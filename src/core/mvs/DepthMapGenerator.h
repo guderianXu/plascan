@@ -56,6 +56,7 @@ struct DepthFrameResult
     bool depthFlippedZ = false;
     FramePinholeCamera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
+    std::vector<int> geometrySourceViewIndices; ///< geometrySourceMask 的精确位序表，最多 16 个来源
     std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
     int requestedSourceViewCount = 0; ///< 选择阶段请求的源视图数，不随缓存释放丢失
     int sourceViewShortfall = 0; ///< 请求数与实际可用源视图数之差
@@ -63,9 +64,9 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     QSharedPointer<cv::Mat> normalMap;   ///< 最终层法线图 (CV_32FC3)，可为空
-    QSharedPointer<cv::Mat> supportCount; ///< 最终层多视支持计数 (CV_16U)
+    QSharedPointer<cv::Mat> supportCount; ///< PatchMatch 候选来源数诊断图；不得作为最终几何支持 (CV_16U)
     QSharedPointer<cv::Mat> geometrySupportCount; ///< 参考帧+跨视几何确认数 (CV_16U)
-    QSharedPointer<cv::Mat> geometrySourceMask; ///< bit N 对应 sourceViewIndices 的第 N 个来源 (CV_16U)
+    QSharedPointer<cv::Mat> geometrySourceMask; ///< bit N 对应 geometrySourceViewIndices 的第 N 个来源 (CV_16U)
     QSharedPointer<cv::Mat> inverseDepthMean; ///< 几何确认观测的逆深度均值 (CV_32F)
     QSharedPointer<cv::Mat> inverseDepthRelativeSpread; ///< 逆深度相对标准差 (CV_32F)
     QSharedPointer<cv::Mat> adaptiveGeometrySupportWeight; ///< 连续跨视几何支持权重 (CV_32F)
@@ -87,6 +88,8 @@ struct DepthFrameResult
     FramePinholeCamera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
     std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
+    std::vector<ProjectedSparseDepthSample> projectedSparseDepthSamples; ///< 最终输出栅格上的稀疏绝对深度锚点
+    SparseDepthResidualSummary sparseDepthResidual; ///< 最终深度相对稀疏锚点的稳健残差审计
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
     DepthFrameQualityDecision qualityDecision; ///< 是否允许进入多视融合
     std::string maskSource;                  ///< project/content/full_image
@@ -119,7 +122,9 @@ struct DepthFrameResult
         return eligibleForConsistencyCheck();
     }
 
-    void releasePixelStorage()
+    /// Release large per-pixel products while retaining the content/support
+    /// domain required by streaming consistency and final artifact diagnostics.
+    void releaseStreamingPixelStorage()
     {
         depthMap.clear();
         confidence.clear();
@@ -138,8 +143,15 @@ struct DepthFrameResult
         depthProvenance.clear();
         missingReasonMap.clear();
         validMask.clear();
-        supportRegionMask.clear();
         intermediatePyramidLevels.clear();
+    }
+
+    /// Release every per-pixel allocation, including the support domain.
+    /// Use this for terminal cleanup paths where no later artifact is produced.
+    void releasePixelStorage()
+    {
+        releaseStreamingPixelStorage();
+        supportRegionMask.clear();
     }
 };
 

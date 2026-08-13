@@ -300,6 +300,22 @@ float adaptiveMvsSourceMaximumAngleDeg(
     const float requested_angle =
         valid_angles[static_cast<std::size_t>(requested_source_count - 1)];
     const float sampling_margin_angle = requested_angle * 1.05f;
+    const std::size_t dense_candidate_threshold =
+        static_cast<std::size_t>(requested_source_count) * 4;
+    if (valid_angles.size() >= dense_candidate_threshold &&
+        requested_angle < configured_maximum * 0.60f)
+    {
+        // Hundreds of closely sampled orbital frames are not equivalent to a
+        // sparse Dino-style ring. Keeping the sparse-ring 70--90 degree gate
+        // lets high-track but appearance-incompatible views outrank the local
+        // angular neighbours and makes PatchMatch hypotheses mutually
+        // contradictory. Use the local sampling density when the candidate
+        // pool can comfortably supply the full source set nearby.
+        return std::clamp(
+            std::max(requested_angle * 1.25f, requested_angle + 2.0f),
+            12.0f,
+            configured_maximum);
+    }
     const float safety_cap =
         requested_source_count >= 6 ? 90.0f : 70.0f;
     return std::clamp(

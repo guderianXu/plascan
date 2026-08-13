@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <cmath>
+#include <cstdint>
 
 namespace xjw
 {
@@ -38,13 +39,70 @@ bool mvsImagePreparationRequiresDistinctPixels(const FramePinholeCamera &camera)
     return hasDistortion(camera.distortion());
 }
 
+cv::Mat normalizeMvsPhotometry(const cv::Mat &source,
+                               MvsSceneProfile sceneProfile)
+{
+    if (source.empty() || source.type() != CV_8UC1)
+    {
+        return source;
+    }
+
+    const double image_mean = cv::mean(source)[0];
+    cv::Mat normalized;
+    if (sceneProfile == MvsSceneProfile::OrbitalObject)
+    {
+        // Planetary/orbital sequences commonly mix strongly illuminated and
+        // shadowed surface views. Apply one moderate transform to the whole
+        // batch; the previous mean-threshold branch enhanced only part of a
+        // sequence and damaged cross-view photometric comparability.
+        cv::createCLAHE(2.0, cv::Size(8, 8))->apply(source, normalized);
+        return normalized;
+    }
+
+    if (image_mean >= 80.0)
+    {
+        return source;
+    }
+    if (image_mean < 30.0)
+    {
+        cv::Mat float_image;
+        source.convertTo(float_image, CV_32F, 1.0 / 255.0);
+        cv::pow(float_image, 0.4, float_image);
+        float_image.convertTo(normalized, CV_8U, 255.0);
+        cv::createCLAHE(8.0, cv::Size(8, 8))->apply(
+            normalized, normalized);
+        return normalized;
+    }
+
+    cv::createCLAHE(4.0, cv::Size(8, 8))->apply(source, normalized);
+    return normalized;
+}
+
 bool prepareMvsImage(const cv::Mat &source,
                      const FramePinholeCamera &sourceCamera,
                      cv::Mat *prepared,
                      FramePinholeCamera *preparedCamera,
                      std::string *errorMessage)
 {
-    if (prepared == nullptr || preparedCamera == nullptr)
+    cv::Mat unused_valid_mask;
+    return prepareMvsImageAndMask(source,
+                                  cv::Mat(),
+                                  sourceCamera,
+                                  prepared,
+                                  &unused_valid_mask,
+                                  preparedCamera,
+                                  errorMessage);
+}
+
+bool prepareMvsImageAndMask(const cv::Mat &source,
+                            const cv::Mat &sourceValidMask,
+                            const FramePinholeCamera &sourceCamera,
+                            cv::Mat *prepared,
+                            cv::Mat *preparedValidMask,
+                            FramePinholeCamera *preparedCamera,
+                            std::string *errorMessage)
+{
+    if (prepared == nullptr || preparedValidMask == nullptr || preparedCamera == nullptr)
     {
         if (errorMessage) *errorMessage = "MVS 影像预处理输出指针不能为空";
         return false;
@@ -57,6 +115,15 @@ bool prepareMvsImage(const cv::Mat &source,
     if (!sourceCamera.isValid())
     {
         if (errorMessage) *errorMessage = "MVS 影像预处理相机无效";
+        return false;
+    }
+    if (!sourceValidMask.empty() &&
+        (sourceValidMask.type() != CV_8UC1 || sourceValidMask.size() != source.size()))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "MVS 有效区域蒙版必须为与影像同尺寸的 CV_8UC1";
+        }
         return false;
     }
 
@@ -77,6 +144,7 @@ bool prepareMvsImage(const cv::Mat &source,
         if (!hasDistortion(distortion))
         {
             *prepared = source;
+            *preparedValidMask = sourceValidMask;
         }
         else
         {
@@ -106,6 +174,43 @@ bool prepareMvsImage(const cv::Mat &source,
                       map_y,
                       cv::INTER_LINEAR,
                       cv::BORDER_CONSTANT);
+            if (!sourceValidMask.empty())
+            {
+                cv::remap(sourceValidMask,
+                          *preparedValidMask,
+                          map_x,
+                          map_y,
+                          cv::INTER_NEAREST,
+                          cv::BORDER_CONSTANT,
+                          cv::Scalar(0));
+
+                // INTER_NEAREST can round a slightly out-of-range coordinate
+                // back onto an edge pixel. Keep the geometric contract strict:
+                // every destination pixel whose source coordinate is outside
+                // the decoded image is invalid regardless of interpolation.
+                for (int row = 0; row < map_x.rows; ++row)
+                {
+                    const float *map_x_row = map_x.ptr<float>(row);
+                    const float *map_y_row = map_y.ptr<float>(row);
+                    std::uint8_t *mask_row = preparedValidMask->ptr<std::uint8_t>(row);
+                    for (int column = 0; column < map_x.cols; ++column)
+                    {
+                        if (!std::isfinite(map_x_row[column]) ||
+                            !std::isfinite(map_y_row[column]) ||
+                            map_x_row[column] < 0.0f ||
+                            map_x_row[column] > static_cast<float>(source.cols - 1) ||
+                            map_y_row[column] < 0.0f ||
+                            map_y_row[column] > static_cast<float>(source.rows - 1))
+                        {
+                            mask_row[column] = 0;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                preparedValidMask->release();
+            }
         }
     }
     catch (const cv::Exception &exception)

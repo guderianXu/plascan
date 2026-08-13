@@ -16,11 +16,22 @@ struct MvsDepthFrameQualification
     QString acceptance;
     bool fusionEligible = false;
     bool reclassified = false;
+    /// The frame qualified through its final hard multi-view core because the
+    /// continuous adaptive residual was not calibrated for this capture.  TSDF
+    /// must then consume the discrete support/spread maps, not the conflicting
+    /// adaptive maps that triggered the fallback.
+    bool useDiscreteGeometryFallback = false;
 };
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 31;
+inline constexpr int kMvsDepthAlgorithmRevision = 37;
+/// Revision 37 persists the exact source-view ordinal table used by the
+/// per-pixel geometry-source mask. Revision 36 stored only the shorter
+/// PatchMatch source list even though orbital consistency and measured repair
+/// could encode up to sixteen repair sources, so its source bits cannot be
+/// decoded reliably by TSDF meshing.
+inline constexpr int kMvsMinimumModelCompatibleRevision = 37;
 inline constexpr int kMvsAdaptiveGeometryEvidenceRevision = 13;
 inline constexpr int kMvsAdaptiveGeometryConflictRatioRevision = 14;
 inline constexpr int kMvsDepthProvenanceRevision = 17;
@@ -28,6 +39,10 @@ inline constexpr int kMvsGeometrySupportedLowConfidenceRevision = 18;
 inline constexpr int kMvsMultiHypothesisTargetedRecoveryRevision = 19;
 inline constexpr int kMvsSurfaceAwareTargetedRecoveryRevision = 20;
 inline constexpr int kMvsPostConsistencyResidualReestimationRevision = 21;
+inline constexpr int kMvsGeometryFusionSupportRevision = 34;
+inline constexpr int kMvsDiscreteGeometryCoreRatioRevision = 35;
+inline constexpr int kMvsSparseAbsoluteDepthResidualRevision = 36;
+inline constexpr int kMvsGeometrySourceOrdinalRevision = 37;
 
 struct MvsDepthFrameRecord
 {
@@ -35,6 +50,7 @@ struct MvsDepthFrameRecord
     QString refImage;
     QStringList sourceImages;
     QVector<int> sourceIndices;
+    QVector<int> geometrySourceIndices;
     QJsonArray sourcePlan;
     QString qualityProfile;
     int configuredSourceViewCount = 0;
@@ -71,6 +87,8 @@ struct MvsDepthFrameRecord
     QString sceneProfile;
     QString filterMode;
     QString acceptance;
+    bool fusionEligible = false;
+    bool fusionEligibilityKnown = false;
     QJsonObject depthPostprocess;
     QJsonObject cameraModel;
     QString status;

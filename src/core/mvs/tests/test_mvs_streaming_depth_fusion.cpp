@@ -55,4 +55,33 @@ TEST(StreamingDepthFusionServiceTest, StopsBeforeLoadingWhenAlreadyCancelled)
     EXPECT_NE(error.find("cancelled"), std::string::npos);
 }
 
+TEST(StreamingDepthFusionServiceTest, RequiresGeometrySupportWhenThresholdIsEnabled)
+{
+    xjw::mvs::StreamingDepthFusionConfig config;
+    config.minConsistentViews = 2;
+    config.neighborCount = 1;
+    config.useColor = false;
+
+    const xjw::mvs::FusionFrameLoader loader =
+        [](int frameIndex, xjw::mvs::FusionFrameInput *frame, std::string *)
+        {
+            frame->depthMap = cv::Mat(8, 8, CV_32FC1, cv::Scalar(5.0f));
+            frame->cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
+            frame->cameraModel.setPose(
+                {1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0},
+                {static_cast<double>(frameIndex), 0.0, 0.0});
+            frame->imgW = frame->depthMap.cols;
+            frame->imgH = frame->depthMap.rows;
+            return true;
+        };
+
+    xjw::mvs::StreamingDepthFusionResult result;
+    std::string error;
+    EXPECT_FALSE(xjw::mvs::fuseDepthMapsStreaming(
+        2, config, loader, &result, &error));
+    EXPECT_NE(error.find("几何支持计数"), std::string::npos);
+}
+
 } // namespace

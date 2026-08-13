@@ -16,7 +16,7 @@ struct DepthLevelResult
     cv::Mat depth;
     cv::Mat normalMap;
     cv::Mat confidence;
-    cv::Mat supportCount;
+    cv::Mat supportCount; ///< PatchMatch 候选来源数诊断图，不代表逐像素几何确认数
     cv::Mat uncertainty;
     cv::Mat validMask;
 };

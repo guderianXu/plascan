@@ -3,10 +3,12 @@
 #include "OpenCvCompat.h"
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 
 namespace xjw
 {
@@ -283,17 +285,28 @@ bool EpipolarRectifier::rectify(
 cv::Mat EpipolarRectifier::unrectifyDepth(
     const cv::Mat &rectifiedDepth,
     const RectifiedPair &pair,
+    const FramePinholeCamera &originalReferenceCamera,
     int origW, int origH)
 {
     const cv::Mat &reference_homography = pair.refIsRight ? pair.H2 : pair.H1;
-    if (rectifiedDepth.empty() || reference_homography.empty())
+    const FramePinholeCamera &rectified_reference_camera = pair.refIsRight
+        ? pair.rectCamRight
+        : pair.rectCamLeft;
+    if (rectifiedDepth.empty() || rectifiedDepth.type() != CV_32FC1 ||
+        reference_homography.empty() || reference_homography.rows != 3 ||
+        reference_homography.cols != 3 || !originalReferenceCamera.isValid() ||
+        !rectified_reference_camera.isValid() || origW <= 0 || origH <= 0)
+    {
         return cv::Mat();
+    }
 
     const int rW = rectifiedDepth.cols;
     const int rH = rectifiedDepth.rows;
     cv::Mat result(origH, origW, CV_32FC1, cv::Scalar(0.0f));
 
-    const double *h = reference_homography.ptr<double>(0);
+    cv::Mat homography;
+    reference_homography.convertTo(homography, CV_64F);
+    const double *h = homography.ptr<double>(0);
     const double h00 = h[0], h01 = h[1], h02 = h[2];
     const double h10 = h[3], h11 = h[4], h12 = h[5];
     const double h20 = h[6], h21 = h[7], h22 = h[8];
@@ -302,22 +315,121 @@ cv::Mat EpipolarRectifier::unrectifyDepth(
     {
         for (int col = 0; col < origW; ++col)
         {
-            double w = h20 * col + h21 * row + h22;
-            if (std::abs(w) < 1e-12) continue;
-            double rx = (h00 * col + h01 * row + h02) / w;
-            double ry = (h10 * col + h11 * row + h12) / w;
-
-            int srcCol = static_cast<int>(std::round(rx));
-            int srcRow = static_cast<int>(std::round(ry));
-            if (srcCol < 0 || srcCol >= rW || srcRow < 0 || srcRow >= rH)
+            const double w = h20 * col + h21 * row + h22;
+            if (std::abs(w) < 1e-12)
+            {
                 continue;
+            }
+            const double rx = (h00 * col + h01 * row + h02) / w;
+            const double ry = (h10 * col + h11 * row + h12) / w;
 
-            float d = rectifiedDepth.at<float>(srcRow, srcCol);
-            if (d > 0.0f)
-                result.at<float>(row, col) = d;
+            const int srcCol = static_cast<int>(std::round(rx));
+            const int srcRow = static_cast<int>(std::round(ry));
+            if (srcCol < 0 || srcCol >= rW || srcRow < 0 || srcRow >= rH)
+            {
+                continue;
+            }
+
+            const float rectified_depth = rectifiedDepth.at<float>(srcRow, srcCol);
+            if (!std::isfinite(rectified_depth) || rectified_depth <= 0.0f)
+            {
+                continue;
+            }
+
+            // A depth sample is axial Z in the rectified camera, not a ray
+            // length and not axial Z in the original camera. Reconstruct the
+            // point on the exact target ray and express it in the original
+            // reference camera before storing it in the unrectified grid.
+            const double rectified_pixel[2] = {rx, ry};
+            double world[3] = {};
+            if (!rectified_reference_camera.unprojectPixel(
+                    rectified_pixel, rectified_depth, world))
+            {
+                continue;
+            }
+            const double original_depth = originalReferenceCamera.positiveDepth(world);
+            if (std::isfinite(original_depth) && original_depth > 0.0 &&
+                original_depth <= std::numeric_limits<float>::max())
+            {
+                result.at<float>(row, col) = static_cast<float>(original_depth);
+            }
         }
     }
     return result;
+}
+
+bool EpipolarRectifier::rectifiedDepthRange(
+    const FramePinholeCamera &originalReferenceCamera,
+    const FramePinholeCamera &rectifiedReferenceCamera,
+    int originalWidth,
+    int originalHeight,
+    float originalNear,
+    float originalFar,
+    float &rectifiedNear,
+    float &rectifiedFar)
+{
+    if (!originalReferenceCamera.isValid() || !rectifiedReferenceCamera.isValid() ||
+        hasLensDistortion(originalReferenceCamera) ||
+        hasLensDistortion(rectifiedReferenceCamera) ||
+        originalWidth <= 0 || originalHeight <= 0 ||
+        !std::isfinite(originalNear) || !std::isfinite(originalFar) ||
+        originalNear <= 0.0f || originalFar <= originalNear)
+    {
+        return false;
+    }
+
+    const std::array<double, 2> columns{
+        0.0, static_cast<double>(std::max(0, originalWidth - 1))};
+    const std::array<double, 2> rows{
+        0.0, static_cast<double>(std::max(0, originalHeight - 1))};
+    const std::array<double, 2> depths{
+        static_cast<double>(originalNear), static_cast<double>(originalFar)};
+    double minimum_rectified_depth = std::numeric_limits<double>::infinity();
+    double maximum_rectified_depth = 0.0;
+
+    // With zero-distortion pinhole cameras, rectified axial Z is affine over
+    // the original image ray rectangle and the original depth interval. Its
+    // extrema therefore occur at these eight corner/end-point combinations.
+    for (const double row : rows)
+    {
+        for (const double column : columns)
+        {
+            const double pixel[2] = {column, row};
+            for (const double depth : depths)
+            {
+                double world[3] = {};
+                if (!originalReferenceCamera.unprojectPixel(pixel, depth, world))
+                {
+                    return false;
+                }
+                const double rectified_depth = rectifiedReferenceCamera.positiveDepth(world);
+                if (!std::isfinite(rectified_depth) || rectified_depth <= 0.0)
+                {
+                    return false;
+                }
+                minimum_rectified_depth = std::min(
+                    minimum_rectified_depth, rectified_depth);
+                maximum_rectified_depth = std::max(
+                    maximum_rectified_depth, rectified_depth);
+            }
+        }
+    }
+
+    if (!std::isfinite(minimum_rectified_depth) ||
+        !std::isfinite(maximum_rectified_depth) ||
+        maximum_rectified_depth <= minimum_rectified_depth ||
+        maximum_rectified_depth > std::numeric_limits<float>::max())
+    {
+        return false;
+    }
+
+    rectifiedNear = std::nextafter(
+        static_cast<float>(minimum_rectified_depth), 0.0f);
+    rectifiedFar = std::nextafter(
+        static_cast<float>(maximum_rectified_depth),
+        std::numeric_limits<float>::infinity());
+    return std::isfinite(rectifiedNear) && std::isfinite(rectifiedFar) &&
+        rectifiedNear > 0.0f && rectifiedFar > rectifiedNear;
 }
 
 cv::Mat EpipolarRectifier::unrectifyNearest(

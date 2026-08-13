@@ -50,6 +50,22 @@ struct AdaptiveGeometryEvidenceMaps
     cv::Mat conflictRatio;      ///< Visible conflict / observable evidence in [0, 1] (CV_32FC1).
 };
 
+struct AdaptiveGeometryEvidenceSummary
+{
+    bool validInputs = false;
+    int observablePixelCount = 0;
+    float effectiveViewCountMean = -1.0f;
+    float conflictRatioMean = -1.0f;
+};
+
+struct DiscreteGeometryCoreSummary
+{
+    bool validInputs = false;
+    int validPixelCount = 0;
+    int corePixelCount = 0;
+    float coreRatio = -1.0f;
+};
+
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
@@ -83,6 +99,33 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWo
 
 AdaptiveGeometryEvidenceClass adaptiveGeometryEvidenceClass(
     const ProjectedDepthConsistencyResult &result);
+
+/// Summarizes pixels for which at least one source produced observable
+/// evidence. Reference-only pixels have effectiveViewCount == 1 and zero
+/// conflict, and must not dilute either frame-level mean.
+AdaptiveGeometryEvidenceSummary summarizeAdaptiveGeometryEvidence(
+    const AdaptiveGeometryEvidenceMaps &maps);
+
+/// Summarize the final retained pixels that jointly have broad discrete
+/// multi-view support and a tightly clustered inverse-depth estimate.  This
+/// independent hard-evidence core is the guarded fallback when the continuous
+/// adaptive residual is miscalibrated for very narrow-FOV orbital imagery.
+DiscreteGeometryCoreSummary summarizeDiscreteGeometryCore(
+    const cv::Mat &retainedDepth,
+    const cv::Mat &geometrySupportCount,
+    const cv::Mat &inverseDepthRelativeSpread,
+    const cv::Mat &supportRegionMask = cv::Mat(),
+    int minimumObservationCount =
+        kDiscreteGeometryCoreMinimumObservationCount,
+    float maximumInverseDepthSpread =
+        kDiscreteGeometryCoreMaximumInverseDepthSpread);
+
+/// Build manifest diagnostics while keeping the pre-consistency candidate
+/// domain separate from the source-observable evidence domain used by the
+/// adaptive quality means.
+QJsonObject adaptiveGeometryEvidenceDiagnosticsToJson(
+    const cv::Mat &retainedDepth,
+    const AdaptiveGeometryEvidenceMaps &maps);
 
 bool shouldRetainDepthFromConsistencyVotes(int sourceViewCount,
                                            int consistentVotes,

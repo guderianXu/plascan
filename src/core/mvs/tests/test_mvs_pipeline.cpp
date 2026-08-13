@@ -17,6 +17,7 @@
 #include "DepthGeometryConsistency.h"
 #include "EpipolarRectifier.h"
 #include "MvsSceneClassifier.h"
+#include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "SparseCloudPreprocessor.h"
 #include "FramePinholeCamera.h"
@@ -258,6 +259,32 @@ TEST(DepthMapBackgroundTaskTest, ExceptionBoundaryReportsFailureExactlyOnce)
     EXPECT_TRUE(failure_message.contains(QStringLiteral("inline PlaPoint failure")));
 }
 
+TEST(MvsImagePreprocessorTest,
+     OrbitalPhotometricNormalizationDoesNotSplitAtBrightnessThreshold)
+{
+    cv::Mat texture(96, 96, CV_8UC1);
+    for (int row = 0; row < texture.rows; ++row)
+    {
+        for (int column = 0; column < texture.cols; ++column)
+        {
+            texture.at<std::uint8_t>(row, column) = static_cast<std::uint8_t>(
+                90 + ((row * 13 + column * 17) % 80));
+        }
+    }
+    cv::Mat dark;
+    texture.convertTo(dark, CV_8UC1, 0.40, 5.0);
+
+    const cv::Mat normalized_bright = xjw::mvs::normalizeMvsPhotometry(
+        texture, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    const cv::Mat normalized_dark = xjw::mvs::normalizeMvsPhotometry(
+        dark, xjw::mvs::MvsSceneProfile::OrbitalObject);
+
+    ASSERT_EQ(normalized_bright.size(), texture.size());
+    ASSERT_EQ(normalized_dark.size(), texture.size());
+    EXPECT_GT(cv::norm(normalized_bright, texture, cv::NORM_L1), 0.0);
+    EXPECT_GT(cv::norm(normalized_dark, dark, cv::NORM_L1), 0.0);
+}
+
 TEST(DepthPyramidPolicyTest, BuildsStrictThreeLevelSchedule)
 {
     xjw::mvs::PatchMatchConfig base;
@@ -496,6 +523,16 @@ TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
             4,
             {12.0f, 24.0f, 40.0f, 55.0f}),
         35.0f);
+    EXPECT_NEAR(
+        adaptiveMvsSourceMaximumAngleDeg(
+            MvsSceneProfile::OrbitalObject,
+            6,
+            {7.8f, 8.1f, 8.4f, 15.6f, 16.0f, 16.4f,
+             24.0f, 24.4f, 24.8f, 32.0f, 32.4f, 32.8f,
+             40.0f, 40.4f, 40.8f, 48.0f, 48.4f, 48.8f,
+             56.0f, 56.4f, 56.8f, 64.0f, 64.4f, 64.8f}),
+        20.5f,
+        1.0e-4f);
 }
 
 TEST(DepthPyramidPropagationTest, PreservesDepthStepAndExpandsLowConfidenceRadius)
@@ -755,6 +792,13 @@ TEST(EpipolarRectifierTest, UnrectifiesRightReferenceWithRightHomography)
     pair.H1inv = pair.H1.inv();
     pair.H2inv = pair.H2.inv();
     pair.refIsRight = true;
+    xjw::FramePinholeCamera reference_camera;
+    reference_camera.setIntrinsics(1.0, 1.0, 0.0, 0.0);
+    reference_camera.setPose({1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0},
+                             {0.0, 0.0, 0.0});
+    pair.rectCamRight = reference_camera;
 
     cv::Mat rectified_depth(3, 4, CV_32F, cv::Scalar(0.0f));
     rectified_depth.at<float>(1, 2) = 7.0f;
@@ -762,6 +806,7 @@ TEST(EpipolarRectifierTest, UnrectifiesRightReferenceWithRightHomography)
     const cv::Mat depth = xjw::mvs::EpipolarRectifier::unrectifyDepth(
         rectified_depth,
         pair,
+        reference_camera,
         4,
         3);
 
@@ -1031,7 +1076,7 @@ TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
     {
         frame.depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
         frame.validMask = cv::Mat(H, W, CV_8U, cv::Scalar(255));
-        frame.supportCount = cv::Mat(H, W, CV_16U, cv::Scalar(3));
+        frame.geometrySupportCount = cv::Mat(H, W, CV_16U, cv::Scalar(2));
         frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
         frame.imgW = W;
         frame.imgH = H;
@@ -1040,7 +1085,7 @@ TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
         frame.validMask(cv::Rect(8, 5, 4, 6)) = 0;
 
         // A disconnected island has depth but insufficient multi-view support.
-        frame.supportCount(cv::Rect(1, 1, 2, 2)) = 1;
+        frame.geometrySupportCount(cv::Rect(1, 1, 2, 2)) = 1;
     }
 
     // The second frame contains a conflicting rear sheet which must not survive fusion.
@@ -1052,7 +1097,7 @@ TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
     fcfg.maxReprojError = 0.5f;
     fcfg.maxDepthError = 0.01f;
     fcfg.requireValidMask = true;
-    fcfg.minSupportViews = 2;
+    fcfg.minGeometryObservationCount = 2;
     fcfg.maxLocalDepthGradient = 0.20f;
 
     xjw::mvs::DepthMapFusion fusion(fcfg);
@@ -1089,6 +1134,8 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     result.adaptiveGeometryConflictRatio =
         QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(0.1f));
     result.validMask = QSharedPointer<cv::Mat>::create(4, 5, CV_8U, cv::Scalar(255));
+    result.supportRegionMask =
+        QSharedPointer<cv::Mat>::create(4, 5, CV_8U, cv::Scalar(255));
 
     result.releasePixelStorage();
 
@@ -1099,6 +1146,33 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     EXPECT_TRUE(result.adaptiveGeometryEffectiveViewCount.isNull());
     EXPECT_TRUE(result.adaptiveGeometryConflictRatio.isNull());
     EXPECT_TRUE(result.validMask.isNull());
+    EXPECT_TRUE(result.supportRegionMask.isNull());
+}
+
+TEST(MvsPipelineTest, StreamingPixelReleasePreservesSupportRegionMask)
+{
+    xjw::mvs::DepthFrameResult result;
+    result.depthMap =
+        QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(8.0f));
+    result.confidence =
+        QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(0.8f));
+    result.validMask =
+        QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
+    result.supportRegionMask =
+        QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
+    result.supportRegionMask->at<std::uint8_t>(1, 2) = 0;
+
+    result.releaseStreamingPixelStorage();
+
+    EXPECT_TRUE(result.depthMap.isNull());
+    EXPECT_TRUE(result.confidence.isNull());
+    EXPECT_TRUE(result.validMask.isNull());
+    ASSERT_FALSE(result.supportRegionMask.isNull());
+    EXPECT_EQ(result.supportRegionMask->size(), cv::Size(4, 3));
+    EXPECT_EQ(result.supportRegionMask->at<std::uint8_t>(1, 2), 0);
+
+    result.releasePixelStorage();
+    EXPECT_TRUE(result.supportRegionMask.isNull());
 }
 
 TEST(MvsPipelineTest, DepthMapFusionCancelBeforeWorkClearsStaleOutput)

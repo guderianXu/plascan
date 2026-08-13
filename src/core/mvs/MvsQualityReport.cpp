@@ -382,6 +382,34 @@ QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &dec
     object.insert(QStringLiteral("min_consistent_views"),
                   decision.filterSettings.minConsistentViews);
 
+    const SparseDepthResidualSummary &sparse_residual =
+        decision.sparseDepthResidual;
+    QJsonObject sparse_residual_object;
+    sparse_residual_object.insert(QStringLiteral("available"),
+                                  sparse_residual.available);
+    sparse_residual_object.insert(QStringLiteral("projected_sample_count"),
+                                  sparse_residual.projectedSampleCount);
+    sparse_residual_object.insert(QStringLiteral("valid_sample_count"),
+                                  sparse_residual.validSampleCount);
+    const double valid_sample_ratio = sparse_residual.projectedSampleCount > 0
+        ? static_cast<double>(sparse_residual.validSampleCount) /
+              static_cast<double>(sparse_residual.projectedSampleCount)
+        : 0.0;
+    sparse_residual_object.insert(QStringLiteral("valid_sample_ratio"),
+                                  valid_sample_ratio);
+    sparse_residual_object.insert(QStringLiteral("median_absolute_log_error"),
+                                  sparse_residual.medianAbsoluteLogError);
+    sparse_residual_object.insert(QStringLiteral("minimum_sample_count"),
+                                  kSparseDepthResidualMinimumSampleCount);
+    sparse_residual_object.insert(QStringLiteral("validation_only_threshold"),
+                                  kSparseDepthResidualValidationThreshold);
+    sparse_residual_object.insert(QStringLiteral("rejection_threshold"),
+                                  kSparseDepthResidualRejectionThreshold);
+    sparse_residual_object.insert(QStringLiteral("neighborhood_radius_pixels"),
+                                  1);
+    object.insert(QStringLiteral("sparse_absolute_depth_residual"),
+                  sparse_residual_object);
+
     QJsonArray reasons;
     for (const std::string &reason : decision.reasons)
     {

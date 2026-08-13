@@ -128,8 +128,16 @@ cv::Mat readImageWithGdal(const QString &path,
         return {};
     }
 
-    const int cv_depth = preservesSourceDepth(flags)
-        ? cvDepthForGdalType(first_band->GetRasterDataType())
+    const GDALDataType source_type = first_band->GetRasterDataType();
+    // GDAL converts UInt16 to Byte by saturation, while cv::imread scales the
+    // full UInt16 range to 8 bit.  Saturation destroys nearly all texture in
+    // scientific TIFF imagery (most non-zero samples become 255), which in
+    // turn makes feature descriptors unusable.  Read UInt16 samples at their
+    // native depth and apply the same 1/256 conversion as OpenCV.
+    const bool scale_uint16_to_byte =
+        !preservesSourceDepth(flags) && source_type == GDT_UInt16;
+    const int cv_depth = preservesSourceDepth(flags) || scale_uint16_to_byte
+        ? cvDepthForGdalType(source_type)
         : CV_8U;
     const GDALDataType gdal_type = gdalTypeForCvDepth(cv_depth);
     if (cv_depth < 0 || gdal_type == GDT_Unknown)
@@ -186,6 +194,12 @@ cv::Mat readImageWithGdal(const QString &path,
                  QStringLiteral("GDAL 读取影像失败 %1: %2")
                      .arg(path, QString::fromUtf8(CPLGetLastErrorMsg())));
         return {};
+    }
+    if (scale_uint16_to_byte)
+    {
+        cv::Mat converted;
+        output.convertTo(converted, CV_MAKETYPE(CV_8U, channels), 1.0 / 256.0);
+        return converted;
     }
     return output;
 }

@@ -274,22 +274,11 @@ bool DepthMapFusion::isPixelEligible(const FusionFrameInput &frame, int row, int
         return false;
     }
 
-    if (_config.minSupportViews > 0 && !frame.supportCount.empty())
+    if (_config.minGeometryObservationCount > 0)
     {
-        int support_count = 0;
-        if (frame.supportCount.type() == CV_16U)
-        {
-            support_count = static_cast<int>(frame.supportCount.at<std::uint16_t>(row, col));
-        }
-        else if (frame.supportCount.type() == CV_8U)
-        {
-            support_count = static_cast<int>(frame.supportCount.at<std::uint8_t>(row, col));
-        }
-        else if (frame.supportCount.type() == CV_32F)
-        {
-            support_count = static_cast<int>(std::lround(frame.supportCount.at<float>(row, col)));
-        }
-        if (support_count < _config.minSupportViews)
+        const int observation_count = static_cast<int>(
+            frame.geometrySupportCount.at<std::uint16_t>(row, col));
+        if (observation_count < _config.minGeometryObservationCount)
         {
             _supportRejected.fetch_add(1, std::memory_order_relaxed);
             return false;
@@ -1716,15 +1705,23 @@ bool DepthMapFusion::fuse(
             }
             return false;
         }
-        if (!frames[fi].supportCount.empty() &&
-            (frames[fi].supportCount.size() != frames[fi].depthMap.size() ||
-             (frames[fi].supportCount.type() != CV_16U &&
-              frames[fi].supportCount.type() != CV_8U &&
-              frames[fi].supportCount.type() != CV_32F)))
+        if (_config.minGeometryObservationCount > 0 &&
+            frames[fi].geometrySupportCount.empty())
         {
             if (errorMsg)
             {
-                *errorMsg = "帧 " + std::to_string(fi) + " 支持计数类型或尺寸不匹配";
+                *errorMsg = "帧 " + std::to_string(fi) + " 缺少跨视几何支持计数";
+            }
+            return false;
+        }
+        if (!frames[fi].geometrySupportCount.empty() &&
+            (frames[fi].geometrySupportCount.size() != frames[fi].depthMap.size() ||
+             frames[fi].geometrySupportCount.type() != CV_16UC1))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "帧 " + std::to_string(fi) +
+                    " 跨视几何支持计数必须为与深度图同尺寸的 CV_16UC1";
             }
             return false;
         }

@@ -1,6 +1,7 @@
 #define CL_TARGET_OPENCL_VERSION 120
 
 #include "PatchMatchCUDA.h"
+#include "PatchMatchHostUtils.h"
 #include "PatchMatchOpenCLKernels.h"
 #include "PatchMatchPhotometricCost.h"
 
@@ -891,43 +892,14 @@ std::vector<float> sourceCameraData(const FramePinholeCamera &reference,
                                     const std::vector<FramePinholeCamera> &sources,
                                     int downsampleFactor)
 {
-    const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
-    const FramePinholeCamera::Intrinsics reference_intrinsics = reference.intrinsics();
-    const std::array<double, 9> reference_rotation = reference.worldToCameraRotation();
-    const std::array<double, 3> reference_translation = reference.worldToCameraTranslation();
     std::vector<float> result(sources.size() * 16, 0.0f);
     for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
     {
-        const FramePinholeCamera::Intrinsics intrinsics = sources[source_index].intrinsics();
-        const std::array<double, 9> rotation = sources[source_index].worldToCameraRotation();
-        const std::array<double, 3> translation = sources[source_index].worldToCameraTranslation();
         float *data = result.data() + source_index * 16;
-        data[0] = static_cast<float>(intrinsics.focalX) * scale;
-        data[1] = static_cast<float>(intrinsics.principalX) * scale;
-        data[2] = static_cast<float>(intrinsics.focalY) * scale;
-        data[3] = static_cast<float>(intrinsics.principalY) * scale;
-        for (int row = 0; row < 3; ++row)
-        {
-            for (int column = 0; column < 3; ++column)
-            {
-                double value = 0.0;
-                for (int k = 0; k < 3; ++k)
-                {
-                    value += rotation[row * 3 + k] * reference_rotation[column * 3 + k];
-                }
-                data[4 + row * 3 + column] = static_cast<float>(value);
-            }
-        }
-        for (int row = 0; row < 3; ++row)
-        {
-            double value = translation[row];
-            for (int column = 0; column < 3; ++column)
-            {
-                value -= static_cast<double>(data[4 + row * 3 + column])
-                    * reference_translation[column];
-            }
-            data[13 + row] = static_cast<float>(value);
-        }
+        const std::array<float, 16> source_data =
+            buildPatchMatchSourceCameraData(
+                reference, sources[source_index], downsampleFactor);
+        std::copy(source_data.begin(), source_data.end(), data);
     }
     return result;
 }
@@ -1588,25 +1560,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     lane_lease->release();
     const auto postprocess_start = read_finished;
 
-    if (config.doMedianBlur && config.medianKernelSize > 1)
-    {
-        const cv::Mat valid_mask = depth_work > 0.0f;
-        cv::Mat filtered;
-        cv::medianBlur(depth_work, filtered, config.medianKernelSize);
-        filtered.copyTo(depth_work, valid_mask);
-    }
-    if (config.doBilateralFilter)
-    {
-        const cv::Mat valid_mask = depth_work > 0.0f;
-        cv::Mat filtered;
-        cv::bilateralFilter(depth_work,
-                            filtered,
-                            config.bilateralD,
-                            config.bilateralSigmaColor,
-                            config.bilateralSigmaSpace);
-        depth_work.setTo(cv::Scalar(0.0f));
-        filtered.copyTo(depth_work, valid_mask);
-    }
+    postprocessPatchMatchDepth(depth_work, config);
 
     if (downsample_factor > 1 && !config.returnNativeResolution)
     {

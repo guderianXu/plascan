@@ -1,6 +1,8 @@
 #include "DepthFrameUtils.h"
 
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthMapGenerator.h"
+#include "MvsWorkspaceReplay.h"
 #include "io/PathIO.h"
 
 #include <QDir>
@@ -65,6 +67,100 @@ QString resolveExistingRawConfidencePath(const QString &pngPath, const QString &
         preferredPath,
         rawConfidenceStoragePath(pngPath)
     });
+}
+
+QString resolveStoredArtifactPath(const QString &rawDepthPath,
+                                  const QString &artifactPath,
+                                  const QString &fallbackPath = QString())
+{
+    const QString normalized_path = QDir::fromNativeSeparators(artifactPath.trimmed());
+    if (normalized_path.isEmpty())
+    {
+        return firstExistingPath({fallbackPath});
+    }
+
+    const QFileInfo artifact_info(normalized_path);
+    if (artifact_info.isAbsolute())
+    {
+        const QString existing_path = firstExistingPath({
+            artifact_info.absoluteFilePath(),
+            fallbackPath
+        });
+        return existing_path.isEmpty()
+            ? QDir::cleanPath(artifact_info.absoluteFilePath())
+            : QDir::cleanPath(existing_path);
+    }
+
+    const QDir raw_depth_directory = QFileInfo(rawDepthPath).absoluteDir();
+    const QString relative_candidate = raw_depth_directory.absoluteFilePath(normalized_path);
+    const QString filename_candidate = raw_depth_directory.filePath(
+        QFileInfo(normalized_path).fileName());
+    const QString existing_path = firstExistingPath({
+        normalized_path,
+        relative_candidate,
+        filename_candidate,
+        fallbackPath
+    });
+    return existing_path.isEmpty()
+        ? QDir::cleanPath(relative_candidate)
+        : QDir::cleanPath(existing_path);
+}
+
+xjw::common::OperationResult loadStoredEvidenceMap(const QString &path,
+                                                    const QString &label,
+                                                    int expectedType,
+                                                    cv::Size expectedSize,
+                                                    bool required,
+                                                    cv::Mat *matrix)
+{
+    if (!matrix)
+    {
+        return {false, QStringLiteral("内部错误：%1输出参数无效").arg(label)};
+    }
+    matrix->release();
+    if (path.isEmpty())
+    {
+        return required
+            ? xjw::common::OperationResult{
+                  false,
+                  QStringLiteral("缓存深度帧缺少%1，请重新计算深度图").arg(label)}
+            : xjw::common::OperationResult{true, QString()};
+    }
+
+    xjw::common::OperationResult status = loadDepthMatStorage(path, matrix);
+    if (!status.ok)
+    {
+        status.errorMessage = QStringLiteral("读取%1失败：%2").arg(label, status.errorMessage);
+        return status;
+    }
+    if (matrix->type() != expectedType || matrix->size() != expectedSize)
+    {
+        const QString error = QStringLiteral(
+            "%1类型或尺寸与深度图不匹配：path=%2 type=%3 size=%4x%5 expected_type=%6 expected_size=%7x%8")
+                                  .arg(label,
+                                       path,
+                                       QString::number(matrix->type()),
+                                       QString::number(matrix->cols),
+                                       QString::number(matrix->rows),
+                                       QString::number(expectedType),
+                                       QString::number(expectedSize.width),
+                                       QString::number(expectedSize.height));
+        matrix->release();
+        return {false, error};
+    }
+    return {true, QString()};
+}
+
+void resizeEvidenceMap(cv::Mat *matrix, cv::Size targetSize)
+{
+    if (!matrix || matrix->empty() || matrix->size() == targetSize)
+    {
+        return;
+    }
+
+    cv::Mat resized;
+    cv::resize(*matrix, resized, targetSize, 0.0, 0.0, cv::INTER_NEAREST);
+    *matrix = std::move(resized);
 }
 
 xjw::common::OperationResult loadFastDepthMatStorage(const QString &path, cv::Mat *matrix)
@@ -168,6 +264,27 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
         frame.rawConfidencePath = resolveExistingRawConfidencePath(
             frame.depthPng,
             record.value(QStringLiteral("raw_confidence_path")).toString());
+        frame.rawGeometrySupportPath = resolveStoredArtifactPath(
+            frame.rawDepthPath,
+            record.value(QStringLiteral("raw_geometry_support_path")).toString(),
+            rawGeometrySupportStoragePath(frame.depthPng));
+        frame.rawInverseDepthSpreadPath = resolveStoredArtifactPath(
+            frame.rawDepthPath,
+            record.value(QStringLiteral("raw_inverse_depth_spread_path")).toString(),
+            rawInverseDepthSpreadStoragePath(frame.depthPng));
+        frame.rawAdaptiveGeometrySupportWeightPath = resolveStoredArtifactPath(
+            frame.rawDepthPath,
+            record.value(QStringLiteral("raw_adaptive_geometry_support_weight_path")).toString(),
+            rawAdaptiveGeometrySupportWeightStoragePath(frame.depthPng));
+        frame.rawAdaptiveGeometryEffectiveViewCountPath = resolveStoredArtifactPath(
+            frame.rawDepthPath,
+            record.value(
+                QStringLiteral("raw_adaptive_geometry_effective_view_count_path")).toString(),
+            rawAdaptiveGeometryEffectiveViewCountStoragePath(frame.depthPng));
+        frame.rawAdaptiveGeometryConflictRatioPath = resolveStoredArtifactPath(
+            frame.rawDepthPath,
+            record.value(QStringLiteral("raw_adaptive_geometry_conflict_ratio_path")).toString(),
+            rawAdaptiveGeometryConflictRatioStoragePath(frame.depthPng));
         const QJsonArray source_images = record.value(QStringLiteral("source_images")).toArray();
         for (const QJsonValue &source_image : source_images)
         {
@@ -196,6 +313,8 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             record.contains(QStringLiteral("fusion_eligible"))
             || qualification.reclassified;
         frame.fusionEligible = qualification.fusionEligible;
+        frame.useDiscreteGeometryFallback =
+            qualification.useDiscreteGeometryFallback;
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
         if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))
@@ -245,8 +364,10 @@ std::uint64_t estimateFusionFrameWorkingSetBytes(int width,
                         static_cast<std::uint64_t>(target_height);
     }
 
-    const std::uint64_t load_peak = source_pixels * 8ULL + target_pixels * 8ULL;
-    const std::uint64_t postprocess_peak = target_pixels * 24ULL;
+    // Depth, confidence, discrete geometry support, inverse-depth spread and the
+    // optional three-map adaptive evidence bundle can coexist during resize.
+    const std::uint64_t load_peak = source_pixels * 28ULL + target_pixels * 28ULL;
+    const std::uint64_t postprocess_peak = target_pixels * 36ULL;
     return std::max(load_peak, postprocess_peak) + 16ULL * 1024ULL * 1024ULL;
 }
 
@@ -276,6 +397,42 @@ QString rawConfidenceStoragePath(const QString &pngPath)
 {
     const QFileInfo info(pngPath);
     return info.dir().filePath(info.completeBaseName() + QStringLiteral("_conf.bin"));
+}
+
+QString rawGeometrySupportStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return info.dir().filePath(
+        info.completeBaseName() + QStringLiteral("_geometry_support.bin"));
+}
+
+QString rawInverseDepthSpreadStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return info.dir().filePath(
+        info.completeBaseName() + QStringLiteral("_inverse_depth_spread.bin"));
+}
+
+QString rawAdaptiveGeometrySupportWeightStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return info.dir().filePath(
+        info.completeBaseName() + QStringLiteral("_adaptive_geometry_support_weight.bin"));
+}
+
+QString rawAdaptiveGeometryEffectiveViewCountStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return info.dir().filePath(
+        info.completeBaseName() +
+        QStringLiteral("_adaptive_geometry_effective_view_count.bin"));
+}
+
+QString rawAdaptiveGeometryConflictRatioStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return info.dir().filePath(
+        info.completeBaseName() + QStringLiteral("_adaptive_geometry_conflict_ratio.bin"));
 }
 
 xjw::common::OperationResult loadDepthMatStorage(const QString &path, cv::Mat *matrix)
@@ -409,6 +566,65 @@ StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &
         batchDirectory);
 }
 
+StoredDepthFramesResult selectFusionEligibleStoredDepthFrames(
+    const StoredDepthFramesResult &storedFrames)
+{
+    StoredDepthFramesResult result;
+    result.batchDir = storedFrames.batchDir;
+    if (!storedFrames.status.ok)
+    {
+        result.status = storedFrames.status;
+        return result;
+    }
+
+    int accepted_count = 0;
+    int fusion_eligible_count = 0;
+    int validation_only_count = 0;
+    result.frames.reserve(storedFrames.frames.size());
+    for (const StoredDepthFrameRecord &frame : storedFrames.frames)
+    {
+        const QString acceptance = frame.acceptance.trimmed().toLower();
+        if (acceptance == QStringLiteral("accepted"))
+        {
+            ++accepted_count;
+        }
+        else if (acceptance == QStringLiteral("validation_only"))
+        {
+            ++validation_only_count;
+        }
+        if (frame.fusionEligible)
+        {
+            ++fusion_eligible_count;
+        }
+        if (xjw::mvs::isPrimaryFusionFrame(
+                frame.acceptance, frame.fusionEligible))
+        {
+            result.frames.push_back(frame);
+        }
+    }
+
+    if (result.frames.size() < 2)
+    {
+        result.status = {
+            false,
+            QStringLiteral(
+                "当前深度图批次没有足够的可融合主帧：accepted=%1，"
+                "fusion_eligible=%2，同时满足=%3/%4，validation_only=%5；"
+                "创建点云至少需要 2 帧同时满足 accepted 和 fusion_eligible。"
+                "这不是目录权限问题；当前深度图缺少可靠的多视几何一致性，"
+                "请检查环拍空三相机参数、相邻视角选择和深度估计质量后重新计算。")
+                .arg(accepted_count)
+                .arg(fusion_eligible_count)
+                .arg(result.frames.size())
+                .arg(storedFrames.frames.size())
+                .arg(validation_only_count)};
+        return result;
+    }
+
+    result.status = {true, QString()};
+    return result;
+}
+
 std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRecord> &frames,
                                            int referenceIndex)
 {
@@ -496,7 +712,12 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     FusionFrameBuildResult result;
     const auto total_start = std::chrono::steady_clock::now();
     result.frame.sourceCamera = camera;
-    result.frame.cameraModel = camera.normalizedForPositiveDepth();
+    xjw::FramePinholeCamera stored_camera;
+    const bool has_stored_camera = xjw::mvs::cameraFromMvsWorkspaceJson(
+        stored.cameraModel, &stored_camera);
+    result.frame.cameraModel = has_stored_camera
+        ? stored_camera.normalizedForPositiveDepth()
+        : camera.normalizedForPositiveDepth();
     result.frame.cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
     result.frame.imgW = stored.gridWidth;
     result.frame.imgH = stored.gridHeight;
@@ -510,16 +731,125 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
         return result;
     }
 
+    int camera_grid_width = 0;
+    int camera_grid_height = 0;
+    if (has_stored_camera)
+    {
+        camera_grid_width = stored.gridWidth;
+        camera_grid_height = stored.gridHeight;
+    }
+    else if (const auto source_size = camera.imageSize(); source_size.has_value())
+    {
+        camera_grid_width = source_size->samples;
+        camera_grid_height = source_size->lines;
+    }
+    if (camera_grid_width > 0 && camera_grid_height > 0 &&
+        (camera_grid_width != result.frame.depthMap.cols ||
+         camera_grid_height != result.frame.depthMap.rows))
+    {
+        result.frame.cameraModel = result.frame.cameraModel.scaledIntrinsics(
+            static_cast<double>(result.frame.depthMap.cols) /
+                static_cast<double>(camera_grid_width),
+            static_cast<double>(result.frame.depthMap.rows) /
+                static_cast<double>(camera_grid_height));
+    }
+    result.frame.cameraModel.setImageSize(xjw::CameraImageSize{
+        result.frame.depthMap.cols,
+        result.frame.depthMap.rows});
+
     const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng,
                                                                        stored.rawConfidencePath);
     if (!rawConfidencePath.isEmpty())
     {
-        (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
+        result.status = loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
+        if (!result.status.ok)
+        {
+            result.status.errorMessage = QStringLiteral("读取缓存置信度图失败：%1")
+                                             .arg(result.status.errorMessage);
+            return result;
+        }
+    }
+
+    xjw::mvs::DepthPostProcessEvidence evidence;
+    const bool require_geometry_evidence =
+        stored.algorithmRevision == 0 ||
+        stored.algorithmRevision >= xjw::mvs::kMvsGeometryFusionSupportRevision;
+    result.status = loadStoredEvidenceMap(stored.rawGeometrySupportPath,
+                                          QStringLiteral("跨视几何支持图"),
+                                          CV_16UC1,
+                                          result.frame.depthMap.size(),
+                                          require_geometry_evidence,
+                                          &evidence.geometrySupportCount);
+    if (!result.status.ok)
+    {
+        return result;
+    }
+    result.status = loadStoredEvidenceMap(stored.rawInverseDepthSpreadPath,
+                                          QStringLiteral("逆深度相对离散度图"),
+                                          CV_32FC1,
+                                          result.frame.depthMap.size(),
+                                          require_geometry_evidence,
+                                          &evidence.inverseDepthRelativeSpread);
+    if (!result.status.ok)
+    {
+        return result;
+    }
+
+    const bool require_adaptive_evidence =
+        !stored.useDiscreteGeometryFallback &&
+        stored.algorithmRevision >= xjw::mvs::kMvsAdaptiveGeometryEvidenceRevision &&
+        stored.sceneProfile == QStringLiteral("orbital_object");
+    const bool has_any_adaptive_evidence =
+        !stored.useDiscreteGeometryFallback &&
+        (!stored.rawAdaptiveGeometrySupportWeightPath.isEmpty() ||
+         !stored.rawAdaptiveGeometryEffectiveViewCountPath.isEmpty() ||
+         !stored.rawAdaptiveGeometryConflictRatioPath.isEmpty());
+    if (require_adaptive_evidence || has_any_adaptive_evidence)
+    {
+        result.status = loadStoredEvidenceMap(
+            stored.rawAdaptiveGeometrySupportWeightPath,
+            QStringLiteral("连续几何支持权重图"),
+            CV_32FC1,
+            result.frame.depthMap.size(),
+            true,
+            &evidence.adaptiveSupportWeight);
+        if (!result.status.ok)
+        {
+            return result;
+        }
+        result.status = loadStoredEvidenceMap(
+            stored.rawAdaptiveGeometryEffectiveViewCountPath,
+            QStringLiteral("连续几何有效视图数图"),
+            CV_32FC1,
+            result.frame.depthMap.size(),
+            true,
+            &evidence.adaptiveEffectiveViewCount);
+        if (!result.status.ok)
+        {
+            return result;
+        }
+        result.status = loadStoredEvidenceMap(
+            stored.rawAdaptiveGeometryConflictRatioPath,
+            QStringLiteral("连续几何冲突比例图"),
+            CV_32FC1,
+            result.frame.depthMap.size(),
+            true,
+            &evidence.adaptiveConflictRatio);
+        if (!result.status.ok)
+        {
+            return result;
+        }
     }
     const auto read_done = std::chrono::steady_clock::now();
 
     const auto resize_start = read_done;
     downsampleFusionFrameForMaxDimension(&result.frame, fusionMaxImageDim);
+    const cv::Size fusion_size = result.frame.depthMap.size();
+    resizeEvidenceMap(&evidence.geometrySupportCount, fusion_size);
+    resizeEvidenceMap(&evidence.inverseDepthRelativeSpread, fusion_size);
+    resizeEvidenceMap(&evidence.adaptiveSupportWeight, fusion_size);
+    resizeEvidenceMap(&evidence.adaptiveEffectiveViewCount, fusion_size);
+    resizeEvidenceMap(&evidence.adaptiveConflictRatio, fusion_size);
     const auto resize_done = std::chrono::steady_clock::now();
 
     const auto postprocess_start = resize_done;
@@ -528,8 +858,16 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
         result.frame.confidence,
         fusionConfig,
         frameIndexFromPath(stored.rawDepthPath),
-        viewCount);
+        viewCount,
+        nullptr,
+        &evidence);
     const auto postprocess_done = std::chrono::steady_clock::now();
+    result.frame.geometrySupportCount = std::move(evidence.geometrySupportCount);
+    if (!result.frame.geometrySupportCount.empty())
+    {
+        result.frame.geometrySupportCount.setTo(
+            cv::Scalar(0), result.frame.depthMap <= 0.0f);
+    }
     result.frame.confidence.release();
     result.frame.imgW = result.frame.depthMap.cols;
     result.frame.imgH = result.frame.depthMap.rows;

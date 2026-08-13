@@ -39,7 +39,7 @@ struct StereoFusionConfig
     bool  useColor           = true;   ///< 是否按原图给融合点赋色
     int   colorCacheCapacity = 4;      ///< 原图懒加载 LRU 缓存容量
     bool  requireValidMask   = false;  ///< 要求每帧提供尺寸一致的权威有效蒙版
-    int   minSupportViews    = 0;      ///< PatchMatch 支持数下限；0 表示不检查
+    int   minGeometryObservationCount = 0; ///< 几何一致总观测数下限（含参考帧）；0 表示不检查
     float maxLocalDepthGradient = 0.20f; ///< 局部相对深度突变上限；<=0 表示不检查
     bool  fuseOnlyFirstFrame = false;  ///< 流式窗口模式：只从窗口首帧产生点
     bool  enableLowYieldFallback = false; ///< 显式预览/低产出模式才允许降到双视一致

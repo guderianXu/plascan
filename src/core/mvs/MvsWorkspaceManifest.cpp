@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QThread>
 
 #include <algorithm>
 #include <cmath>
@@ -72,10 +73,192 @@ bool hasOnlyLegacyFusionPostprocessReason(const QJsonArray &reasons)
     return true;
 }
 
+bool containsReason(const QJsonArray &reasons, const QString &expected)
+{
+    return std::any_of(
+        reasons.cbegin(), reasons.cend(), [&expected](const QJsonValue &value)
+        {
+            return value.toString() == expected;
+        });
+}
+
+bool hasOnlyRecoverableAdaptiveOrPostprocessReasons(const QJsonArray &reasons)
+{
+    if (reasons.isEmpty())
+    {
+        return false;
+    }
+    for (const QJsonValue &value : reasons)
+    {
+        const QString reason = value.toString();
+        if (reason != QStringLiteral("destructive_fusion_postprocess_collapse")
+            && reason != QStringLiteral("fusion_postprocess_coverage_loss")
+            && reason != QStringLiteral("insufficient_adaptive_effective_views")
+            && reason != QStringLiteral("excessive_adaptive_geometry_conflict")
+            && reason != QStringLiteral(
+                "adaptive_geometry_fallback_to_discrete_core"))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool hasFiniteRatio(const QJsonObject &object, const QString &name)
 {
     const QJsonValue value = object.value(name);
     return value.isDouble() && std::isfinite(value.toDouble());
+}
+
+bool hasReliableAdaptiveOrbitalEvidence(const QJsonObject &artifact)
+{
+    const int algorithm_revision = artifact.value(
+        QStringLiteral("algorithm_revision")).toInt(0);
+    if (algorithm_revision < kMvsAdaptiveGeometryConflictRatioRevision)
+    {
+        return true;
+    }
+
+    const QJsonObject diagnostics = artifact.value(
+        QStringLiteral("geometry_evidence_diagnostics")).toObject();
+    const QString effective_view_key = hasFiniteRatio(
+            diagnostics,
+            QStringLiteral("adaptive_observable_effective_view_count_mean"))
+        ? QStringLiteral("adaptive_observable_effective_view_count_mean")
+        : QStringLiteral("adaptive_effective_view_count_mean");
+    const QString conflict_key = hasFiniteRatio(
+            diagnostics,
+            QStringLiteral("adaptive_observable_conflict_ratio_mean"))
+        ? QStringLiteral("adaptive_observable_conflict_ratio_mean")
+        : QStringLiteral("adaptive_conflict_ratio_mean");
+    if (!hasFiniteRatio(diagnostics, effective_view_key) ||
+        !hasFiniteRatio(diagnostics, conflict_key))
+    {
+        return false;
+    }
+
+    constexpr double minimum_effective_view_count = 1.50;
+    constexpr double maximum_conflict_ratio = 0.60;
+    return diagnostics.value(effective_view_key).toDouble() >=
+            minimum_effective_view_count &&
+        diagnostics.value(conflict_key).toDouble() <= maximum_conflict_ratio;
+}
+
+bool populateStoredOrbitalQualityInput(const QJsonObject &artifact,
+                                       DepthFrameQualityInput *input)
+{
+    if (!input)
+    {
+        return false;
+    }
+    const QJsonObject depth_quality = artifact.value(
+        QStringLiteral("depth_quality")).toObject();
+    const QJsonObject depth_completeness = artifact.value(
+        QStringLiteral("depth_completeness")).toObject();
+    if (!hasFiniteRatio(artifact, QStringLiteral("valid_coverage"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("largest_component_ratio"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("mean_confidence"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("depth_at_search_boundary_ratio"))
+        || !hasFiniteRatio(depth_completeness,
+                           QStringLiteral("consistency_retention_ratio"))
+        || !hasFiniteRatio(depth_completeness,
+                           QStringLiteral("fusion_postprocess_retention_ratio")))
+    {
+        return false;
+    }
+
+    input->sceneProfile = MvsSceneProfile::OrbitalObject;
+    input->validCoverage = static_cast<float>(artifact.value(
+        QStringLiteral("valid_coverage")).toDouble());
+    input->largestComponentRatio = static_cast<float>(depth_quality.value(
+        QStringLiteral("largest_component_ratio")).toDouble());
+    input->meanConfidence = static_cast<float>(depth_quality.value(
+        QStringLiteral("mean_confidence")).toDouble());
+    input->multiViewConsistency = std::clamp(
+        static_cast<float>(depth_completeness.value(
+            QStringLiteral("consistency_retention_ratio")).toDouble()),
+        0.0f,
+        1.0f);
+    input->depthAtSearchBoundaryRatio = static_cast<float>(depth_quality.value(
+        QStringLiteral("depth_at_search_boundary_ratio")).toDouble());
+    input->fusionPostprocessRetentionRatio = static_cast<float>(
+        depth_completeness.value(
+            QStringLiteral("fusion_postprocess_retention_ratio")).toDouble());
+    return true;
+}
+
+double storedDiscreteGeometryCoreRatio(const QJsonObject &artifact)
+{
+    const QJsonObject diagnostics = artifact.value(
+        QStringLiteral("geometry_evidence_diagnostics")).toObject();
+    if (!diagnostics.value(QStringLiteral("valid_inputs")).toBool(false))
+    {
+        return -1.0;
+    }
+    if (hasFiniteRatio(
+            diagnostics, QStringLiteral("discrete_geometry_core_ratio")))
+    {
+        return std::clamp(
+            diagnostics.value(QStringLiteral(
+                "discrete_geometry_core_ratio")).toDouble(),
+            0.0,
+            1.0);
+    }
+    if (artifact.value(QStringLiteral("algorithm_revision")).toInt(0) >=
+        kMvsDiscreteGeometryCoreRatioRevision)
+    {
+        return -1.0;
+    }
+
+    // Revision 34 did not persist the joint ratio, but it did persist the
+    // complete support histogram and inverse-depth quantiles.  If P90 is under
+    // the spread limit, at least 90% of valid pixels satisfy the spread term.
+    // Inclusion-exclusion therefore gives a conservative lower bound for the
+    // joint support-and-spread core without reading tens of gigabytes on the
+    // GUI thread.
+    if (!hasFiniteRatio(diagnostics, QStringLiteral("valid_pixel_count"))
+        || !hasFiniteRatio(
+            diagnostics, QStringLiteral("inverse_depth_spread_p90")))
+    {
+        return -1.0;
+    }
+    const double valid_pixel_count = diagnostics.value(
+        QStringLiteral("valid_pixel_count")).toDouble();
+    const double spread_p90 = diagnostics.value(
+        QStringLiteral("inverse_depth_spread_p90")).toDouble();
+    const QJsonObject histogram = diagnostics.value(
+        QStringLiteral("geometry_support_histogram")).toObject();
+    if (valid_pixel_count <= 0.0
+        || spread_p90 > static_cast<double>(
+            kDiscreteGeometryCoreMaximumInverseDepthSpread)
+        || !hasFiniteRatio(histogram, QStringLiteral("support_3"))
+        || !hasFiniteRatio(histogram, QStringLiteral("support_4"))
+        || !hasFiniteRatio(histogram, QStringLiteral("support_5_plus")))
+    {
+        return -1.0;
+    }
+    const double three_view_count =
+        histogram.value(QStringLiteral("support_3")).toDouble()
+        + histogram.value(QStringLiteral("support_4")).toDouble()
+        + histogram.value(QStringLiteral("support_5_plus")).toDouble();
+    const double three_view_ratio = std::clamp(
+        three_view_count / valid_pixel_count, 0.0, 1.0);
+    return std::max(0.0, three_view_ratio - 0.10);
+}
+
+bool hasReliableStoredDiscreteOrbitalEvidence(const QJsonObject &artifact)
+{
+    DepthFrameQualityInput input;
+    if (!populateStoredOrbitalQualityInput(artifact, &input))
+    {
+        return false;
+    }
+    input.discreteGeometryCoreRatio = static_cast<float>(
+        storedDiscreteGeometryCoreRatio(artifact));
+    input.discreteGeometryCoreAvailable =
+        std::isfinite(input.discreteGeometryCoreRatio)
+        && input.discreteGeometryCoreRatio >= 0.0f;
+    return hasReliableOrbitalDiscreteGeometryCore(input);
 }
 }
 
@@ -93,52 +276,41 @@ MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
         ? artifact.value(QStringLiteral("fusion_eligible")).toBool()
         : qualification.acceptance == QStringLiteral("accepted");
 
+    const QJsonArray quality_reasons = quality_decision.value(
+        QStringLiteral("reasons")).toArray();
+    qualification.useDiscreteGeometryFallback = containsReason(
+        quality_reasons,
+        QStringLiteral("adaptive_geometry_fallback_to_discrete_core"));
+
     if (qualification.fusionEligible
         || artifact.value(QStringLiteral("status")).toString()
             != QStringLiteral("completed")
         || artifact.value(QStringLiteral("scene_profile")).toString()
-            != QStringLiteral("orbital_object")
-        || !hasOnlyLegacyFusionPostprocessReason(
-            quality_decision.value(QStringLiteral("reasons")).toArray()))
-    {
-        return qualification;
-    }
-
-    const QJsonObject depth_quality = artifact.value(
-        QStringLiteral("depth_quality")).toObject();
-    const QJsonObject depth_completeness = artifact.value(
-        QStringLiteral("depth_completeness")).toObject();
-    if (!hasFiniteRatio(artifact, QStringLiteral("valid_coverage"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("largest_component_ratio"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("mean_confidence"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("depth_at_search_boundary_ratio"))
-        || !hasFiniteRatio(depth_completeness,
-                           QStringLiteral("consistency_retention_ratio"))
-        || !hasFiniteRatio(depth_completeness,
-                           QStringLiteral("fusion_postprocess_retention_ratio")))
+            != QStringLiteral("orbital_object"))
     {
         return qualification;
     }
 
     DepthFrameQualityInput input;
-    input.sceneProfile = MvsSceneProfile::OrbitalObject;
-    input.validCoverage = static_cast<float>(artifact.value(
-        QStringLiteral("valid_coverage")).toDouble());
-    input.largestComponentRatio = static_cast<float>(depth_quality.value(
-        QStringLiteral("largest_component_ratio")).toDouble());
-    input.meanConfidence = static_cast<float>(depth_quality.value(
-        QStringLiteral("mean_confidence")).toDouble());
-    input.multiViewConsistency = std::clamp(
-        static_cast<float>(depth_completeness.value(
-            QStringLiteral("consistency_retention_ratio")).toDouble()),
-        0.0f,
-        1.0f);
-    input.depthAtSearchBoundaryRatio = static_cast<float>(depth_quality.value(
-        QStringLiteral("depth_at_search_boundary_ratio")).toDouble());
-    input.fusionPostprocessRetentionRatio = static_cast<float>(
-        depth_completeness.value(
-            QStringLiteral("fusion_postprocess_retention_ratio")).toDouble());
-    if (!hasReliableOrbitalFusionCore(input))
+    if (!populateStoredOrbitalQualityInput(artifact, &input))
+    {
+        return qualification;
+    }
+
+    const bool legacy_postprocess_migration =
+        hasOnlyLegacyFusionPostprocessReason(quality_reasons)
+        && hasReliableAdaptiveOrbitalEvidence(artifact)
+        && hasReliableOrbitalFusionCore(input);
+    const bool adaptive_failure = containsReason(
+            quality_reasons,
+            QStringLiteral("insufficient_adaptive_effective_views"))
+        || containsReason(
+            quality_reasons,
+            QStringLiteral("excessive_adaptive_geometry_conflict"));
+    const bool discrete_core_migration = adaptive_failure
+        && hasOnlyRecoverableAdaptiveOrPostprocessReasons(quality_reasons)
+        && hasReliableStoredDiscreteOrbitalEvidence(artifact);
+    if (!legacy_postprocess_migration && !discrete_core_migration)
     {
         return qualification;
     }
@@ -146,6 +318,7 @@ MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
     qualification.acceptance = QStringLiteral("accepted");
     qualification.fusionEligible = true;
     qualification.reclassified = true;
+    qualification.useDiscreteGeometryFallback = discrete_core_migration;
     return qualification;
 }
 
@@ -161,6 +334,14 @@ QJsonObject MvsDepthFrameRecord::toJson() const
         source_indices.append(source_index);
     }
     object.insert(QStringLiteral("source_indices"), source_indices);
+    QJsonArray geometry_source_indices;
+    for (const int source_index : geometrySourceIndices)
+    {
+        geometry_source_indices.append(source_index);
+    }
+    object.insert(
+        QStringLiteral("geometry_source_indices"),
+        geometry_source_indices);
     object.insert(QStringLiteral("source_plan"), sourcePlan);
     object.insert(QStringLiteral("quality_profile"), qualityProfile);
     object.insert(QStringLiteral("configured_source_view_count"),
@@ -224,6 +405,10 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("scene_profile"), sceneProfile);
     object.insert(QStringLiteral("filter_mode"), filterMode);
     object.insert(QStringLiteral("acceptance"), acceptance);
+    if (fusionEligibilityKnown)
+    {
+        object.insert(QStringLiteral("fusion_eligible"), fusionEligible);
+    }
     object.insert(QStringLiteral("depth_postprocess"), depthPostprocess);
     object.insert(QStringLiteral("camera_model"), cameraModel);
     object.insert(QStringLiteral("status"), status);
@@ -273,6 +458,11 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     for (const QJsonValue &value : object.value(QStringLiteral("source_indices")).toArray())
     {
         record.sourceIndices.push_back(value.toInt(-1));
+    }
+    for (const QJsonValue &value :
+         object.value(QStringLiteral("geometry_source_indices")).toArray())
+    {
+        record.geometrySourceIndices.push_back(value.toInt(-1));
     }
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
     record.qualityProfile = object.value(
@@ -333,6 +523,11 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.filterMode = object.value(QStringLiteral("filter_mode")).toString();
     record.acceptance = object.value(QStringLiteral("acceptance")).toString(
         record.qualityDecision.value(QStringLiteral("acceptance")).toString());
+    record.fusionEligibilityKnown = object.contains(
+        QStringLiteral("fusion_eligible"));
+    record.fusionEligible = record.fusionEligibilityKnown
+        ? object.value(QStringLiteral("fusion_eligible")).toBool()
+        : record.acceptance == QStringLiteral("accepted");
     record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
     record.cameraModel = object.value(QStringLiteral("camera_model")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
@@ -443,26 +638,43 @@ bool MvsWorkspaceManifest::saveAtomic(const QString &path, QString *errorMsg) co
         return false;
     }
 
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    const QByteArray payload = QJsonDocument(toJson()).toJson(QJsonDocument::Indented);
+    QString last_error;
+    constexpr int maximum_attempts = 5;
+    for (int attempt = 0; attempt < maximum_attempts; ++attempt)
     {
-        if (errorMsg)
+        QSaveFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         {
-            *errorMsg = file.errorString();
+            const qint64 written = file.write(payload);
+            if (written == payload.size() && file.commit())
+            {
+                return true;
+            }
+            last_error = written == payload.size()
+                ? file.errorString()
+                : QStringLiteral("写入 manifest 数据不完整");
+            if (file.isOpen())
+            {
+                file.cancelWriting();
+            }
         }
-        return false;
+        else
+        {
+            last_error = file.errorString();
+        }
+
+        if (attempt + 1 < maximum_attempts)
+        {
+            QThread::msleep(static_cast<unsigned long>(20 * (attempt + 1)));
+        }
     }
 
-    file.write(QJsonDocument(toJson()).toJson(QJsonDocument::Indented));
-    if (!file.commit())
+    if (errorMsg)
     {
-        if (errorMsg)
-        {
-            *errorMsg = file.errorString();
-        }
-        return false;
+        *errorMsg = last_error;
     }
-    return true;
+    return false;
 }
 
 void MvsWorkspaceManifest::clear()
@@ -621,6 +833,12 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.acceptance = _frames[index].acceptance;
     }
+    if (!completed.fusionEligibilityKnown && index >= 0)
+    {
+        completed.fusionEligibilityKnown =
+            _frames[index].fusionEligibilityKnown;
+        completed.fusionEligible = _frames[index].fusionEligible;
+    }
     if (completed.depthPostprocess.isEmpty() && index >= 0)
     {
         completed.depthPostprocess = _frames[index].depthPostprocess;
@@ -691,11 +909,48 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return false;
     }
 
+    const auto artifact_exists = [](const QString &path)
+    {
+        return !path.isEmpty() && QFileInfo::exists(path);
+    };
+
     if (record.algorithmRevision >= kMvsDepthProvenanceRevision &&
-        (record.depthProvenancePath.isEmpty() ||
-         !QFileInfo::exists(record.depthProvenancePath)))
+        !artifact_exists(record.depthProvenancePath))
     {
         return false;
+    }
+
+    if (record.algorithmRevision >= kMvsGeometryFusionSupportRevision &&
+        (!artifact_exists(record.rawGeometrySupportPath) ||
+         !artifact_exists(record.rawInverseDepthSpreadPath)))
+    {
+        return false;
+    }
+
+    if (record.algorithmRevision >= kMvsGeometrySourceOrdinalRevision)
+    {
+        if (!artifact_exists(record.rawGeometrySourceMaskPath) ||
+            record.geometrySourceIndices.isEmpty() ||
+            record.geometrySourceIndices.size() > 16)
+        {
+            return false;
+        }
+        for (qsizetype ordinal = 0;
+             ordinal < record.geometrySourceIndices.size();
+             ++ordinal)
+        {
+            const int source_index =
+                record.geometrySourceIndices[ordinal];
+            if (source_index < 0 || source_index == record.refIndex ||
+                std::find(
+                    record.geometrySourceIndices.cbegin(),
+                    record.geometrySourceIndices.cbegin() + ordinal,
+                    source_index) !=
+                    record.geometrySourceIndices.cbegin() + ordinal)
+            {
+                return false;
+            }
+        }
     }
 
     const bool requires_adaptive_geometry_evidence =
@@ -706,10 +961,6 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return true;
     }
 
-    const auto artifact_exists = [](const QString &path)
-    {
-        return !path.isEmpty() && QFileInfo::exists(path);
-    };
     const bool conflict_artifact_exists =
         artifact_exists(record.rawAdaptiveGeometryConflictRatioPath) ||
         (record.algorithmRevision < kMvsAdaptiveGeometryConflictRatioRevision &&

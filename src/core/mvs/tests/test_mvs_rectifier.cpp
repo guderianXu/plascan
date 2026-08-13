@@ -236,6 +236,109 @@ TEST(EpipolarRectifier, YawedStereoKeepsEpipolarRowsAlignedAcrossPoints)
     }
 }
 
+TEST(EpipolarRectifier, RotatedRectifiedDepthRoundTripsToOriginalCameraZ)
+{
+    constexpr int width = 64;
+    constexpr int height = 48;
+    constexpr double focal = 100.0;
+    constexpr double principal_x = 32.0;
+    constexpr double principal_y = 24.0;
+    constexpr double angle_degrees = 10.0;
+    const double angle = angle_degrees * M_PI / 180.0;
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    FramePinholeCamera original_camera;
+    original_camera.setIntrinsics(focal, focal, principal_x, principal_y);
+    original_camera.setPose({1.0, 0.0, 0.0,
+                             0.0, 1.0, 0.0,
+                             0.0, 0.0, 1.0},
+                            {0.0, 0.0, 0.0});
+    FramePinholeCamera rectified_camera;
+    rectified_camera.setIntrinsics(focal, focal, principal_x, principal_y);
+    // setPose receives camera-to-world. Its transpose is the +10 degree
+    // world-to-rectified-camera rotation used by the homography below.
+    rectified_camera.setPose({cosine, 0.0, -sine,
+                              0.0, 1.0, 0.0,
+                              sine, 0.0, cosine},
+                             {0.0, 0.0, 0.0});
+    const cv::Mat camera_matrix = (cv::Mat_<double>(3, 3)
+        << focal, 0.0, principal_x,
+           0.0, focal, principal_y,
+           0.0, 0.0, 1.0);
+    const cv::Mat rotation_world_to_rectified = (cv::Mat_<double>(3, 3)
+        << cosine, 0.0, sine,
+           0.0, 1.0, 0.0,
+           -sine, 0.0, cosine);
+    EpipolarRectifier::RectifiedPair rectified;
+    rectified.H1 = camera_matrix * rotation_world_to_rectified * camera_matrix.inv();
+    rectified.H1inv = rectified.H1.inv();
+    rectified.rectCamLeft = rectified_camera;
+    rectified.refIsRight = false;
+
+    constexpr double original_depth = 6.0;
+    constexpr int original_column = 32;
+    constexpr int original_row = 24;
+    const double original_pixel[2] = {original_column, original_row};
+    double world[3] = {};
+    ASSERT_TRUE(original_camera.unprojectPixel(original_pixel, original_depth, world));
+    double rectified_pixel[2] = {};
+    double rectified_depth = 0.0;
+    ASSERT_TRUE(rectified_camera.projectWorldPointWithDepth(
+        world, rectified_pixel, rectified_depth));
+    ASSERT_GT(std::fabs(rectified_depth - original_depth), 0.01);
+    const int rectified_column = static_cast<int>(std::lround(rectified_pixel[0]));
+    const int rectified_row = static_cast<int>(std::lround(rectified_pixel[1]));
+    ASSERT_GE(rectified_column, 0);
+    ASSERT_LT(rectified_column, width);
+    ASSERT_GE(rectified_row, 0);
+    ASSERT_LT(rectified_row, height);
+
+    cv::Mat rectified_depth_map(height, width, CV_32FC1, cv::Scalar(0.0f));
+    rectified_depth_map.at<float>(rectified_row, rectified_column) =
+        static_cast<float>(rectified_depth);
+    const cv::Mat original_depth_map = EpipolarRectifier::unrectifyDepth(
+        rectified_depth_map,
+        rectified,
+        original_camera,
+        width,
+        height);
+
+    ASSERT_FALSE(original_depth_map.empty());
+    ASSERT_GT(original_depth_map.at<float>(original_row, original_column), 0.0f);
+    EXPECT_NEAR(original_depth_map.at<float>(original_row, original_column),
+                original_depth,
+                1.0e-3);
+
+    float rectified_near = 0.0f;
+    float rectified_far = 0.0f;
+    ASSERT_TRUE(EpipolarRectifier::rectifiedDepthRange(
+        original_camera,
+        rectified_camera,
+        width,
+        height,
+        4.0f,
+        9.0f,
+        rectified_near,
+        rectified_far));
+    for (const int row : {0, height - 1})
+    {
+        for (const int column : {0, width - 1})
+        {
+            const double pixel[2] = {
+                static_cast<double>(column), static_cast<double>(row)};
+            for (const double depth : {4.0, 9.0})
+            {
+                double range_world[3] = {};
+                ASSERT_TRUE(original_camera.unprojectPixel(pixel, depth, range_world));
+                const double depth_in_rectified_camera =
+                    rectified_camera.positiveDepth(range_world);
+                EXPECT_GE(depth_in_rectified_camera, rectified_near);
+                EXPECT_LE(depth_in_rectified_camera, rectified_far);
+            }
+        }
+    }
+}
+
 
 TEST(EpipolarRectifier, VerticalBaselineSetsTransposedForHorizontalDisparity)
 {

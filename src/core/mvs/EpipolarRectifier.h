@@ -39,7 +39,20 @@ public:
     static cv::Mat unrectifyDepth(
         const cv::Mat &rectifiedDepth,
         const RectifiedPair &pair,
+        const FramePinholeCamera &originalReferenceCamera,
         int origW, int origH);
+
+    /// Converts an axial positive-depth interval from the original reference
+    /// camera into a conservative interval for the rectified reference camera.
+    static bool rectifiedDepthRange(
+        const FramePinholeCamera &originalReferenceCamera,
+        const FramePinholeCamera &rectifiedReferenceCamera,
+        int originalWidth,
+        int originalHeight,
+        float originalNear,
+        float originalFar,
+        float &rectifiedNear,
+        float &rectifiedFar);
 
     static cv::Mat unrectifyNearest(
         const cv::Mat &rectifiedArtifact,

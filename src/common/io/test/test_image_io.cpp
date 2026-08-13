@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 namespace
 {
 
@@ -50,6 +52,30 @@ TEST(ImageIOTest, PreservesSixteenBitTiffDepth)
     EXPECT_EQ(restored.type(), CV_16UC1);
     EXPECT_EQ(restored.size(), source.size());
     EXPECT_EQ(cv::norm(restored, source, cv::NORM_INF), 0.0);
+}
+
+TEST(ImageIOTest, ScalesSixteenBitTiffWhenEightBitGrayIsRequested)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+
+    const QString path =
+        QDir(temporary.path()).filePath(QStringLiteral("十六位纹理.tiff"));
+    cv::Mat source(1, 4, CV_16UC1);
+    source.at<std::uint16_t>(0, 0) = 0;
+    source.at<std::uint16_t>(0, 1) = 256;
+    source.at<std::uint16_t>(0, 2) = 32768;
+    source.at<std::uint16_t>(0, 3) = 65535;
+    ASSERT_TRUE(writeImage(path, source));
+
+    QString error;
+    const cv::Mat restored = readImage(path, cv::IMREAD_GRAYSCALE, &error);
+    ASSERT_FALSE(restored.empty()) << qPrintable(error);
+    ASSERT_EQ(restored.type(), CV_8UC1);
+    EXPECT_EQ(restored.at<std::uint8_t>(0, 0), 0);
+    EXPECT_EQ(restored.at<std::uint8_t>(0, 1), 1);
+    EXPECT_EQ(restored.at<std::uint8_t>(0, 2), 128);
+    EXPECT_EQ(restored.at<std::uint8_t>(0, 3), 255);
 }
 
 TEST(ImageIOTest, ExpandsSingleBandTiffWhenColorIsRequested)

@@ -27,6 +27,11 @@ struct StoredDepthFrameRecord
     QString depthPng;
     QString rawDepthPath;
     QString rawConfidencePath;
+    QString rawGeometrySupportPath;
+    QString rawInverseDepthSpreadPath;
+    QString rawAdaptiveGeometrySupportWeightPath;
+    QString rawAdaptiveGeometryEffectiveViewCountPath;
+    QString rawAdaptiveGeometryConflictRatioPath;
     QStringList sourceImages;
     QString device;
     QString configHash;
@@ -38,6 +43,7 @@ struct StoredDepthFrameRecord
     QString acceptance;
     bool fusionEligible = false;
     bool fusionEligibilityKnown = false;
+    bool useDiscreteGeometryFallback = false;
     int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;
@@ -69,6 +75,11 @@ int recommendedDepthFrameLoadWorkers(int requestedWorkers,
 
 QString rawDepthStoragePath(const QString &pngPath);
 QString rawConfidenceStoragePath(const QString &pngPath);
+QString rawGeometrySupportStoragePath(const QString &pngPath);
+QString rawInverseDepthSpreadStoragePath(const QString &pngPath);
+QString rawAdaptiveGeometrySupportWeightStoragePath(const QString &pngPath);
+QString rawAdaptiveGeometryEffectiveViewCountStoragePath(const QString &pngPath);
+QString rawAdaptiveGeometryConflictRatioStoragePath(const QString &pngPath);
 xjw::common::OperationResult loadDepthMatStorage(const QString &path, cv::Mat *matrix);
 xjw::common::OperationResult writeDepthMatStorage(const QString &path, const cv::Mat &matrix);
 bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = false);
@@ -77,6 +88,8 @@ bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireC
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
 StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
                                                              const QString &batchDirectory);
+StoredDepthFramesResult selectFusionEligibleStoredDepthFrames(
+    const StoredDepthFramesResult &storedFrames);
 std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRecord> &frames,
                                            int referenceIndex);
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,

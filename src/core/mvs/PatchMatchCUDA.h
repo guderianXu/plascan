@@ -11,7 +11,9 @@
 //       Y = R_rel[3..5] * [xn,yn,1] + T_rel[1] / d
 //       Z = R_rel[6..8] * [xn,yn,1] + T_rel[2] / d
 //       u_s = fx_s * X/Z + cx_s
-//     其中 R_rel = R_cw_src * R_cw_ref^T, T_rel = T_src - R_rel * T_ref
+//     其中 R_rel = R_cw_src * R_cw_ref^T,
+//          T_rel = R_cw_src * (C_ref - C_src)
+//     T_rel 必须先以 double 相机中心计算局部基线，再转为 float。
 //
 //   源相机数据布局（每个源帧 16 个 float）：
 //     [0..3]  = {fx_s, cx_s, fy_s, cy_s}

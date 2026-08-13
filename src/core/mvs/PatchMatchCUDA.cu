@@ -8,6 +8,7 @@
 // =============================================================================
 
 #include "PatchMatchCUDA.h"
+#include "PatchMatchHostUtils.h"
 #include "PatchMatchPhotometricCost.h"
 #include "Logger.h"
 #include <opencv2/imgproc.hpp>
@@ -59,15 +60,11 @@ struct HostPinholeCamera
     float focalY = 0.0f;
     float principalX = 0.0f;
     float principalY = 0.0f;
-    std::array<float, 9> rotationWorldToCamera{};
-    std::array<float, 3> translationWorldToCamera{};
 };
 
 HostPinholeCamera makeHostPinholeCamera(const FramePinholeCamera &camera, int downsampleFactor)
 {
     const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-    const std::array<double, 9> rotation = camera.worldToCameraRotation();
-    const std::array<double, 3> translation = camera.worldToCameraTranslation();
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
 
     HostPinholeCamera result;
@@ -75,14 +72,6 @@ HostPinholeCamera makeHostPinholeCamera(const FramePinholeCamera &camera, int do
     result.focalY = static_cast<float>(intrinsics.focalY) * scale;
     result.principalX = static_cast<float>(intrinsics.principalX) * scale;
     result.principalY = static_cast<float>(intrinsics.principalY) * scale;
-    for (int index = 0; index < 9; ++index)
-    {
-        result.rotationWorldToCamera[index] = static_cast<float>(rotation[index]);
-    }
-    for (int index = 0; index < 3; ++index)
-    {
-        result.translationWorldToCamera[index] = static_cast<float>(translation[index]);
-    }
     return result;
 }
 
@@ -2059,30 +2048,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     for (int si = 0; si < N; ++si) 
     {
-        const HostPinholeCamera sc = makeHostPinholeCamera(srcCams[si], ds);
-
         float *sd = srcDatas.data() + si * 16;
-        sd[0]=sc.focalX; sd[1]=sc.principalX; sd[2]=sc.focalY; sd[3]=sc.principalY;
-
-        float R_rel[9], T_rel[3];
-        for (int r=0; r<3; ++r)
-            for (int c=0; c<3; ++c) 
-            {
-                float v=0;
-                for (int k=0; k<3; ++k)
-                    v += sc.rotationWorldToCamera[r*3+k]
-                       * refCamS.rotationWorldToCamera[c*3+k];
-                R_rel[r*3+c] = v;
-            }
-        for (int r=0; r<3; ++r) 
-        {
-            float v=sc.translationWorldToCamera[r];
-            for (int c=0; c<3; ++c)
-                v -= R_rel[r*3+c] * refCamS.translationWorldToCamera[c];
-            T_rel[r]=v;
-        }
-        for (int k=0; k<9; ++k) sd[4+k]=R_rel[k];
-        sd[13]=T_rel[0]; sd[14]=T_rel[1]; sd[15]=T_rel[2];
+        const std::array<float, 16> source_data =
+            buildPatchMatchSourceCameraData(refCam, srcCams[si], ds);
+        std::copy(source_data.begin(), source_data.end(), sd);
     }
 
     // ── GPU 参数摘要 ──────────────────────────────────────────
@@ -2530,21 +2499,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
 
     // ── 后处理（在降采样分辨率上做，再 upscale → 更快 ×4+）───────
-    if (config.doMedianBlur && config.medianKernelSize > 1) 
-    {
-        cv::Mat validMask = (depthS > 0);
-        cv::Mat tmp; cv::medianBlur(depthS, tmp, config.medianKernelSize);
-        tmp.copyTo(depthS, validMask);
-    }
-    if (config.doBilateralFilter) 
-    {
-        cv::Mat validMask = (depthS > 0);
-        cv::Mat tmp;
-        cv::bilateralFilter(depthS, tmp, config.bilateralD,
-                            config.bilateralSigmaColor, config.bilateralSigmaSpace);
-        depthS = cv::Mat::zeros(depthS.rows, depthS.cols, CV_32F);
-        tmp.copyTo(depthS, validMask);
-    }
+    postprocessPatchMatchDepth(depthS, config);
 
     // ── 上采样到原始分辨率 ───────────────────────────────────────
     cv::Mat depthFull = depthS, confFull = confS;

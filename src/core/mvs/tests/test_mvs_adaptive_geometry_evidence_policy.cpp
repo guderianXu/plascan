@@ -1,10 +1,12 @@
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 #include <gtest/gtest.h>
 
 #include "AdaptiveGeometryEvidencePolicy.h"
+#include "DepthGeometryConsistency.h"
 
 namespace
 {
@@ -42,6 +44,153 @@ TEST(AdaptiveGeometryEvidencePolicyTest,
     EXPECT_FLOAT_EQ(result.conflictRatio, 0.0f);
     EXPECT_NEAR(result.agreementProbability, 5.0f / 6.0f, 1.0e-6f);
     EXPECT_NEAR(result.supportWeight, 7.0f / 24.0f, 1.0e-6f);
+}
+
+TEST(AdaptiveGeometryEvidencePolicyTest,
+     FrameSummaryExcludesReferenceOnlyPixelsButKeepsPureConflicts)
+{
+    xjw::mvs::AdaptiveGeometryEvidenceMaps maps;
+    maps.effectiveViewCount = (cv::Mat_<float>(1, 3) << 1.0f, 2.0f, 1.0f);
+    maps.conflictRatio = (cv::Mat_<float>(1, 3) << 0.0f, 0.25f, 0.80f);
+
+    const xjw::mvs::AdaptiveGeometryEvidenceSummary summary =
+        xjw::mvs::summarizeAdaptiveGeometryEvidence(maps);
+
+    EXPECT_TRUE(summary.validInputs);
+    EXPECT_EQ(summary.observablePixelCount, 2);
+    EXPECT_NEAR(summary.effectiveViewCountMean, 1.5f, 1.0e-6f);
+    EXPECT_NEAR(summary.conflictRatioMean, 0.525f, 1.0e-6f);
+}
+
+TEST(AdaptiveGeometryEvidencePolicyTest,
+     FrameSummaryReportsUnavailableWhenNoSourceIsObservable)
+{
+    xjw::mvs::AdaptiveGeometryEvidenceMaps maps;
+    maps.effectiveViewCount = cv::Mat(2, 2, CV_32FC1, cv::Scalar(1.0f));
+    maps.conflictRatio = cv::Mat(2, 2, CV_32FC1, cv::Scalar(0.0f));
+
+    const xjw::mvs::AdaptiveGeometryEvidenceSummary summary =
+        xjw::mvs::summarizeAdaptiveGeometryEvidence(maps);
+
+    EXPECT_TRUE(summary.validInputs);
+    EXPECT_EQ(summary.observablePixelCount, 0);
+    EXPECT_FLOAT_EQ(summary.effectiveViewCountMean, -1.0f);
+    EXPECT_FLOAT_EQ(summary.conflictRatioMean, -1.0f);
+}
+
+TEST(AdaptiveGeometryEvidencePolicyTest,
+     ManifestDiagnosticsSeparateCandidateAndObservableDomains)
+{
+    const cv::Mat retained_depth =
+        (cv::Mat_<float>(1, 3) << 4.0f, 0.0f, 6.0f);
+    xjw::mvs::AdaptiveGeometryEvidenceMaps maps;
+    maps.supportWeight =
+        (cv::Mat_<float>(1, 3) << 0.3f, 0.6f, 0.9f);
+    maps.effectiveViewCount =
+        (cv::Mat_<float>(1, 3) << 1.0f, 2.0f, 1.0f);
+    maps.conflictRatio =
+        (cv::Mat_<float>(1, 3) << 0.0f, 0.25f, 0.80f);
+
+    const QJsonObject diagnostics =
+        xjw::mvs::adaptiveGeometryEvidenceDiagnosticsToJson(
+            retained_depth, maps);
+
+    EXPECT_TRUE(diagnostics.value(
+        QStringLiteral("adaptive_evidence_available")).toBool());
+    EXPECT_EQ(
+        diagnostics.value(
+            QStringLiteral("adaptive_candidate_domain")).toString(),
+        QStringLiteral("pre_consistency_depth"));
+    EXPECT_EQ(
+        diagnostics.value(QStringLiteral(
+            "adaptive_candidate_domain_pixel_count")).toInt(),
+        3);
+    EXPECT_EQ(
+        diagnostics.value(QStringLiteral(
+            "adaptive_candidate_domain_removed_by_hard_gate_pixel_count"))
+            .toInt(),
+        1);
+    EXPECT_NEAR(
+        diagnostics.value(QStringLiteral(
+            "adaptive_candidate_domain_support_weight_mean")).toDouble(),
+        0.6,
+        1.0e-6);
+    EXPECT_NEAR(
+        diagnostics.value(QStringLiteral(
+            "adaptive_candidate_domain_effective_view_count_mean"))
+            .toDouble(),
+        4.0 / 3.0,
+        1.0e-6);
+    EXPECT_NEAR(
+        diagnostics.value(QStringLiteral(
+            "adaptive_candidate_domain_conflict_ratio_mean")).toDouble(),
+        0.35,
+        1.0e-6);
+    EXPECT_EQ(
+        diagnostics.value(QStringLiteral(
+            "adaptive_observable_pixel_count")).toInt(),
+        2);
+    EXPECT_NEAR(
+        diagnostics.value(QStringLiteral(
+            "adaptive_observable_effective_view_count_mean")).toDouble(),
+        1.5,
+        1.0e-6);
+    EXPECT_NEAR(
+        diagnostics.value(QStringLiteral(
+            "adaptive_observable_conflict_ratio_mean")).toDouble(),
+        0.525,
+        1.0e-6);
+    EXPECT_FALSE(diagnostics.contains(
+        QStringLiteral("adaptive_hypothesis_domain")));
+    EXPECT_FALSE(diagnostics.contains(
+        QStringLiteral("adaptive_support_weight_mean")));
+    EXPECT_FALSE(diagnostics.contains(
+        QStringLiteral("adaptive_effective_view_count_mean")));
+    EXPECT_FALSE(diagnostics.contains(
+        QStringLiteral("adaptive_conflict_ratio_mean")));
+}
+
+TEST(AdaptiveGeometryEvidencePolicyTest,
+     DiscreteCoreRequiresJointSupportAndSpreadInsideSupportRegion)
+{
+    const cv::Mat depth =
+        (cv::Mat_<float>(1, 6) << 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f);
+    const cv::Mat support =
+        (cv::Mat_<std::uint16_t>(1, 6) << 3, 2, 4, 5, 3, 3);
+    const cv::Mat spread =
+        (cv::Mat_<float>(1, 6)
+            << 0.0060f,
+               0.0010f,
+               0.0065f,
+               0.0066f,
+               std::numeric_limits<float>::quiet_NaN(),
+               0.0f);
+    const cv::Mat support_region =
+        (cv::Mat_<std::uint8_t>(1, 6) << 255, 255, 255, 255, 255, 0);
+
+    const xjw::mvs::DiscreteGeometryCoreSummary summary =
+        xjw::mvs::summarizeDiscreteGeometryCore(
+            depth, support, spread, support_region);
+
+    EXPECT_TRUE(summary.validInputs);
+    EXPECT_EQ(summary.validPixelCount, 5);
+    EXPECT_EQ(summary.corePixelCount, 2);
+    EXPECT_FLOAT_EQ(summary.coreRatio, 0.4f);
+}
+
+TEST(AdaptiveGeometryEvidencePolicyTest,
+     DiscreteCoreRejectsMismatchedEvidenceMaps)
+{
+    const cv::Mat depth(2, 2, CV_32FC1, cv::Scalar(1.0f));
+    const cv::Mat support(2, 2, CV_8UC1, cv::Scalar(3));
+    const cv::Mat spread(2, 2, CV_32FC1, cv::Scalar(0.001f));
+
+    const xjw::mvs::DiscreteGeometryCoreSummary summary =
+        xjw::mvs::summarizeDiscreteGeometryCore(depth, support, spread);
+
+    EXPECT_FALSE(summary.validInputs);
+    EXPECT_EQ(summary.validPixelCount, 0);
+    EXPECT_FLOAT_EQ(summary.coreRatio, -1.0f);
 }
 
 TEST(AdaptiveGeometryEvidencePolicyTest,

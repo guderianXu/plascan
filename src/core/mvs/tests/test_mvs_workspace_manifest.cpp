@@ -62,6 +62,10 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
     record.sourceIndices = {7, 9};
+    record.geometrySourceIndices = {7, 9, 11};
+    record.acceptance = QStringLiteral("accepted");
+    record.fusionEligible = true;
+    record.fusionEligibilityKnown = true;
     record.qualityProfile = QStringLiteral("highest");
     record.configuredSourceViewCount = 8;
     record.sourceViewCount = 2;
@@ -173,6 +177,10 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryConflictRatioPath,
               QStringLiteral("adaptive_geometry_conflict_ratio_002.bin"));
     EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
+    EXPECT_EQ(loaded.frames().front().geometrySourceIndices,
+              QVector<int>({7, 9, 11}));
+    EXPECT_TRUE(loaded.frames().front().fusionEligibilityKnown);
+    EXPECT_TRUE(loaded.frames().front().fusionEligible);
     EXPECT_EQ(loaded.frames().front().qualityProfile, QStringLiteral("highest"));
     EXPECT_EQ(loaded.frames().front().configuredSourceViewCount, 8);
     EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
@@ -287,10 +295,19 @@ TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
     MvsDepthFrameRecord completed = makeRecord(3, QStringLiteral("image_003.jpg"), QStringLiteral("completed"));
     completed.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.png"));
     completed.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.bin"));
+    completed.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_003_geometry_support.bin"));
+    completed.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_003_inverse_depth_spread.bin"));
+    completed.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_003_geometry_source_mask.bin"));
     completed.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_003_provenance.png"));
     touchFile(completed.depthPng);
     touchFile(completed.rawDepthPath);
+    touchFile(completed.rawGeometrySupportPath);
+    touchFile(completed.rawInverseDepthSpreadPath);
+    touchFile(completed.rawGeometrySourceMaskPath);
     touchFile(completed.depthProvenancePath);
     manifest.markCompleted(completed);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-a")));
@@ -341,7 +358,25 @@ TEST(MvsWorkspaceManifest, LoadsLegacyRecordWithoutGeometryEvidencePaths)
     EXPECT_TRUE(record.rawInverseDepthMeanPath.isEmpty());
     EXPECT_TRUE(record.rawInverseDepthSpreadPath.isEmpty());
     EXPECT_TRUE(record.crossViewRepairedMaskPath.isEmpty());
+    EXPECT_FALSE(record.fusionEligibilityKnown);
+    EXPECT_FALSE(record.fusionEligible);
     EXPECT_EQ(record.algorithmRevision, 0);
+}
+
+TEST(MvsWorkspaceManifest, PreservesExplicitFusionIneligibility)
+{
+    MvsDepthFrameRecord record = makeRecord(
+        7, QStringLiteral("image_007.jpg"), QStringLiteral("completed"));
+    record.acceptance = QStringLiteral("validation_only");
+    record.fusionEligibilityKnown = true;
+    record.fusionEligible = false;
+
+    const MvsDepthFrameRecord loaded = MvsDepthFrameRecord::fromJson(
+        record.toJson());
+
+    EXPECT_TRUE(loaded.fusionEligibilityKnown);
+    EXPECT_FALSE(loaded.fusionEligible);
+    EXPECT_EQ(loaded.acceptance, QStringLiteral("validation_only"));
 }
 
 TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
@@ -797,6 +832,60 @@ TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
+TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpread)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    MvsDepthFrameRecord record = makeRecord(
+        4,
+        QStringLiteral("image_004.jpg"),
+        QStringLiteral("completed"));
+    record.sceneProfile = QStringLiteral("aerial_terrain");
+    record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
+    record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_source_mask.bin"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_provenance.png"));
+    touchFile(record.depthPng);
+    touchFile(record.rawDepthPath);
+    touchFile(record.depthProvenancePath);
+    touchFile(record.rawGeometrySourceMaskPath);
+    manifest.upsertFrame(record);
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A current frame without geometry support must not be reused";
+
+    touchFile(record.rawGeometrySupportPath);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A current frame without inverse-depth spread must not be reused";
+
+    touchFile(record.rawInverseDepthSpreadPath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    record.geometrySourceIndices.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A revision-37 frame without the exact source ordinal table must "
+           "not be reused";
+
+    record.geometrySourceIndices = {7, 7};
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A duplicate source ordinal must not be reused";
+
+    record.geometrySourceIndices = {7, 9, 11};
+    manifest.upsertFrame(record);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+}
+
 TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMatch)
 {
     QTemporaryDir tempDir;
@@ -812,6 +901,12 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
     record.sceneProfile = QStringLiteral("orbital_object");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_source_mask.bin"));
     record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
     record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
@@ -822,6 +917,9 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
         QStringLiteral("depth_004_provenance.png"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
+    touchFile(record.rawGeometrySupportPath);
+    touchFile(record.rawInverseDepthSpreadPath);
+    touchFile(record.rawGeometrySourceMaskPath);
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);
@@ -846,6 +944,12 @@ TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
     record.sceneProfile = QStringLiteral("orbital_object");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_geometry_source_mask.bin"));
     record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
     record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
@@ -858,6 +962,9 @@ TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
         QStringLiteral("depth_004_provenance.png"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
+    touchFile(record.rawGeometrySupportPath);
+    touchFile(record.rawInverseDepthSpreadPath);
+    touchFile(record.rawGeometrySourceMaskPath);
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);

@@ -1,6 +1,7 @@
 #include "DepthFrameQualityGate.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace xjw
@@ -24,6 +25,20 @@ void lowerAcceptance(DepthFrameAcceptance requested, DepthFrameQualityDecision &
     {
         decision.acceptance = requested;
     }
+}
+
+float medianOfSortedValues(const std::vector<float> &values)
+{
+    if (values.empty())
+    {
+        return -1.0f;
+    }
+    const std::size_t middle = values.size() / 2;
+    if ((values.size() & 1U) != 0U)
+    {
+        return values[middle];
+    }
+    return 0.5f * (values[middle - 1] + values[middle]);
 }
 
 } // namespace
@@ -199,6 +214,7 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     DepthFrameQualityDecision decision;
     decision.acceptance = DepthFrameAcceptance::Accepted;
     decision.filterSettings = depthFilterSettings(input.filterMode, input.sourceViewCount);
+    decision.sparseDepthResidual = input.sparseDepthResidual;
 
     DepthConfidenceComponents components;
     components.photometric = input.meanConfidence;
@@ -206,7 +222,9 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         ? std::min(1.0f, static_cast<float>(input.sourceViewCount) / 4.0f)
         : 0.0f;
     components.uniqueness = 1.0f - input.depthAtSearchBoundaryRatio;
-    components.geometry = input.multiViewConsistency;
+    components.geometry = input.multiViewConsistencyAvailable
+        ? input.multiViewConsistency
+        : 1.0f;
     components.texture = input.largestComponentRatio;
     decision.calibratedConfidence = calibrateDepthConfidence(components);
 
@@ -293,7 +311,8 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("fragmented_depth_support");
     }
 
-    if (input.validCoverage >= 0.95f &&
+    if (input.multiViewConsistencyAvailable &&
+        input.validCoverage >= 0.95f &&
         input.meanConfidence < 0.45f &&
         input.multiViewConsistency < 0.50f)
     {
@@ -304,16 +323,67 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     const float consistency_threshold = input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.50f : 0.55f)
         : 0.45f;
-    if (input.sourceViewCount >= 2 && input.multiViewConsistency < consistency_threshold)
+    if (input.multiViewConsistencyAvailable &&
+        input.sourceViewCount >= 2 &&
+        input.multiViewConsistency < consistency_threshold)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("weak_multiview_consistency");
     }
 
-    if (input.sparseDepthMedianRelativeError > 0.12f)
+    if (input.sceneProfile == MvsSceneProfile::OrbitalObject &&
+        input.adaptiveGeometryEvidenceAvailable)
+    {
+        const bool insufficient_effective_views =
+            !std::isfinite(input.adaptiveEffectiveViewCountMean) ||
+            input.adaptiveEffectiveViewCountMean < 1.50f;
+        const bool excessive_conflict =
+            !std::isfinite(input.adaptiveConflictRatioMean) ||
+            input.adaptiveConflictRatioMean > 0.60f;
+        const bool use_discrete_geometry_fallback =
+            (insufficient_effective_views || excessive_conflict) &&
+            hasReliableOrbitalDiscreteGeometryCore(input);
+        if (insufficient_effective_views && !use_discrete_geometry_fallback)
+        {
+            lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+            decision.reasons.emplace_back(
+                "insufficient_adaptive_effective_views");
+        }
+        if (excessive_conflict && !use_discrete_geometry_fallback)
+        {
+            lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+            decision.reasons.emplace_back("excessive_adaptive_geometry_conflict");
+        }
+        if (use_discrete_geometry_fallback)
+        {
+            decision.reasons.emplace_back(
+                "adaptive_geometry_fallback_to_discrete_core");
+        }
+    }
+
+    const SparseDepthResidualSummary &sparse_residual =
+        input.sparseDepthResidual;
+    const bool has_sufficient_sparse_residual =
+        sparse_residual.available &&
+        sparse_residual.validSampleCount >=
+            kSparseDepthResidualMinimumSampleCount &&
+        std::isfinite(sparse_residual.medianAbsoluteLogError) &&
+        sparse_residual.medianAbsoluteLogError >= 0.0f;
+    if (has_sufficient_sparse_residual &&
+        sparse_residual.medianAbsoluteLogError >
+            kSparseDepthResidualRejectionThreshold)
+    {
+        lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
+        decision.reasons.emplace_back(
+            "sparse_absolute_depth_residual_rejected");
+    }
+    else if (has_sufficient_sparse_residual &&
+             sparse_residual.medianAbsoluteLogError >
+                 kSparseDepthResidualValidationThreshold)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
-        decision.reasons.emplace_back("sparse_depth_residual_high");
+        decision.reasons.emplace_back(
+            "sparse_absolute_depth_residual_validation_only");
     }
 
     if (decision.reasons.empty())
@@ -323,18 +393,117 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     return decision;
 }
 
+SparseDepthResidualSummary summarizeSparseDepthResidual(
+    const cv::Mat &depth,
+    const std::vector<ProjectedSparseDepthSample> &samples)
+{
+    SparseDepthResidualSummary summary;
+    if (depth.empty() || depth.type() != CV_32FC1 || samples.empty())
+    {
+        return summary;
+    }
+
+    std::vector<float> absolute_log_errors;
+    absolute_log_errors.reserve(samples.size());
+    for (const ProjectedSparseDepthSample &sample : samples)
+    {
+        if (!std::isfinite(sample.uNorm) || !std::isfinite(sample.vNorm) ||
+            !std::isfinite(sample.depth) || sample.depth <= 0.0f)
+        {
+            continue;
+        }
+
+        const int column = static_cast<int>(std::lround(
+            sample.uNorm * static_cast<float>(depth.cols)));
+        const int row = static_cast<int>(std::lround(
+            sample.vNorm * static_cast<float>(depth.rows)));
+        if (column < 0 || column >= depth.cols || row < 0 || row >= depth.rows)
+        {
+            continue;
+        }
+        ++summary.projectedSampleCount;
+
+        std::array<float, 9> neighborhood{};
+        int valid_neighborhood_count = 0;
+        for (int delta_row = -1; delta_row <= 1; ++delta_row)
+        {
+            const int sample_row = row + delta_row;
+            if (sample_row < 0 || sample_row >= depth.rows)
+            {
+                continue;
+            }
+            const float *depth_row = depth.ptr<float>(sample_row);
+            for (int delta_column = -1; delta_column <= 1; ++delta_column)
+            {
+                const int sample_column = column + delta_column;
+                if (sample_column < 0 || sample_column >= depth.cols)
+                {
+                    continue;
+                }
+                const float value = depth_row[sample_column];
+                if (std::isfinite(value) && value > 0.0f)
+                {
+                    neighborhood[static_cast<std::size_t>(
+                        valid_neighborhood_count++)] = value;
+                }
+            }
+        }
+        if (valid_neighborhood_count <= 0)
+        {
+            continue;
+        }
+
+        std::sort(neighborhood.begin(),
+                  neighborhood.begin() + valid_neighborhood_count);
+        const int middle = valid_neighborhood_count / 2;
+        const float neighborhood_median =
+            (valid_neighborhood_count & 1) != 0
+            ? neighborhood[static_cast<std::size_t>(middle)]
+            : 0.5f * (neighborhood[static_cast<std::size_t>(middle - 1)] +
+                      neighborhood[static_cast<std::size_t>(middle)]);
+        const float absolute_log_error = std::fabs(std::log(
+            neighborhood_median / sample.depth));
+        if (std::isfinite(absolute_log_error))
+        {
+            absolute_log_errors.push_back(absolute_log_error);
+        }
+    }
+
+    summary.validSampleCount = static_cast<int>(absolute_log_errors.size());
+    if (absolute_log_errors.empty())
+    {
+        return summary;
+    }
+    std::sort(absolute_log_errors.begin(), absolute_log_errors.end());
+    summary.medianAbsoluteLogError = medianOfSortedValues(absolute_log_errors);
+    summary.available =
+        summary.validSampleCount >= kSparseDepthResidualMinimumSampleCount;
+    return summary;
+}
+
 bool hasReliableOrbitalFusionCore(const DepthFrameQualityInput &input)
 {
     // Large orbital sequences can create a broad pre-filter hypothesis set.
     // Removing weak hypotheses is not a frame collapse when the remaining
     // surface is still broad, confident, multi-view consistent, and coherent.
     return input.sceneProfile == MvsSceneProfile::OrbitalObject
+        && input.multiViewConsistencyAvailable
         && input.fusionPostprocessRetentionRatio >= 0.40f
         && input.validCoverage >= 0.30f
         && input.meanConfidence >= 0.70f
         && input.multiViewConsistency >= 0.45f
         && input.largestComponentRatio >= 0.15f
         && input.depthAtSearchBoundaryRatio <= 0.45f;
+}
+
+bool hasReliableOrbitalDiscreteGeometryCore(
+    const DepthFrameQualityInput &input)
+{
+    return hasReliableOrbitalFusionCore(input)
+        && input.discreteGeometryCoreAvailable
+        && std::isfinite(input.discreteGeometryCoreRatio)
+        && input.discreteGeometryCoreRatio >=
+            kDiscreteGeometryCoreMinimumRatio;
 }
 
 const char *depthFrameAcceptanceId(DepthFrameAcceptance acceptance)

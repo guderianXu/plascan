@@ -81,7 +81,7 @@ struct PatchMatchConfig
     int   medianKernelSize   = 5;
     bool  doBilateralFilter  = true;
     int   bilateralD         = 9;
-    float bilateralSigmaColor= 50.f;
+    float bilateralSigmaColor= 50.f;     ///< 历史字段名；当前解释为对数深度千分比 sigma（50=5%）
     float bilateralSigmaSpace= 5.f;
 
     // 几何一致性检查（PatchMatch 第二趟）
@@ -176,7 +176,7 @@ struct FusionFrameInput
     cv::Mat   normalMap;   ///< CV_32FC3, 法线（相机坐标系），可为空
     cv::Mat   confidence;  ///< CV_32F, [0,1]，可为空
     cv::Mat   validMask;   ///< CV_8U, 项目/内容蒙版传播后的权威有效区域
-    cv::Mat   supportCount; ///< CV_16U, PatchMatch 多视支持计数
+    cv::Mat   geometrySupportCount; ///< CV_16U, 参考帧加跨视几何一致来源的总观测数
     FramePinholeCamera    cameraModel;  ///< 与深度栅格对应的正深度、零畸变工作相机
     FramePinholeCamera    sourceCamera; ///< 与 imagePath 原始像素对应的完整相机，用于融合取色预处理
     int       viewIndex = -1; ///< 原始 CameraView 下标，用于将 source plan 重映射到融合帧下标

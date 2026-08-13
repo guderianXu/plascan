@@ -796,6 +796,208 @@ AdaptiveGeometryEvidenceMaps makeAdaptiveGeometryEvidenceMaps(
     return result;
 }
 
+AdaptiveGeometryEvidenceSummary summarizeAdaptiveGeometryEvidence(
+    const AdaptiveGeometryEvidenceMaps &maps)
+{
+    AdaptiveGeometryEvidenceSummary summary;
+    if (maps.effectiveViewCount.empty() || maps.conflictRatio.empty() ||
+        maps.effectiveViewCount.type() != CV_32FC1 ||
+        maps.conflictRatio.type() != CV_32FC1 ||
+        maps.effectiveViewCount.size() != maps.conflictRatio.size())
+    {
+        return summary;
+    }
+
+    summary.validInputs = true;
+    double effective_view_sum = 0.0;
+    double conflict_ratio_sum = 0.0;
+    for (int row = 0; row < maps.effectiveViewCount.rows; ++row)
+    {
+        const float *effective_view_row =
+            maps.effectiveViewCount.ptr<float>(row);
+        const float *conflict_ratio_row = maps.conflictRatio.ptr<float>(row);
+        for (int column = 0; column < maps.effectiveViewCount.cols; ++column)
+        {
+            const float effective_view_count = effective_view_row[column];
+            const float conflict_ratio = conflict_ratio_row[column];
+            if (!std::isfinite(effective_view_count) ||
+                !std::isfinite(conflict_ratio) ||
+                effective_view_count < 0.0f ||
+                conflict_ratio < 0.0f ||
+                conflict_ratio > 1.0f)
+            {
+                continue;
+            }
+
+            // Positive support increases the effective count above the fixed
+            // reference mass of one. A pure contradiction leaves that count
+            // at one but has a non-zero conflict ratio. Both are observable;
+            // (1, 0) is a reference-only pixel with no source measurement.
+            constexpr float observable_epsilon = 1.0e-6f;
+            if (effective_view_count <= 1.0f + observable_epsilon &&
+                conflict_ratio <= observable_epsilon)
+            {
+                continue;
+            }
+
+            effective_view_sum += effective_view_count;
+            conflict_ratio_sum += conflict_ratio;
+            ++summary.observablePixelCount;
+        }
+    }
+
+    if (summary.observablePixelCount > 0)
+    {
+        const double denominator =
+            static_cast<double>(summary.observablePixelCount);
+        summary.effectiveViewCountMean = static_cast<float>(
+            effective_view_sum / denominator);
+        summary.conflictRatioMean = static_cast<float>(
+            conflict_ratio_sum / denominator);
+    }
+    return summary;
+}
+
+DiscreteGeometryCoreSummary summarizeDiscreteGeometryCore(
+    const cv::Mat &retained_depth,
+    const cv::Mat &geometry_support_count,
+    const cv::Mat &inverse_depth_relative_spread,
+    const cv::Mat &support_region_mask,
+    int minimum_observation_count,
+    float maximum_inverse_depth_spread)
+{
+    DiscreteGeometryCoreSummary summary;
+    const bool has_support_region = !support_region_mask.empty();
+    if (retained_depth.empty() || retained_depth.type() != CV_32FC1 ||
+        geometry_support_count.empty() ||
+        geometry_support_count.type() != CV_16UC1 ||
+        inverse_depth_relative_spread.empty() ||
+        inverse_depth_relative_spread.type() != CV_32FC1 ||
+        geometry_support_count.size() != retained_depth.size() ||
+        inverse_depth_relative_spread.size() != retained_depth.size() ||
+        (has_support_region &&
+         (support_region_mask.type() != CV_8UC1 ||
+          support_region_mask.size() != retained_depth.size())) ||
+        minimum_observation_count <= 0 ||
+        !std::isfinite(maximum_inverse_depth_spread) ||
+        maximum_inverse_depth_spread < 0.0f)
+    {
+        return summary;
+    }
+
+    summary.validInputs = true;
+    for (int row = 0; row < retained_depth.rows; ++row)
+    {
+        const float *depth_row = retained_depth.ptr<float>(row);
+        const std::uint16_t *support_row =
+            geometry_support_count.ptr<std::uint16_t>(row);
+        const float *spread_row =
+            inverse_depth_relative_spread.ptr<float>(row);
+        const std::uint8_t *region_row = has_support_region
+            ? support_region_mask.ptr<std::uint8_t>(row)
+            : nullptr;
+        for (int column = 0; column < retained_depth.cols; ++column)
+        {
+            if (region_row && region_row[column] == 0)
+            {
+                continue;
+            }
+            const float depth = depth_row[column];
+            if (!std::isfinite(depth) || depth <= 0.0f)
+            {
+                continue;
+            }
+
+            ++summary.validPixelCount;
+            const float spread = spread_row[column];
+            if (support_row[column] >= minimum_observation_count &&
+                std::isfinite(spread) && spread >= 0.0f &&
+                spread <= maximum_inverse_depth_spread)
+            {
+                ++summary.corePixelCount;
+            }
+        }
+    }
+    summary.coreRatio = summary.validPixelCount > 0
+        ? static_cast<float>(summary.corePixelCount) /
+              static_cast<float>(summary.validPixelCount)
+        : 0.0f;
+    return summary;
+}
+
+QJsonObject adaptiveGeometryEvidenceDiagnosticsToJson(
+    const cv::Mat &retained_depth,
+    const AdaptiveGeometryEvidenceMaps &maps)
+{
+    QJsonObject object;
+    const bool valid_inputs =
+        !retained_depth.empty() && retained_depth.type() == CV_32FC1 &&
+        !maps.supportWeight.empty() &&
+        maps.supportWeight.type() == CV_32FC1 &&
+        !maps.effectiveViewCount.empty() &&
+        maps.effectiveViewCount.type() == CV_32FC1 &&
+        !maps.conflictRatio.empty() &&
+        maps.conflictRatio.type() == CV_32FC1 &&
+        maps.supportWeight.size() == retained_depth.size() &&
+        maps.effectiveViewCount.size() == retained_depth.size() &&
+        maps.conflictRatio.size() == retained_depth.size();
+
+    object.insert(
+        QStringLiteral("adaptive_evidence_available"), valid_inputs);
+    object.insert(
+        QStringLiteral("adaptive_candidate_domain"),
+        QStringLiteral("pre_consistency_depth"));
+    object.insert(
+        QStringLiteral("adaptive_observable_pixel_count"), 0);
+    if (!valid_inputs)
+    {
+        return object;
+    }
+
+    const cv::Mat candidate_mask = maps.effectiveViewCount > 0.0f;
+    const cv::Mat retained_candidate_mask =
+        candidate_mask & (retained_depth > 0.0f);
+    const int candidate_count = cv::countNonZero(candidate_mask);
+    const int retained_candidate_count =
+        cv::countNonZero(retained_candidate_mask);
+    object.insert(
+        QStringLiteral("adaptive_candidate_domain_pixel_count"),
+        candidate_count);
+    object.insert(
+        QStringLiteral(
+            "adaptive_candidate_domain_removed_by_hard_gate_pixel_count"),
+        std::max(0, candidate_count - retained_candidate_count));
+    object.insert(
+        QStringLiteral("adaptive_candidate_domain_support_weight_mean"),
+        candidate_count > 0
+            ? cv::mean(maps.supportWeight, candidate_mask)[0]
+            : 0.0);
+    object.insert(
+        QStringLiteral(
+            "adaptive_candidate_domain_effective_view_count_mean"),
+        candidate_count > 0
+            ? cv::mean(maps.effectiveViewCount, candidate_mask)[0]
+            : 0.0);
+    object.insert(
+        QStringLiteral("adaptive_candidate_domain_conflict_ratio_mean"),
+        candidate_count > 0
+            ? cv::mean(maps.conflictRatio, candidate_mask)[0]
+            : 0.0);
+
+    const AdaptiveGeometryEvidenceSummary summary =
+        summarizeAdaptiveGeometryEvidence(maps);
+    object.insert(
+        QStringLiteral("adaptive_observable_pixel_count"),
+        summary.observablePixelCount);
+    object.insert(
+        QStringLiteral("adaptive_observable_effective_view_count_mean"),
+        summary.effectiveViewCountMean);
+    object.insert(
+        QStringLiteral("adaptive_observable_conflict_ratio_mean"),
+        summary.conflictRatioMean);
+    return object;
+}
+
 QJsonObject geometryEvidenceDiagnosticsToJson(
     const cv::Mat &depth,
     const cv::Mat &geometry_support_count,

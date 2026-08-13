@@ -167,6 +167,9 @@ bool fuseDepthMapsStreaming(int frameCount,
         fusionConfig.colorCacheCapacity = config.useColor ? 2 : 0;
         fusionConfig.fuseOnlyFirstFrame = true;
         fusionConfig.cancelFlag = config.cancelFlag;
+        fusionConfig.minGeometryObservationCount = std::min(
+            std::max(1, config.minConsistentViews),
+            static_cast<int>(frames.size()));
         if (frameCount <= 32)
         {
             fusionConfig.minNumPixels = std::min(fusionConfig.minNumPixels, 2);

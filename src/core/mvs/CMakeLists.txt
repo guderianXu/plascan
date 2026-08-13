@@ -61,6 +61,7 @@ set(MVS_CXX_SOURCES
     MvsWorkspaceReplay.cpp
     PatchMatchCPU.cpp
     PatchMatchEstimator.cpp
+    PatchMatchHostUtils.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
     EpipolarRectifier.cpp
@@ -103,6 +104,7 @@ set(MVS_HEADERS
     PatchMatchCUDA.h
     DepthMapFusion.h
     DepthFrameQualityGate.h
+    DepthFrameQualificationPolicy.h
     DepthPyramidPolicy.h
     DepthPyramidEstimator.h
     DepthPyramidPropagation.h
@@ -112,6 +114,7 @@ set(MVS_HEADERS
     DenseCloudBuilder.h
     DepthMapGenerator.h
     PatchMatchPhotometricCost.h
+    PatchMatchHostUtils.h
     DensePointCloudCUDA.h
     EpipolarRectifier.h
     SparseCloudPreprocessor.h
