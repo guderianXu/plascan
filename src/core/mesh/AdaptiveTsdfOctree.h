@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DepthGeometrySourceEncoding.h"
 #include "DepthVisibilityHistogram.h"
 
 #include <array>
@@ -24,7 +25,7 @@ struct AdaptiveTsdfOctreeNode
     int level = 0;
     float value = 1.0f;
     float observationWeight = 0.0f;
-    std::uint16_t geometrySourceMask = 0;
+    DepthGeometrySourceMask geometrySourceMask;
     std::uint32_t activeSampleCount = 0;
     std::uint32_t supportedSampleCount = 0;
     DepthVisibilityHistogramSummary histogram;
@@ -54,7 +55,7 @@ public:
         const std::array<int, 3> &dimensions,
         const std::vector<float> &field,
         const std::vector<float> &observationWeight,
-        const std::vector<std::uint16_t> &geometrySourceMask,
+        const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
         const std::vector<std::uint8_t> &active,
         const std::vector<std::uint8_t> &supported,
         const std::vector<DepthVisibilityHistogram> &histograms,

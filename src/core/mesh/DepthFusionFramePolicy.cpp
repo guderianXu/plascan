@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace xjw::mesh
@@ -233,6 +234,14 @@ OrbitalCoverageStatistics DepthFusionFramePolicy::evaluateOrbitalCoverage(
     result.medianAngularSpacingDegrees = median_gap * kRadiansToDegrees;
     result.maximumAngularGapDegrees = maximum_gap * kRadiansToDegrees;
     result.maximumAngularGapRatio = maximum_gap / median_gap;
+    result.angularGapDegreesDescending.reserve(sorted_gaps.size());
+    for (auto iterator = sorted_gaps.crbegin();
+         iterator != sorted_gaps.crend();
+         ++iterator)
+    {
+        result.angularGapDegreesDescending.push_back(
+            *iterator * kRadiansToDegrees);
+    }
     const std::size_t maximum_gap_end_index =
         (maximum_gap_start_index + 1) % angular_views.size();
     const AngularView &gap_start = angular_views[maximum_gap_start_index];
@@ -323,6 +332,95 @@ bool DepthFusionFramePolicy::canRejectWithoutCoverageGap(
         return false;
     }
     return coverage.maximumAngularGapRatio <= std::max(1.0, maximumGapRatio);
+}
+
+std::vector<int> DepthFusionFramePolicy::selectCoverageComplementaryCandidates(
+    const std::vector<DepthFusionView> &fixedViews,
+    const std::vector<DepthFusionView> &candidateViews,
+    int maximumSelectedCount)
+{
+    std::vector<int> selected;
+    const int selection_count = std::clamp(
+        maximumSelectedCount,
+        0,
+        static_cast<int>(candidateViews.size()));
+    if (selection_count == 0 || fixedViews.size() < 3)
+    {
+        return selected;
+    }
+
+    std::vector<DepthFusionView> combined_views = fixedViews;
+    combined_views.insert(
+        combined_views.end(), candidateViews.begin(), candidateViews.end());
+    std::vector<float> weights(combined_views.size(), 0.0f);
+    std::fill_n(weights.begin(), fixedViews.size(), 1.0f);
+    std::vector<std::uint8_t> candidate_selected(candidateViews.size(), 0);
+    selected.reserve(static_cast<std::size_t>(selection_count));
+
+    constexpr double kComparisonEpsilon = 1.0e-9;
+    const auto has_better_gap_distribution = [kComparisonEpsilon](
+        const OrbitalCoverageStatistics &candidate,
+        const OrbitalCoverageStatistics &current)
+    {
+        const std::size_t comparable_count = std::min(
+            candidate.angularGapDegreesDescending.size(),
+            current.angularGapDegreesDescending.size());
+        for (std::size_t index = 0; index < comparable_count; ++index)
+        {
+            const double difference =
+                candidate.angularGapDegreesDescending[index] -
+                current.angularGapDegreesDescending[index];
+            if (std::fabs(difference) > kComparisonEpsilon)
+            {
+                return difference < 0.0;
+            }
+        }
+        return candidate.angularGapDegreesDescending.size() <
+            current.angularGapDegreesDescending.size();
+    };
+    for (int slot = 0; slot < selection_count; ++slot)
+    {
+        int best_candidate = -1;
+        OrbitalCoverageStatistics best_coverage;
+        for (int candidate_index = 0;
+             candidate_index < static_cast<int>(candidateViews.size());
+             ++candidate_index)
+        {
+            if (candidate_selected[static_cast<std::size_t>(candidate_index)] != 0)
+            {
+                continue;
+            }
+            const std::size_t combined_index =
+                fixedViews.size() + static_cast<std::size_t>(candidate_index);
+            weights[combined_index] = 1.0f;
+            const OrbitalCoverageStatistics coverage =
+                evaluateOrbitalCoverage(combined_views, weights);
+            weights[combined_index] = 0.0f;
+            if (!coverage.valid)
+            {
+                continue;
+            }
+
+            if (best_candidate < 0 ||
+                has_better_gap_distribution(coverage, best_coverage))
+            {
+                best_candidate = candidate_index;
+                best_coverage = coverage;
+            }
+        }
+        if (best_candidate < 0)
+        {
+            selected.clear();
+            return selected;
+        }
+
+        candidate_selected[static_cast<std::size_t>(best_candidate)] = 1;
+        weights[fixedViews.size() + static_cast<std::size_t>(best_candidate)] =
+            1.0f;
+        selected.push_back(
+            candidateViews[static_cast<std::size_t>(best_candidate)].frameIndex);
+    }
+    return selected;
 }
 
 } // namespace xjw::mesh

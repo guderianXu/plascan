@@ -54,6 +54,39 @@ cv::Vec3f bilinearColor(const cv::Mat &image, double x, double y)
     return top * (1.0f - ty) + bottom * ty;
 }
 
+bool isBilinearMaskSampleValid(const cv::Mat &mask, double x, double y)
+{
+    if (mask.empty())
+    {
+        return true;
+    }
+    if (mask.type() != CV_8UC1 ||
+        x < 0.0 || y < 0.0 || x > mask.cols - 1.0 || y > mask.rows - 1.0)
+    {
+        return false;
+    }
+    const int x0 = static_cast<int>(std::floor(x));
+    const int y0 = static_cast<int>(std::floor(y));
+    const int x1 = std::min(x0 + 1, mask.cols - 1);
+    const int y1 = std::min(y0 + 1, mask.rows - 1);
+    return mask.at<std::uint8_t>(y0, x0) != 0 &&
+           mask.at<std::uint8_t>(y0, x1) != 0 &&
+           mask.at<std::uint8_t>(y1, x0) != 0 &&
+           mask.at<std::uint8_t>(y1, x1) != 0;
+}
+
+bool projectColorPoint(const MeshColorView &view,
+                       const double world[3],
+                       double pixel[2])
+{
+    double depth = 0.0;
+    return view.colorCamera.projectWorldPointWithDepth(world, pixel, depth) &&
+           pixel[0] >= 0.0 && pixel[1] >= 0.0 &&
+           pixel[0] <= view.colorBgr.cols - 1.0 &&
+           pixel[1] <= view.colorBgr.rows - 1.0 &&
+           isBilinearMaskSampleValid(view.colorForegroundMask, pixel[0], pixel[1]);
+}
+
 float scoreFaceView(const TriMesh &mesh,
                     const Triangle &face,
                     const MeshColorView &view,
@@ -74,8 +107,8 @@ float scoreFaceView(const TriMesh &mesh,
     const FacePoint normal = normalizedCross(subtract(second, first), subtract(third, first));
     const double world[3] = {centroid.x, centroid.y, centroid.z};
     double pixel[2]{};
-    double cameraDepth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(world, pixel, cameraDepth))
+    double camera_depth = 0.0;
+    if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
     {
         return -1.0f;
     }
@@ -84,6 +117,11 @@ float scoreFaceView(const TriMesh &mesh,
     if (row < 0 || column < 0 || row >= view.depth.rows || column >= view.depth.cols ||
         view.supportMask.at<std::uint8_t>(row, column) == 0 ||
         view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+    {
+        return -1.0f;
+    }
+    double color_pixel[2]{};
+    if (!projectColorPoint(view, world, color_pixel))
     {
         return -1.0f;
     }
@@ -97,8 +135,8 @@ float scoreFaceView(const TriMesh &mesh,
     const float voxelSize = std::max(options.maximumVoxelSize, 1.0e-8f);
     const float tolerance = std::max(
         options.depthToleranceVoxels * voxelSize,
-        options.relativeDepthTolerance * std::fabs(static_cast<float>(cameraDepth)));
-    const float residual = std::fabs(observedDepth - static_cast<float>(cameraDepth));
+        options.relativeDepthTolerance * std::fabs(static_cast<float>(camera_depth)));
+    const float residual = std::fabs(observedDepth - static_cast<float>(camera_depth));
     if (residual > tolerance)
     {
         return -1.0f;
@@ -107,25 +145,25 @@ float scoreFaceView(const TriMesh &mesh,
     FacePoint direction{static_cast<float>(center[0]) - centroid.x,
                         static_cast<float>(center[1]) - centroid.y,
                         static_cast<float>(center[2]) - centroid.z};
-    const float directionLength = std::sqrt(
+    const float direction_length = std::sqrt(
         direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
-    if (directionLength <= 1.0e-8f)
+    if (direction_length <= 1.0e-8f)
     {
         return -1.0f;
     }
-    direction.x /= directionLength;
-    direction.y /= directionLength;
-    direction.z /= directionLength;
-    const float viewCosine = std::fabs(
+    direction.x /= direction_length;
+    direction.y /= direction_length;
+    direction.z /= direction_length;
+    const float view_cosine = std::fabs(
         normal.x * direction.x + normal.y * direction.y + normal.z * direction.z);
-    if (viewCosine < options.minimumViewCosine)
+    if (view_cosine < options.minimumViewCosine)
     {
         return -1.0f;
     }
-    const float residualScore = 1.0f /
+    const float residual_score = 1.0f /
         std::pow(1.0f + residual / std::max(tolerance, 1.0e-8f), 2.0f);
     return confidence * std::max(0.0f, view.qualityWeight)
-        * std::pow(viewCosine, 4.0f) * residualScore;
+        * std::pow(view_cosine, 4.0f) * residual_score;
 }
 
 bool sampleVertex(const MeshVertex &vertex,
@@ -135,8 +173,8 @@ bool sampleVertex(const MeshVertex &vertex,
 {
     const double world[3] = {vertex.x, vertex.y, vertex.z};
     double pixel[2]{};
-    double cameraDepth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(world, pixel, cameraDepth))
+    double camera_depth = 0.0;
+    if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
     {
         return false;
     }
@@ -149,15 +187,20 @@ bool sampleVertex(const MeshVertex &vertex,
         return false;
     }
     const float observedDepth = view.depth.at<float>(row, column);
-    const float voxelSize = std::max(options.maximumVoxelSize, 1.0e-8f);
-    const float tolerance = std::max(7.5f * voxelSize,
-        0.008f * std::fabs(static_cast<float>(cameraDepth)));
+    const float voxel_size = std::max(options.maximumVoxelSize, 1.0e-8f);
+    const float tolerance = std::max(7.5f * voxel_size,
+        0.008f * std::fabs(static_cast<float>(camera_depth)));
     if (!std::isfinite(observedDepth) || observedDepth <= 0.0f ||
-        std::fabs(observedDepth - static_cast<float>(cameraDepth)) > tolerance)
+        std::fabs(observedDepth - static_cast<float>(camera_depth)) > tolerance)
     {
         return false;
     }
-    *color = bilinearColor(view.colorBgr, pixel[0], pixel[1]);
+    double color_pixel[2]{};
+    if (!projectColorPoint(view, world, color_pixel))
+    {
+        return false;
+    }
+    *color = bilinearColor(view.colorBgr, color_pixel[0], color_pixel[1]);
     return true;
 }
 

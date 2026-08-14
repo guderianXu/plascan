@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DepthGeometrySourceEncoding.h"
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -41,7 +43,7 @@ public:
         const std::array<int, 3> &sampleDimensions,
         const std::vector<float> &surfaceEvidenceField,
         const std::vector<float> &observationWeight,
-        const std::vector<std::uint16_t> &geometrySourceMask,
+        const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
         const std::vector<std::uint8_t> &eligible,
         const DepthImplicitFieldRegularizationOptions &options,
         std::vector<float> *field,

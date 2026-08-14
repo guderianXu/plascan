@@ -42,6 +42,7 @@ struct OrbitalCoverageStatistics
     int gapEndRefIndex = -1;
     int gapOppositeFrameIndex = -1;
     int gapOppositeRefIndex = -1;
+    std::vector<double> angularGapDegreesDescending;
     std::vector<OrbitalFrameRoleAssignment> frameRoles;
 };
 
@@ -62,6 +63,11 @@ public:
         double maximumGapRatio,
         int minimumRetainedFrames,
         OrbitalCoverageStatistics *trialCoverage = nullptr);
+
+    static std::vector<int> selectCoverageComplementaryCandidates(
+        const std::vector<DepthFusionView> &fixedViews,
+        const std::vector<DepthFusionView> &candidateViews,
+        int maximumSelectedCount);
 };
 
 } // namespace xjw::mesh

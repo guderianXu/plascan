@@ -5,6 +5,7 @@
 #include <QVector>
 
 #include <cstdint>
+#include <vector>
 
 namespace xjw::mesh
 {
@@ -38,6 +39,8 @@ struct DepthMeshCompletenessOptions
     double tolerance = 0.0;
     double minimumP10FrameRecall = 0.40;
     double minimumMedianFrameRecall = 0.75;
+    bool excludeAuxiliaryFrames = false;
+    std::vector<int> excludedRefIndices;
 };
 
 class DepthMeshCompleteness

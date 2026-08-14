@@ -1,10 +1,10 @@
 #include "MeshAcquisitionGapReport.h"
 
 #include <QJsonArray>
+#include <QString>
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +21,8 @@ constexpr int kAzimuthSectorCount = 12;
 constexpr int kElevationBandCount = 3;
 constexpr int kOrientationBinCount = kAzimuthSectorCount * kElevationBandCount;
 constexpr int kReasonCount = 9;
+constexpr int kSourceMaskBitWidth =
+    static_cast<int>(kDepthGeometrySourceSlotCount);
 constexpr double kPi = 3.14159265358979323846;
 
 struct OrientationBin
@@ -238,19 +240,33 @@ QJsonArray pointToJson(const std::array<float, 3> &point)
     return {point[0], point[1], point[2]};
 }
 
+QString sourceMaskToHex(const DepthGeometrySourceMask &source_mask)
+{
+    QString encoded = QStringLiteral("0x");
+    const auto &words = source_mask.words();
+    for (auto iterator = words.crbegin(); iterator != words.crend(); ++iterator)
+    {
+        encoded += QString::number(static_cast<qulonglong>(*iterator), 16)
+                       .rightJustified(16, QLatin1Char('0'));
+    }
+    return encoded;
+}
+
 } // namespace
 
 QJsonObject buildMeshAcquisitionGapReport(
     const std::vector<MeshBoundaryEdgeAttribution> &edges,
     const DepthTsdfLayout &layout,
-    const QStringList &frameLabels,
-    int inputFrameCount)
+    const QStringList &sourceLabels,
+    const std::vector<int> &sourceIndices,
+    int inputFrameCount,
+    bool sourceMappingComplete)
 {
     std::array<OrientationBin, kOrientationBinCount> bins{};
     OrientationBin unknown_bin;
     std::array<std::uint64_t, kReasonCount> primary_reasons{};
     std::array<std::uint64_t, kReasonCount> root_causes{};
-    std::array<FrameCoverage, 16> frame_coverage{};
+    std::array<FrameCoverage, kSourceMaskBitWidth> frame_coverage{};
     const std::array<double, 3> center{{
         0.5 * (layout.boundsMin[0] + layout.boundsMax[0]),
         0.5 * (layout.boundsMin[1] + layout.boundsMax[1]),
@@ -270,7 +286,7 @@ QJsonObject buildMeshAcquisitionGapReport(
         bin.boundaryLength += edge.length;
         bin.severity += reasonSeverity(edge.evidenceReason);
         ++bin.reasons[static_cast<std::size_t>(cause_index)];
-        const int source_count = std::popcount(edge.sourceMask);
+        const int source_count = static_cast<int>(edge.sourceMask.count());
         ++bin.sourceCountHistogram[static_cast<std::size_t>(
             std::min(source_count, 3))];
         const double normal_length = std::sqrt(
@@ -286,9 +302,10 @@ QJsonObject buildMeshAcquisitionGapReport(
             }
             ++bin.validNormalCount;
         }
-        for (int frame = 0; frame < 16; ++frame)
+        for (int frame = 0; frame < kSourceMaskBitWidth; ++frame)
         {
-            if ((edge.sourceMask & (static_cast<std::uint16_t>(1U) << frame)) == 0)
+            if (!(edge.sourceMask & DepthGeometrySourceMask::singleBit(
+                      static_cast<std::size_t>(frame))).any())
             {
                 continue;
             }
@@ -339,21 +356,25 @@ QJsonObject buildMeshAcquisitionGapReport(
                 ranked_indices[static_cast<std::size_t>(rank)])]));
     }
 
-    QJsonArray frames;
-    const int reported_frame_count = std::min(std::max(inputFrameCount, 0), 16);
-    for (int frame = 0; frame < reported_frame_count; ++frame)
+    QJsonArray sources;
+    const int reported_source_count = std::min({
+        static_cast<int>(sourceLabels.size()),
+        static_cast<int>(sourceIndices.size()),
+        kSourceMaskBitWidth});
+    for (int slot = 0; slot < reported_source_count; ++slot)
     {
-        const FrameCoverage &coverage = frame_coverage[static_cast<std::size_t>(frame)];
+        const FrameCoverage &coverage =
+            frame_coverage[static_cast<std::size_t>(slot)];
         const auto strongest = std::max_element(
             coverage.orientationCounts.begin(), coverage.orientationCounts.end());
         const int strongest_sector = coverage.participatingEdgeCount > 0
             ? static_cast<int>(std::distance(
                   coverage.orientationCounts.begin(), strongest))
             : -1;
-        frames.append(QJsonObject{
-            {QStringLiteral("frame_index"), frame},
-            {QStringLiteral("frame_label"),
-             frame < frameLabels.size() ? frameLabels[frame] : QString{}},
+        sources.append(QJsonObject{
+            {QStringLiteral("source_slot"), slot},
+            {QStringLiteral("source_index"), sourceIndices[slot]},
+            {QStringLiteral("source_label"), sourceLabels[slot]},
             {QStringLiteral("participating_edge_count"),
              static_cast<double>(coverage.participatingEdgeCount)},
             {QStringLiteral("exclusive_edge_count"),
@@ -380,7 +401,7 @@ QJsonObject buildMeshAcquisitionGapReport(
             {QStringLiteral("length"), edge.length},
             {QStringLiteral("orientation_bin"), orientationBin(edge, center)},
             {QStringLiteral("root_cause"), reasonName(edge.evidenceReason)},
-            {QStringLiteral("source_mask"), edge.sourceMask}});
+            {QStringLiteral("source_mask"), sourceMaskToHex(edge.sourceMask)}});
     }
 
     const std::uint64_t acquisition_edges =
@@ -406,7 +427,7 @@ QJsonObject buildMeshAcquisitionGapReport(
 
     return {
         {QStringLiteral("schema"),
-         QStringLiteral("plascan.mesh.acquisition_gap_report.v1")},
+         QStringLiteral("plascan.mesh.acquisition_gap_report.v2")},
         {QStringLiteral("boundary_edge_count"),
          static_cast<double>(edges.size())},
         {QStringLiteral("records_complete"), true},
@@ -421,10 +442,14 @@ QJsonObject buildMeshAcquisitionGapReport(
          orientationBinToJson(-1, unknown_bin)},
         {QStringLiteral("highest_risk_sectors"), highest_risk_sectors},
         {QStringLiteral("input_frame_count"), inputFrameCount},
-        {QStringLiteral("source_mask_bit_width"), 16},
-        {QStringLiteral("source_mask_frame_mapping_complete"),
-         inputFrameCount <= 16},
-        {QStringLiteral("frames"), frames},
+        {QStringLiteral("source_mask_bit_width"), kSourceMaskBitWidth},
+        {QStringLiteral("mapped_source_count"), reported_source_count},
+        {QStringLiteral("source_mask_source_mapping_complete"),
+         sourceMappingComplete &&
+             sourceLabels.size() == static_cast<qsizetype>(sourceIndices.size()) &&
+             sourceIndices.size() <=
+                 static_cast<std::size_t>(kSourceMaskBitWidth)},
+        {QStringLiteral("sources"), sources},
         {QStringLiteral("existing_image_rematch_edge_count"),
          static_cast<double>(rematch_edges)},
         {QStringLiteral("rematch_target_count"), rematch_targets.size()},

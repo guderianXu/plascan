@@ -20,7 +20,7 @@ struct CandidateCell
     bool missingNegative = false;
     bool anchor = false;
     int normalAxis = 2;
-    std::uint16_t sourceMask = 0;
+    DepthGeometrySourceMask sourceMask;
     std::array<std::size_t, 8> recoverableCorners{};
     int recoverableCornerCount = 0;
 };
@@ -124,7 +124,7 @@ void unite(std::vector<int> *parents,
 bool compatible(const CandidateCell &lhs, const CandidateCell &rhs)
 {
     return lhs.missingNegative == rhs.missingNegative &&
-        (lhs.sourceMask & rhs.sourceMask) != 0;
+        (lhs.sourceMask & rhs.sourceMask).any();
 }
 
 } // namespace
@@ -134,7 +134,7 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
     const DepthTsdfLayout &layout,
     const std::vector<float> &tsdf,
     const std::vector<float> &weight,
-    const std::vector<std::uint16_t> &geometrySourceMask,
+    const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
     const std::vector<std::uint8_t> &eligible,
     int minimumSupportedCorners,
     int minimumSheetCells,
@@ -260,7 +260,7 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
                     {
                         continue;
                     }
-                    std::uint16_t shared_sources = 0;
+                    DepthGeometrySourceMask shared_sources;
                     for (const std::size_t neighbor : corners)
                     {
                         if (core_supported[neighbor] != 0)
@@ -269,7 +269,7 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
                                 geometrySourceMask[neighbor];
                         }
                     }
-                    if (shared_sources == 0)
+                    if (shared_sources.none())
                     {
                         continue;
                     }

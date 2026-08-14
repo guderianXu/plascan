@@ -66,35 +66,176 @@ std::size_t sampleIndex(const std::array<int, 3> &cells,
         static_cast<std::size_t>(x);
 }
 
-bool cellHasSupportedSignChange(
+bool isInsideIsoSurface(float value, float isoLevel)
+{
+    // Keep exact-iso samples on the non-negative side, matching the TSDF
+    // connectivity code (negative: value < iso, positive: value >= iso).
+    return value < isoLevel;
+}
+
+bool supportedGridEdgeHasSignChange(
     const std::array<int, 3> &cells,
     const std::vector<float> &field,
     const std::vector<std::uint8_t> &support,
     float isoLevel,
-    int cellX,
-    int cellY,
-    int cellZ)
+    const std::array<int, 3> &first,
+    const std::array<int, 3> &second)
 {
-    bool has_inside = false;
-    bool has_outside = false;
-    for (int dz = 0; dz <= 1; ++dz)
+    const std::size_t first_index = sampleIndex(
+        cells, first[0], first[1], first[2]);
+    const std::size_t second_index = sampleIndex(
+        cells, second[0], second[1], second[2]);
+    return support[first_index] != 0u && support[second_index] != 0u &&
+        isInsideIsoSurface(field[first_index], isoLevel) !=
+            isInsideIsoSurface(field[second_index], isoLevel);
+}
+
+bool cellHasSupportedGridEdgeSignChange(
+    const std::array<int, 3> &cells,
+    const std::vector<float> &field,
+    const std::vector<std::uint8_t> &support,
+    float isoLevel,
+    const std::array<int, 3> &cell)
+{
+    for (int axis = 0; axis < 3; ++axis)
     {
-        for (int dy = 0; dy <= 1; ++dy)
+        const int first_orthogonal_axis = (axis + 1) % 3;
+        const int second_orthogonal_axis = (axis + 2) % 3;
+        for (int first_offset = 0; first_offset <= 1; ++first_offset)
         {
-            for (int dx = 0; dx <= 1; ++dx)
+            for (int second_offset = 0; second_offset <= 1; ++second_offset)
             {
-                const std::size_t index = sampleIndex(
-                    cells, cellX + dx, cellY + dy, cellZ + dz);
-                if (support[index] == 0u)
+                std::array<int, 3> first = cell;
+                first[first_orthogonal_axis] += first_offset;
+                first[second_orthogonal_axis] += second_offset;
+                std::array<int, 3> second = first;
+                ++second[axis];
+                if (supportedGridEdgeHasSignChange(
+                        cells, field, support, isoLevel, first, second))
                 {
-                    continue;
+                    return true;
                 }
-                has_inside = has_inside || field[index] <= isoLevel;
-                has_outside = has_outside || field[index] > isoLevel;
             }
         }
     }
-    return has_inside && has_outside;
+    return false;
+}
+
+enum class VertexSupportKind
+{
+    Invalid,
+    SupportedGridEdge,
+    SupportedCellInterior
+};
+
+VertexSupportKind classifyVertexSupport(
+    const MeshVertex &vertex,
+    const std::array<float, 3> &boundsMin,
+    const std::array<float, 3> &voxelSize,
+    const std::array<int, 3> &cells,
+    const std::vector<float> &field,
+    const std::vector<std::uint8_t> &support,
+    float isoLevel)
+{
+    constexpr double coordinate_tolerance = 2.0e-4;
+    std::array<double, 3> grid_coordinate{
+        (static_cast<double>(vertex.x) - boundsMin[0]) / voxelSize[0],
+        (static_cast<double>(vertex.y) - boundsMin[1]) / voxelSize[1],
+        (static_cast<double>(vertex.z) - boundsMin[2]) / voxelSize[2]};
+    std::array<int, 3> rounded_coordinate{};
+    std::array<bool, 3> is_integer{};
+    int integer_axis_count = 0;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        if (grid_coordinate[axis] < -coordinate_tolerance ||
+            grid_coordinate[axis] >
+                static_cast<double>(cells[axis]) + coordinate_tolerance)
+        {
+            return VertexSupportKind::Invalid;
+        }
+        rounded_coordinate[axis] = static_cast<int>(
+            std::llround(grid_coordinate[axis]));
+        is_integer[axis] =
+            std::fabs(grid_coordinate[axis] - rounded_coordinate[axis]) <=
+            coordinate_tolerance;
+        integer_axis_count += is_integer[axis] ? 1 : 0;
+    }
+
+    if (integer_axis_count == 2)
+    {
+        int varying_axis = 0;
+        while (is_integer[varying_axis])
+        {
+            ++varying_axis;
+        }
+        std::array<int, 3> first = rounded_coordinate;
+        first[varying_axis] = static_cast<int>(
+            std::floor(grid_coordinate[varying_axis]));
+        std::array<int, 3> second = first;
+        ++second[varying_axis];
+        if (first[varying_axis] < 0 ||
+            second[varying_axis] > cells[varying_axis])
+        {
+            return VertexSupportKind::Invalid;
+        }
+        return supportedGridEdgeHasSignChange(
+                   cells, field, support, isoLevel, first, second)
+            ? VertexSupportKind::SupportedGridEdge
+            : VertexSupportKind::Invalid;
+    }
+
+    if (integer_axis_count == 3)
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            for (int direction : {-1, 1})
+            {
+                std::array<int, 3> neighbour = rounded_coordinate;
+                neighbour[axis] += direction;
+                if (neighbour[axis] < 0 || neighbour[axis] > cells[axis])
+                {
+                    continue;
+                }
+                if (supportedGridEdgeHasSignChange(
+                        cells,
+                        field,
+                        support,
+                        isoLevel,
+                        rounded_coordinate,
+                        neighbour))
+                {
+                    return VertexSupportKind::SupportedGridEdge;
+                }
+            }
+        }
+        return VertexSupportKind::Invalid;
+    }
+
+    // MC33 may introduce a cube-centre vertex for an ambiguous case. It is
+    // not a crossing edge itself, so retain it only when its cube contains an
+    // independently supported grid-edge crossing. Every retained triangle is
+    // additionally required to contain two supported crossing-edge vertices.
+    if (integer_axis_count == 0)
+    {
+        std::array<int, 3> cell{};
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            cell[axis] = static_cast<int>(std::floor(grid_coordinate[axis]));
+            if (cell[axis] < 0 || cell[axis] >= cells[axis] ||
+                std::fabs(grid_coordinate[axis] -
+                          (static_cast<double>(cell[axis]) + 0.5)) >
+                    coordinate_tolerance)
+            {
+                return VertexSupportKind::Invalid;
+            }
+        }
+        return cellHasSupportedGridEdgeSignChange(
+                   cells, field, support, isoLevel, cell)
+            ? VertexSupportKind::SupportedCellInterior
+            : VertexSupportKind::Invalid;
+    }
+
+    return VertexSupportKind::Invalid;
 }
 
 void compactReferencedVertices(TriMesh *mesh)
@@ -196,6 +337,12 @@ Mc33IsoSurfaceResult Mc33IsoSurfaceExtractor::extract(
             {
                 throw std::invalid_argument("MC33 field samples must be finite");
             }
+            if (extraction_field[index] == options.isoLevel)
+            {
+                extraction_field[index] = std::nextafter(
+                    options.isoLevel,
+                    std::numeric_limits<float>::infinity());
+            }
             if (!extractionSupport.empty() && extractionSupport[index] == 0u)
             {
                 extraction_field[index] = outside_value;
@@ -265,11 +412,8 @@ Mc33IsoSurfaceResult Mc33IsoSurfaceExtractor::extract(
             target.v[1] = static_cast<int>(source[1]);
             target.v[2] = static_cast<int>(source[2]);
         }
-        const bool has_unsupported_samples =
-            result.statistics.supportMaskedSampleCount > 0;
         if (options.requireSupportedSignChange &&
-            !extractionSupport.empty() &&
-            has_unsupported_samples)
+            !extractionSupport.empty())
         {
             const std::array<float, 3> voxel_size{
                 (boundsMax[0] - boundsMin[0]) /
@@ -280,40 +424,34 @@ Mc33IsoSurfaceResult Mc33IsoSurfaceExtractor::extract(
                     static_cast<float>(cells[2])};
             std::vector<Triangle> retained_faces;
             retained_faces.reserve(result.mesh.faces.size());
+            std::vector<VertexSupportKind> vertex_support(
+                result.mesh.vertices.size(), VertexSupportKind::Invalid);
+            for (std::size_t index = 0; index < result.mesh.vertices.size(); ++index)
+            {
+                vertex_support[index] = classifyVertexSupport(
+                    result.mesh.vertices[index],
+                    boundsMin,
+                    voxel_size,
+                    cells,
+                    field,
+                    extractionSupport,
+                    options.isoLevel);
+            }
             for (const Triangle &face : result.mesh.faces)
             {
-                std::array<float, 3> centroid{};
+                bool valid = true;
+                int supported_edge_vertex_count = 0;
                 for (int corner = 0; corner < 3; ++corner)
                 {
-                    const MeshVertex &vertex = result.mesh.vertices[
+                    const VertexSupportKind support_kind = vertex_support[
                         static_cast<std::size_t>(face.v[corner])];
-                    centroid[0] += vertex.x / 3.0f;
-                    centroid[1] += vertex.y / 3.0f;
-                    centroid[2] += vertex.z / 3.0f;
+                    valid = valid && support_kind != VertexSupportKind::Invalid;
+                    supported_edge_vertex_count +=
+                        support_kind == VertexSupportKind::SupportedGridEdge
+                        ? 1
+                        : 0;
                 }
-                const int cell_x = std::clamp(
-                    static_cast<int>(std::floor(
-                        (centroid[0] - boundsMin[0]) / voxel_size[0])),
-                    0,
-                    cells[0] - 1);
-                const int cell_y = std::clamp(
-                    static_cast<int>(std::floor(
-                        (centroid[1] - boundsMin[1]) / voxel_size[1])),
-                    0,
-                    cells[1] - 1);
-                const int cell_z = std::clamp(
-                    static_cast<int>(std::floor(
-                        (centroid[2] - boundsMin[2]) / voxel_size[2])),
-                    0,
-                    cells[2] - 1);
-                if (cellHasSupportedSignChange(
-                        cells,
-                        field,
-                        extractionSupport,
-                        options.isoLevel,
-                        cell_x,
-                        cell_y,
-                        cell_z))
+                if (valid && supported_edge_vertex_count >= 2)
                 {
                     retained_faces.push_back(face);
                 }

@@ -1,16 +1,48 @@
 cmake_minimum_required(VERSION 3.16)
 
+include(FetchContent)
+
+set(PLASCAN_POISSON_RECON_COMMIT
+    262b0f539d404057d1f36e1adc07fc9388678899)
+FetchContent_Declare(plascan_poisson_recon
+    GIT_REPOSITORY https://github.com/mkazhdan/PoissonRecon.git
+    GIT_TAG ${PLASCAN_POISSON_RECON_COMMIT}
+    GIT_SHALLOW FALSE
+    GIT_SUBMODULES ""
+    UPDATE_DISCONNECTED TRUE
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(plascan_poisson_recon)
+if(NOT EXISTS "${plascan_poisson_recon_SOURCE_DIR}/Src/Reconstructors.h")
+    message(FATAL_ERROR
+        "Pinned PoissonRecon source is missing Reconstructors.h: "
+        "${plascan_poisson_recon_SOURCE_DIR}")
+endif()
+
+add_library(plascan_poisson_recon_headers INTERFACE)
+target_include_directories(plascan_poisson_recon_headers SYSTEM INTERFACE
+    "${plascan_poisson_recon_SOURCE_DIR}/Src"
+)
+
 add_library(meshing STATIC
     SurfaceReconstructor.cpp
     PointCloudPreprocess.cpp
     SurfaceReconstructorPostprocess.cpp
     BoundaryAwareVoxelSimplifier.cpp
     SurfaceReconstructorHeightGrid.cpp
+    ScreenedPoissonSurfaceBuilder.cpp
+    SparseSfmPointQualityReader.cpp
+    SparseOrbitalScaffoldBuilder.cpp
+    MeshVoxelTopologyRepair.cpp
+    OrbitalSparseScaffoldSurfaceBuilder.cpp
+    StudioForegroundMask.cpp
     DepthMapMeshBuilder.cpp
+    DepthAuxiliaryBridgeSelector.cpp
     DepthFusionFramePolicy.cpp
     DepthMeshCompleteness.cpp
     TriangleDistanceIndex.cpp
     DepthRayMetric.cpp
+    DepthGeometrySourceEncoding.cpp
     DepthTsdfSurfaceBuilder.cpp
     DepthMeasuredSupportConnectivity.cpp
     DepthTsdfNarrowBandActivation.cpp
@@ -47,6 +79,8 @@ add_library(meshing STATIC
     MeshFaceOrientation.cpp
     OpenMeshSimplifier.cpp
     MeshTopologyQuality.cpp
+    DepthTsdfFinalQualityGate.cpp
+    DepthTsdfRecoveryTransaction.cpp
     MeshBoundaryAttribution.cpp
     MeshAcquisitionGapReport.cpp
     MeshIsotropicRemesher.cpp
@@ -100,12 +134,18 @@ target_link_libraries(meshing
         ${OpenCV_LIBS}
     PRIVATE
         mvs
+        plascan_poisson_recon_headers
         plapoint::plapoint
         plascan_common_concurrency
         plascan_common_io
         Qt6::Core
         Qt6::Gui
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
+)
+
+install(FILES
+    ${CMAKE_SOURCE_DIR}/docs/third_party/PoissonRecon_NOTICE.md
+    DESTINATION share/plascan/licenses
 )
 
 if(OpenMP_CXX_FOUND)

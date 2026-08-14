@@ -204,8 +204,7 @@ AdaptiveTsdfOctreeNode mergedParent(
             0.01f, child.observationWeight);
         weighted_value += child.value * child_weight;
         parent.observationWeight += child_weight;
-        parent.geometrySourceMask = static_cast<std::uint16_t>(
-            parent.geometrySourceMask | child.geometrySourceMask);
+        parent.geometrySourceMask |= child.geometrySourceMask;
         parent.activeSampleCount += child.activeSampleCount;
         parent.supportedSampleCount += child.supportedSampleCount;
         for (std::size_t bin = 0; bin < parent.histogram.bins.size(); ++bin)
@@ -257,7 +256,7 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
     const std::array<int, 3> &dimensions,
     const std::vector<float> &field,
     const std::vector<float> &observationWeight,
-    const std::vector<std::uint16_t> &geometrySourceMask,
+    const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
     const std::vector<std::uint8_t> &active,
     const std::vector<std::uint8_t> &supported,
     const std::vector<DepthVisibilityHistogram> &histograms,

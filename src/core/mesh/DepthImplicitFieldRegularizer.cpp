@@ -40,7 +40,7 @@ DepthImplicitFieldRegularizer::regularize(
     const std::array<int, 3> &sampleDimensions,
     const std::vector<float> &surfaceEvidenceField,
     const std::vector<float> &observationWeight,
-    const std::vector<std::uint16_t> &geometrySourceMask,
+    const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
     const std::vector<std::uint8_t> &eligible,
     const DepthImplicitFieldRegularizationOptions &options,
     std::vector<float> *field,
@@ -129,11 +129,11 @@ DepthImplicitFieldRegularizer::regularize(
                         {
                             continue;
                         }
-                        const std::uint16_t common_sources =
+                        const DepthGeometrySourceMask common_sources =
                             geometrySourceMask[index] &
                             geometrySourceMask[negative_index] &
                             geometrySourceMask[positive_index];
-                        if (common_sources == 0)
+                        if (common_sources.none())
                         {
                             continue;
                         }
@@ -221,7 +221,7 @@ DepthImplicitFieldRegularizer::regularize(
                             const std::size_t index =
                                 sampleIndex(sampleDimensions, x, y, z);
                             if ((*supported)[index] == 0 ||
-                                geometrySourceMask[index] == 0 ||
+                                geometrySourceMask[index].none() ||
                                 std::fabs((*field)[index]) <= 1.0e-5f ||
                                 std::fabs((*field)[index]) > edge_threshold)
                             {
@@ -249,7 +249,7 @@ DepthImplicitFieldRegularizer::regularize(
                                     (*supported)[positive_index] == 0 ||
                                     (geometrySourceMask[index] &
                                      geometrySourceMask[negative_index] &
-                                     geometrySourceMask[positive_index]) == 0 ||
+                                     geometrySourceMask[positive_index]).none() ||
                                     std::fabs((*field)[negative_index] -
                                               (*field)[index]) >
                                         edge_threshold ||

@@ -9,6 +9,7 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <utility>
 
 namespace xjw::mesh::texture_v4
 {
@@ -200,7 +201,11 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
         return {};
     }
     const double area = projectedArea(pixels);
-    if (area < 0.50)
+    // Dense reconstruction commonly creates triangles smaller than one source
+    // pixel.  Rejecting them individually tears otherwise valid connected
+    // charts into fallback-colored facets.  Keep only a numerical degeneracy
+    // guard here; resolutionScore still makes larger projections win.
+    if (!std::isfinite(area) || area <= 1.0e-8)
     {
         ++result->rejectedResolutionCount;
         return {};
@@ -412,31 +417,46 @@ void mergeSmallLabelIslands(const TextureMappingConfig &config,
         {
             continue;
         }
-        const auto target = std::max_element(
-            boundary_votes.begin(),
-            boundary_votes.end(),
-            [](const auto &left, const auto &right)
-            {
-                return left.second < right.second ||
-                    (left.second == right.second && left.first > right.first);
-            });
-        const int target_label = target->first;
-        bool can_merge = true;
-        for (const int face_index : component)
+        QVector<std::pair<int, int>> targets;
+        targets.reserve(static_cast<qsizetype>(boundary_votes.size()));
+        for (const auto &[label, votes] : boundary_votes)
         {
-            const FaceAssignment &assignment = data->assignments[face_index];
-            const FaceCandidate *candidate =
-                candidateForView(assignment, target_label);
-            if (!candidate || !passesUnaryQualityFloor(
-                    assignment,
-                    *candidate,
-                    config.coherentReplacementRatio))
+            targets.push_back({label, votes});
+        }
+        std::sort(targets.begin(), targets.end(), [](const auto &left,
+                                                     const auto &right)
+        {
+            return left.second > right.second ||
+                (left.second == right.second && left.first < right.first);
+        });
+
+        int target_label = -1;
+        for (const auto &[label, votes] : targets)
+        {
+            static_cast<void>(votes);
+            bool can_merge = true;
+            for (const int face_index : component)
             {
-                can_merge = false;
+                const FaceAssignment &assignment =
+                    data->assignments[face_index];
+                const FaceCandidate *candidate =
+                    candidateForView(assignment, label);
+                if (!candidate || !passesUnaryQualityFloor(
+                        assignment,
+                        *candidate,
+                        config.coherentReplacementRatio))
+                {
+                    can_merge = false;
+                    break;
+                }
+            }
+            if (can_merge)
+            {
+                target_label = label;
                 break;
             }
         }
-        if (!can_merge)
+        if (target_label < 0)
         {
             continue;
         }
@@ -552,8 +572,12 @@ bool selectTextureViews(const TextureMappingConfig &config,
     for (int pass = 0; pass < config.labelOptimizationPasses; ++pass)
     {
         int changed = 0;
-        for (int face_index = 0; face_index < data->assignments.size(); ++face_index)
+        const int face_count = data->assignments.size();
+        for (int step = 0; step < face_count; ++step)
         {
+            const int face_index = pass % 2 == 0
+                ? step
+                : face_count - step - 1;
             FaceAssignment &assignment = data->assignments[face_index];
             if (assignment.primaryView < 0)
             {
@@ -618,6 +642,9 @@ bool selectTextureViews(const TextureMappingConfig &config,
             break;
         }
     }
+    // A second deterministic pass allows components joined by the first pass
+    // to absorb the remaining small islands instead of leaving two-face charts.
+    mergeSmallLabelIslands(config, data);
     mergeSmallLabelIslands(config, data);
 
     std::set<int> used_views;

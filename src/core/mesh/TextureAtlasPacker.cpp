@@ -200,11 +200,13 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(
     int atlasSize,
     int reservedLeft,
     const std::function<bool()> &isCancelled,
-    const std::function<void(int)> &progressFn)
+    const std::function<void(int)> &progressFn,
+    float maximumScale)
 {
     TextureAtlasPackingResult result;
     if (items.isEmpty() || atlasSize <= 0 ||
-        reservedLeft < 0 || reservedLeft >= atlasSize)
+        reservedLeft < 0 || reservedLeft >= atlasSize ||
+        !std::isfinite(maximumScale) || maximumScale <= 0.0f)
     {
         return result;
     }
@@ -216,7 +218,7 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(
 
     long double requested_area = 0.0L;
     long double minimum_packed_area = 0.0L;
-    double dimension_scale_bound = 1.0;
+    double dimension_scale_bound = maximumScale;
     const int available_width = atlasSize - reservedLeft;
     for (const TextureAtlasItem &item : items)
     {
@@ -264,7 +266,7 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(
         static_cast<long double>(available_area) /
         std::max(requested_area, 1.0L));
     float high = static_cast<float>(std::min(
-        {1.0L,
+        {static_cast<long double>(maximumScale),
          area_scale_bound,
          static_cast<long double>(dimension_scale_bound)}));
     // At this scale every content dimension is rounded up to one pixel.  The

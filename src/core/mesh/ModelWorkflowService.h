@@ -33,6 +33,8 @@ struct DepthMapMeshBuildRequest
 {
     QString depthMapSourcePath;
     QString reusableDenseCloudPath;
+    QString sparseScaffoldPointCloudPath;
+    QString sparseScaffoldPointsPath;
     QString outputRoot;
     QJsonObject settings;
     xjw::mesh::ReconstructionConfig reconstruction;
@@ -60,6 +62,8 @@ struct ModelBuildRequest
     QString requestedSourcePath;
     QString sourcePointCloudPath;
     QString depthMapSourcePath;
+    QString sparseScaffoldPointCloudPath;
+    QString sparseScaffoldPointsPath;
     QString outputRoot;
     QJsonObject settings;
     std::optional<ModelOutputPolicy> outputPolicy;

@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -15,6 +16,12 @@
 
 namespace xjw::mesh
 {
+
+static_assert(
+    kDepthGeometrySourceSlotCount == 256 &&
+        sizeof(DepthGeometrySourceMask) == 4 * sizeof(std::uint64_t),
+    "Sparse TGV must use the same 256-bit TSDF source encoding as the octree");
+
 namespace
 {
 

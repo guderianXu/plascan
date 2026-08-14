@@ -2,7 +2,10 @@
 
 #include "DepthMapMeshBuilder.h"
 #include "DepthConstrainedSurfaceRefiner.h"
+#include "DepthFrameQualificationPolicy.h"
+#include "MvsWorkspaceManifest.h"
 #include "DepthMeshCompleteness.h"
+#include "DepthTsdfFinalQualityGate.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "MeshColorizer.h"
@@ -10,6 +13,7 @@
 #include "MeshQuadricSimplifier.h"
 #include "MeshTopologyQuality.h"
 #include "OpenMeshSimplifier.h"
+#include "OrbitalSparseScaffoldSurfaceBuilder.h"
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
 #include "VisualHullDepthRefiner.h"
@@ -33,10 +37,16 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <vector>
 
 namespace xjw::mesh::workflow
 {
+
+static_assert(
+    kDepthGeometrySourceSlotCount == 256 &&
+        sizeof(DepthGeometrySourceMask) == 4 * sizeof(std::uint64_t),
+    "Depth TSDF workflow requires the collision-free 256-bit source encoding");
 
 namespace
 {
@@ -216,9 +226,16 @@ struct FinalSurfaceDenoisingResult
 {
     bool attempted = false;
     bool accepted = false;
+    bool carrierAreaRelaxationEnabled = false;
+    bool carrierAreaRelaxationApplied = false;
     int movedVertexCount = 0;
     double areaBefore = 0.0;
     double areaAfter = 0.0;
+    double areaRatio = 0.0;
+    double absoluteVolumeBefore = 0.0;
+    double absoluteVolumeAfter = 0.0;
+    double absoluteVolumeRatio = 0.0;
+    double effectiveMinimumAreaRatio = 0.96;
     MeshTopologyQualityStatistics qualityBefore;
     MeshTopologyQualityStatistics qualityAfter;
 };
@@ -279,6 +296,41 @@ double meshSurfaceArea(const TriMesh &mesh)
             cross_z * cross_z);
     }
     return area;
+}
+
+double meshAbsoluteOrientedVolume(const TriMesh &mesh)
+{
+    if (mesh.vertices.empty())
+    {
+        return 0.0;
+    }
+
+    const MeshVertex &origin = mesh.vertices.front();
+    double signed_volume_six = 0.0;
+    for (const Triangle &face : mesh.faces)
+    {
+        const MeshVertex &first = mesh.vertices[
+            static_cast<std::size_t>(face.v[0])];
+        const MeshVertex &second = mesh.vertices[
+            static_cast<std::size_t>(face.v[1])];
+        const MeshVertex &third = mesh.vertices[
+            static_cast<std::size_t>(face.v[2])];
+        const double first_x = first.x - origin.x;
+        const double first_y = first.y - origin.y;
+        const double first_z = first.z - origin.z;
+        const double second_x = second.x - origin.x;
+        const double second_y = second.y - origin.y;
+        const double second_z = second.z - origin.z;
+        const double third_x = third.x - origin.x;
+        const double third_y = third.y - origin.y;
+        const double third_z = third.z - origin.z;
+        const double cross_x = second_y * third_z - second_z * third_y;
+        const double cross_y = second_z * third_x - second_x * third_z;
+        const double cross_z = second_x * third_y - second_y * third_x;
+        signed_volume_six += first_x * cross_x +
+            first_y * cross_y + first_z * cross_z;
+    }
+    return std::abs(signed_volume_six) / 6.0;
 }
 
 double meshMeanNormalVariation(const TriMesh &mesh)
@@ -477,6 +529,62 @@ MeshColorView textureViewFromFrame(const DepthTsdfFrame &frame)
     return view;
 }
 
+MeshColorView vertexColorViewFromFrame(const DepthTsdfFrame &frame)
+{
+    MeshColorView view;
+    view.camera = frame.camera;
+    view.colorBgr = frame.colorBgr;
+    view.depth = frame.depth;
+    view.confidence = frame.confidence;
+    view.depthValidMask = frame.depthValidMask;
+    view.supportMask = frame.supportMask;
+    view.qualityWeight = frame.frameQualityWeight;
+    return view;
+}
+
+void addFinalMeshColorStatistics(const MeshColorStatistics &statistics,
+                                 QJsonObject *payload)
+{
+    if (!payload)
+    {
+        return;
+    }
+
+    (*payload)[QStringLiteral("final_mesh_recolorized")] = true;
+    (*payload)[QStringLiteral("color_candidate_observation_count")] =
+        static_cast<qint64>(statistics.candidateObservationCount);
+    (*payload)[QStringLiteral("color_rejected_projection_count")] =
+        static_cast<qint64>(statistics.rejectedProjectionCount);
+    (*payload)[QStringLiteral("color_rejected_mask_count")] =
+        static_cast<qint64>(statistics.rejectedMaskCount);
+    (*payload)[QStringLiteral("color_rejected_depth_count")] =
+        static_cast<qint64>(statistics.rejectedDepthCount);
+    (*payload)[QStringLiteral("color_rejected_visibility_count")] =
+        static_cast<qint64>(statistics.rejectedVisibilityCount);
+    (*payload)[QStringLiteral("color_rejected_view_angle_count")] =
+        static_cast<qint64>(statistics.rejectedViewAngleCount);
+    (*payload)[QStringLiteral("color_rejected_outlier_count")] =
+        static_cast<qint64>(statistics.rejectedColorOutlierCount);
+    (*payload)[QStringLiteral("reliably_colored_vertex_count")] =
+        statistics.reliablyColoredVertexCount;
+    (*payload)[QStringLiteral("best_view_fallback_color_vertex_count")] =
+        statistics.bestViewFallbackVertexCount;
+    (*payload)[QStringLiteral("propagated_color_vertex_count")] =
+        statistics.propagatedVertexCount;
+    (*payload)[QStringLiteral("fallback_color_vertex_count")] =
+        statistics.fallbackVertexCount;
+    (*payload)[QStringLiteral("cleaned_color_speckle_vertex_count")] =
+        statistics.cleanedSpeckleVertexCount;
+    (*payload)[QStringLiteral("coherent_primary_view_face_count")] =
+        statistics.coherentPrimaryViewFaceCount;
+    (*payload)[QStringLiteral("coherent_primary_view_vertex_count")] =
+        statistics.coherentPrimaryViewVertexCount;
+    (*payload)[QStringLiteral("mesh_colorization_worker_count")] =
+        statistics.effectiveWorkerCount;
+    (*payload)[QStringLiteral("mesh_colorization_elapsed_ms")] =
+        static_cast<qint64>(statistics.elapsedMs);
+}
+
 void assignFinalModelFields(QJsonObject *result, bool exportObj)
 {
     if (!result)
@@ -626,29 +734,37 @@ void enforceNoDepthInterpolationPolicy(
         return;
     }
 
-    // “插值禁用” applies to depth observations, not to the construction of a
-    // continuous surface between measured samples. Exclude every path that
-    // invents depth pixels or performs an unconstrained visual-hull fill, while
-    // retaining the orbital visibility-occupancy prior and geometry-verified
-    // boundary recovery. Those paths are bounded by depth, silhouettes and
-    // free-space visibility and match the user-facing semantics of building a
-    // mesh without interpolating the source depth maps. The occupancy grid is
-    // deliberately kept as a topology/sign prior: directly extracting its
-    // low-resolution cell boundary quantizes orbital geometry and cannot be
-    // repaired by later triangle subdivision.
+    // “插值禁用” is an observation-only contract. Keep only depth samples that
+    // have measured support, and do not let an explicit completion setting or
+    // an orbital default re-enable an unsupported/silhouette-derived carrier.
+    // MC33 still interpolates the zero-crossing position inside a cell, but the
+    // sign-changing edge itself must be supported by measured observations.
     options->fillSmallBoundaryHoles = false;
     options->enableSilhouetteAwareFinalHoleFill = false;
     options->enableVisibilityConstrainedFinalHoleFill = false;
     options->enableTinyBoundaryLoopCollapse = false;
     options->enableVisualHullSignedDistanceCompletion = false;
+    options->enableVisibilityOccupancyCompletion = false;
+    options->visibilityOccupancyAlignCarrierGrid = false;
+    options->visibilityOccupancyNativeCarrierExtraction = false;
+    options->visibilityOccupancyCellBoundaryExtraction = false;
+    options->visibilityOccupancySilhouetteFullPriorCapacity = 0;
     options->allowInvalidNearestPixelRecovery = false;
     options->excludeAnchoredInterpolationObservations = true;
+    options->enableAuxiliarySurfaceOnlyIntegration = false;
+    // Revision-37 validation frames may still contribute their measured,
+    // multi-view core when they are the minimum bridge needed to reconnect the
+    // exact geometry-source graph. The builder fails closed for older or
+    // incomplete manifests and applies an additional per-pixel evidence gate.
+    options->enableAuxiliaryBridgeOnlyIntegration = true;
+    options->enableGeometryZeroCrossingRecovery = false;
+    options->enableCrossViewAnchoredSurfaceRecovery = false;
+    options->enableGeometryZeroCrossingCellSheets = false;
+    options->enableContourBandZeroCrossingSupport = false;
+    options->enableSurfacePatchSupport = false;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
-    // The iso-surface extractor must interpolate a zero crossing inside the
-    // fused TSDF cell. Requiring both signs to carry direct sample support cuts
-    // away the visibility-constrained carrier at narrow-band boundaries.
-    options->mc33RequireSupportedSignChange = false;
+    options->mc33RequireSupportedSignChange = true;
 }
 
 xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
@@ -660,6 +776,12 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         : requested_resolution;
     options.calculateVertexColors =
         settings.value(QStringLiteral("calculateVertexColors")).toBool(true);
+    options.useEvidenceAwareBounds = settings.value(
+        QStringLiteral("tsdfEvidenceAwareBounds"))
+        .toBool(options.useEvidenceAwareBounds);
+    options.preservePerFrameCoverageBounds = settings.value(
+        QStringLiteral("tsdfPerFrameCoverageBounds"))
+        .toBool(options.preservePerFrameCoverageBounds);
     options.compensateColorExposure = settings.value(
         QStringLiteral("tsdfCompensateColorExposure")).toBool(false);
     options.coherentFacePrimaryViewColors = settings.value(
@@ -1314,6 +1436,36 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.validationOnlyFrameWeightMultiplier)),
         0.05f,
         1.0f);
+    options.enableAuxiliarySurfaceOnlyIntegration = settings.value(
+        QStringLiteral("tsdfAuxiliarySurfaceOnlyIntegration"))
+        .toBool(options.enableAuxiliarySurfaceOnlyIntegration);
+    options.enableAuxiliaryBridgeOnlyIntegration = settings.value(
+        QStringLiteral("tsdfAuxiliaryBridgeOnlyIntegration"))
+        .toBool(options.enableAuxiliaryBridgeOnlyIntegration);
+    options.auxiliaryBridgeMinimumGeometrySupport = qBound(
+        2,
+        settings.value(QStringLiteral(
+            "tsdfAuxiliaryBridgeMinimumGeometrySupport"))
+            .toInt(options.auxiliaryBridgeMinimumGeometrySupport),
+        16);
+    options.auxiliaryBridgeMinimumSourceCount = qBound(
+        2,
+        settings.value(QStringLiteral(
+            "tsdfAuxiliaryBridgeMinimumSourceCount"))
+            .toInt(options.auxiliaryBridgeMinimumSourceCount),
+        16);
+    options.auxiliaryBridgeMaximumInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAuxiliaryBridgeMaximumInverseDepthSpread"))
+            .toDouble(options.auxiliaryBridgeMaximumInverseDepthSpread)),
+        0.001f,
+        0.02f);
+    options.auxiliaryBridgeMaximumExtensionVoxels = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfAuxiliaryBridgeMaximumExtensionVoxels"))
+            .toInt(options.auxiliaryBridgeMaximumExtensionVoxels),
+        4);
     options.coverageProtectedFrameMinimumMultiplier = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
             "tsdfCoverageProtectedFrameMinimumMultiplier"))
@@ -1729,6 +1881,9 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         1.0f);
     options.enableVisibilityOccupancyCompletion = settings.value(
         QStringLiteral("tsdfVisibilityOccupancyCompletion")).toBool(false);
+    options.visibilityOccupancyUseSupportMaskSilhouette = settings.value(
+        QStringLiteral("tsdfVisibilityOccupancyUseSupportMaskSilhouette"))
+        .toBool(options.visibilityOccupancyUseSupportMaskSilhouette);
     options.visibilityOccupancyResolution = qBound(
         24,
         settings.value(QStringLiteral(
@@ -2638,6 +2793,35 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->enableOrbitalFrameCoverageProtection = true;
     }
+    if (!settings.contains(QStringLiteral("tsdfPerFrameCoverageBounds")))
+    {
+        // A point on an orbital object's silhouette can be visible in only a
+        // few adjacent camera sectors. Global point quantiles clip those valid
+        // extrema, so preserve robust bounds from individual frames first.
+        options->preservePerFrameCoverageBounds = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfMinimumComponentFaceRatio")))
+    {
+        // An orbital-object run reconstructs one physical body.  Small nested
+        // shells above the generic 2.5% dust threshold are depth ghosts, not a
+        // legitimate second object.  Keep genuinely large competing surfaces
+        // for the final single-component quality gate to reject explicitly.
+        options->minimumComponentFaceRatio = std::max(
+            options->minimumComponentFaceRatio, 0.05f);
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfTopologyQualityMaximumClosedGenus")))
+    {
+        // A single small-body target is expected to be sphere-like.  Handles
+        // in an automatically completed carrier are unsupported topology,
+        // not recoverable surface detail.
+        options->topologyQualityMaximumClosedGenus = 0.0f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfTopologyQualityMaximumTopologicalComplexity")))
+    {
+        options->topologyQualityMaximumTopologicalComplexity = 0;
+    }
     if (!settings.contains(QStringLiteral("tsdfOrbitalGapBoundaryRecovery")))
     {
         options->enableOrbitalGapBoundaryRecovery = true;
@@ -2755,6 +2939,21 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyDetailBlend")))
     {
         options->visibilityOccupancyDetailBlend = 1.0f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfTriangleQualityOptimizationMaximumPasses")))
+    {
+        options->triangleQualityOptimizationMaximumPasses = 12;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfTriangleQualityTangentialRelaxationPasses")))
+    {
+        options->triangleQualityTangentialRelaxationPasses = 8;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfTriangleQualityIsotropicRemeshingPasses")))
+    {
+        options->triangleQualityIsotropicRemeshingPasses = 4;
     }
     const bool high_detail_model = options->resolution >= 384 &&
         options->simplifyTargetFaces > 0 &&
@@ -2992,7 +3191,8 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
     float mu,
     float maximumDisplacement,
     float featureAngleDegrees,
-    int boundaryProtectionRings)
+    int boundaryProtectionRings,
+    bool allowCarrierAreaRelaxation)
 {
     FinalSurfaceDenoisingResult result;
     if (mesh == nullptr || mesh->empty() || iterations <= 0 ||
@@ -3002,7 +3202,9 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
     }
 
     result.attempted = true;
+    result.carrierAreaRelaxationEnabled = allowCarrierAreaRelaxation;
     result.areaBefore = meshSurfaceArea(*mesh);
+    result.absoluteVolumeBefore = meshAbsoluteOrientedVolume(*mesh);
     result.qualityBefore = evaluateMeshTopologyQuality(*mesh);
     const MeshTopologySignature topology_before =
         meshTopologySignature(result.qualityBefore);
@@ -3019,22 +3221,25 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
             boundaryProtectionRings);
     detail::recomputeNormals(&candidate);
     result.areaAfter = meshSurfaceArea(candidate);
+    result.absoluteVolumeAfter = meshAbsoluteOrientedVolume(candidate);
     result.qualityAfter = evaluateMeshTopologyQuality(candidate);
     const MeshTopologySignature topology_after =
         meshTopologySignature(result.qualityAfter);
 
-    const double area_ratio = result.areaBefore > 1.0e-12
+    result.areaRatio = result.areaBefore > 1.0e-12
         ? result.areaAfter / result.areaBefore
         : 0.0;
-    const bool geometry_preserved =
-        result.movedVertexCount > 0 &&
+    result.absoluteVolumeRatio = result.absoluteVolumeBefore > 1.0e-12
+        ? result.absoluteVolumeAfter / result.absoluteVolumeBefore
+        : 0.0;
+    const bool mesh_structure_preserved =
         candidate.vertexCount() == mesh->vertexCount() &&
         candidate.faceCount() == mesh->faceCount() &&
         hasSameFaceIndexBuffer(*mesh, candidate) &&
         topology_after == topology_before &&
         result.qualityAfter.validFaceCount ==
-            result.qualityBefore.validFaceCount &&
-        area_ratio >= 0.96 && area_ratio <= 1.01 &&
+            result.qualityBefore.validFaceCount;
+    const bool triangle_quality_not_worse =
         result.qualityAfter.highAspectFaceRatio <=
             result.qualityBefore.highAspectFaceRatio + 1.0e-6 &&
         result.qualityAfter.extremeAspectFaceRatio <=
@@ -3049,10 +3254,39 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
             result.qualityBefore.adjacentNormalAngleP90Degrees - 0.25 ||
         result.qualityAfter.adjacentNormalAngleOver30Ratio <=
             result.qualityBefore.adjacentNormalAngleOver30Ratio - 0.001 ||
-        result.qualityAfter.adjacentNormalAngleMedianDegrees <=
-            result.qualityBefore.adjacentNormalAngleMedianDegrees - 0.10;
+         result.qualityAfter.adjacentNormalAngleMedianDegrees <=
+             result.qualityBefore.adjacentNormalAngleMedianDegrees - 0.10;
+
+    const bool closed_strict_topology_preserved =
+        mesh_structure_preserved &&
+        result.qualityBefore.closedTwoManifold &&
+        result.qualityAfter.closedTwoManifold;
+    const bool absolute_volume_preserved =
+        std::isfinite(result.absoluteVolumeRatio) &&
+        result.absoluteVolumeRatio >= 0.98 &&
+        result.absoluteVolumeRatio <= 1.02;
+    const bool carrier_area_relaxation_eligible =
+        allowCarrierAreaRelaxation &&
+        closed_strict_topology_preserved &&
+        absolute_volume_preserved &&
+        triangle_quality_not_worse &&
+        normal_quality_not_worse &&
+        normal_quality_improved;
+    result.effectiveMinimumAreaRatio =
+        carrier_area_relaxation_eligible ? 0.60 : 0.96;
+    result.carrierAreaRelaxationApplied =
+        carrier_area_relaxation_eligible &&
+        result.areaRatio >= result.effectiveMinimumAreaRatio &&
+        result.areaRatio < 0.96;
+    const bool geometry_preserved =
+        result.movedVertexCount > 0 &&
+        mesh_structure_preserved &&
+        std::isfinite(result.areaRatio) &&
+        result.areaRatio >= result.effectiveMinimumAreaRatio &&
+        result.areaRatio <= 1.01;
 
     result.accepted = geometry_preserved &&
+        triangle_quality_not_worse &&
         normal_quality_not_worse && normal_quality_improved;
     if (result.accepted)
     {
@@ -3064,6 +3298,10 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
 bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
                                                bool orbitalWorkspace)
 {
+    if (interpolationIsDisabled(settings))
+    {
+        return false;
+    }
     return settings.value(QStringLiteral(
         "tsdfVisibilityOccupancyDepthRefinement")).toBool(orbitalWorkspace);
 }
@@ -3164,7 +3402,8 @@ DepthMeshCompletenessStatistics evaluateDepthCompleteness(
     const TriMesh &mesh,
     const QVector<DepthTsdfFrame> &frames,
     const DepthTsdfOptions &options,
-    const DepthTsdfLayout &layout)
+    const DepthTsdfLayout &layout,
+    const QVector<int> &excludedRefIndices)
 {
     DepthMeshCompletenessOptions completeness_options;
     completeness_options.maximumDepthSamplesPerFrame =
@@ -3178,6 +3417,9 @@ DepthMeshCompletenessStatistics evaluateDepthCompleteness(
         options.minimumDepthCompletenessP10Recall;
     completeness_options.minimumMedianFrameRecall =
         options.minimumDepthCompletenessMedianRecall;
+    completeness_options.excludeAuxiliaryFrames = true;
+    completeness_options.excludedRefIndices.assign(
+        excludedRefIndices.cbegin(), excludedRefIndices.cend());
     return DepthMeshCompleteness::evaluate(
         mesh, frames, completeness_options);
 }
@@ -3214,7 +3456,7 @@ int selectOrbitalTsdfRetryResolution(int currentResolution,
                                      double minimumMedianRecall,
                                      double minimumP10Recall)
 {
-    if (!completenessAvailable || currentResolution <= 96 ||
+    if (!completenessAvailable || currentResolution <= 176 ||
         !std::isfinite(medianRecall) || !std::isfinite(p10Recall) ||
         !std::isfinite(minimumMedianRecall) ||
         !std::isfinite(minimumP10Recall) ||
@@ -3223,7 +3465,7 @@ int selectOrbitalTsdfRetryResolution(int currentResolution,
         return 0;
     }
 
-    return 96;
+    return currentResolution > 256 ? 256 : 176;
 }
 
 int meshResolutionFromSettings(const QJsonObject &settings)
@@ -3720,6 +3962,53 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral("depth_frame_discovery_elapsed_ms")] =
             static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - discovery_started_at).count());
+        const QFileInfo source_info(request.depthMapSourcePath);
+        const QDir source_directory = source_info.isDir()
+            ? QDir(source_info.absoluteFilePath())
+            : QDir(source_info.absolutePath());
+        const bool has_workspace_manifest = QFileInfo::exists(
+            source_directory.filePath(QStringLiteral("mvs_manifest.json")));
+        int incompatible_revision_count = 0;
+        int first_incompatible_revision = -1;
+        if (has_workspace_manifest)
+        {
+            for (const DepthFrameArtifact &artifact : artifacts)
+            {
+                if (artifact.algorithmRevision <
+                        xjw::mvs::kMvsMinimumModelCompatibleRevision ||
+                    artifact.algorithmRevision >
+                        xjw::mvs::kMvsDepthAlgorithmRevision)
+                {
+                    ++incompatible_revision_count;
+                    if (first_incompatible_revision < 0)
+                    {
+                        first_incompatible_revision = artifact.algorithmRevision;
+                    }
+                }
+            }
+        }
+        result.payload[QStringLiteral("mvs_workspace_manifest_present")] =
+            has_workspace_manifest;
+        result.payload[QStringLiteral("minimum_model_compatible_revision")] =
+            xjw::mvs::kMvsMinimumModelCompatibleRevision;
+        result.payload[QStringLiteral("current_depth_algorithm_revision")] =
+            xjw::mvs::kMvsDepthAlgorithmRevision;
+        result.payload[QStringLiteral("incompatible_depth_frame_count")] =
+            incompatible_revision_count;
+        if (incompatible_revision_count > 0)
+        {
+            result.errorMessage = QStringLiteral(
+                "所选深度图包含 %1 帧不兼容的算法版本（首个版本=%2，"
+                "当前模型要求版本 %3-%4）。旧版本缺少当前几何质量审计，"
+                "或没有保存像素来源掩码的精确位序，可能把位置错误的"
+                "深度壳层或错误来源关系送入融合；"
+                "请重新估计深度图后再生成模型。")
+                                      .arg(incompatible_revision_count)
+                                      .arg(first_incompatible_revision)
+                                      .arg(xjw::mvs::kMvsMinimumModelCompatibleRevision)
+                                      .arg(xjw::mvs::kMvsDepthAlgorithmRevision);
+            return result;
+        }
         const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
             artifacts,
             request.settings.value(QStringLiteral("threads")).toInt(0));
@@ -3752,9 +4041,6 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             return result;
         }
 
-        DepthTsdfOptions options = depthTsdfOptionsFromSettings(
-            request.settings,
-            request.reconstruction.resolution);
         const int orbital_frame_count = std::count_if(
             artifacts.cbegin(),
             artifacts.cend(),
@@ -3764,12 +4050,141 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             });
         const bool orbital_workspace = orbital_frame_count >=
             std::max(3, static_cast<int>(artifacts.size() / 2));
-        const int requested_tsdf_resolution = options.resolution;
-        const int requested_target_faces = options.simplifyTargetFaces;
+        const bool sparse_scaffold_pair_provided =
+            !request.sparseScaffoldPointCloudPath.trimmed().isEmpty() &&
+            !request.sparseScaffoldPointsPath.trimmed().isEmpty();
+        const bool sparse_scaffold_pair_incomplete =
+            request.sparseScaffoldPointCloudPath.trimmed().isEmpty() !=
+            request.sparseScaffoldPointsPath.trimmed().isEmpty();
+        const bool sparse_scaffold_completion_enabled =
+            request.settings.value(QStringLiteral(
+                "tsdfOrbitalSparseScaffoldCompletion")).toBool(true);
+        result.payload[QStringLiteral(
+            "configured_orbital_sparse_scaffold_completion")] =
+            sparse_scaffold_completion_enabled;
+        result.payload[QStringLiteral(
+            "orbital_sparse_scaffold_pair_provided")] =
+            sparse_scaffold_pair_provided;
+        result.payload[QStringLiteral(
+            "orbital_sparse_scaffold_pair_incomplete")] =
+            sparse_scaffold_pair_incomplete;
+        if (sparse_scaffold_pair_incomplete)
+        {
+            result.errorMessage = QStringLiteral(
+                "环拍稀疏骨架必须同时提供 PLY 与逐点质量 sidecar JSON；"
+                "仅使用原始稀疏 PLY 无法安全过滤错误轨迹。");
+            return result;
+        }
+        if (orbital_workspace)
+        {
+            const int discovered_primary_frame_count = std::count_if(
+                artifacts.cbegin(),
+                artifacts.cend(),
+                [](const DepthFrameArtifact &artifact)
+                {
+                    return xjw::mvs::isPrimaryFusionFrame(
+                        artifact.acceptance, artifact.fusionEligible);
+                });
+            const int minimum_primary_frame_count =
+                xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(
+                    loaded.discoveredArtifactCount);
+            result.payload[QStringLiteral(
+                "qualified_primary_depth_frame_count")] =
+                discovered_primary_frame_count;
+            result.payload[QStringLiteral(
+                "minimum_orbital_primary_depth_frame_count")] =
+                minimum_primary_frame_count;
+            const bool sparse_scaffold_low_primary_bypass_applied =
+                loaded.primaryFrameCount < minimum_primary_frame_count &&
+                loaded.primaryFrameCount >= 2 &&
+                sparse_scaffold_completion_enabled &&
+                sparse_scaffold_pair_provided;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_low_primary_bypass_applied")] =
+                sparse_scaffold_low_primary_bypass_applied;
+            if (loaded.primaryFrameCount < minimum_primary_frame_count &&
+                !sparse_scaffold_low_primary_bypass_applied)
+            {
+                result.errorMessage = QStringLiteral(
+                    "环拍 TSDF 实际载入的主融合深度帧不足：载入=%1，"
+                    "至少需要=%2，质量门控合格=%3，发现=%4，辅助=%5。"
+                    "当前深度图缺少足够的多视一致性，或可用内存限制了"
+                    "主帧载入数量；"
+                    "继续补全只会生成方块或马赛克；请按环拍近邻视角策略"
+                    "重新估计深度图；若仍失败，请检查空三相机内参、姿态和"
+                    "几何匹配质量。")
+                                          .arg(loaded.primaryFrameCount)
+                                          .arg(minimum_primary_frame_count)
+                                          .arg(discovered_primary_frame_count)
+                                          .arg(loaded.discoveredArtifactCount)
+                                          .arg(loaded.auxiliaryFrameCount);
+                return result;
+            }
+        }
+        const DepthTsdfOptions requested_options = depthTsdfOptionsFromSettings(
+            request.settings,
+            request.reconstruction.resolution);
+        const int requested_tsdf_resolution = requested_options.resolution;
+        const int requested_target_faces = requested_options.simplifyTargetFaces;
+
+        QJsonObject effective_settings = request.settings;
+        DepthMapVisualHullPreflightResult cached_visual_hull_preflight;
+        bool visual_hull_preflight_performed = false;
+        const bool natural_background_policy_enabled =
+            request.settings.value(QStringLiteral(
+                "tsdfOrbitalNaturalBackgroundPolicy")).toBool(true);
+        bool natural_background_policy_applied = false;
+        if (orbital_workspace && natural_background_policy_enabled &&
+            !interpolationIsDisabled(effective_settings))
+        {
+            cached_visual_hull_preflight =
+                DepthMapMeshBuilder::inspectVisualHullApplicability(
+                    request.depthMapSourcePath);
+            visual_hull_preflight_performed = true;
+            natural_background_policy_applied =
+                !cached_visual_hull_preflight.applicable;
+            if (natural_background_policy_applied)
+            {
+                // Close-up orbital captures often fill the image and have no
+                // separable foreground silhouette. In that case interpolation
+                // and evidence-only global bounds invent a small central shell
+                // and clip valid extrema that occur in only a few view sectors.
+                effective_settings[QStringLiteral("interpolation")] =
+                    QStringLiteral("disabled");
+                if (!request.settings.contains(QStringLiteral(
+                        "tsdfVisibilityOccupancyCompletion")))
+                {
+                    effective_settings[QStringLiteral(
+                        "tsdfVisibilityOccupancyCompletion")] = false;
+                }
+                if (!request.settings.contains(QStringLiteral(
+                        "tsdfEvidenceAwareBounds")))
+                {
+                    effective_settings[QStringLiteral(
+                        "tsdfEvidenceAwareBounds")] = false;
+                }
+                if (!request.settings.contains(QStringLiteral(
+                        "tsdfPerFrameCoverageBounds")))
+                {
+                    effective_settings[QStringLiteral(
+                        "tsdfPerFrameCoverageBounds")] = true;
+                }
+            }
+        }
+        result.payload[QStringLiteral(
+            "configured_orbital_natural_background_policy")] =
+            natural_background_policy_enabled;
+        result.payload[QStringLiteral(
+            "orbital_natural_background_policy_applied")] =
+            natural_background_policy_applied;
+
+        DepthTsdfOptions options = depthTsdfOptionsFromSettings(
+            effective_settings,
+            request.reconstruction.resolution);
         if (orbital_workspace)
         {
             applyOrbitalDepthTsdfDefaults(
-                request.settings,
+                effective_settings,
                 &options,
                 maximumReliableOrbitalResolution(
                     loaded.frames, options.resolution));
@@ -3796,6 +4211,12 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "configured_orbital_frame_coverage_protection")] =
             options.enableOrbitalFrameCoverageProtection;
+        result.payload[QStringLiteral(
+            "configured_auxiliary_surface_only_integration")] =
+            options.enableAuxiliarySurfaceOnlyIntegration;
+        result.payload[QStringLiteral(
+            "configured_auxiliary_bridge_only_integration")] =
+            options.enableAuxiliaryBridgeOnlyIntegration;
         result.payload[QStringLiteral(
             "configured_orbital_gap_boundary_recovery")] =
             options.enableOrbitalGapBoundaryRecovery;
@@ -3871,24 +4292,28 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         {
             request.progress(
                 QStringLiteral(
-                    "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4，插值=%5")
+                    "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4，"
+                    "插值=%5，表面策略=%6")
                     .arg(loaded.frames.size())
                     .arg(orbital_workspace
                              ? QStringLiteral("环拍目标")
                              : QStringLiteral("常规场景"))
                     .arg(options.resolution)
                     .arg(options.simplifyTargetFaces)
-                    .arg(request.settings.value(QStringLiteral("interpolation"))
-                             .toString(QStringLiteral("enabled"))),
+                    .arg(effective_settings.value(QStringLiteral("interpolation"))
+                             .toString(QStringLiteral("enabled")))
+                    .arg(interpolationIsDisabled(effective_settings)
+                             ? (options.enableAuxiliaryBridgeOnlyIntegration
+                                    ? QStringLiteral("仅观测支持（实测桥接）")
+                                    : QStringLiteral("仅观测支持"))
+                             : QStringLiteral("允许受约束补全")),
                 1);
         }
         const auto tsdf_started_at = std::chrono::steady_clock::now();
         DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(
             loaded.frames, build_options);
         bool effective_observation_only_surface =
-            interpolationIsDisabled(request.settings);
-        DepthMapVisualHullPreflightResult cached_visual_hull_preflight;
-        bool visual_hull_preflight_performed = false;
+            interpolationIsDisabled(effective_settings);
         const bool adaptive_completeness_retry_enabled =
             request.settings.value(QStringLiteral(
                 "tsdfOrbitalAdaptiveCompletenessRetry")).toBool(true);
@@ -3940,32 +4365,13 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     initial_tsdf_progress_end);
             }
 
-            QJsonObject retry_settings = request.settings;
+            QJsonObject retry_settings = effective_settings;
             retry_settings[QStringLiteral("meshResolution")] = retry_resolution;
-            bool retry_disabled_interpolation = false;
-            if (!effective_observation_only_surface && retry_resolution == 96)
-            {
-                cached_visual_hull_preflight =
-                    DepthMapMeshBuilder::inspectVisualHullApplicability(
-                        request.depthMapSourcePath);
-                visual_hull_preflight_performed = true;
-                retry_disabled_interpolation =
-                    !cached_visual_hull_preflight.applicable;
-                if (retry_disabled_interpolation)
-                {
-                    retry_settings[QStringLiteral("interpolation")] =
-                        QStringLiteral("disabled");
-                }
-            }
             result.payload[QStringLiteral(
                 "orbital_adaptive_completeness_retry_disabled_interpolation")] =
-                retry_disabled_interpolation;
+                false;
             DepthTsdfOptions retry_options = depthTsdfOptionsFromSettings(
                 retry_settings, retry_resolution);
-            if (retry_disabled_interpolation)
-            {
-                retry_options.useEvidenceAwareBounds = false;
-            }
             applyOrbitalDepthTsdfDefaults(
                 retry_settings,
                 &retry_options,
@@ -4006,9 +4412,6 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 options = std::move(retry_options);
                 build_options = std::move(retry_build_options);
                 tsdf = std::move(retry_tsdf);
-                effective_observation_only_surface =
-                    retry_disabled_interpolation ||
-                    effective_observation_only_surface;
             }
         }
         result.payload[QStringLiteral("depth_tsdf_build_elapsed_ms")] =
@@ -4019,10 +4422,14 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral("effective_interpolation")] =
             effective_observation_only_surface
             ? QStringLiteral("disabled")
-            : request.settings.value(QStringLiteral("interpolation"))
+            : effective_settings.value(QStringLiteral("interpolation"))
                   .toString(QStringLiteral("enabled"));
+        result.payload[QStringLiteral("effective_observation_only_surface")] =
+            effective_observation_only_surface;
         result.payload[QStringLiteral("configured_evidence_aware_bounds")] =
             options.useEvidenceAwareBounds;
+        result.payload[QStringLiteral("configured_per_frame_coverage_bounds")] =
+            options.preservePerFrameCoverageBounds;
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
         result.payload[QStringLiteral(
             "base_depth_completeness_available")] =
@@ -4075,7 +4482,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         const bool orbital_visual_hull_completion_configured =
             request.settings.value(QStringLiteral(
                 "tsdfOrbitalVisualHullCompletion")).toBool(true);
-        const bool observation_only_surface =
+        bool observation_only_surface =
             effective_observation_only_surface;
         const bool orbital_visual_hull_completion_enabled =
             orbital_visual_hull_completion_configured &&
@@ -4128,11 +4535,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         if (request.progress)
         {
             request.progress(
-                observation_only_surface &&
-                        orbital_visual_hull_completion_configured
+                observation_only_surface
                     ? QStringLiteral(
-                          "插值已禁用：排除插值深度，保留深度/轮廓/可见性约束的连续表面；"
-                          "跳过无约束环拍视觉外壳补全")
+                          "插值已禁用：仅提取有测量支持的 TSDF 符号变化；"
+                          "已关闭占据/轮廓载体、外壳补全与深度细化")
                     : orbital_visual_hull_completion_candidate &&
                               !visual_hull_preflight.applicable
                     ? QStringLiteral(
@@ -4149,6 +4555,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         }
 
         DepthMapVisualHullResult orbital_completion;
+        OrbitalSparseScaffoldSurfaceResult sparse_scaffold_completion;
         TriMesh *output_mesh = &tsdf.mesh;
         QString output_algorithm = QStringLiteral("depth_tsdf");
         if (orbital_visual_hull_completion_requested)
@@ -5242,10 +5649,320 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "orbital_visual_hull_completion_applied")] = false;
         }
 
+        const bool base_surface_incomplete =
+            !tsdf.statistics.depthCompletenessAvailable ||
+            !tsdf.statistics.depthCompletenessGatePassed ||
+            tsdf.statistics.boundaryEdgeCountAfter > 128 ||
+            evaluateMeshTopologyQuality(tsdf.mesh).componentCount > 1;
+        const bool visual_hull_unavailable =
+            !orbital_visual_hull_completion_requested ||
+            !result.payload.value(QStringLiteral(
+                "orbital_visual_hull_completion_applied")).toBool(false);
+        const bool sparse_scaffold_observation_policy_active =
+            natural_background_policy_applied ||
+            interpolationIsDisabled(effective_settings);
+        const bool sparse_scaffold_completion_requested =
+            orbital_workspace &&
+            sparse_scaffold_completion_enabled &&
+            sparse_scaffold_observation_policy_active &&
+            sparse_scaffold_pair_provided &&
+            base_surface_incomplete &&
+            visual_hull_unavailable;
+        result.payload[QStringLiteral(
+            "orbital_sparse_scaffold_observation_policy_active")] =
+            sparse_scaffold_observation_policy_active;
+        result.payload[QStringLiteral(
+            "orbital_sparse_scaffold_completion_requested")] =
+            sparse_scaffold_completion_requested;
+        result.payload[QStringLiteral(
+            "orbital_sparse_scaffold_completion_applied")] = false;
+        if (sparse_scaffold_completion_requested)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "局部深度无法构成完整环拍目标表面，正在用质量过滤的"
+                        "空三稀疏骨架构建全局闭合载体..."),
+                    94);
+            }
+            OrbitalSparseScaffoldSurfaceOptions scaffold_options;
+            scaffold_options.scaffold.minimumPointCount = 500;
+            scaffold_options.scaffold.maximumPointCount =
+                static_cast<std::size_t>(qBound(
+                    10000,
+                    request.settings.value(QStringLiteral(
+                        "tsdfOrbitalSparseScaffoldMaximumPoints"))
+                        .toInt(80000),
+                    200000));
+            scaffold_options.scaffold.minimumTrackLength = qBound(
+                3,
+                request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldMinimumTrackLength"))
+                    .toInt(3),
+                32);
+            scaffold_options.scaffold.maximumRmsReprojectionPixels =
+                std::clamp(
+                    static_cast<float>(request.settings.value(QStringLiteral(
+                        "tsdfOrbitalSparseScaffoldMaximumRmsReprojectionPixels"))
+                        .toDouble(1.5)),
+                    0.1f,
+                    5.0f);
+            scaffold_options.scaffold.minimumTriangulationAngleDegrees =
+                std::clamp(
+                    static_cast<float>(request.settings.value(QStringLiteral(
+                        "tsdfOrbitalSparseScaffoldMinimumTriangulationAngleDegrees"))
+                        .toDouble(5.0)),
+                    0.5f,
+                    30.0f);
+            scaffold_options.poisson.depth = qBound(
+                6,
+                request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldPoissonDepth"))
+                    .toInt(9),
+                11);
+            scaffold_options.poisson.pointWeight = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldPoissonPointWeight"))
+                    .toDouble(4.0)),
+                0.1f,
+                20.0f);
+            scaffold_options.poisson.samplesPerNode = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldPoissonSamplesPerNode"))
+                    .toDouble(1.5)),
+                0.5f,
+                10.0f);
+            scaffold_options.topologyRepair.targetResolution = qBound(
+                96,
+                request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldTopologyResolution"))
+                    .toInt(224),
+                256);
+            scaffold_options.topologyRepair.maximumClosingRadius = qBound(
+                0,
+                request.settings.value(QStringLiteral(
+                    "tsdfOrbitalSparseScaffoldMaximumClosingRadius"))
+                    .toInt(3),
+                8);
+            scaffold_options.topologyRepair.isCancelled = request.isCancelled;
+            sparse_scaffold_completion =
+                OrbitalSparseScaffoldSurfaceBuilder::build(
+                    xjw::common::io::toFilesystemPath(
+                        request.depthMapSourcePath),
+                    xjw::common::io::toFilesystemPath(
+                        request.sparseScaffoldPointCloudPath),
+                    xjw::common::io::toFilesystemPath(
+                        request.sparseScaffoldPointsPath),
+                    scaffold_options);
+            const auto &scaffold_statistics =
+                sparse_scaffold_completion.statistics;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_input_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.inputPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_quality_rejected_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.qualityRejectedCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_statistical_rejected_points")] =
+                static_cast<double>(scaffold_statistics.scaffold
+                    .statisticalOutlierRejectedCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_output_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.outputPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_poisson_vertices")] =
+                static_cast<double>(
+                    scaffold_statistics.poisson.outputVertexCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_poisson_faces")] =
+                static_cast<double>(
+                    scaffold_statistics.poisson.outputTriangleCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_before_components")] =
+                scaffold_statistics.topologyBeforeRepair.componentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_before_euler")] =
+                scaffold_statistics.topologyBeforeRepair.eulerCharacteristic;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_poisson_components")] =
+                scaffold_statistics.poissonComponentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_poisson_largest_component_ratio")] =
+                scaffold_statistics.poissonLargestComponentFaceRatio;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_removed_satellite_components")] =
+                scaffold_statistics.removedSatelliteComponentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_component_filtered_vertices")] =
+                static_cast<double>(
+                    scaffold_statistics.componentFilteredVertexCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_component_filtered_faces")] =
+                static_cast<double>(
+                    scaffold_statistics.componentFilteredFaceCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_filtered_components")] =
+                scaffold_statistics.topologyAfterComponentFilter.componentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_filtered_euler")] =
+                scaffold_statistics.topologyAfterComponentFilter
+                    .eulerCharacteristic;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_repair_attempted")] =
+                scaffold_statistics.topologyRepairAttempted;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_repair_applied")] =
+                scaffold_statistics.topologyRepairApplied;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_requested_resolution")] =
+                scaffold_statistics.topologyRepair.requestedResolution;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_effective_resolution")] =
+                scaffold_statistics.topologyRepair.effectiveResolution;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_voxel_size")] =
+                scaffold_statistics.topologyRepair.voxelSize;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_extraction_attempted")] =
+                scaffold_statistics.topologyRepair.smoothExtractionAttempted;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_extraction_accepted")] =
+                scaffold_statistics.topologyRepair.smoothExtractionAccepted;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_extraction_rejected_by_topology")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionRejectedByTopology;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_cell_boundary_fallback_used")] =
+                scaffold_statistics.topologyRepair.cellBoundaryExtractionUsed;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_vertices")] =
+                static_cast<double>(scaffold_statistics.topologyRepair
+                    .smoothExtractionVertexCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_faces")] =
+                static_cast<double>(scaffold_statistics.topologyRepair
+                    .smoothExtractionFaceCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_components")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionComponentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_boundary_edges")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionBoundaryEdgeCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_non_manifold_edges")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionNonManifoldEdgeCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_non_manifold_vertices")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionNonManifoldVertexCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_euler")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionSurfaceEulerCharacteristic;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_high_aspect_ratio")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionHighAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_extreme_aspect_ratio")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionExtremeAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_strict_gate_passed")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionStrictGatePassed;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_attempted")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationAttempted;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_accepted")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationAccepted;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_cancelled")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationCancelled;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_passes")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationPassCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_flips")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationFlippedEdgeCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_tangential_passes")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationTangentialPassCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_optimization_relaxed_vertices")] =
+                scaffold_statistics.topologyRepair
+                    .smoothTriangleOptimizationRelaxedVertexCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_high_aspect_ratio_before_optimization")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionHighAspectFaceRatioBeforeOptimization;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_smooth_extreme_aspect_ratio_before_optimization")] =
+                scaffold_statistics.topologyRepair
+                    .smoothExtractionExtremeAspectFaceRatioBeforeOptimization;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_closing_radius")] =
+                scaffold_statistics.topologyRepair.selectedClosingRadius;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_after_components")] =
+                scaffold_statistics.topologyAfterRepair.componentCount;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_topology_after_euler")] =
+                scaffold_statistics.topologyAfterRepair.eulerCharacteristic;
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_error")] =
+                QString::fromStdString(sparse_scaffold_completion.error);
+            if (!sparse_scaffold_completion.ok)
+            {
+                result.errorMessage = sparse_scaffold_completion.cancelled
+                    ? QStringLiteral("环拍稀疏骨架建模已取消。")
+                    : QStringLiteral(
+                          "环拍深度不完整，且稀疏全局骨架构建失败：%1。"
+                          "已停止输出错误模型。")
+                          .arg(QString::fromStdString(
+                              sparse_scaffold_completion.error));
+                return result;
+            }
+            output_mesh = &sparse_scaffold_completion.mesh;
+            output_algorithm =
+                QStringLiteral("orbital_sparse_scaffold_screened_poisson");
+            effective_observation_only_surface = false;
+            observation_only_surface = false;
+            result.payload[QStringLiteral(
+                "effective_observation_only_surface")] = false;
+            result.payload[QStringLiteral("effective_interpolation")] =
+                QStringLiteral("sparse_scaffold_completion");
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_completion_applied")] = true;
+            result.payload[QStringLiteral("actual_mesh_algorithm")] =
+                output_algorithm;
+        }
+
         const bool direct_visibility_occupancy_output =
             output_mesh == &tsdf.mesh &&
             tsdf.statistics
                 .effectiveVisibilityOccupancyCellBoundaryExtraction;
+        const bool output_mesh_unsafe_for_spatial_queries =
+            output_mesh == &tsdf.mesh &&
+            tsdf.statistics.depthCompletenessSkippedUnsafeTopology;
+        result.payload[QStringLiteral(
+            "output_mesh_spatial_queries_skipped_unsafe_topology")] =
+            output_mesh_unsafe_for_spatial_queries;
         const int carrier_subdivision_passes =
             direct_visibility_occupancy_output
             ? qBound(
@@ -5788,11 +6505,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         const bool visibility_occupancy_depth_refinement_enabled =
             output_mesh == &tsdf.mesh &&
             options.enableVisibilityOccupancyCompletion &&
+            !output_mesh_unsafe_for_spatial_queries &&
             visibilityOccupancyDepthRefinementEnabled(
-                request.settings, orbital_workspace);
+                effective_settings, orbital_workspace);
         result.payload[QStringLiteral(
             "configured_visibility_occupancy_depth_refinement")] =
             visibility_occupancy_depth_refinement_enabled;
+        result.payload[QStringLiteral(
+            "visibility_occupancy_depth_refinement_skipped_unsafe_topology")] =
+            output_mesh_unsafe_for_spatial_queries;
         if (visibility_occupancy_depth_refinement_enabled)
         {
             TriMesh direct_refinement_baseline;
@@ -6111,6 +6832,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 tsdf.layout.voxelSize[0],
                 tsdf.layout.voxelSize[1],
                 tsdf.layout.voxelSize[2]});
+            const bool allow_carrier_area_relaxation =
+                output_mesh == &sparse_scaffold_completion.mesh ||
+                direct_visibility_occupancy_output;
             const FinalSurfaceDenoisingResult denoising =
                 applyTopologyGuardedFinalSurfaceDenoising(
                     output_mesh,
@@ -6119,7 +6843,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     final_denoising_mu,
                     final_denoising_displacement_voxels * maximum_voxel_size,
                     final_denoising_feature_angle,
-                    final_denoising_boundary_rings);
+                    final_denoising_boundary_rings,
+                    allow_carrier_area_relaxation);
             result.payload[QStringLiteral(
                 "visibility_occupancy_final_surface_denoising_attempted")] =
                 denoising.attempted;
@@ -6135,6 +6860,27 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             result.payload[QStringLiteral(
                 "visibility_occupancy_final_surface_denoising_area_after")] =
                 denoising.areaAfter;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_area_ratio")] =
+                denoising.areaRatio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_volume_before")] =
+                denoising.absoluteVolumeBefore;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_volume_after")] =
+                denoising.absoluteVolumeAfter;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_volume_ratio")] =
+                denoising.absoluteVolumeRatio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_carrier_area_relaxation_enabled")] =
+                denoising.carrierAreaRelaxationEnabled;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_carrier_area_relaxation_applied")] =
+                denoising.carrierAreaRelaxationApplied;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_effective_minimum_area_ratio")] =
+                denoising.effectiveMinimumAreaRatio;
             result.payload[QStringLiteral(
                 "visibility_occupancy_final_surface_denoising_normal_median_before")] =
                 denoising.qualityBefore.adjacentNormalAngleMedianDegrees;
@@ -6160,6 +6906,24 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "final_surface_denoising_moved_vertices")] =
                 denoising.movedVertexCount;
             result.payload[QStringLiteral(
+                "final_surface_denoising_area_before")] =
+                denoising.areaBefore;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_area_after")] =
+                denoising.areaAfter;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_area_ratio")] =
+                denoising.areaRatio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_volume_before")] =
+                denoising.absoluteVolumeBefore;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_volume_after")] =
+                denoising.absoluteVolumeAfter;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_volume_ratio")] =
+                denoising.absoluteVolumeRatio;
+            result.payload[QStringLiteral(
                 "final_surface_denoising_normal_p90_before")] =
                 denoising.qualityBefore.adjacentNormalAngleP90Degrees;
             result.payload[QStringLiteral(
@@ -6173,7 +6937,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 denoising.qualityAfter.adjacentNormalAngleOver30Ratio;
         }
 
-        if (options.enableDepthCompletenessDiagnostics)
+        if (options.enableDepthCompletenessDiagnostics &&
+            !output_mesh_unsafe_for_spatial_queries)
         {
             if (request.progress)
             {
@@ -6184,14 +6949,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             }
             DepthMeshCompletenessStatistics final_completeness =
                 evaluateDepthCompleteness(
-                    *output_mesh, loaded.frames, options, tsdf.layout);
+                    *output_mesh,
+                    loaded.frames,
+                    options,
+                    tsdf.layout,
+                    tsdf.statistics.robustFrameQualityRejectedRefIndices);
             bool gap_boundary_available = false;
             double gap_boundary_minimum_recall = 1.0;
             for (const DepthMeshFrameCompleteness &frame :
                  final_completeness.frames)
             {
                 if (orbitalRoleForDepthFrame(
-                        tsdf.statistics.orbitalFrameRoles,
+                        tsdf.statistics.depthCompletenessFrameRoles,
                         frame.refIndex) != QStringLiteral("gap_boundary"))
                 {
                     continue;
@@ -6234,7 +7003,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 options.minimumDepthCompletenessMedianRecall;
             const QStringList worst_labels = worstDepthCompletenessLabels(
                 final_completeness,
-                tsdf.statistics.orbitalFrameRoles);
+                tsdf.statistics.depthCompletenessFrameRoles);
             result.payload[QStringLiteral(
                 "final_depth_completeness_worst_frames")] =
                 worst_labels.join(QStringLiteral(", "));
@@ -6320,6 +7089,26 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 return result;
             }
         }
+        else if (options.enableDepthCompletenessDiagnostics &&
+                 output_mesh_unsafe_for_spatial_queries)
+        {
+            result.payload[QStringLiteral(
+                "final_depth_completeness_available")] = false;
+            result.payload[QStringLiteral(
+                "final_depth_completeness_skipped_unsafe_topology")] = true;
+            result.payload[QStringLiteral(
+                "depth_completeness_available")] = false;
+            result.payload[QStringLiteral(
+                "depth_completeness_skipped_unsafe_topology")] = true;
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "最终模型拓扑不安全，跳过空间索引与深度细化，"
+                        "转入最终几何质量门"),
+                    99);
+            }
+        }
 
         if (direct_visibility_occupancy_output)
         {
@@ -6387,6 +7176,69 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     .arg(expected_surface_euler);
                 return result;
             }
+        }
+
+        MeshTopologyQualityThresholds final_quality_thresholds;
+        final_quality_thresholds.maximumBoundaryEdgeRatio =
+            std::max(0.0f, options.topologyQualityMaximumBoundaryEdgeRatio);
+        final_quality_thresholds.maximumHighAspectFaceRatio =
+            std::max(0.0f, options.topologyQualityMaximumHighAspectFaceRatio);
+        final_quality_thresholds.maximumExtremeAspectFaceRatio =
+            std::max(0.0f, options.topologyQualityMaximumExtremeAspectFaceRatio);
+        final_quality_thresholds.maximumClosedGenus =
+            std::max(0.0f, options.topologyQualityMaximumClosedGenus);
+        final_quality_thresholds.maximumTopologicalComplexity =
+            std::max(0, options.topologyQualityMaximumTopologicalComplexity);
+        const DepthTsdfFinalQualityGateResult final_quality_gate =
+            evaluateDepthTsdfFinalQualityGate(
+                *output_mesh,
+                observation_only_surface
+                    ? DepthTsdfFinalQualityPolicy::ObservationOnly
+                    : DepthTsdfFinalQualityPolicy::Strict,
+                final_quality_thresholds);
+        mergePayload(final_quality_gate.diagnostics, &result.payload);
+        if (!final_quality_gate.passed)
+        {
+            result.errorMessage = QStringLiteral(
+                "最终深度网格质量门未通过：%1。已停止写入模型，"
+                "请先修复深度图或采集覆盖，不能把该结果作为有效模型。")
+                                      .arg(final_quality_gate.reason);
+            return result;
+        }
+
+        if (options.calculateVertexColors && !output_mesh->hasVertexColors)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral("正在为最终网格重新投影顶点颜色..."),
+                    99);
+            }
+            QVector<MeshColorView> final_color_views;
+            final_color_views.reserve(loaded.frames.size());
+            for (const DepthTsdfFrame &frame : loaded.frames)
+            {
+                final_color_views.push_back(vertexColorViewFromFrame(frame));
+            }
+            MeshColorOptions color_options;
+            color_options.maximumVoxelSize = std::max({
+                tsdf.layout.voxelSize[0],
+                tsdf.layout.voxelSize[1],
+                tsdf.layout.voxelSize[2]});
+            color_options.minimumConfidence = options.minimumConfidence;
+            color_options.compensateExposure = options.compensateColorExposure;
+            color_options.coherentFacePrimaryViews =
+                options.coherentFacePrimaryViewColors;
+            color_options.workerCount = options.workerCount;
+            const MeshColorStatistics final_color_statistics =
+                MeshColorizer::colorize(
+                    output_mesh, final_color_views, color_options);
+            addFinalMeshColorStatistics(
+                final_color_statistics, &result.payload);
+        }
+        else
+        {
+            result.payload[QStringLiteral("final_mesh_recolorized")] = false;
         }
 
         const QJsonObject diagnostics = result.payload;
@@ -6709,6 +7561,10 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
                 ? request.requestedSourcePath
                 : request.depthMapSourcePath;
             depth_request.reusableDenseCloudPath = request.sourcePointCloudPath;
+            depth_request.sparseScaffoldPointCloudPath =
+                request.sparseScaffoldPointCloudPath;
+            depth_request.sparseScaffoldPointsPath =
+                request.sparseScaffoldPointsPath;
             depth_request.outputRoot = effectiveOutputRoot;
             depth_request.settings = request.settings;
             depth_request.reconstruction = reconstruction;
@@ -6807,6 +7663,7 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
 
     xjw::mesh::TextureMappingResult textureResult;
     std::string textureError;
+    QJsonObject texture_source_diagnostics;
     if (!request.depthMapSourcePath.trimmed().isEmpty())
     {
         if (cancellationRequested(request.isCancelled))
@@ -6832,13 +7689,78 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
         {
             views.push_back(textureViewFromFrame(frame));
         }
+        QString texture_mesh_path = request.meshPath;
+        QString temporary_colored_mesh_path;
+        if (QFileInfo(request.meshPath).suffix().compare(
+                QStringLiteral("ply"), Qt::CaseInsensitive) == 0)
+        {
+            TriMesh source_mesh;
+            std::string source_mesh_error;
+            if (TriMesh::loadPLY(
+                    xjw::common::io::toUtf8Path(request.meshPath),
+                    &source_mesh,
+                    &source_mesh_error) &&
+                !source_mesh.hasVertexColors)
+            {
+                if (request.progress)
+                {
+                    request.progress(
+                        QStringLiteral(
+                            "正在为纹理未覆盖区域计算顶点颜色..."),
+                        2);
+                }
+                QVector<MeshColorView> color_views;
+                color_views.reserve(loaded.frames.size());
+                for (const DepthTsdfFrame &frame : loaded.frames)
+                {
+                    color_views.push_back(vertexColorViewFromFrame(frame));
+                }
+                MeshColorOptions color_options;
+                color_options.minimumConfidence = textureConfig.minimumConfidence;
+                const MeshColorStatistics color_statistics =
+                    MeshColorizer::colorize(
+                        &source_mesh, color_views, color_options);
+                texture_source_diagnostics[QStringLiteral(
+                    "texture_source_recolorized")] =
+                    source_mesh.hasVertexColors;
+                texture_source_diagnostics[QStringLiteral(
+                    "texture_source_reliably_colored_vertex_count")] =
+                    color_statistics.reliablyColoredVertexCount;
+                texture_source_diagnostics[QStringLiteral(
+                    "texture_source_fallback_color_vertex_count")] =
+                    color_statistics.fallbackVertexCount;
+                if (source_mesh.hasVertexColors)
+                {
+                    QDir().mkpath(request.outputDir);
+                    temporary_colored_mesh_path = QDir(request.outputDir).filePath(
+                        QStringLiteral(".texture_source_colored.ply"));
+                    std::string save_error;
+                    if (!source_mesh.savePLY(
+                            xjw::common::io::toUtf8Path(
+                                temporary_colored_mesh_path),
+                            &save_error))
+                    {
+                        QFile::remove(temporary_colored_mesh_path);
+                        result.errorMessage = QStringLiteral(
+                            "无法准备纹理未覆盖区域的顶点颜色: %1")
+                            .arg(QString::fromStdString(save_error));
+                        return result;
+                    }
+                    texture_mesh_path = temporary_colored_mesh_path;
+                }
+            }
+        }
         result.ok = xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
-            xjw::common::io::toUtf8Path(request.meshPath),
+            xjw::common::io::toUtf8Path(texture_mesh_path),
             xjw::common::io::toUtf8Path(request.outputDir),
             textureConfig,
             views,
             &textureResult,
             &textureError);
+        if (!temporary_colored_mesh_path.isEmpty())
+        {
+            QFile::remove(temporary_colored_mesh_path);
+        }
     }
     else
     {
@@ -6869,6 +7791,7 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
     }
 
     result.payload = textureResultToJson(textureResult, &textureConfig);
+    mergePayload(texture_source_diagnostics, &result.payload);
     result.payload[QStringLiteral("source_model_path")] = request.meshPath;
     if (!request.textureRunId.trimmed().isEmpty())
     {

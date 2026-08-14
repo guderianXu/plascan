@@ -21,6 +21,7 @@ struct MeshColorView
     cv::Mat confidence;
     cv::Mat depthValidMask;
     cv::Mat supportMask;
+    cv::Mat colorForegroundMask; ///< 可选，颜色图分辨率下可安全取色的前景区域。
     float qualityWeight = 1.0f;
 };
 

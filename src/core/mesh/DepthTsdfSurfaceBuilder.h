@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DepthGeometrySourceEncoding.h"
 #include "FramePinholeCamera.h"
 #include "DepthMapMeshBuilder.h"
 #include "MeshTopologyQuality.h"
@@ -25,6 +26,8 @@ struct DepthTsdfFrame
 {
     int refIndex = -1;
     QString refImage;
+    QString sceneProfile;
+    int algorithmRevision = 0;
     FramePinholeCamera camera;
     cv::Mat depth;
     cv::Mat confidence;
@@ -37,19 +40,30 @@ struct DepthTsdfFrame
     cv::Mat inverseDepthRelativeSpread;
     cv::Mat crossViewRepairedMask;
     cv::Mat depthProvenance;
-    QVector<int> sourceIndices;
+    QVector<int> geometrySourceIndices;
     cv::Mat depthValidMask;
     cv::Mat supportMask;
     cv::Mat colorBgr;
     float frameQualityWeight = 1.0f;
     bool auxiliarySurfaceOnly = false;
     bool useAdaptiveGeometryEvidence = false;
+    double validWithinMaskRatio = -1.0;
+    double consistencyRetentionRatio = -1.0;
+    double largestComponentRatio = -1.0;
+    double meanConfidence = -1.0;
+    double sparseAbsoluteDepthMedianLogError = -1.0;
+    int sourceViewCount = 0;
+    int qualityReasonCount = 0;
+    std::uint64_t trustedGeometryCorePixelCount = 0;
+    bool auxiliaryBridgeEligible = false;
+    bool auxiliaryBridgeSelected = false;
 };
 
 struct DepthTsdfOptions
 {
     int resolution = 320;
     bool useEvidenceAwareBounds = true;
+    bool preservePerFrameCoverageBounds = false;
     float truncationVoxels = 7.5f;
     float surfaceSupportBandVoxels = 0.0f;
     bool enableUncertaintyAdaptiveTruncation = false;
@@ -110,7 +124,13 @@ struct DepthTsdfOptions
     int robustFrameQualityMinimumRetainedFrames = 5;
     bool enableOrbitalFrameCoverageProtection = false;
     float maximumOrbitalAngularGapRatio = 2.0f;
+    bool enableAuxiliarySurfaceOnlyIntegration = true;
     float validationOnlyFrameWeightMultiplier = 0.35f;
+    bool enableAuxiliaryBridgeOnlyIntegration = false;
+    int auxiliaryBridgeMinimumGeometrySupport = 4;
+    int auxiliaryBridgeMinimumSourceCount = 3;
+    float auxiliaryBridgeMaximumInverseDepthSpread = 0.008f;
+    int auxiliaryBridgeMaximumExtensionVoxels = 2;
     float coverageProtectedFrameMinimumMultiplier = 0.20f;
     bool enableOrbitalGapBoundaryRecovery = false;
     float orbitalGapBoundaryMinimumQualityMultiplier = 0.65f;
@@ -192,6 +212,7 @@ struct DepthTsdfOptions
     float visualHullCompletionMaximumSurfaceAreaRatio = 1.30f;
     float visualHullCompletionMaximumBoundsDiagonalRatio = 1.10f;
     bool enableVisibilityOccupancyCompletion = false;
+    bool visibilityOccupancyUseSupportMaskSilhouette = true;
     int visibilityOccupancyResolution = 72;
     bool visibilityOccupancyAlignCarrierGrid = false;
     bool visibilityOccupancyNativeCarrierExtraction = false;
@@ -428,6 +449,25 @@ struct DepthTsdfStatistics
     std::uint64_t contourBandZeroCrossingRejectedNoSignPairCount = 0;
     float effectiveMaximumContourBandAbsoluteTsdf = 0.0f;
     bool effectiveZeroCrossingDiagnostics = false;
+    int geometrySourceMaskBitWidth =
+        static_cast<int>(kDepthGeometrySourceSlotCount);
+    std::uint64_t geometrySourceEncodingFrameCount = 0;
+    std::uint64_t geometrySourceValidReferenceCount = 0;
+    std::uint64_t geometrySourceIgnoredNegativeReferenceCount = 0;
+    std::uint64_t geometrySourceMappedReferenceCount = 0;
+    std::uint64_t geometrySourceUnmappedReferenceCount = 0;
+    std::uint64_t geometrySourceNonzeroLocalMaskObservationCount = 0;
+    std::uint64_t geometrySourceFullyMappedObservationCount = 0;
+    std::uint64_t geometrySourcePartiallyMappedObservationCount = 0;
+    std::uint64_t geometrySourceFullyUnmappedObservationCount = 0;
+    int geometrySourceDistinctCount = 0;
+    int geometrySourceMappedCount = 0;
+    int geometrySourceUnmappedCount = 0;
+    double geometrySourceMappedReferenceRatio = 0.0;
+    double geometrySourceFullyMappedObservationRatio = 0.0;
+    double geometrySourcePartiallyMappedObservationRatio = 0.0;
+    double geometrySourceFullyUnmappedObservationRatio = 0.0;
+    QJsonArray geometrySourceEncodingSlots;
     bool effectiveMeasuredSupportConnectivity = false;
     float effectiveMeasuredSupportMinimumObservationWeight = 0.0f;
     int effectiveMeasuredSupportMinimumSourceCount = 0;
@@ -449,6 +489,7 @@ struct DepthTsdfStatistics
     std::uint64_t measuredSupportEligibleSampleCount = 0;
     std::uint64_t measuredSupportRejectedZeroCrossingCount = 0;
     std::uint64_t measuredSupportRecoveredSampleCount = 0;
+    std::uint64_t measuredSupportAppliedRecoveredSampleCount = 0;
     std::uint64_t measuredSupportUnlockedCellCount = 0;
     std::uint64_t measuredSupportCandidateCellCount = 0;
     std::uint64_t measuredSupportAcceptedCellCount = 0;
@@ -457,6 +498,30 @@ struct DepthTsdfStatistics
     int measuredSupportRejectedSmallComponentCount = 0;
     int measuredSupportRejectedAnchorComponentCount = 0;
     int measuredSupportRejectedBoundaryComponentCount = 0;
+    bool measuredSupportTopologyTransactionEvaluated = false;
+    bool measuredSupportTopologyTransactionAccepted = false;
+    std::uint32_t measuredSupportTopologyTransactionRejectionFlags = 0;
+    QString measuredSupportTopologyTransactionRejectionReason;
+    int measuredSupportTopologyTransactionBaselineValidFaceCount = 0;
+    int measuredSupportTopologyTransactionCandidateValidFaceCount = 0;
+    int measuredSupportTopologyTransactionBaselineBoundaryEdgeCount = 0;
+    int measuredSupportTopologyTransactionCandidateBoundaryEdgeCount = 0;
+    int measuredSupportTopologyTransactionBaselineComponentCount = 0;
+    int measuredSupportTopologyTransactionCandidateComponentCount = 0;
+    int measuredSupportTopologyTransactionBaselineNonManifoldEdgeCount = 0;
+    int measuredSupportTopologyTransactionCandidateNonManifoldEdgeCount = 0;
+    int measuredSupportTopologyTransactionBaselineNonManifoldVertexCount = 0;
+    int measuredSupportTopologyTransactionCandidateNonManifoldVertexCount = 0;
+    int measuredSupportTopologyTransactionBaselineTopologicalComplexity = 0;
+    int measuredSupportTopologyTransactionCandidateTopologicalComplexity = 0;
+    double measuredSupportTopologyTransactionBaselineLargestComponentFaceRatio =
+        0.0;
+    double measuredSupportTopologyTransactionCandidateLargestComponentFaceRatio =
+        0.0;
+    double measuredSupportTopologyTransactionBaselineExtremeAspectFaceRatio =
+        0.0;
+    double measuredSupportTopologyTransactionCandidateExtremeAspectFaceRatio =
+        0.0;
     bool effectiveConsistentIsoSurfaceExtraction = false;
     bool effectiveMc33IsoSurfaceExtraction = false;
     bool effectiveMc33RequireSupportedSignChange = false;
@@ -545,6 +610,7 @@ struct DepthTsdfStatistics
     double visualHullCompletionTopologyGuardSurfaceAreaRatio = 0.0;
     double visualHullCompletionTopologyGuardBoundsDiagonalRatio = 0.0;
     bool effectiveVisibilityOccupancyCompletion = false;
+    bool effectiveVisibilityOccupancyUseSupportMaskSilhouette = true;
     bool visibilityOccupancyRejectedEmptyCut = false;
     bool visibilityOccupancyRejectedCollapsedCut = false;
     bool effectiveVisibilityOccupancyCellBoundaryExtraction = false;
@@ -693,6 +759,19 @@ struct DepthTsdfStatistics
     QVector<int> robustFrameQualityRejectedRefIndices;
     int auxiliarySurfaceOnlyFrameCount = 0;
     QVector<int> auxiliarySurfaceOnlyRefIndices;
+    bool effectiveAuxiliarySurfaceOnlyIntegration = true;
+    bool effectiveAuxiliaryBridgeOnlyIntegration = false;
+    int auxiliaryBridgePrimaryComponentCount = 0;
+    bool auxiliaryBridgeGraphConnected = false;
+    bool auxiliaryBridgeSelectionFailClosed = false;
+    QVector<int> auxiliaryBridgeRefIndices;
+    std::uint64_t auxiliaryBridgeRejectedGeometrySupportCount = 0;
+    std::uint64_t auxiliaryBridgeRejectedSourceCount = 0;
+    std::uint64_t auxiliaryBridgeRejectedSpreadCount = 0;
+    std::uint64_t auxiliaryBridgeRejectedExtensionSampleCount = 0;
+    int excludedAuxiliarySurfaceOnlyFrameCount = 0;
+    QVector<int> excludedAuxiliarySurfaceOnlyRefIndices;
+    int geometryInputFrameCount = 0;
     bool effectiveOrbitalFrameCoverageProtection = false;
     int orbitalCoverageProtectedFrameCount = 0;
     QVector<int> orbitalCoverageProtectedRefIndices;
@@ -704,6 +783,7 @@ struct DepthTsdfStatistics
     int orbitalGapEndRefIndex = -1;
     int orbitalGapOppositeRefIndex = -1;
     QJsonArray orbitalFrameRoles;
+    QJsonArray depthCompletenessFrameRoles;
     bool effectiveOrbitalGapBoundaryRecovery = false;
     bool effectiveOrbitalGapAdaptiveTruncation = false;
     float effectiveOrbitalGapAdaptiveTruncationScale = 0.0f;
@@ -1019,6 +1099,7 @@ struct DepthTsdfStatistics
     bool effectiveDepthCompletenessDiagnostics = false;
     bool effectiveExcludeAnchoredInterpolationObservations = false;
     bool effectiveDepthCompletenessGateEnforcement = false;
+    bool depthCompletenessSkippedUnsafeTopology = false;
     bool depthCompletenessAvailable = false;
     bool depthCompletenessGatePassed = false;
     double depthCompletenessTolerance = 0.0;
@@ -1233,7 +1314,8 @@ public:
         int requestedWorkerCount = 0);
     static DepthTsdfBoundsResult estimateBounds(
         const QVector<DepthTsdfFrame> &frames,
-        bool useEvidenceAwareBounds = true);
+        bool useEvidenceAwareBounds = true,
+        bool preservePerFrameCoverageBounds = false);
     static DepthTsdfObservationSample sampleObservation(
         const DepthTsdfFrame &frame,
         const cv::Mat &effectiveDepthValidMask,
@@ -1312,13 +1394,20 @@ public:
             int maximumTopologicalComplexityIncrease = 0,
             double maximumSurfaceAreaRatio = 1.30,
             double maximumBoundsDiagonalRatio = 1.10);
+    static bool finalizeMeasuredSupportTopologyTransaction(
+        const MeshTopologyQualityStatistics &baselineQuality,
+        const MeshTopologyQualityStatistics &candidateQuality,
+        const std::vector<std::uint8_t> &baselineSupport,
+        std::uint64_t attemptedRecoveredSampleCount,
+        std::vector<std::uint8_t> *candidateSupport,
+        DepthTsdfStatistics *statistics);
 
     static DepthTsdfZeroCrossingRecoveryStatistics
         recoverGeometryVerifiedZeroCrossingSamples(
             const DepthTsdfLayout &layout,
             const std::vector<float> &tsdf,
             const std::vector<float> &weight,
-            const std::vector<std::uint16_t> &geometrySourceMask,
+            const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
             const std::vector<std::uint8_t> &eligible,
             int minimumSupportedCorners,
             int minimumCellVotes,
@@ -1350,6 +1439,10 @@ public:
         int boundaryEdgeCountBefore,
         int boundaryEdgeCountAfter,
         float maximumBoundaryEdgeGrowthRatio);
+    static bool shouldAttemptVoxelFallbackSimplification(
+        int currentFaceCount,
+        int targetFaceCount,
+        bool quadricReachedTarget);
     static DepthTsdfResult build(const QVector<DepthTsdfFrame> &frames,
                                  const DepthTsdfOptions &options);
     static QJsonObject statisticsToJson(const DepthTsdfResult &result);

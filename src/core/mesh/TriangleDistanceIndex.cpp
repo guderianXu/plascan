@@ -152,7 +152,6 @@ class TriangleDistanceIndex::Impl
 {
 public:
     explicit Impl(const TriMesh &mesh)
-        : _mesh(mesh)
     {
         _triangles.reserve(mesh.faces.size());
         for (std::size_t face_index = 0;
@@ -168,14 +167,14 @@ public:
                 continue;
             }
             TriangleRecord record;
-            record.faceIndex = face_index;
             record.minimum.fill(std::numeric_limits<double>::infinity());
             record.maximum.fill(-std::numeric_limits<double>::infinity());
-            for (int vertex_index : face.v)
+            for (int corner = 0; corner < 3; ++corner)
             {
                 const MeshVertex &vertex =
-                    mesh.vertices[static_cast<std::size_t>(vertex_index)];
+                    mesh.vertices[static_cast<std::size_t>(face.v[corner])];
                 const Point3d point{vertex.x, vertex.y, vertex.z};
+                record.vertices[static_cast<std::size_t>(corner)] = point;
                 for (int axis = 0; axis < 3; ++axis)
                 {
                     record.minimum[axis] = std::min(
@@ -216,7 +215,7 @@ public:
 private:
     struct TriangleRecord
     {
-        std::size_t faceIndex = 0;
+        std::array<Point3d, 3> vertices{};
         Point3d minimum{};
         Point3d maximum{};
         Point3d center{};
@@ -317,21 +316,14 @@ private:
         {
             for (std::size_t index = node.begin; index < node.end; ++index)
             {
-                const Triangle &face =
-                    _mesh.faces[_triangles[index].faceIndex];
-                const MeshVertex &a =
-                    _mesh.vertices[static_cast<std::size_t>(face.v[0])];
-                const MeshVertex &b =
-                    _mesh.vertices[static_cast<std::size_t>(face.v[1])];
-                const MeshVertex &c =
-                    _mesh.vertices[static_cast<std::size_t>(face.v[2])];
+                const TriangleRecord &triangle = _triangles[index];
                 *best = std::min(
                     *best,
                     pointTriangleDistanceSquared(
                         point,
-                        {a.x, a.y, a.z},
-                        {b.x, b.y, b.z},
-                        {c.x, c.y, c.z}));
+                        triangle.vertices[0],
+                        triangle.vertices[1],
+                        triangle.vertices[2]));
             }
             return;
         }
@@ -347,7 +339,6 @@ private:
         findNearest(second, point, best);
     }
 
-    const TriMesh &_mesh;
     std::vector<TriangleRecord> _triangles;
     std::vector<Node> _nodes;
 };

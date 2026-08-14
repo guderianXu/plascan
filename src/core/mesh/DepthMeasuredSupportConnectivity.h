@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DepthGeometrySourceEncoding.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -51,7 +53,7 @@ struct DepthMeasuredSupportConnectivityInput
     const std::vector<float> *weight = nullptr;
     const std::vector<float> *surfaceObservationWeight = nullptr;
     const std::vector<float> *maximumEvidenceObservationWeight = nullptr;
-    const std::vector<std::uint16_t> *geometrySourceMask = nullptr;
+    const std::vector<DepthGeometrySourceMask> *geometrySourceMask = nullptr;
     const std::vector<std::uint16_t> *minimumInverseDepthSpread = nullptr;
     const std::vector<std::uint16_t> *maximumGeometrySupportCount = nullptr;
 };

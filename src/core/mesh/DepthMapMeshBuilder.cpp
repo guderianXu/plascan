@@ -2,6 +2,7 @@
 
 #include "FramePinholeCamera.h"
 #include "DepthFrameUtils.h"
+#include "StudioForegroundMask.h"
 #include "VisualHullReconstructor.h"
 #include "io/PathIO.h"
 
@@ -236,140 +237,9 @@ void attachLegacyReportCameras(const QDir &directory, QVector<DepthFrameArtifact
     }
 }
 
-cv::Mat buildSilhouetteMask(const cv::Mat &color_image,
-                            float *coverage,
-                            float *border_coverage,
-                            float *border_luminance)
-{
-    cv::Mat gray;
-    if (color_image.channels() == 3)
-    {
-        cv::cvtColor(color_image, gray, cv::COLOR_BGR2GRAY);
-    }
-    else
-    {
-        gray = color_image;
-    }
-    cv::Mat blurred;
-    cv::GaussianBlur(gray, blurred, cv::Size(5, 5), 0.0);
-    cv::Mat otsu_mask;
-    const double otsu_threshold = cv::threshold(
-        blurred, otsu_mask, 0.0, 255.0, cv::THRESH_BINARY | cv::THRESH_OTSU);
-    const double conservative_threshold = std::clamp(otsu_threshold, 24.0, 0.19 * 255.0);
-    cv::Mat mask;
-    cv::threshold(blurred, mask, conservative_threshold, 255.0, cv::THRESH_BINARY);
-
-    const int border_width = std::max(2, std::min(mask.cols, mask.rows) / 80);
-    cv::Mat border = cv::Mat::zeros(mask.size(), CV_8UC1);
-    border.rowRange(0, border_width).setTo(255);
-    border.rowRange(mask.rows - border_width, mask.rows).setTo(255);
-    border.colRange(0, border_width).setTo(255);
-    border.colRange(mask.cols - border_width, mask.cols).setTo(255);
-    const int border_pixels = cv::countNonZero(border);
-    const int white_border = cv::countNonZero(mask & border);
-    if (border_luminance)
-    {
-        *border_luminance = static_cast<float>(cv::mean(gray, border)[0]);
-    }
-    if (white_border > border_pixels / 2)
-    {
-        cv::bitwise_not(mask, mask);
-    }
-
-    cv::Mat labels;
-    cv::Mat statistics;
-    cv::Mat centroids;
-    const int component_count = cv::connectedComponentsWithStats(
-        mask,
-        labels,
-        statistics,
-        centroids,
-        8,
-        CV_32S);
-    if (component_count <= 1)
-    {
-        return {};
-    }
-    int largest_label = 1;
-    int largest_area = statistics.at<int>(1, cv::CC_STAT_AREA);
-    for (int label = 2; label < component_count; ++label)
-    {
-        const int area = statistics.at<int>(label, cv::CC_STAT_AREA);
-        if (area > largest_area)
-        {
-            largest_label = label;
-            largest_area = area;
-        }
-    }
-    cv::compare(labels, largest_label, mask, cv::CMP_EQ);
-    const double image_scale = std::min(mask.cols / 640.0, mask.rows / 480.0);
-    const int dilate_radius = std::max(2, static_cast<int>(std::lround(10.0 * image_scale)));
-    const int erode_radius = std::max(1, static_cast<int>(std::lround(7.0 * image_scale)));
-    const cv::Mat dilate_kernel = cv::getStructuringElement(
-        cv::MORPH_ELLIPSE, cv::Size(dilate_radius * 2 + 1, dilate_radius * 2 + 1));
-    const cv::Mat erode_kernel = cv::getStructuringElement(
-        cv::MORPH_ELLIPSE, cv::Size(erode_radius * 2 + 1, erode_radius * 2 + 1));
-    cv::dilate(mask, mask, dilate_kernel);
-    cv::erode(mask, mask, erode_kernel);
-
-    cv::Mat background;
-    cv::bitwise_not(mask, background);
-    cv::Mat background_labels;
-    cv::Mat background_statistics;
-    cv::Mat background_centroids;
-    const int background_component_count = cv::connectedComponentsWithStats(
-        background,
-        background_labels,
-        background_statistics,
-        background_centroids,
-        8,
-        CV_32S);
-    const int maximum_speckle_hole_area =
-        std::max(32, mask.rows * mask.cols / 240);
-    for (int label = 1; label < background_component_count; ++label)
-    {
-        const int left =
-            background_statistics.at<int>(label, cv::CC_STAT_LEFT);
-        const int top =
-            background_statistics.at<int>(label, cv::CC_STAT_TOP);
-        const int width =
-            background_statistics.at<int>(label, cv::CC_STAT_WIDTH);
-        const int height =
-            background_statistics.at<int>(label, cv::CC_STAT_HEIGHT);
-        const int area =
-            background_statistics.at<int>(label, cv::CC_STAT_AREA);
-        const bool touches_border =
-            left == 0 || top == 0 || left + width >= mask.cols ||
-            top + height >= mask.rows;
-        if (!touches_border && area <= maximum_speckle_hole_area)
-        {
-            mask.setTo(255, background_labels == label);
-        }
-    }
-
-    if (coverage)
-    {
-        *coverage = static_cast<float>(cv::countNonZero(mask)) /
-                    std::max(1, mask.rows * mask.cols);
-    }
-    if (border_coverage)
-    {
-        *border_coverage = static_cast<float>(cv::countNonZero(mask & border)) /
-                           std::max(1, border_pixels);
-    }
-    return mask;
-}
-
 bool isUsableStudioSilhouette(const cv::Mat &color_image)
 {
-    float coverage = 0.0f;
-    float border_coverage = 1.0f;
-    float border_luminance = 255.0f;
-    const cv::Mat silhouette = buildSilhouetteMask(
-        color_image, &coverage, &border_coverage, &border_luminance);
-    return !silhouette.empty() && border_luminance <= 55.0f &&
-           coverage >= 0.03f && coverage <= 0.80f &&
-           border_coverage <= 0.30f;
+    return buildStudioForegroundMask(color_image).isUsable();
 }
 
 int countEnclosedMaskHoles(const cv::Mat &mask)
@@ -440,7 +310,12 @@ bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
                 {
                     continue;
                 }
-                const double pixel[2] = {column + 0.5, row + 0.5};
+                // OpenCV's calibrated projection uses integer coordinates for
+                // pixel centres.  Adding half a pixel here shifts every visual-
+                // hull ray away from the depth/TSDF projection convention.
+                const double pixel[2] = {
+                    static_cast<double>(column),
+                    static_cast<double>(row)};
                 double world[3] = {};
                 if (frame.cameraModel.unprojectPixel(pixel, value, world) &&
                     std::isfinite(world[0]) && std::isfinite(world[1]) &&
@@ -529,6 +404,13 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             {
                 frame.sourceIndices.push_back(source_value.toInt(-1));
             }
+            for (const QJsonValue &source_value :
+                 object.value(QStringLiteral(
+                     "geometry_source_indices")).toArray())
+            {
+                frame.geometrySourceIndices.push_back(
+                    source_value.toInt(-1));
+            }
             frame.previewPath = resolveArtifactPath(directory, object.value(QStringLiteral("depth_png")).toString());
             frame.validMaskPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("valid_mask_path")).toString());
@@ -545,6 +427,8 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 xjw::mvs::qualifyMvsDepthFrameArtifact(object);
             frame.acceptance = qualification.acceptance;
             frame.fusionEligible = qualification.fusionEligible;
+            frame.useDiscreteGeometryFallback =
+                qualification.useDiscreteGeometryFallback;
             frame.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(
                 depthQuality.value(QStringLiteral("valid_coverage")).toDouble(-1.0));
             const QJsonObject depthCompleteness =
@@ -561,8 +445,30 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                     QStringLiteral("largest_component_ratio")).toDouble(-1.0);
             frame.meanConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(
                 depthQuality.value(QStringLiteral("mean_confidence")).toDouble(-1.0));
+            frame.sparseAbsoluteDepthMedianLogError =
+                qualityDecision.value(
+                    QStringLiteral("sparse_absolute_depth_residual"))
+                    .toObject()
+                    .value(QStringLiteral("median_absolute_log_error"))
+                    .toDouble(-1.0);
             frame.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(
                 depthQuality.value(QStringLiteral("source_view_count")).toInt(0));
+            const QJsonObject geometryEvidence = object.value(
+                QStringLiteral("geometry_evidence_diagnostics")).toObject();
+            const double geometry_valid_pixel_count = geometryEvidence.value(
+                QStringLiteral("valid_pixel_count")).toDouble(0.0);
+            const double discrete_core_ratio = geometryEvidence.value(
+                QStringLiteral("discrete_geometry_core_ratio")).toDouble(-1.0);
+            if (std::isfinite(geometry_valid_pixel_count) &&
+                geometry_valid_pixel_count > 0.0 &&
+                std::isfinite(discrete_core_ratio) &&
+                discrete_core_ratio >= 0.0)
+            {
+                frame.trustedGeometryCorePixelCount =
+                    static_cast<std::uint64_t>(std::llround(
+                        geometry_valid_pixel_count *
+                        std::clamp(discrete_core_ratio, 0.0, 1.0)));
+            }
             for (const QJsonValue &reason :
                  qualityDecision.value(QStringLiteral("reasons")).toArray())
             {
@@ -723,17 +629,12 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         {
             cv::resize(color, color, cv::Size(frame.gridWidth, frame.gridHeight));
         }
-        float coverage = 0.0f;
-        float border_coverage = 1.0f;
-        float border_luminance = 255.0f;
-        cv::Mat silhouette = buildSilhouetteMask(
-            color, &coverage, &border_coverage, &border_luminance);
-        const bool has_dark_studio_background = border_luminance <= 55.0f;
-        if (silhouette.empty() || !has_dark_studio_background ||
-            coverage < 0.03f || coverage > 0.80f || border_coverage > 0.30f)
+        StudioForegroundMask foreground = buildStudioForegroundMask(color);
+        if (!foreground.isUsable())
         {
             continue;
         }
+        cv::Mat silhouette = std::move(foreground.mask);
         if (countEnclosedMaskHoles(silhouette) > 0)
         {
             ++result.preservedSilhouetteHoleViewCount;

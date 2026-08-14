@@ -65,12 +65,12 @@ std::size_t gridIndex(
 
 bool frameImageSize(
     const VisibilityOccupancyFrameView &frame,
+    bool use_support_mask_silhouette,
     int *width,
     int *height)
 {
     const cv::Mat *images[] = {
         frame.depth,
-        frame.supportMask,
         frame.depthValidMask,
         frame.confidence};
     for (const cv::Mat *image : images)
@@ -82,17 +82,24 @@ bool frameImageSize(
             return *width > 0 && *height > 0;
         }
     }
+    if (use_support_mask_silhouette &&
+        frame.supportMask != nullptr && !frame.supportMask->empty())
+    {
+        *width = frame.supportMask->cols;
+        *height = frame.supportMask->rows;
+        return *width > 0 && *height > 0;
+    }
     return false;
 }
 
 bool frameImagesHaveMatchingSize(
     const VisibilityOccupancyFrameView &frame,
+    bool use_support_mask_silhouette,
     int width,
     int height)
 {
     const cv::Mat *images[] = {
         frame.depth,
-        frame.supportMask,
         frame.depthValidMask,
         frame.confidence};
     for (const cv::Mat *image : images)
@@ -102,6 +109,13 @@ bool frameImagesHaveMatchingSize(
         {
             return false;
         }
+    }
+    if (use_support_mask_silhouette &&
+        frame.supportMask != nullptr && !frame.supportMask->empty() &&
+        (frame.supportMask->cols != width ||
+         frame.supportMask->rows != height))
+    {
+        return false;
     }
     return true;
 }
@@ -200,8 +214,16 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
         }
         int width = 0;
         int height = 0;
-        if (frameImageSize(frame, &width, &height) &&
-            !frameImagesHaveMatchingSize(frame, width, height))
+        if (frameImageSize(
+                frame,
+                options.useSupportMaskSilhouette,
+                &width,
+                &height) &&
+            !frameImagesHaveMatchingSize(
+                frame,
+                options.useSupportMaskSilhouette,
+                width,
+                height))
         {
             result.error =
                 "visibility occupancy frame images have inconsistent dimensions";
@@ -327,7 +349,11 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                     }
                     int width = 0;
                     int height = 0;
-                    if (!frameImageSize(frame, &width, &height))
+                    if (!frameImageSize(
+                            frame,
+                            options.useSupportMaskSilhouette,
+                            &width,
+                            &height))
                     {
                         continue;
                     }
@@ -347,7 +373,8 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                     }
                     ++projected_views;
                     ++projected_view_count;
-                    if (!maskAllows(frame.supportMask, row, column))
+                    if (options.useSupportMaskSilhouette &&
+                        !maskAllows(frame.supportMask, row, column))
                     {
                         ++silhouette_violations;
                         ++silhouette_outside_vote_count;
@@ -358,8 +385,11 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                             &problem.sinkCapacities[index]);
                         continue;
                     }
-                    ++silhouette_inside_views;
-                    ++silhouette_inside_vote_count;
+                    if (options.useSupportMaskSilhouette)
+                    {
+                        ++silhouette_inside_views;
+                        ++silhouette_inside_vote_count;
+                    }
                     if (frame.depth == nullptr || frame.depth->empty() ||
                         frame.depth->type() != CV_32FC1 ||
                         !maskAllows(frame.depthValidMask, row, column))
@@ -408,6 +438,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                     }
                 }
                 const bool silhouette_prior_candidate =
+                    options.useSupportMaskSilhouette &&
                     projected_views >= options.minimumVisibleViews &&
                     silhouette_inside_views >=
                         options.minimumSilhouetteViews &&
@@ -451,6 +482,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         1,
                         options.closingMinimumDepthEmptyViewsToProtect);
                 const bool protect_silhouette_empty =
+                    options.useSupportMaskSilhouette &&
                     silhouette_inside_views == 0 &&
                     silhouette_violations >= std::max(
                         options.allowedSilhouetteViolations + 1,

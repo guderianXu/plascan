@@ -108,7 +108,10 @@ DepthMeasuredSupportConnectivity::recover(
 
     const std::vector<std::uint8_t> frozen_support = *supported;
     std::vector<std::uint8_t> eligible(frozen_support.size(), 0);
-    const int minimum_source_count = std::clamp(options.minimumSourceCount, 2, 16);
+    const int minimum_source_count = std::clamp(
+        options.minimumSourceCount,
+        2,
+        static_cast<int>(kDepthGeometrySourceSlotCount));
     const int minimum_geometry_support = std::clamp(options.minimumGeometrySupport, 2, 16);
     const float maximum_spread = std::clamp(options.maximumInverseDepthSpread, 0.001f, 0.05f);
     const float minimum_surface_ratio = std::clamp(options.minimumSurfaceWeightRatio, 0.01f, 1.0f);
@@ -129,7 +132,8 @@ DepthMeasuredSupportConnectivity::recover(
             ++statistics.rejectedObservationWeightCount;
             continue;
         }
-        if (std::popcount((*input.geometrySourceMask)[index]) < minimum_source_count)
+        if (static_cast<int>((*input.geometrySourceMask)[index].count()) <
+            minimum_source_count)
         {
             ++statistics.rejectedSourceCount;
             continue;

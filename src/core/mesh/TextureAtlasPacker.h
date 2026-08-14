@@ -36,7 +36,8 @@ public:
                                           int atlasSize,
                                           int reservedLeft = 0,
                                           const std::function<bool()> &isCancelled = {},
-                                          const std::function<void(int)> &progressFn = {});
+                                          const std::function<void(int)> &progressFn = {},
+                                          float maximumScale = 1.0f);
 };
 
 } // namespace xjw::mesh

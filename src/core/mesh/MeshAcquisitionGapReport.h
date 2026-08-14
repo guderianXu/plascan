@@ -14,7 +14,9 @@ namespace xjw::mesh
 QJsonObject buildMeshAcquisitionGapReport(
     const std::vector<MeshBoundaryEdgeAttribution> &edges,
     const DepthTsdfLayout &layout,
-    const QStringList &frameLabels,
-    int inputFrameCount);
+    const QStringList &sourceLabels,
+    const std::vector<int> &sourceIndices,
+    int inputFrameCount,
+    bool sourceMappingComplete);
 
 } // namespace xjw::mesh

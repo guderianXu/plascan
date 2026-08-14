@@ -1,6 +1,7 @@
 #include "MeshColorizer.h"
 
 #include "MeshFaceColorOptimizer.h"
+#include "StudioForegroundMask.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -63,6 +64,69 @@ cv::Vec3f bilinearColor(const cv::Mat &image, double x, double y)
     return top * (1.0f - ty) + bottom * ty;
 }
 
+bool isBilinearMaskSampleValid(const cv::Mat &mask, double x, double y)
+{
+    if (mask.empty())
+    {
+        return true;
+    }
+    if (mask.type() != CV_8UC1 ||
+        x < 0.0 || y < 0.0 || x > mask.cols - 1.0 || y > mask.rows - 1.0)
+    {
+        return false;
+    }
+    const int x0 = static_cast<int>(std::floor(x));
+    const int y0 = static_cast<int>(std::floor(y));
+    const int x1 = std::min(x0 + 1, mask.cols - 1);
+    const int y1 = std::min(y0 + 1, mask.rows - 1);
+    return mask.at<std::uint8_t>(y0, x0) != 0 &&
+           mask.at<std::uint8_t>(y0, x1) != 0 &&
+           mask.at<std::uint8_t>(y1, x0) != 0 &&
+           mask.at<std::uint8_t>(y1, x1) != 0;
+}
+
+QVector<MeshColorView> prepareColorViews(const QVector<MeshColorView> &views)
+{
+    QVector<MeshColorView> prepared_views = views;
+    for (MeshColorView &view : prepared_views)
+    {
+        if (view.colorBgr.type() != CV_8UC3)
+        {
+            continue;
+        }
+        if (!view.colorCamera.isValid())
+        {
+            view.colorCamera = view.camera;
+            if (!view.depth.empty() && view.colorBgr.size() != view.depth.size())
+            {
+                view.colorCamera = view.camera.scaledIntrinsics(
+                    static_cast<double>(view.colorBgr.cols) / view.depth.cols,
+                    static_cast<double>(view.colorBgr.rows) / view.depth.rows);
+            }
+        }
+        if (!view.colorForegroundMask.empty())
+        {
+            continue;
+        }
+        StudioForegroundMask foreground = buildStudioForegroundMask(view.colorBgr);
+        if (!foreground.isUsableForColorSampling())
+        {
+            continue;
+        }
+
+        const double image_scale = std::min(
+            foreground.mask.cols / 640.0, foreground.mask.rows / 480.0);
+        const int safe_interior_radius = std::max(
+            2, static_cast<int>(std::lround(4.0 * image_scale)));
+        const cv::Mat kernel = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE,
+            cv::Size(safe_interior_radius * 2 + 1,
+                     safe_interior_radius * 2 + 1));
+        cv::erode(foreground.mask, view.colorForegroundMask, kernel);
+    }
+    return prepared_views;
+}
+
 std::vector<float> exposureGains(const QVector<MeshColorView> &views, bool enabled)
 {
     std::vector<float> luminances(static_cast<std::size_t>(views.size()), 0.0f);
@@ -75,12 +139,26 @@ std::vector<float> exposureGains(const QVector<MeshColorView> &views, bool enabl
             continue;
         }
         cv::Mat mask;
+        if (view.colorForegroundMask.type() == CV_8UC1 &&
+            view.colorForegroundMask.size() == view.colorBgr.size())
+        {
+            mask = view.colorForegroundMask;
+        }
         if (view.supportMask.type() == CV_8UC1 &&
             view.depthValidMask.type() == CV_8UC1 &&
             view.supportMask.size() == view.colorBgr.size() &&
             view.depthValidMask.size() == view.colorBgr.size())
         {
-            cv::bitwise_and(view.supportMask, view.depthValidMask, mask);
+            cv::Mat evidenceMask;
+            cv::bitwise_and(view.supportMask, view.depthValidMask, evidenceMask);
+            if (mask.empty())
+            {
+                mask = std::move(evidenceMask);
+            }
+            else
+            {
+                cv::bitwise_and(mask, evidenceMask, mask);
+            }
         }
         const cv::Scalar mean = cv::mean(view.colorBgr, mask);
         const float luminance = static_cast<float>(
@@ -128,11 +206,11 @@ std::vector<cv::Mat> visibilityDepths(const TriMesh &mesh,
         try
         {
             const MeshColorView &view = views[view_index];
-            if (view.colorBgr.empty())
+            if (view.depth.type() != CV_32FC1)
             {
                 continue;
             }
-            cv::Mat depth(view.colorBgr.size(), CV_32F,
+            cv::Mat depth(view.depth.size(), CV_32F,
                           cv::Scalar(std::numeric_limits<float>::infinity()));
             for (const MeshVertex &vertex : mesh.vertices)
             {
@@ -396,9 +474,11 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
         1,
         std::max(1, std::min(
             static_cast<int>(mesh->vertices.size()), maximum_workers)));
-    const std::vector<float> gains = exposureGains(views, options.compensateExposure);
+    const QVector<MeshColorView> prepared_views = prepareColorViews(views);
+    const std::vector<float> gains = exposureGains(
+        prepared_views, options.compensateExposure);
     const std::vector<cv::Mat> visibility_depths = visibilityDepths(
-        *mesh, views, statistics.effectiveWorkerCount);
+        *mesh, prepared_views, statistics.effectiveWorkerCount);
     std::vector<std::uint8_t> colored(mesh->vertices.size(), 0);
     std::vector<std::array<std::uint8_t, 3>> reliable_color_by_vertex(
         mesh->vertices.size());
@@ -437,14 +517,20 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
             const std::size_t vertex_index = static_cast<std::size_t>(vertex_offset);
             MeshVertex &vertex = mesh->vertices[vertex_index];
             std::vector<ColorCandidate> candidates;
-            candidates.reserve(static_cast<std::size_t>(views.size()));
+            candidates.reserve(static_cast<std::size_t>(prepared_views.size()));
             ColorCandidate best_fallback;
             bool has_best_fallback = false;
             const double world[3] = {vertex.x, vertex.y, vertex.z};
-            for (int view_index = 0; view_index < views.size(); ++view_index)
+            for (int view_index = 0; view_index < prepared_views.size(); ++view_index)
             {
-                const MeshColorView &view = views[view_index];
-                if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1)
+                const MeshColorView &view = prepared_views[view_index];
+                if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1 ||
+                    view.confidence.type() != CV_32FC1 ||
+                    view.depthValidMask.type() != CV_8UC1 ||
+                    view.supportMask.type() != CV_8UC1 ||
+                    view.depth.size() != view.confidence.size() ||
+                    view.depth.size() != view.depthValidMask.size() ||
+                    view.depth.size() != view.supportMask.size())
                 {
                     continue;
                 }
@@ -457,13 +543,27 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                 }
                 const int column = static_cast<int>(std::lround(pixel[0]));
                 const int row = static_cast<int>(std::lround(pixel[1]));
-                if (row < 0 || column < 0 || row >= view.colorBgr.rows || column >= view.colorBgr.cols)
+                if (row < 0 || column < 0 ||
+                    row >= view.depth.rows || column >= view.depth.cols)
+                {
+                    ++rejected_projection_count;
+                    continue;
+                }
+                double color_pixel[2]{};
+                double color_depth = 0.0;
+                if (!view.colorCamera.projectWorldPointWithDepth(
+                        world, color_pixel, color_depth) ||
+                    color_pixel[0] < 0.0 || color_pixel[1] < 0.0 ||
+                    color_pixel[0] > view.colorBgr.cols - 1.0 ||
+                    color_pixel[1] > view.colorBgr.rows - 1.0)
                 {
                     ++rejected_projection_count;
                     continue;
                 }
                 if (view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-                    view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+                    view.depthValidMask.at<std::uint8_t>(row, column) == 0 ||
+                    !isBilinearMaskSampleValid(
+                        view.colorForegroundMask, color_pixel[0], color_pixel[1]))
                 {
                     ++rejected_mask_count;
                     continue;
@@ -487,7 +587,7 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                 if (depth_residual <= fallback_tolerance)
                 {
                     const cv::Vec3f fallback_color = bilinearColor(
-                        view.colorBgr, pixel[0], pixel[1])
+                        view.colorBgr, color_pixel[0], color_pixel[1])
                         * gains[static_cast<std::size_t>(view_index)];
                     ColorCandidate fallback;
                     fallback.blue = std::clamp(fallback_color[0], 0.0f, 255.0f);
@@ -531,7 +631,8 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     ++rejected_view_angle_count;
                     continue;
                 }
-                const cv::Vec3f color = bilinearColor(view.colorBgr, pixel[0], pixel[1])
+                const cv::Vec3f color = bilinearColor(
+                    view.colorBgr, color_pixel[0], color_pixel[1])
                     * gains[static_cast<std::size_t>(view_index)];
                 const float residual_score = 1.0f /
                     std::pow(1.0f + depth_residual / std::max(depth_tolerance, 1.0e-8f), 2.0f);
@@ -682,7 +783,7 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     if (options.coherentFacePrimaryViews)
     {
         const FaceColorCoherenceStatistics coherence = applyFaceCoherentPrimaryViews(
-            mesh, views, options);
+            mesh, prepared_views, options);
         statistics.coherentPrimaryViewFaceCount = coherence.assignedFaceCount;
         statistics.coherentPrimaryViewVertexCount = coherence.recoloredVertexCount;
     }

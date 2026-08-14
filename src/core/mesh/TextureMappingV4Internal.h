@@ -21,6 +21,11 @@ namespace xjw::mesh::texture_v4
 
 using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
+// The left atlas strip stores the constant emergency sample and compact
+// per-face vertex-colour tiles for geometry with no valid camera observation.
+inline constexpr int kFallbackAtlasWidth = 130;
+inline constexpr int kFallbackTileSize = 4;
+
 struct PreparedView
 {
     int sourceIndex = -1;

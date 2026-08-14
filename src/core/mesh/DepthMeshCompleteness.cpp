@@ -50,6 +50,17 @@ DepthMeshCompletenessStatistics DepthMeshCompleteness::evaluate(
     frame_recalls.reserve(static_cast<std::size_t>(frames.size()));
     for (const DepthTsdfFrame &frame : frames)
     {
+        if (options.excludeAuxiliaryFrames && frame.auxiliarySurfaceOnly)
+        {
+            continue;
+        }
+        if (std::find(
+                options.excludedRefIndices.cbegin(),
+                options.excludedRefIndices.cend(),
+                frame.refIndex) != options.excludedRefIndices.cend())
+        {
+            continue;
+        }
         if (!frame.camera.isValid() || frame.depth.empty() ||
             frame.depth.type() != CV_32FC1 ||
             frame.depthValidMask.type() != CV_8UC1 ||
@@ -83,8 +94,8 @@ DepthMeshCompletenessStatistics DepthMeshCompleteness::evaluate(
                     continue;
                 }
                 const double pixel[2] = {
-                    static_cast<double>(column) + 0.5,
-                    static_cast<double>(row) + 0.5
+                    static_cast<double>(column),
+                    static_cast<double>(row)
                 };
                 double world[3]{};
                 if (!frame.camera.unprojectPixel(pixel, depth, world))

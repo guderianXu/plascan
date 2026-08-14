@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QVector>
 
+#include <cstdint>
 #include <functional>
 
 namespace xjw::mesh
@@ -30,6 +31,7 @@ struct DepthFrameArtifact
     QString crossViewRepairedMaskPath;
     QString depthProvenancePath;
     QVector<int> sourceIndices;
+    QVector<int> geometrySourceIndices;
     QString previewPath;
     QString validMaskPath;
     QString supportMaskPath;
@@ -38,18 +40,22 @@ struct DepthFrameArtifact
     QString sceneProfile;
     int algorithmRevision = 0;
     bool fusionEligible = true;
+    bool useDiscreteGeometryFallback = false;
     double validCoverage = -1.0;
     double validWithinMaskRatio = -1.0;
     double consistencyRetentionRatio = -1.0;
     double largestComponentRatio = -1.0;
     double meanConfidence = -1.0;
+    double sparseAbsoluteDepthMedianLogError = -1.0;
     int sourceViewCount = 0;
+    std::uint64_t trustedGeometryCorePixelCount = 0;
     QStringList qualityReasons;
     int gridWidth = 0;
     int gridHeight = 0;
     FramePinholeCamera cameraModel;
     bool hasCameraModel = false;
     bool pyramidFallback = false;
+    bool auxiliaryBridgeSelected = false;
 };
 
 struct DepthMapVisualHullResult

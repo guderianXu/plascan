@@ -32,6 +32,7 @@ struct VisibilityOccupancyOptions
     int minimumSilhouetteViews = 2;
     int minimumDepthFullViewsForSilhouettePrior = 0;
     int allowedSilhouetteViolations = 1;
+    bool useSupportMaskSilhouette = true;
     float frontTolerancePixelFootprints = 2.5f;
     float behindSurfaceBandPixelFootprints = 5.0f;
     BinaryGridCapacity depthEmptyCapacity = 18;
@@ -139,9 +140,11 @@ struct VisibilityOccupancyResult
  * @brief Builds a globally closed occupancy field from depth-ray visibility.
  *
  * Invalid depth and pixels outside a camera field of view stay unknown.
- * Foreground-mask violations vote Empty, camera-to-surface rays vote Empty,
- * and a short band behind each observed surface votes Full. A deterministic
- * regular-grid s-t cut combines these observations with a Potts prior.
+ * Camera-to-surface rays vote Empty and a short band behind each observed
+ * surface votes Full. When support-mask silhouettes are enabled, foreground-
+ * mask violations also vote Empty and silhouette interiors provide an
+ * optional Full prior. A deterministic regular-grid s-t cut combines these
+ * observations with a Potts prior.
  */
 class VisibilityOccupancySurfaceBuilder
 {

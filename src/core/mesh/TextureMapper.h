@@ -37,24 +37,24 @@ enum class TextureHoleFillMode
 struct TextureMappingConfig
 {
     int textureSize = 8192;
-    int imageDownscale = 2;
+    int imageDownscale = 1;
     int padding = 8;
-    int maximumCandidateViews = 4;
-    int maximumBlendedViews = 3;
-    int labelOptimizationPasses = 6;
-    int minimumChartFaces = 8;
+    int maximumCandidateViews = 8;
+    int maximumBlendedViews = 4;
+    int labelOptimizationPasses = 8;
+    int minimumChartFaces = 32;
     float minimumConfidence = 0.25f;
     float minimumViewCosine = 0.20f;
     float relativeDepthTolerance = 0.005f;
     float edgeLengthDepthTolerance = 2.0f;
-    float labelSmoothness = 0.35f;
-    float labelColorPenalty = 0.50f;
-    float coherentReplacementRatio = 0.65f;
+    float labelSmoothness = 0.80f;
+    float labelColorPenalty = 1.25f;
+    float coherentReplacementRatio = 0.60f;
     float ghostColorThreshold = 36.0f;
-    float sharpeningStrength = 1.0f;
+    float sharpeningStrength = 0.35f;
     TextureMappingMode mappingMode = TextureMappingMode::AutoProjective;
     TextureBlendMode blendMode = TextureBlendMode::Natural;
-    TextureHoleFillMode holeFillMode = TextureHoleFillMode::TextureSpaceSmallHoles;
+    TextureHoleFillMode holeFillMode = TextureHoleFillMode::NeighborViewRecovery;
     bool enableGhostFilter = true;
     bool enableOutOfFocusFilter = false;
     bool enableColorCorrection = false;

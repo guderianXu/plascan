@@ -104,6 +104,47 @@ cv::Vec3b fallbackColor(const PlaPointCloud &mesh)
         static_cast<std::uint8_t>(red / count));
 }
 
+cv::Vec3b meshVertexColor(const PlaPointCloud &mesh, int vertexIndex)
+{
+    const auto row = static_cast<plamatrix::Index>(vertexIndex);
+    return cv::Vec3b(
+        mesh.colors()->getValue(row, 2),
+        mesh.colors()->getValue(row, 1),
+        mesh.colors()->getValue(row, 0));
+}
+
+void bakeVertexColorTile(cv::Mat *atlas,
+                         cv::Mat *mask,
+                         int left,
+                         int top,
+                         const std::array<cv::Vec3b, 3> &colors)
+{
+    for (int row = 0; row < kFallbackTileSize; ++row)
+    {
+        for (int column = 0; column < kFallbackTileSize; ++column)
+        {
+            float second_weight = std::max(0.0f, static_cast<float>(column - 1));
+            float third_weight = std::max(0.0f, static_cast<float>(row - 1));
+            const float edge_sum = second_weight + third_weight;
+            if (edge_sum > 1.0f)
+            {
+                second_weight /= edge_sum;
+                third_weight /= edge_sum;
+            }
+            const float first_weight = 1.0f - second_weight - third_weight;
+            cv::Vec3b &destination = atlas->at<cv::Vec3b>(top + row, left + column);
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                destination[channel] = cv::saturate_cast<std::uint8_t>(
+                    first_weight * colors[0][channel]
+                    + second_weight * colors[1][channel]
+                    + third_weight * colors[2][channel]);
+            }
+            mask->at<std::uint8_t>(top + row, left + column) = 255;
+        }
+    }
+}
+
 void expandPadding(cv::Mat *atlas,
                    cv::Mat *mask,
                    const QRect &bounds,
@@ -375,6 +416,47 @@ bool bakeAndExport(const std::string &productsDir,
         for (int corner = 0; corner < 3; ++corner)
         {
             texture_indices.setValue(face_index, corner, 0);
+        }
+    }
+
+    if (config.keepUnmapped && data->mesh->hasColors() && data->mesh->colors())
+    {
+        const int columns = (kFallbackAtlasWidth - 2) / kFallbackTileSize;
+        const int first_row = fallback_size + 2;
+        const int rows = std::max(0, (atlas_size - first_row - 1) / kFallbackTileSize);
+        const int tile_capacity = columns * rows;
+        int tile_index = 0;
+        for (int face_index = 0;
+             face_index < face_count && tile_index < tile_capacity;
+             ++face_index)
+        {
+            if (data->assignments[face_index].primaryView >= 0)
+            {
+                continue;
+            }
+            const FaceGeometry &face = data->geometry[face_index];
+            const int left = 1 + (tile_index % columns) * kFallbackTileSize;
+            const int top = first_row + (tile_index / columns) * kFallbackTileSize;
+            const std::array<cv::Vec3b, 3> colors{
+                meshVertexColor(*data->mesh, face.vertexIndices[0]),
+                meshVertexColor(*data->mesh, face.vertexIndices[1]),
+                meshVertexColor(*data->mesh, face.vertexIndices[2])};
+            bakeVertexColorTile(&atlas, &filled_mask, left, top, colors);
+            const std::array<QPointF, 3> centers{
+                QPointF(left + 1.5, top + 1.5),
+                QPointF(left + 2.5, top + 1.5),
+                QPointF(left + 1.5, top + 2.5)};
+            for (int corner = 0; corner < 3; ++corner)
+            {
+                const int texture_index =
+                    static_cast<int>(texture_coordinate_values.size());
+                texture_coordinate_values.push_back({
+                    atlasCoordinateToNormalizedUv(centers[corner].x(), atlas_size),
+                    1.0f - atlasCoordinateToNormalizedUv(
+                        centers[corner].y(), atlas_size)});
+                texture_indices.setValue(face_index, corner, texture_index);
+            }
+            ++tile_index;
         }
     }
 

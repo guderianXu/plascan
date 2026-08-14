@@ -175,7 +175,10 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
             {chart.index, chart.sourceBounds.size(), QRect(), padding});
     }
     const int atlas_size = std::clamp(config.textureSize, 1024, 16384);
-    const int fallback_width = std::clamp(padding * 2 + 2, 8, 130);
+    const int fallback_width = config.keepUnmapped
+        && data->mesh && data->mesh->hasColors()
+        ? kFallbackAtlasWidth
+        : std::clamp(padding * 2 + 2, 8, kFallbackAtlasWidth);
     if (config.progressFn)
     {
         config.progressFn(
@@ -195,7 +198,8 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
                           "正在打包纹理图集...",
                           59 + std::clamp(percent, 0, 100) * 6 / 100);
                   })
-                : std::function<void(int)>());
+                : std::function<void(int)>(),
+            static_cast<float>(std::clamp(config.imageDownscale, 1, 8)));
     if (packing.cancelled)
     {
         result->cancelled = true;

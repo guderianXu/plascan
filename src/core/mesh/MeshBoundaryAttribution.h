@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DepthGeometrySourceEncoding.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "MeshTypes.h"
 
@@ -52,7 +53,7 @@ struct MeshBoundaryEdgeAttribution
     int secondVertex = -1;
     MeshBoundaryAttributionReason reason = MeshBoundaryAttributionReason::None;
     MeshBoundaryAttributionReason evidenceReason = MeshBoundaryAttributionReason::None;
-    std::uint16_t sourceMask = 0;
+    DepthGeometrySourceMask sourceMask;
     int supportedCornerCount = 0;
     int observedUnsupportedCornerCount = 0;
     int maximumSourceCount = 0;
@@ -72,7 +73,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
     const std::vector<float> &tsdf,
     const std::vector<float> &weight,
     const std::vector<float> &surfaceObservationWeight,
-    const std::vector<std::uint16_t> &geometrySourceMask,
+    const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
     const std::vector<std::uint16_t> &minimumInverseDepthSpread,
     const std::vector<std::uint8_t> &supported,
     const MeshBoundaryAttributionOptions &options = {},

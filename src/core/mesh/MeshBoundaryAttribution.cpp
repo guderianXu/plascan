@@ -20,15 +20,9 @@ std::uint64_t edgeKey(int lhs, int rhs)
     return (static_cast<std::uint64_t>(low) << 32U) | high;
 }
 
-int bitCount(std::uint16_t value)
+int bitCount(const DepthGeometrySourceMask &value)
 {
-    int count = 0;
-    while (value != 0)
-    {
-        count += value & 1U;
-        value >>= 1U;
-    }
-    return count;
+    return static_cast<int>(value.count());
 }
 
 std::size_t sampleIndex(const DepthTsdfLayout &layout, int x, int y, int z)
@@ -91,7 +85,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
     const std::vector<float> &tsdf,
     const std::vector<float> &weight,
     const std::vector<float> &surfaceObservationWeight,
-    const std::vector<std::uint16_t> &geometrySourceMask,
+    const std::vector<DepthGeometrySourceMask> &geometrySourceMask,
     const std::vector<std::uint16_t> &minimumInverseDepthSpread,
     const std::vector<std::uint8_t> &supported,
     const MeshBoundaryAttributionOptions &options,
@@ -221,14 +215,14 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         int supported_corner_count = 0;
         bool has_observation = false;
         int maximum_source_count = 0;
-        std::uint16_t nearby_source_mask = 0;
+        DepthGeometrySourceMask nearby_source_mask;
         float minimum_spread = std::numeric_limits<float>::infinity();
         float maximum_surface_ratio = 0.0f;
         float minimum_absolute_tsdf = std::numeric_limits<float>::infinity();
         bool unsupported_has_observation = false;
         int observed_unsupported_corner_count = 0;
         int unsupported_maximum_source_count = 0;
-        std::uint16_t unsupported_source_mask = 0;
+        DepthGeometrySourceMask unsupported_source_mask;
         float unsupported_minimum_spread = std::numeric_limits<float>::infinity();
         float unsupported_maximum_surface_ratio = 0.0f;
         float unsupported_minimum_absolute_tsdf =
@@ -250,8 +244,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
                         continue;
                     }
                     has_observation = true;
-                    nearby_source_mask = static_cast<std::uint16_t>(
-                        nearby_source_mask | geometrySourceMask[index]);
+                    nearby_source_mask |= geometrySourceMask[index];
                     maximum_source_count = std::max(
                         maximum_source_count,
                         bitCount(geometrySourceMask[index]));
@@ -274,8 +267,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
                     {
                         unsupported_has_observation = true;
                         ++observed_unsupported_corner_count;
-                        unsupported_source_mask = static_cast<std::uint16_t>(
-                            unsupported_source_mask | geometrySourceMask[index]);
+                        unsupported_source_mask |= geometrySourceMask[index];
                         unsupported_maximum_source_count = std::max(
                             unsupported_maximum_source_count,
                             bitCount(geometrySourceMask[index]));
