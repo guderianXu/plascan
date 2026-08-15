@@ -59,6 +59,8 @@ int main(int argc, char *argv[])
     std::string point_cloud;
     std::string depth_map_dir;
     std::string dense_cloud;
+    std::string sparse_scaffold;
+    std::string sparse_points_json;
     std::string output_dir;
     std::string settings_json;
     std::string settings_key = "generate_model";
@@ -67,6 +69,10 @@ int main(int argc, char *argv[])
     app.add_option("--point-cloud", point_cloud, "点云源 PLY 路径");
     app.add_option("--depth-map-dir", depth_map_dir, "深度图输出目录");
     app.add_option("--dense-cloud", dense_cloud, "仅显式 poisson_legacy 模式使用的密集点云 PLY");
+    app.add_option("--sparse-scaffold", sparse_scaffold,
+                   "环拍深度补全使用的 SfM 稀疏骨架 PLY");
+    app.add_option("--sparse-points-json", sparse_points_json,
+                   "稀疏骨架逐点质量元数据 JSON");
     app.add_option("--output-dir", output_dir, "模型输出根目录")->required();
     app.add_option("--settings-json", settings_json, "GUI 设置 JSON 文件")->required();
     app.add_option("--settings-key", settings_key, "设置对象键；空字符串表示 JSON 根对象");
@@ -94,6 +100,11 @@ int main(int argc, char *argv[])
     {
         cli::fatal("depth_maps 模式缺少 --depth-map-dir", cli::EXIT_ARG_ERR);
     }
+    if (sparse_scaffold.empty() != sparse_points_json.empty())
+    {
+        cli::fatal("--sparse-scaffold 与 --sparse-points-json 必须成对提供",
+                   cli::EXIT_ARG_ERR);
+    }
 
     settings[QStringLiteral("source_data")] = source_data_qt;
     if (source_data_qt == QStringLiteral("depth_maps") &&
@@ -114,6 +125,8 @@ int main(int argc, char *argv[])
                : QString())
         : QString::fromUtf8(point_cloud);
     request.depthMapSourcePath = QString::fromUtf8(depth_map_dir);
+    request.sparseScaffoldPointCloudPath = QString::fromUtf8(sparse_scaffold);
+    request.sparseScaffoldPointsPath = QString::fromUtf8(sparse_points_json);
     request.outputRoot = QString::fromUtf8(output_dir);
     request.settings = settings;
     request.progress = [](const QString &stage, int percent)

@@ -738,6 +738,7 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
                 .toObject();
     if (results)
     {
+        *results = PortableProjectFormat::normalizeProjectResults(*results);
         *results = portableValue(
                        *results,
                        root,

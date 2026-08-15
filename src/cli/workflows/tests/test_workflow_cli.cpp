@@ -871,7 +871,7 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferen
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     const QJsonObject pipelineInput = report.value(QStringLiteral("pipeline_input")).toObject();
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("use_sequence_pose_recovery")).toBool());
-    EXPECT_TRUE(pipelineInput.value(QStringLiteral("sequence_loop_closure")).toBool());
+    EXPECT_FALSE(pipelineInput.value(QStringLiteral("sequence_loop_closure")).toBool());
 }
 
 TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
@@ -890,6 +890,8 @@ TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
         "--point-cloud",
         "--depth-map-dir",
         "--dense-cloud",
+        "--sparse-scaffold",
+        "--sparse-points-json",
         "--output-dir",
         "--settings-json",
         "--settings-key",
@@ -897,6 +899,8 @@ TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
         "xjw::mesh::workflow::buildModel",
         "reconstruction_mode",
         "depth_tsdf",
+        "sparseScaffoldPointCloudPath",
+        "sparseScaffoldPointsPath",
     });
 }
 

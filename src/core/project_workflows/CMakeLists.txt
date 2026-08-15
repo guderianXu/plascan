@@ -1,4 +1,6 @@
 add_library(project_workflows STATIC
+    MvsSourcePairQualityLoader.cpp
+    MvsSourcePairQualityLoader.h
     PointCloudInputPreparation.cpp
     PointCloudWorkflowConfig.cpp
     ProjectResourceCleanup.cpp
@@ -28,4 +30,6 @@ target_link_libraries(project_workflows
         sfm_postprocess
         terrain
         plapoint::plapoint
+    PRIVATE
+        aerial_triangulation
 )

@@ -160,8 +160,9 @@ std::vector<xjw::SparsePointCloudPoint> sparsePointsFromJson(const QJsonArray &p
 {
     std::vector<xjw::SparsePointCloudPoint> points;
     points.reserve(pointsArray.size());
-    for (const QJsonValue &value : pointsArray)
+    for (qsizetype source_index = 0; source_index < pointsArray.size(); ++source_index)
     {
+        const QJsonValue value = pointsArray.at(source_index);
         const QJsonObject pointObj = value.toObject();
         const QJsonArray xyz = pointObj.value(QStringLiteral("point_xyz")).toArray();
         if (xyz.size() < 3)
@@ -177,6 +178,7 @@ std::vector<xjw::SparsePointCloudPoint> sparsePointsFromJson(const QJsonArray &p
             pointObj.value(QStringLiteral("rms_after")).toDouble());
         point.minTriAngleDeg = pointObj.value(QStringLiteral("min_tri_angle_deg")).toDouble();
         point.trackLen = pointObj.value(QStringLiteral("track_len")).toInt(0);
+        point.sourceIndex = static_cast<std::size_t>(source_index);
         if (!applyColorArray(pointObj.value(QStringLiteral("color_rgb")).toArray(), &point))
         {
             if (!applyColorArray(pointObj.value(QStringLiteral("rgb")).toArray(), &point))
@@ -266,6 +268,7 @@ bool loadSparsePointsFromPly(const QString &path,
             point.rmsReprojPx = 0.0;
             point.minTriAngleDeg = 0.0;
             point.trackLen = 0;
+            point.sourceIndex = i;
             if (hasColors)
             {
                 const auto *colors = cloud->colors();
@@ -335,31 +338,95 @@ bool loadSparsePointSource(const SparsePointContext &context,
     return true;
 }
 
-QJsonArray sparsePointsToJson(const std::vector<xjw::SparsePointCloudPoint> &points)
+QJsonObject sparsePointToJson(const xjw::SparsePointCloudPoint &point)
+{
+    QJsonObject object;
+    QJsonArray xyz;
+    xyz.append(point.x);
+    xyz.append(point.y);
+    xyz.append(point.z);
+    object[QStringLiteral("point_xyz")] = xyz;
+    object[QStringLiteral("rms_reproj_px")] = point.rmsReprojPx;
+    object[QStringLiteral("min_tri_angle_deg")] = point.minTriAngleDeg;
+    object[QStringLiteral("track_len")] = point.trackLen;
+    if (point.hasColor)
+    {
+        object[QStringLiteral("color_rgb")] = QJsonArray{
+            static_cast<int>(point.red),
+            static_cast<int>(point.green),
+            static_cast<int>(point.blue)
+        };
+    }
+    return object;
+}
+
+QJsonArray sparsePointsToJson(const std::vector<xjw::SparsePointCloudPoint> &points,
+                              const QJsonArray &sourcePoints)
 {
     QJsonArray array;
     for (const xjw::SparsePointCloudPoint &point : points)
     {
-        QJsonObject object;
-        QJsonArray xyz;
-        xyz.append(point.x);
-        xyz.append(point.y);
-        xyz.append(point.z);
-        object[QStringLiteral("point_xyz")] = xyz;
-        object[QStringLiteral("rms_reproj_px")] = point.rmsReprojPx;
-        object[QStringLiteral("min_tri_angle_deg")] = point.minTriAngleDeg;
-        object[QStringLiteral("track_len")] = point.trackLen;
-        if (point.hasColor)
-        {
-            object[QStringLiteral("color_rgb")] = QJsonArray{
-                static_cast<int>(point.red),
-                static_cast<int>(point.green),
-                static_cast<int>(point.blue)
-            };
-        }
-        array.append(object);
+        const bool has_source_point =
+            point.sourceIndex != xjw::SparsePointCloudPoint::kInvalidSourceIndex &&
+            point.sourceIndex < static_cast<std::size_t>(sourcePoints.size()) &&
+            sourcePoints.at(static_cast<qsizetype>(point.sourceIndex)).isObject();
+        array.append(has_source_point
+                         ? sourcePoints.at(static_cast<qsizetype>(point.sourceIndex)).toObject()
+                         : sparsePointToJson(point));
     }
     return array;
+}
+
+QJsonObject sourceQualityMetadata(const QJsonObject &sourceRoot)
+{
+    const QJsonObject nested = sourceRoot.value(QStringLiteral("quality")).toObject();
+    return nested.isEmpty() ? sourceRoot : nested;
+}
+
+QJsonObject refreshSparsePointQuality(const QJsonObject &sourceRoot,
+                                      const QJsonArray &filteredPoints,
+                                      const QStringList &selectedImages,
+                                      const QString &parentSidecar)
+{
+    if (!sourceRoot.value(QStringLiteral("quality_metrics_available")).toBool(true))
+    {
+        return {};
+    }
+
+    const QJsonObject nested_source_quality =
+        sourceRoot.value(QStringLiteral("quality")).toObject();
+    const QJsonObject source_quality = sourceQualityMetadata(sourceRoot);
+    const int registered_image_count = source_quality.value(
+        QStringLiteral("registered_image_count")).toInt(
+            source_quality.value(QStringLiteral("camera_count")).toInt(selectedImages.size()));
+    const int input_image_count = source_quality.value(QStringLiteral("input_image_count")).toInt(
+        source_quality.value(QStringLiteral("total_image_count")).toInt(selectedImages.size()));
+    const bool ba_applied = source_quality.value(QStringLiteral("ba_applied")).toBool(false);
+
+    QString source_result_kind =
+        xjw::common::project::sparseResultKind(sourceRoot);
+    if (source_result_kind == xjw::common::project::kSparseResultKindSparsePostprocess)
+    {
+        source_result_kind = source_quality.value(QStringLiteral("source_result_kind")).toString();
+    }
+
+    // 只保留原有 quality 扩展字段。旧 sidecar 可能把少量质量统计放在根级，
+    // 根对象还包含完整 points 数组，不能把整棵根对象复制进 quality。
+    QJsonObject refreshed = nested_source_quality;
+    const QJsonObject calculated = xjw::common::project::buildSparseQualityMetadata(
+        filteredPoints,
+        registered_image_count,
+        ba_applied,
+        xjw::common::project::kSparseResultKindSparsePostprocess,
+        source_result_kind,
+        parentSidecar,
+        input_image_count);
+    for (auto it = calculated.begin(); it != calculated.end(); ++it)
+    {
+        refreshed[it.key()] = it.value();
+    }
+    refreshed[QStringLiteral("point_count")] = filteredPoints.size();
+    return refreshed;
 }
 
 bool writeSparsePointCloudPly(const QString &path,
@@ -415,6 +482,8 @@ QJsonObject makeSparsePointSidecar(QJsonObject sourceRoot,
                                    const QStringList &selectedImages,
                                    const QString &parentSidecar)
 {
+    const QJsonArray sourcePoints = sourceRoot.value(QStringLiteral("points")).toArray();
+    const QJsonArray filteredPoints = sparsePointsToJson(points, sourcePoints);
     sourceRoot[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     sourceRoot[QStringLiteral("operation")] = operation;
     sourceRoot[QStringLiteral("settings")] = settings;
@@ -422,7 +491,15 @@ QJsonObject makeSparsePointSidecar(QJsonObject sourceRoot,
     sourceRoot[QStringLiteral("selected_images")] = QJsonArray::fromStringList(selectedImages);
     sourceRoot[QStringLiteral("parent_sidecar")] = parentSidecar;
     sourceRoot[QStringLiteral("point_count")] = static_cast<int>(points.size());
-    sourceRoot[QStringLiteral("points")] = sparsePointsToJson(points);
+    sourceRoot[QStringLiteral("points")] = filteredPoints;
+
+    const QJsonObject quality = refreshSparsePointQuality(
+        sourceRoot, filteredPoints, selectedImages, parentSidecar);
+    if (!quality.isEmpty())
+    {
+        sourceRoot = xjw::common::project::mergeSparseQualityIntoRecord(sourceRoot, quality);
+        sourceRoot[QStringLiteral("point_count")] = filteredPoints.size();
+    }
     return sourceRoot;
 }
 
@@ -788,6 +865,12 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
+    const QJsonObject quality = sidecar.value(QStringLiteral("quality")).toObject();
+    if (!quality.isEmpty())
+    {
+        result->extraRecord =
+            xjw::common::project::mergeSparseQualityIntoRecord(result->extraRecord, quality);
+    }
     return true;
 }
 
@@ -892,6 +975,12 @@ bool runSparsePointLocalOptim(const SparsePointContext &context,
     }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
+    const QJsonObject quality = sidecar.value(QStringLiteral("quality")).toObject();
+    if (!quality.isEmpty())
+    {
+        result->extraRecord =
+            xjw::common::project::mergeSparseQualityIntoRecord(result->extraRecord, quality);
+    }
     return true;
 }
 
@@ -1038,6 +1127,12 @@ bool runSparsePointRefine(const SparsePointContext &context,
     }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
+    const QJsonObject quality = sidecar.value(QStringLiteral("quality")).toObject();
+    if (!quality.isEmpty())
+    {
+        result->extraRecord =
+            xjw::common::project::mergeSparseQualityIntoRecord(result->extraRecord, quality);
+    }
     return true;
 }
 

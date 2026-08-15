@@ -20,8 +20,8 @@
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
-#include "preparation/MatchResultCatalog.h"
 #include "ModelWorkflowService.h"
+#include "MvsSourcePairQualityLoader.h"
 #include "MvsSceneClassifier.h"
 #include "PointCloudWorkflowConfig.h"
 #include "PointCloudArtifactIO.h"
@@ -57,6 +57,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -64,54 +65,11 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace
 {
-
-std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QString &matchDir)
-{
-    std::vector<xjw::mvs::MvsSourcePairQuality> qualities;
-    if (matchDir.trimmed().isEmpty())
-    {
-        return qualities;
-    }
-
-    // `.pimatch` 是匹配结果的唯一权威来源。旧流程先读 JSON 报告、再扫描匹配
-    // 文件，会把同一像对重复加入 MVS 规划器，并且报告可能落后于当前缓存。
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = matchDir;
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-    qualities.reserve(static_cast<size_t>(summary.pairGroups.size()));
-    for (const xjw::aerial_triangulation::MatchPairGroup &group : summary.pairGroups)
-    {
-        if (group.bestVariantIndex < 0 || group.bestVariantIndex >= group.variants.size())
-        {
-            continue;
-        }
-
-        const xjw::aerial_triangulation::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
-        if (!variant.compatible)
-        {
-            continue;
-        }
-
-        xjw::mvs::MvsSourcePairQuality quality;
-        quality.imageA = xjw::common::io::toUtf8Path(variant.imageA);
-        quality.imageB = xjw::common::io::toUtf8Path(variant.imageB);
-        quality.totalMatches = std::max(0, variant.totalMatches);
-        quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
-        quality.hasVerificationStatistics = variant.hasInlierStats;
-        quality.verified = variant.geometryPassed;
-        quality.geometricCoverage = static_cast<float>(variant.geometricCoverage);
-        quality.verificationReason = quality.verified
-            ? "verified_from_pimatch"
-            : "pimatch_geometry_gate_failed";
-        qualities.push_back(std::move(quality));
-    }
-    return qualities;
-}
 
 using InputItem = xjw::cli::PhotogrammetryInputItem;
 
@@ -837,6 +795,88 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
         }
     }
 
+    cv::Mat geometry_support;
+    const QString geometry_support_path =
+        xjw::core::project::rawGeometrySupportStoragePath(depthPngPath);
+    if (!loadCvMatStorage(geometry_support_path, &geometry_support, error))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("融合所需跨视几何支持图不可用，请重新计算深度图：%1")
+                         .arg(*error);
+        }
+        return false;
+    }
+    if (geometry_support.type() != CV_16UC1 || geometry_support.size() != depth.size())
+    {
+        if (error)
+        {
+            *error = QStringLiteral(
+                "跨视几何支持图必须为与深度图同尺寸的 CV_16UC1：%1")
+                         .arg(geometry_support_path);
+        }
+        return false;
+    }
+
+    cv::Mat inverse_depth_spread;
+    const QString inverse_depth_spread_path =
+        xjw::core::project::rawInverseDepthSpreadStoragePath(depthPngPath);
+    if (!loadCvMatStorage(inverse_depth_spread_path, &inverse_depth_spread, error))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("融合所需逆深度离散度图不可用，请重新计算深度图：%1")
+                         .arg(*error);
+        }
+        return false;
+    }
+    if (inverse_depth_spread.type() != CV_32FC1 ||
+        inverse_depth_spread.size() != depth.size())
+    {
+        if (error)
+        {
+            *error = QStringLiteral(
+                "逆深度离散度图必须为与深度图同尺寸的 CV_32FC1：%1")
+                         .arg(inverse_depth_spread_path);
+        }
+        return false;
+    }
+
+    xjw::mvs::DepthPostProcessEvidence evidence;
+    evidence.geometrySupportCount = geometry_support;
+    evidence.inverseDepthRelativeSpread = inverse_depth_spread;
+    const QString adaptive_support_path =
+        xjw::core::project::rawAdaptiveGeometrySupportWeightStoragePath(depthPngPath);
+    const QString adaptive_view_count_path =
+        xjw::core::project::rawAdaptiveGeometryEffectiveViewCountStoragePath(depthPngPath);
+    const QString adaptive_conflict_path =
+        xjw::core::project::rawAdaptiveGeometryConflictRatioStoragePath(depthPngPath);
+    const bool has_any_adaptive_evidence = QFileInfo::exists(adaptive_support_path) ||
+        QFileInfo::exists(adaptive_view_count_path) || QFileInfo::exists(adaptive_conflict_path);
+    if (has_any_adaptive_evidence)
+    {
+        const std::array<std::pair<QString, cv::Mat *>, 3> adaptive_maps{{
+            {adaptive_support_path, &evidence.adaptiveSupportWeight},
+            {adaptive_view_count_path, &evidence.adaptiveEffectiveViewCount},
+            {adaptive_conflict_path, &evidence.adaptiveConflictRatio}
+        }};
+        for (const auto &[path, target] : adaptive_maps)
+        {
+            if (!loadCvMatStorage(path, target, error))
+            {
+                return false;
+            }
+            if (target->type() != CV_32FC1 || target->size() != depth.size())
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("连续几何证据类型或尺寸无效：%1").arg(path);
+                }
+                return false;
+            }
+        }
+    }
+
     const xjw::mvs::CameraView &view = views[static_cast<std::size_t>(frameIndex)];
     frame->sourceCamera = view.camera;
     frame->cameraModel = view.camera.normalizedForPositiveDepth();
@@ -849,6 +889,26 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
     const bool downsampled = xjw::core::project::downsampleFusionFrameForMaxDimension(
         frame,
         fusionMaxImageDim);
+    const auto resize_evidence = [frame](cv::Mat *matrix)
+    {
+        if (!matrix || matrix->empty() || matrix->size() == frame->depthMap.size())
+        {
+            return;
+        }
+        cv::Mat resized;
+        cv::resize(*matrix,
+                   resized,
+                   frame->depthMap.size(),
+                   0.0,
+                   0.0,
+                   cv::INTER_NEAREST);
+        *matrix = std::move(resized);
+    };
+    resize_evidence(&evidence.geometrySupportCount);
+    resize_evidence(&evidence.inverseDepthRelativeSpread);
+    resize_evidence(&evidence.adaptiveSupportWeight);
+    resize_evidence(&evidence.adaptiveEffectiveViewCount);
+    resize_evidence(&evidence.adaptiveConflictRatio);
     if (downsampled)
     {
         std::fprintf(stdout,
@@ -866,9 +926,13 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
             frame->confidence,
             fusionConfig,
             frameIndex,
-            static_cast<int>(views.size()));
+            static_cast<int>(views.size()),
+            nullptr,
+            &evidence);
 
     frame->depthPostprocess = postprocessStats;
+    frame->geometrySupportCount = std::move(evidence.geometrySupportCount);
+    frame->geometrySupportCount.setTo(cv::Scalar(0), frame->depthMap <= 0.0f);
     return true;
 }
 
@@ -1928,34 +1992,19 @@ xjw::cli::ReconstructionCliOptions options;
     depthConfig.runFusion = false;
     depthConfig.saveIntermediateDepthMaps = true;
     depthConfig.intermediateDir = xjw::common::io::toUtf8Path(mvsDir);
-    depthConfig.sourcePairQualities =
-        loadMvsSourcePairQualities(sfmOptions.matchDir);
-    const std::size_t verified_pair_count = static_cast<std::size_t>(std::count_if(
-        depthConfig.sourcePairQualities.cbegin(),
-        depthConfig.sourcePairQualities.cend(),
-        [](const xjw::mvs::MvsSourcePairQuality &quality)
-        {
-            return quality.verified && quality.geometricInliers > 0;
-        }));
-    const std::size_t missing_statistics_count =
-        static_cast<std::size_t>(std::count_if(
-            depthConfig.sourcePairQualities.cbegin(),
-            depthConfig.sourcePairQualities.cend(),
-            [](const xjw::mvs::MvsSourcePairQuality &quality)
-            {
-                return !quality.hasVerificationStatistics;
-            }));
-    depthConfig.requireVerifiedSourcePairs = verified_pair_count > 0;
-    if (!depthConfig.sourcePairQualities.empty())
+    auto source_pair_quality =
+        xjw::core::project::loadMvsSourcePairQualities(sfmOptions.matchDir);
+    if (!source_pair_quality.qualities.empty())
     {
         std::fprintf(stdout,
-                     "  [MVS] pair audit verified=%zu missing_stats=%zu failed=%zu\n",
-                     verified_pair_count,
-                     missing_statistics_count,
-                     depthConfig.sourcePairQualities.size() -
-                         verified_pair_count - missing_statistics_count);
+                     "  [MVS] pair audit verified=%d missing_stats=%d failed=%d\n",
+                     source_pair_quality.verifiedPairCount,
+                     source_pair_quality.missingStatisticsPairCount,
+                     source_pair_quality.failedPairCount);
         std::fflush(stdout);
     }
+    xjw::core::project::applyMvsSourcePairQualities(
+        &depthConfig, std::move(source_pair_quality));
 
     xjw::mvs::DepthMapGenerator generator;
     generator.setViews(views);

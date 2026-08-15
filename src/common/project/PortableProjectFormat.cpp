@@ -348,6 +348,14 @@ QJsonObject PortableProjectFormat::normalizeProjectResults(
                 continue;
             }
             QJsonObject record = value.toObject();
+            if (it.key() == QStringLiteral("depth_map_results"))
+            {
+                // The MVS manifest is mutable resume bookkeeping rather than
+                // a project result. Archiving it while MVS replaces it causes
+                // transient sharing violations on Windows and duplicates the
+                // same path in every depth record.
+                record.remove(QStringLiteral("manifest_path"));
+            }
             if (!record.contains(QStringLiteral("schema_version")))
             {
                 record[QStringLiteral("schema_version")] = 1;
