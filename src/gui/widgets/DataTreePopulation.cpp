@@ -430,29 +430,28 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
         if (!isDisplayableMeshResult(obj)) continue;
-        QString modelPath = obj.value(QStringLiteral("final_model_path")).toString();
-        bool texturedModel = obj.value(QStringLiteral("textured")).toBool(false);
-        if (modelPath.isEmpty()) {
-            modelPath = obj.value(QStringLiteral("model_obj")).toString();
+        const QString modelObjPath = obj.value(
+            QStringLiteral("model_obj")).toString().trimmed();
+        const bool texturedRecord = obj.value(
+            QStringLiteral("textured")).toBool(false);
+        for (const QString &modelPath : displayableMeshAssetPaths(obj))
+        {
+            QString name = QFileInfo(modelPath).fileName();
+            if (name.isEmpty()) name = modelPath;
+            const int vtx = obj.value(QStringLiteral("vertex_count")).toInt(-1);
+            const int face = obj.value(QStringLiteral("face_count")).toInt(-1);
+            if (vtx >= 0 && face >= 0)
+                name = QStringLiteral("%1  [V:%2 F:%3]").arg(name).arg(vtx).arg(face);
+            const QString format = QFileInfo(modelPath).suffix().toUpper();
+            if (!format.isEmpty()) {
+                name += QStringLiteral("  [%1]").arg(format);
+            }
+            if (texturedRecord && modelPath.compare(
+                    modelObjPath, Qt::CaseInsensitive) == 0) {
+                name += QStringLiteral("  [纹理]");
+            }
+            appendItemRow(model3d, name, modelPath, QStringLiteral("generated"));
         }
-        if (modelPath.isEmpty()) {
-            modelPath = obj.value(QStringLiteral("model_ply")).toString();
-        }
-        if (modelPath.isEmpty()) continue;
-        QString name = QFileInfo(modelPath).fileName();
-        if (name.isEmpty()) name = modelPath;
-        const int vtx  = obj.value(QStringLiteral("vertex_count")).toInt(-1);
-        const int face = obj.value(QStringLiteral("face_count")).toInt(-1);
-        if (vtx >= 0 && face >= 0)
-            name = QStringLiteral("%1  [V:%2 F:%3]").arg(name).arg(vtx).arg(face);
-        const QString finalFormat = obj.value(QStringLiteral("final_model_format")).toString();
-        if (!finalFormat.isEmpty()) {
-            name += QStringLiteral("  [%1]").arg(finalFormat);
-        }
-        if (texturedModel) {
-            name += QStringLiteral("  [纹理]");
-        }
-        appendItemRow(model3d, name, modelPath, QStringLiteral("generated"));
     }
 
     for (const QString &modelPath : _transientModels) {

@@ -335,6 +335,8 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
             _workspacePanels->restoreDefaultVisibility();
         }
     }
+    _propertiesDockSuppressed = false;
+    updatePropertiesDockForCurrentTab();
 
     if (_logDock && !_logDock->isHidden() && _log)
     {

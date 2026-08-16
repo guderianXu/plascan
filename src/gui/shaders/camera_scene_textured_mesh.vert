@@ -4,6 +4,7 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec3 aColor;
 layout(location = 3) in vec2 aTexCoord;
+layout(location = 4) in float aVertexColorFallback;
 
 layout(std140, binding = 0) uniform SceneUniforms
 {
@@ -19,6 +20,8 @@ layout(std140, binding = 0) uniform SceneUniforms
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec3 vColor;
 layout(location = 2) out vec2 vTexCoord;
+layout(location = 3) flat out float vVertexColorFallback;
+layout(location = 4) out vec3 vViewPosition;
 
 void main()
 {
@@ -26,4 +29,6 @@ void main()
     vNormal = mat3(ubuf.uNormalMat) * aNormal;
     vColor = aColor;
     vTexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
+    vVertexColorFallback = aVertexColorFallback;
+    vViewPosition = (ubuf.uModelView * vec4(aPos, 1.0)).xyz;
 }

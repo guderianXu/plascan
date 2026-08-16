@@ -12,6 +12,7 @@
 
 #include <QAction>
 #include <QDockWidget>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QTabWidget>
@@ -145,6 +146,54 @@ void MainWindow::setupSelectionPanels()
     _photosDock->setWidget(_photoStrip);
 
     restoreDefaultProjectDockLayout();
+    connect(_leftTabs, &QTabWidget::currentChanged, this, [this](int)
+    {
+        updatePropertiesDockForCurrentTab();
+    });
+    updatePropertiesDockForCurrentTab();
+}
+
+void MainWindow::updatePropertiesDockForCurrentTab()
+{
+    if (!_leftTabs || !_propertiesDock || !_referencePanel)
+    {
+        return;
+    }
+
+    const bool referenceTabActive = _leftTabs->currentWidget() == _referencePanel;
+    QAction *propertiesAction = _mainMenu
+        ? _mainMenu->togglePropertiesAction()
+        : nullptr;
+    if (referenceTabActive)
+    {
+        if (!_propertiesDockSuppressed)
+        {
+            _propertiesDockVisibleOutsideReference = propertiesAction
+                ? propertiesAction->isChecked()
+                : !_propertiesDock->isHidden();
+            _propertiesDockSuppressed = true;
+        }
+        const QSignalBlocker dockBlocker(_propertiesDock);
+        _propertiesDock->hide();
+        if (propertiesAction)
+        {
+            propertiesAction->setEnabled(false);
+        }
+        return;
+    }
+
+    if (propertiesAction)
+    {
+        propertiesAction->setEnabled(true);
+    }
+    if (!_propertiesDockSuppressed)
+    {
+        return;
+    }
+
+    const QSignalBlocker dockBlocker(_propertiesDock);
+    _propertiesDock->setVisible(_propertiesDockVisibleOutsideReference);
+    _propertiesDockSuppressed = false;
 }
 
 // ============================================================

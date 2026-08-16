@@ -136,6 +136,9 @@ signals:
     void atProgressChanged(const QString &stage, int percent);
     // AT 流程结束（success=true 表示正常完成）
     void atProgressFinished(bool success);
+    // 正式连接点成果生成或后处理完成，三维视图应加载这对一致的文件。
+    void tiePointResultReady(const QString &sparseCloudPath,
+                             const QString &sidecarPath);
 
     // 支持并发实例的后台任务进度，供主窗口聚合到系统任务栏。
     void backgroundTaskProgressChanged(const QString &taskId, int value, int maximum);

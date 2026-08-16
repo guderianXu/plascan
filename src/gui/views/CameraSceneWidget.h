@@ -75,6 +75,8 @@ class CameraSceneWidget : public QRhiWidget
     Q_OBJECT
 public:
     using TiePointColorMode = xjw::gui::tie_points::ColorMode;
+    using TiePointQualityCriterion = xjw::gui::tie_points::QualityCriterion;
+    using TiePointPrunePreviewQuery = xjw::gui::tie_points::PrunePreviewQuery;
     using ModelColorMode = xjw::gui::model_views::ColorMode;
 
     // -------------------------------------------------------------------------
@@ -136,6 +138,15 @@ public:
                                    const QString &sidecarPath = QString());
     void setTiePointColorMode(TiePointColorMode mode);
     void setModelColorMode(ModelColorMode mode);
+    bool hasTiePointQualityMetadata(TiePointQualityCriterion criterion) const;
+    xjw::gui::tie_points::ScalarRange tiePointQualityRange(
+        TiePointQualityCriterion criterion) const;
+    int tiePointQualityPointCount() const;
+    bool requestTiePointPrunePreview(
+        const TiePointPrunePreviewQuery &query,
+        QString *errorMessage = nullptr);
+    void clearTiePointPrunePreview();
+    int tiePointPrunePreviewCandidateCount() const;
 
     bool setManualPruneModeEnabled(bool enabled, QString *errorMessage = nullptr);
     bool isManualPruneModeEnabled() const { return _manualPruneMode; }
@@ -162,6 +173,8 @@ public:
 signals:
     void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
     void modelColorModeChanged(ModelColorMode mode);
+    void tiePointQualityMetadataReady(bool ready);
+    void tiePointPrunePreviewChanged(int candidateCount);
     void manualPruneApplied(int removedCount, int remainingCount);
     void manualPruneUndone(int restoredCount);
     void manualPruneSaved(const QString &path, int remainingCount);
@@ -227,6 +240,9 @@ private:
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
     QPointF projectToScreen(const QVector3D &p, bool *ok = nullptr) const;
     SceneMatrices sceneMatrices() const;
+    bool cameraAlignmentActive() const;
+    QSize displayedCameraImageSize() const;
+    QRectF cameraAlignmentViewport(const QSize &renderSize) const;
 
     // 将向量从本地空间旋转到当前视图空间（应用 _viewRot）
     QVector3D applyViewRotation(const QVector3D &v) const;
@@ -281,8 +297,6 @@ private:
     void applyCameraPlaneImage(const CameraPlaneImageResult &result);
     void discardQueuedCameraThumbnails();
     int displayedCameraImagePoseIndex() const;
-    QVector<QVector3D> displayedCameraImagePlaneCorners() const;
-    QPainterPath foregroundCameraImageOcclusionPath() const;
     void updateActiveCameraForView();
     void refreshLockedCameraImage();
     void drawFloorPivotCross(QPainter &painter) const;
@@ -310,6 +324,18 @@ private:
     };
     void startTiePointMetadataLoad(const QString &sidecarPath, int generation);
     void pumpTiePointMetadataLoad();
+    struct TiePointPrunePreviewRequest
+    {
+        QByteArray vertexData;
+        QByteArray scalarData;
+        xjw::gui::tie_points::QualityMetadata metadata;
+        TiePointPrunePreviewQuery query;
+        int strideBytes = 0;
+        int generation = 0;
+        int loadGeneration = 0;
+        int pointCount = 0;
+    };
+    void pumpTiePointPrunePreview();
     void loadPointCloudFromXyzInternal(const QString &xyzPath,
                                        bool tiePointCloud,
                                        bool fitAfterLoad);
@@ -437,7 +463,6 @@ private:
         QSize textureSize;
         QString uploadedImageKey;
         QString uploadedGeometryKey;
-        QVector<QVector3D> planeCorners;
         bool geometryDirty = true;
         bool pipelineDirty = true;
     };
@@ -517,8 +542,9 @@ private:
     struct alignas(16) ImagePlaneUniforms
     {
         std::array<float, 16> mvp{};
+        std::array<float, 4> composition{};
     };
-    static_assert(sizeof(ImagePlaneUniforms) == 16 * sizeof(float));
+    static_assert(sizeof(ImagePlaneUniforms) == 20 * sizeof(float));
 
     struct alignas(16) CameraPlaneUniforms
     {
@@ -601,7 +627,9 @@ private:
                         const SceneUniforms &uniforms,
                         const QMatrix4x4 &clipMatrix);
     void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
-    void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
+    void drawActiveCameraImage(QRhiCommandBuffer *cb,
+                               const QMatrix4x4 &mvp,
+                               float opacity);
     void drawCameraThumbnails(QRhiCommandBuffer *cb,
                               const QMatrix4x4 &mvp,
                               const QMatrix4x4 &model_view);
@@ -616,6 +644,9 @@ private:
     RhiBufferSet _manualHighlightPointBuffer;
     RhiBufferSet _manualHighlightScalarBuffer;
     bool _manualHighlightBuffersReleasePending = false;
+    RhiBufferSet _prunePreviewPointBuffer;
+    RhiBufferSet _prunePreviewScalarBuffer;
+    bool _prunePreviewBuffersReleasePending = false;
     int _pointCount = 0;
     float _pointCloudPointSize = 2.4f;
 
@@ -639,6 +670,7 @@ private:
     int _lineCount = 0;
 
     RhiPipelineSet _colorPointPipeline;
+    RhiPipelineSet _prunePreviewPointPipeline;
     RhiPipelineSet _highlightPointPipeline;
     RhiPipelineSet _colorLinePipeline;
     RhiPipelineSet _meshTrianglePipeline;
@@ -655,6 +687,7 @@ private:
     TiePointColorMode _tiePointColorMode = TiePointColorMode::Color;
     ModelColorMode _modelColorMode = ModelColorMode::Shaded;
     QVector<int> _tiePointImageCounts;
+    xjw::gui::tie_points::QualityMetadata _tiePointQualityMetadata;
     QByteArray _tiePointScalarData;
     xjw::gui::tie_points::ScalarRange _tiePointElevationRange;
     xjw::gui::tie_points::ScalarRange _tiePointImageCountRange;
@@ -664,6 +697,11 @@ private:
     std::optional<TiePointMetadataRequest> _pendingTiePointMetadataLoad;
     std::shared_ptr<std::atomic_bool> _tiePointMetadataCancellation;
     bool _tiePointMetadataWorkerActive = false;
+    std::optional<TiePointPrunePreviewRequest> _pendingTiePointPrunePreview;
+    std::shared_ptr<std::atomic_bool> _tiePointPrunePreviewCancellation;
+    bool _tiePointPrunePreviewWorkerActive = false;
+    int _tiePointPrunePreviewGeneration = 0;
+    int _tiePointPrunePreviewCandidateCount = 0;
     QImage _meshTextureImage;
     QImage _meshTextureUploadImage;
     QString _meshTexturePath;

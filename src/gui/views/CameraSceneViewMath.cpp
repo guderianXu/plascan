@@ -416,6 +416,65 @@ QMatrix4x4 calibratedProjection(float focalX,
     return projection;
 }
 
+QMatrix4x4 calibratedCameraView(const QVector3D &cameraCenter,
+                                const QMatrix3x3 &cameraToWorld,
+                                bool depthAxisFlipped)
+{
+    const float depth_sign = depthAxisFlipped ? -1.0f : 1.0f;
+    const QVector3D camera_x(cameraToWorld(0, 0),
+                             cameraToWorld(1, 0),
+                             cameraToWorld(2, 0));
+    const QVector3D camera_y(cameraToWorld(0, 1),
+                             cameraToWorld(1, 1),
+                             cameraToWorld(2, 1));
+    const QVector3D camera_z(cameraToWorld(0, 2),
+                             cameraToWorld(1, 2),
+                             cameraToWorld(2, 2));
+    const QVector3D row_x = camera_x * depth_sign;
+    const QVector3D row_y = camera_y * depth_sign;
+    const QVector3D row_z = camera_z * -depth_sign;
+
+    QMatrix4x4 view;
+    view.setToIdentity();
+    const QVector3D rows[] = {row_x, row_y, row_z};
+    for (int row = 0; row < 3; ++row)
+    {
+        view(row, 0) = rows[row].x();
+        view(row, 1) = rows[row].y();
+        view(row, 2) = rows[row].z();
+        view(row, 3) = -QVector3D::dotProduct(rows[row], cameraCenter);
+    }
+    return view;
+}
+
+QRectF fittedImageViewport(const QSize &renderSize, const QSize &imageSize)
+{
+    if (renderSize.width() <= 0 || renderSize.height() <= 0
+        || imageSize.width() <= 0 || imageSize.height() <= 0)
+    {
+        return {};
+    }
+
+    const double render_aspect = static_cast<double>(renderSize.width())
+        / static_cast<double>(renderSize.height());
+    const double image_aspect = static_cast<double>(imageSize.width())
+        / static_cast<double>(imageSize.height());
+    if (render_aspect > image_aspect)
+    {
+        const double viewport_width = renderSize.height() * image_aspect;
+        return QRectF((renderSize.width() - viewport_width) * 0.5,
+                      0.0,
+                      viewport_width,
+                      renderSize.height());
+    }
+
+    const double viewport_height = renderSize.width() / image_aspect;
+    return QRectF(0.0,
+                  (renderSize.height() - viewport_height) * 0.5,
+                  renderSize.width(),
+                  viewport_height);
+}
+
 QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
                                            const QVector3D &right,
                                            const QVector3D &up,

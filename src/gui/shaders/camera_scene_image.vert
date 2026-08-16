@@ -6,6 +6,7 @@ layout(location = 1) in vec2 texCoord;
 layout(std140, binding = 0) uniform ImagePlaneUniforms
 {
     mat4 uMVP;
+    vec4 composition;
 } ubuf;
 
 layout(location = 0) out vec2 uv;

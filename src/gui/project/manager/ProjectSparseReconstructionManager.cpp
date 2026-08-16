@@ -207,6 +207,7 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
                  .arg(result.exportedPointCount)
                  .arg(result.sparseCloudPath));
 
+    emit tiePointResultReady(result.sparseCloudPath, sidecarPath);
     emit atProgressFinished(true);
     QMessageBox::information(_parentWidget,
                              QStringLiteral("生成两视预览云"),
@@ -252,6 +253,40 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             return;
         }
         context = contextResult.context;
+
+        const auto normalizedOverride = [&settings](const QString &key)
+        {
+            const QString value = settings.value(key).toString().trimmed();
+            return value.isEmpty() ? QString() : QDir::cleanPath(value);
+        };
+        const QString sparseCloudOverride = normalizedOverride(
+            QStringLiteral("sourceSparseCloudPath"));
+        const QString sidecarOverride = normalizedOverride(
+            QStringLiteral("sourceSidecarPath"));
+        if (!sparseCloudOverride.isEmpty())
+        {
+            if (!QFileInfo(sparseCloudOverride).isFile())
+            {
+                QMessageBox::warning(
+                    _parentWidget,
+                    spec.title,
+                    QStringLiteral("稀疏点云文件不存在: %1").arg(sparseCloudOverride));
+                return;
+            }
+            context.sparseCloudPath = sparseCloudOverride;
+        }
+        if (!sidecarOverride.isEmpty())
+        {
+            if (!QFileInfo(sidecarOverride).isFile())
+            {
+                QMessageBox::warning(
+                    _parentWidget,
+                    spec.title,
+                    QStringLiteral("连接点逐点数据文件不存在: %1").arg(sidecarOverride));
+                return;
+            }
+            context.sidecarPath = sidecarOverride;
+        }
     }
 
     const auto session = _owner->currentSessionContext();
@@ -264,12 +299,16 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
     emit atProgressChanged(spec.progressMessage, 20);
 
+    QJsonObject operationSettings = settings;
+    operationSettings.remove(QStringLiteral("sourceSparseCloudPath"));
+    operationSettings.remove(QStringLiteral("sourceSidecarPath"));
     QPointer<ProjectManager> ownerGuard(_owner);
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [kind, context, settings, outputDir]()
+        [kind, context, operationSettings, outputDir]()
         {
-            return runSparsePointWorkflowResult(kind, context, settings, outputDir);
+            return runSparsePointWorkflowResult(
+                kind, context, operationSettings, outputDir);
         },
         [spec, context, ownerGuard, session](
             ProjectSparseReconstructionManager *self,
@@ -312,6 +351,8 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
                 return;
             }
 
+            emit self->tiePointResultReady(operationResult.sparseCloudPath,
+                                           operationResult.sidecarPath);
             emit self->atProgressFinished(true);
             QMessageBox::information(self->_parentWidget,
                                      spec.title,

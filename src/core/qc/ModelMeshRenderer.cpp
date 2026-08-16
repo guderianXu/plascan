@@ -15,34 +15,174 @@ namespace
 {
 
 constexpr int kTileSize = 32;
+// Keep clipped vertices safely beyond FramePinholeCamera's projection singularity.
+constexpr double kNearPlaneDepth = 1.0e-6;
+
+struct ClippedVertex
+{
+    std::array<double, 3> world = {};
+    double positiveDepth = 0.0;
+    double red = 0.0;
+    double green = 0.0;
+    double blue = 0.0;
+};
 
 struct ProjectedVertex
 {
-    float x = 0.0f;
-    float y = 0.0f;
-    float depth = 0.0f;
-    float red = 0.0f;
-    float green = 0.0f;
-    float blue = 0.0f;
+    double x = 0.0;
+    double y = 0.0;
+    double depth = 0.0;
+    double red = 0.0;
+    double green = 0.0;
+    double blue = 0.0;
 };
 
 struct ProjectedTriangle
 {
     std::array<ProjectedVertex, 3> vertices;
-    float area = 0.0f;
+    double area = 0.0;
     int minimumX = 0;
     int maximumX = -1;
     int minimumY = 0;
     int maximumY = -1;
 };
 
-float edge(float ax, float ay, float bx, float by, float px, float py)
+double edge(double ax, double ay, double bx, double by, double px, double py)
 {
     return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
 }
 
-bool projectTriangle(const xjw::mesh::TriMesh &mesh,
-                     const xjw::mesh::Triangle &face,
+bool sameWorldPosition(const ClippedVertex &left, const ClippedVertex &right)
+{
+    for (std::size_t axis = 0; axis < left.world.size(); ++axis)
+    {
+        const double scale = std::max({1.0,
+                                       std::abs(left.world[axis]),
+                                       std::abs(right.world[axis])});
+        if (std::abs(left.world[axis] - right.world[axis]) > 1.0e-12 * scale)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool appendClippedVertex(const ClippedVertex &vertex,
+                         std::array<ClippedVertex, 4> *polygon,
+                         int *vertex_count)
+{
+    if (!polygon || !vertex_count)
+    {
+        return false;
+    }
+    if (*vertex_count > 0 &&
+        sameWorldPosition((*polygon)[static_cast<std::size_t>(*vertex_count - 1)], vertex))
+    {
+        return true;
+    }
+    if (*vertex_count >= static_cast<int>(polygon->size()))
+    {
+        return false;
+    }
+    (*polygon)[static_cast<std::size_t>(*vertex_count)] = vertex;
+    ++(*vertex_count);
+    return true;
+}
+
+bool intersectNearPlane(const ClippedVertex &start,
+                        const ClippedVertex &end,
+                        ClippedVertex *intersection)
+{
+    if (!intersection)
+    {
+        return false;
+    }
+    const double depth_delta = end.positiveDepth - start.positiveDepth;
+    if (!std::isfinite(depth_delta) || std::abs(depth_delta) <= 1.0e-15)
+    {
+        return false;
+    }
+
+    const double interpolation = std::clamp(
+        (kNearPlaneDepth - start.positiveDepth) / depth_delta, 0.0, 1.0);
+    for (std::size_t axis = 0; axis < intersection->world.size(); ++axis)
+    {
+        intersection->world[axis] = start.world[axis] +
+            interpolation * (end.world[axis] - start.world[axis]);
+    }
+    intersection->positiveDepth = kNearPlaneDepth;
+    intersection->red = start.red + interpolation * (end.red - start.red);
+    intersection->green = start.green + interpolation * (end.green - start.green);
+    intersection->blue = start.blue + interpolation * (end.blue - start.blue);
+    return std::all_of(intersection->world.begin(), intersection->world.end(), [](double value) {
+        return std::isfinite(value);
+    });
+}
+
+int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh &mesh,
+                                const xjw::mesh::Triangle &face,
+                                const xjw::FramePinholeCamera &camera,
+                                std::array<ClippedVertex, 4> *polygon)
+{
+    if (!polygon)
+    {
+        return 0;
+    }
+
+    std::array<ClippedVertex, 3> source_vertices;
+    for (int corner = 0; corner < 3; ++corner)
+    {
+        const xjw::mesh::MeshVertex &source =
+            mesh.vertices[static_cast<std::size_t>(face.v[corner])];
+        ClippedVertex &target = source_vertices[static_cast<std::size_t>(corner)];
+        target.world = {source.x, source.y, source.z};
+        target.positiveDepth = camera.positiveDepth(target.world.data());
+        if (!std::isfinite(target.positiveDepth) ||
+            !std::all_of(target.world.begin(), target.world.end(), [](double value) {
+                return std::isfinite(value);
+            }))
+        {
+            return 0;
+        }
+        target.red = static_cast<double>(source.r);
+        target.green = static_cast<double>(source.g);
+        target.blue = static_cast<double>(source.b);
+    }
+
+    int clipped_vertex_count = 0;
+    ClippedVertex previous = source_vertices.back();
+    bool previous_inside = previous.positiveDepth >= kNearPlaneDepth;
+    for (const ClippedVertex &current : source_vertices)
+    {
+        const bool current_inside = current.positiveDepth >= kNearPlaneDepth;
+        if (current_inside != previous_inside)
+        {
+            ClippedVertex intersection;
+            if (!intersectNearPlane(previous, current, &intersection) ||
+                !appendClippedVertex(intersection, polygon, &clipped_vertex_count))
+            {
+                return 0;
+            }
+        }
+        if (current_inside &&
+            !appendClippedVertex(current, polygon, &clipped_vertex_count))
+        {
+            return 0;
+        }
+        previous = current;
+        previous_inside = current_inside;
+    }
+
+    if (clipped_vertex_count > 1 &&
+        sameWorldPosition((*polygon)[0],
+                          (*polygon)[static_cast<std::size_t>(clipped_vertex_count - 1)]))
+    {
+        --clipped_vertex_count;
+    }
+    return clipped_vertex_count;
+}
+
+bool projectTriangle(const std::array<ClippedVertex, 3> &source_vertices,
                      const xjw::FramePinholeCamera &camera,
                      const cv::Size &image_size,
                      ProjectedTriangle *projected)
@@ -54,65 +194,82 @@ bool projectTriangle(const xjw::mesh::TriMesh &mesh,
 
     for (int corner = 0; corner < 3; ++corner)
     {
-        const xjw::mesh::MeshVertex &source =
-            mesh.vertices[static_cast<std::size_t>(face.v[corner])];
+        const ClippedVertex &source = source_vertices[static_cast<std::size_t>(corner)];
         ProjectedVertex &target = projected->vertices[static_cast<std::size_t>(corner)];
-        const double world[3] = {source.x, source.y, source.z};
         double pixel[2] = {};
         double positiveDepth = 0.0;
-        if (!camera.projectWorldPointWithDepth(world, pixel, positiveDepth) ||
+        if (!camera.projectWorldPointWithDepth(source.world.data(), pixel, positiveDepth) ||
             !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
             !std::isfinite(positiveDepth) || positiveDepth <= 0.0)
         {
             return false;
         }
-        target.x = static_cast<float>(pixel[0]);
-        target.y = static_cast<float>(pixel[1]);
-        target.depth = static_cast<float>(positiveDepth);
+        target.x = pixel[0];
+        target.y = pixel[1];
+        target.depth = positiveDepth;
         if (!std::isfinite(target.x) || !std::isfinite(target.y) ||
-            !std::isfinite(target.depth) || target.depth <= 0.0f)
+            !std::isfinite(target.depth) || target.depth <= 0.0)
         {
             return false;
         }
-        target.red = static_cast<float>(source.r);
-        target.green = static_cast<float>(source.g);
-        target.blue = static_cast<float>(source.b);
+        target.red = source.red;
+        target.green = source.green;
+        target.blue = source.blue;
     }
 
     projected->area = edge(projected->vertices[0].x, projected->vertices[0].y,
                            projected->vertices[1].x, projected->vertices[1].y,
                            projected->vertices[2].x, projected->vertices[2].y);
-    if (std::abs(projected->area) < 1.0e-6f)
+    if (!std::isfinite(projected->area) || std::abs(projected->area) < 1.0e-6)
     {
         return false;
     }
 
-    const float minimum_x = std::min({projected->vertices[0].x,
-                                      projected->vertices[1].x,
-                                      projected->vertices[2].x});
-    const float maximum_x = std::max({projected->vertices[0].x,
-                                      projected->vertices[1].x,
-                                      projected->vertices[2].x});
-    const float minimum_y = std::min({projected->vertices[0].y,
-                                      projected->vertices[1].y,
-                                      projected->vertices[2].y});
-    const float maximum_y = std::max({projected->vertices[0].y,
-                                      projected->vertices[1].y,
-                                      projected->vertices[2].y});
+    const double minimum_x = std::min({projected->vertices[0].x,
+                                       projected->vertices[1].x,
+                                       projected->vertices[2].x});
+    const double maximum_x = std::max({projected->vertices[0].x,
+                                       projected->vertices[1].x,
+                                       projected->vertices[2].x});
+    const double minimum_y = std::min({projected->vertices[0].y,
+                                       projected->vertices[1].y,
+                                       projected->vertices[2].y});
+    const double maximum_y = std::max({projected->vertices[0].y,
+                                       projected->vertices[1].y,
+                                       projected->vertices[2].y});
+    if (!std::isfinite(minimum_x) || !std::isfinite(maximum_x) ||
+        !std::isfinite(minimum_y) || !std::isfinite(maximum_y))
+    {
+        return false;
+    }
 
-    projected->minimumX = std::max(0, static_cast<int>(std::floor(minimum_x)));
-    projected->maximumX = std::min(image_size.width - 1,
-                                   static_cast<int>(std::ceil(maximum_x)));
-    projected->minimumY = std::max(0, static_cast<int>(std::floor(minimum_y)));
-    projected->maximumY = std::min(image_size.height - 1,
-                                   static_cast<int>(std::ceil(maximum_y)));
+    const double minimum_sample_x = 0.5;
+    const double maximum_sample_x = static_cast<double>(image_size.width) - 0.5;
+    const double minimum_sample_y = 0.5;
+    const double maximum_sample_y = static_cast<double>(image_size.height) - 0.5;
+    if (maximum_x < minimum_sample_x || minimum_x > maximum_sample_x ||
+        maximum_y < minimum_sample_y || minimum_y > maximum_sample_y)
+    {
+        return false;
+    }
+
+    const double maximum_index_x = static_cast<double>(image_size.width - 1);
+    const double maximum_index_y = static_cast<double>(image_size.height - 1);
+    const double bounded_minimum_x = std::clamp(minimum_x, 0.0, maximum_index_x);
+    const double bounded_maximum_x = std::clamp(maximum_x, 0.0, maximum_index_x);
+    const double bounded_minimum_y = std::clamp(minimum_y, 0.0, maximum_index_y);
+    const double bounded_maximum_y = std::clamp(maximum_y, 0.0, maximum_index_y);
+    projected->minimumX = static_cast<int>(std::floor(bounded_minimum_x));
+    projected->maximumX = static_cast<int>(std::ceil(bounded_maximum_x));
+    projected->minimumY = static_cast<int>(std::floor(bounded_minimum_y));
+    projected->maximumY = static_cast<int>(std::ceil(bounded_maximum_y));
     return projected->minimumX <= projected->maximumX &&
            projected->minimumY <= projected->maximumY;
 }
 
-std::uint8_t colorByte(float value)
+std::uint8_t colorByte(double value)
 {
-    return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 255.0f) + 0.5f);
+    return static_cast<std::uint8_t>(std::clamp(value, 0.0, 255.0) + 0.5);
 }
 
 } // namespace
@@ -146,13 +303,29 @@ ModelRenderResult ModelMeshRenderer::render(
                            cv::Scalar(std::numeric_limits<float>::infinity()));
 
     std::vector<ProjectedTriangle> triangles;
-    triangles.reserve(mesh.faces.size());
+    triangles.reserve(mesh.faces.size() * 2);
+    int visible_triangle_count = 0;
     for (const xjw::mesh::Triangle &face : mesh.faces)
     {
-        ProjectedTriangle projected;
-        if (projectTriangle(mesh, face, camera, imageSize, &projected))
+        const std::size_t projected_triangle_count_before_face = triangles.size();
+        std::array<ClippedVertex, 4> clipped_polygon;
+        const int clipped_vertex_count =
+            clipTriangleToPositiveDepth(mesh, face, camera, &clipped_polygon);
+        for (int corner = 1; corner + 1 < clipped_vertex_count; ++corner)
         {
-            triangles.push_back(projected);
+            const std::array<ClippedVertex, 3> clipped_triangle = {
+                clipped_polygon[0],
+                clipped_polygon[static_cast<std::size_t>(corner)],
+                clipped_polygon[static_cast<std::size_t>(corner + 1)]};
+            ProjectedTriangle projected;
+            if (projectTriangle(clipped_triangle, camera, imageSize, &projected))
+            {
+                triangles.push_back(projected);
+            }
+        }
+        if (triangles.size() > projected_triangle_count_before_face)
+        {
+            ++visible_triangle_count;
         }
     }
     if (triangles.empty())
@@ -206,51 +379,71 @@ ModelRenderResult ModelMeshRenderer::render(
                 {
                     for (int x = minimum_x; x <= maximum_x; ++x)
                     {
-                        const float pixel_x = static_cast<float>(x) + 0.5f;
-                        const float pixel_y = static_cast<float>(y) + 0.5f;
-                        const float weight_0 = edge(
+                        const double pixel_x = static_cast<double>(x) + 0.5;
+                        const double pixel_y = static_cast<double>(y) + 0.5;
+                        const double weight_0 = edge(
                             triangle.vertices[1].x, triangle.vertices[1].y,
                             triangle.vertices[2].x, triangle.vertices[2].y,
                             pixel_x, pixel_y) / triangle.area;
-                        const float weight_1 = edge(
+                        const double weight_1 = edge(
                             triangle.vertices[2].x, triangle.vertices[2].y,
                             triangle.vertices[0].x, triangle.vertices[0].y,
                             pixel_x, pixel_y) / triangle.area;
-                        const float weight_2 = 1.0f - weight_0 - weight_1;
-                        constexpr float tolerance = -1.0e-5f;
+                        const double weight_2 = 1.0 - weight_0 - weight_1;
+                        constexpr double tolerance = -1.0e-5;
                         if (weight_0 < tolerance || weight_1 < tolerance ||
                             weight_2 < tolerance)
                         {
                             continue;
                         }
 
-                        const float depth = weight_0 * triangle.vertices[0].depth +
-                                            weight_1 * triangle.vertices[1].depth +
-                                            weight_2 * triangle.vertices[2].depth;
+                        const double reciprocal_depth =
+                            weight_0 / triangle.vertices[0].depth +
+                            weight_1 / triangle.vertices[1].depth +
+                            weight_2 / triangle.vertices[2].depth;
+                        if (!std::isfinite(reciprocal_depth) || reciprocal_depth <= 0.0)
+                        {
+                            continue;
+                        }
+                        const double depth = 1.0 / reciprocal_depth;
+                        if (!std::isfinite(depth) || depth <= 0.0 ||
+                            depth > static_cast<double>(std::numeric_limits<float>::max()))
+                        {
+                            continue;
+                        }
                         float &stored_depth = result.depth.at<float>(y, x);
                         if (depth >= stored_depth)
                         {
                             continue;
                         }
-                        stored_depth = depth;
+                        stored_depth = static_cast<float>(depth);
                         result.validMask.at<std::uint8_t>(y, x) = 255;
                         cv::Vec3b &color = result.color.at<cv::Vec3b>(y, x);
-                        color[0] = colorByte(weight_0 * triangle.vertices[0].blue +
-                                             weight_1 * triangle.vertices[1].blue +
-                                             weight_2 * triangle.vertices[2].blue);
-                        color[1] = colorByte(weight_0 * triangle.vertices[0].green +
-                                             weight_1 * triangle.vertices[1].green +
-                                             weight_2 * triangle.vertices[2].green);
-                        color[2] = colorByte(weight_0 * triangle.vertices[0].red +
-                                             weight_1 * triangle.vertices[1].red +
-                                             weight_2 * triangle.vertices[2].red);
+                        const double perspective_weight_0 =
+                            (weight_0 / triangle.vertices[0].depth) * depth;
+                        const double perspective_weight_1 =
+                            (weight_1 / triangle.vertices[1].depth) * depth;
+                        const double perspective_weight_2 =
+                            (weight_2 / triangle.vertices[2].depth) * depth;
+                        color[0] = colorByte(
+                            perspective_weight_0 * triangle.vertices[0].blue +
+                            perspective_weight_1 * triangle.vertices[1].blue +
+                            perspective_weight_2 * triangle.vertices[2].blue);
+                        color[1] = colorByte(
+                            perspective_weight_0 * triangle.vertices[0].green +
+                            perspective_weight_1 * triangle.vertices[1].green +
+                            perspective_weight_2 * triangle.vertices[2].green);
+                        color[2] = colorByte(
+                            perspective_weight_0 * triangle.vertices[0].red +
+                            perspective_weight_1 * triangle.vertices[1].red +
+                            perspective_weight_2 * triangle.vertices[2].red);
                     }
                 }
             }
         }
     });
 
-    result.visibleTriangleCount = static_cast<int>(triangles.size());
+    result.visibleTriangleCount = visible_triangle_count;
     result.ok = cv::countNonZero(result.validMask) > 0;
     if (!result.ok)
     {

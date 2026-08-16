@@ -29,9 +29,12 @@ QTreeView *createReferenceTree(const QString &objectName, QWidget *parent)
     tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree->setSelectionMode(QAbstractItemView::SingleSelection);
     tree->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tree->setTextElideMode(Qt::ElideMiddle);
     tree->setUniformRowHeights(true);
     tree->header()->setStretchLastSection(false);
-    tree->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    tree->header()->setMinimumSectionSize(56);
+    tree->header()->setSectionResizeMode(QHeaderView::Interactive);
+    tree->header()->setDefaultSectionSize(92);
     return tree;
 }
 
@@ -132,28 +135,36 @@ void ReferencePanelWidget::buildInterface()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(3);
 
-    auto *toolbar = new QToolBar(this);
-    toolbar->setObjectName(QStringLiteral("referenceToolbar"));
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    toolbar->setMovable(false);
-    _importCameraAction = toolbar->addAction(tr("导入相机参考"));
+    auto *importToolbar = new QToolBar(this);
+    importToolbar->setObjectName(QStringLiteral("referenceImportToolbar"));
+    importToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    importToolbar->setMovable(false);
+    _importCameraAction = importToolbar->addAction(tr("导入相机参考"));
     _importCameraAction->setObjectName(QStringLiteral("importCameraReferencesAction"));
-    _importMarkerAction = toolbar->addAction(tr("导入标记参考"));
+    _importMarkerAction = importToolbar->addAction(tr("导入标记参考"));
     _importMarkerAction->setObjectName(QStringLiteral("importMarkerReferencesAction"));
-    _exportCameraAction = toolbar->addAction(tr("导出"));
+    _exportCameraAction = importToolbar->addAction(tr("导出"));
     _exportCameraAction->setObjectName(QStringLiteral("exportCameraReferencesAction"));
-    toolbar->addSeparator();
-    _toggleCameraAction = toolbar->addAction(tr("启用/禁用"));
+    importToolbar->addSeparator();
+    _settingsAction = importToolbar->addAction(tr("设置"));
+    _settingsAction->setObjectName(QStringLiteral("cameraReferenceSettingsAction"));
+    layout->addWidget(importToolbar);
+
+    auto *viewToolbar = new QToolBar(this);
+    viewToolbar->setObjectName(QStringLiteral("referenceViewToolbar"));
+    viewToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    viewToolbar->setMovable(false);
+    _toggleCameraAction = viewToolbar->addAction(tr("启用/禁用"));
     _toggleCameraAction->setObjectName(QStringLiteral("toggleCameraReferenceAction"));
-    _editMarkerAction = toolbar->addAction(tr("标记属性"));
+    _editMarkerAction = viewToolbar->addAction(tr("标记属性"));
     _editMarkerAction->setObjectName(QStringLiteral("editMarkerReferenceAction"));
-    toolbar->addSeparator();
+    viewToolbar->addSeparator();
 
     auto *modeGroup = new QActionGroup(this);
     modeGroup->setExclusive(true);
-    _sourceModeAction = toolbar->addAction(tr("源值"));
-    _estimatedModeAction = toolbar->addAction(tr("估计值"));
-    _errorModeAction = toolbar->addAction(tr("误差"));
+    _sourceModeAction = viewToolbar->addAction(tr("源值"));
+    _estimatedModeAction = viewToolbar->addAction(tr("估计值"));
+    _errorModeAction = viewToolbar->addAction(tr("误差"));
     for (QAction *action : {_sourceModeAction, _estimatedModeAction, _errorModeAction})
     {
         action->setCheckable(true);
@@ -163,10 +174,7 @@ void ReferencePanelWidget::buildInterface()
     _estimatedModeAction->setObjectName(QStringLiteral("referenceEstimatedModeAction"));
     _errorModeAction->setObjectName(QStringLiteral("referenceErrorModeAction"));
     _sourceModeAction->setChecked(true);
-    toolbar->addSeparator();
-    _settingsAction = toolbar->addAction(tr("设置"));
-    _settingsAction->setObjectName(QStringLiteral("cameraReferenceSettingsAction"));
-    layout->addWidget(toolbar);
+    layout->addWidget(viewToolbar);
 
     auto *splitter = new QSplitter(Qt::Vertical, this);
     splitter->setObjectName(QStringLiteral("referenceSectionSplitter"));
@@ -174,12 +182,19 @@ void ReferencePanelWidget::buildInterface()
     _cameraTree = createReferenceTree(QStringLiteral("cameraReferenceTree"), splitter);
     _markerTree = createReferenceTree(QStringLiteral("markerReferenceTree"), splitter);
     _scaleBarTree = createReferenceTree(QStringLiteral("scaleBarReferenceTree"), splitter);
-    splitter->addWidget(createSection(tr("相机参考"), _cameraTree, splitter));
-    splitter->addWidget(createSection(tr("标记"), _markerTree, splitter));
-    splitter->addWidget(createSection(tr("标尺"), _scaleBarTree, splitter));
-    splitter->setStretchFactor(0, 1);
+    auto *cameraSection = createSection(tr("相机参考"), _cameraTree, splitter);
+    auto *markerSection = createSection(tr("标记"), _markerTree, splitter);
+    auto *scaleBarSection = createSection(tr("标尺"), _scaleBarTree, splitter);
+    cameraSection->setMinimumHeight(150);
+    markerSection->setMinimumHeight(100);
+    scaleBarSection->setMinimumHeight(100);
+    splitter->addWidget(cameraSection);
+    splitter->addWidget(markerSection);
+    splitter->addWidget(scaleBarSection);
+    splitter->setStretchFactor(0, 2);
     splitter->setStretchFactor(1, 1);
     splitter->setStretchFactor(2, 1);
+    splitter->setSizes({300, 150, 150});
     layout->addWidget(splitter, 1);
 
     _cameraModel = new xjw::gui::reference::CameraReferenceTreeModel(this);
@@ -188,6 +203,9 @@ void ReferencePanelWidget::buildInterface()
     _cameraTree->setModel(_cameraModel);
     _markerTree->setModel(_markerModel);
     _scaleBarTree->setModel(_scaleBarModel);
+    _cameraTree->header()->resizeSection(0, 168);
+    _markerTree->header()->resizeSection(0, 168);
+    _scaleBarTree->header()->resizeSection(0, 168);
 
     connect(_importCameraAction, &QAction::triggered,
             this, &ReferencePanelWidget::importCameraReferencesRequested);

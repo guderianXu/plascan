@@ -349,10 +349,10 @@ private:
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图
     QAction *_toggleLocalAxesAct{}; ///< 工具栏相机菜单中的本地轴显示开关
-    QAction *_toggleCameraImagesAct{}; ///< 显示当前相机图像平面
-    QAction *_showCameraImagesInForegroundAct{}; ///< 在前景中显示当前相机图像
-    QAction *_showCameraImagesInBackgroundAct{}; ///< 在后景中显示当前相机图像
-    QAction *_lockCameraImageAct{}; ///< 锁定当前显示的相机图像
+    QAction *_toggleCameraImagesAct{}; ///< 启用 SfM 相机对齐检查
+    QAction *_showCameraImagesInForegroundAct{}; ///< 半透明叠加当前原始影像
+    QAction *_showCameraImagesInBackgroundAct{}; ///< 将当前原始影像作为背景
+    QAction *_lockCameraImageAct{}; ///< 锁定当前检查相机
     QAction *_tiePointColorModeAct{}; ///< 连接点原始 RGB 颜色
     QAction *_tiePointElevationModeAct{}; ///< 连接点按高程着色
     QAction *_tiePointImageCountModeAct{}; ///< 连接点按影像观测数着色

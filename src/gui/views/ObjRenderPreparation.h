@@ -50,9 +50,11 @@ struct ObjRenderPreparation
 
     // UV seams cannot share source vertices. Keep a separate expanded stream
     // so switching Texture on or off never replaces the static mesh VBO.
+    // Layout: position (3), smooth normal (3), source colour (3), UV (2),
+    // vertex-colour fallback flag (1).
     QByteArray texturedVertexData;
     int texturedVertexCount = 0;
-    int texturedStrideBytes = 11 * static_cast<int>(sizeof(float));
+    int texturedStrideBytes = 12 * static_cast<int>(sizeof(float));
 
     bool hasTexture = false;
     bool hasVertexColors = false;

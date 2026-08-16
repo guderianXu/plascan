@@ -27,6 +27,12 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     _paddingSpin = form.m_paddingSpin;
     _keepUnmappedCheck = form.m_keepUnmappedCheck;
 
+    // Quality-first default. Persisted settings applied after construction may
+    // still select x2/x4 explicitly for memory-constrained projects.
+    _imageDownscaleCombo->setCurrentIndex(0);
+    _colorCorrCheck->setChecked(false);
+    _seamsMarginSpin->setValue(0.35);
+
     for (QComboBox *combo_box : {_texSizeCombo, _blendCombo, _imageDownscaleCombo})
     {
         xjw::gui::dialogs::configureWorkflowComboBox(combo_box);
@@ -80,7 +86,7 @@ QJsonObject TextureMappingDialog::collectSettings() const
     o["saveEachStep"] = false;
     o["holeFill"] = _holeFillCheck->isChecked();
     o["holeFillMode"] = _holeFillCheck->isChecked()
-        ? QStringLiteral("texture_space_small_holes")
+        ? QStringLiteral("neighbor_view_recovery")
         : QStringLiteral("disabled");
     o["colorCorrection"] = _colorCorrCheck->isChecked();
     o["ghostFilter"] = _ghostFilterCheck->isChecked();
@@ -149,7 +155,7 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
         _holeFillCheck->setChecked(
             s["holeFillMode"].toString() != QStringLiteral("disabled"));
     }
-    if (s.contains("colorCorrection")) _colorCorrCheck->setChecked(s["colorCorrection"].toBool(true));
+    if (s.contains("colorCorrection")) _colorCorrCheck->setChecked(s["colorCorrection"].toBool(false));
     if (s.contains("ghostFilter")) _ghostFilterCheck->setChecked(s["ghostFilter"].toBool(true));
     if (s.contains("outOfFocusFilter")) _outOfFocusFilterCheck->setChecked(s["outOfFocusFilter"].toBool());
     if (s.contains("sharpeningStrength")) _seamsMarginSpin->setValue(s["sharpeningStrength"].toDouble(1.0));

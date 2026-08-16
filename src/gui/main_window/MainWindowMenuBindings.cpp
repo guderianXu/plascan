@@ -70,6 +70,8 @@ void MainWindow::setupMenuConnections()
             {
                 _workspacePanels->restoreDefaultVisibility();
             }
+            _propertiesDockSuppressed = false;
+            updatePropertiesDockForCurrentTab();
             persistCurrentUiSettings();
         });
     }

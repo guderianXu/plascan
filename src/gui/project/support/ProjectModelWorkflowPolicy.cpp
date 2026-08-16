@@ -1,12 +1,14 @@
 #include "ProjectModelWorkflowPolicy.h"
 
 #include "ProjectDepthBatchLineage.h"
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthFrameUtils.h"
 #include "ProjectWorkflowUtils.h"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QStringList>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -26,6 +28,244 @@ QString comparablePath(const QString &path)
         return QString();
     }
     return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+bool samePath(const QString &lhs, const QString &rhs)
+{
+    const QString comparable_lhs = comparablePath(lhs);
+    const QString comparable_rhs = comparablePath(rhs);
+    return !comparable_lhs.isEmpty() &&
+        comparable_lhs.compare(comparable_rhs, Qt::CaseInsensitive) == 0;
+}
+
+bool pathIsInsideDirectory(const QString &path, const QString &directory)
+{
+    const QString comparable_path = comparablePath(path);
+    QString comparable_directory = comparablePath(directory);
+    if (comparable_path.isEmpty() || comparable_directory.isEmpty())
+    {
+        return false;
+    }
+    if (!comparable_directory.endsWith(QDir::separator()))
+    {
+        comparable_directory += QDir::separator();
+    }
+    return comparable_path.startsWith(comparable_directory,
+                                      Qt::CaseInsensitive);
+}
+
+QString atRecordPath(const QJsonObject &record, const QString &key)
+{
+    const QJsonObject files = record.value(QStringLiteral("files")).toObject();
+    const QString nested_path = files.value(key).toString().trimmed();
+    return nested_path.isEmpty()
+        ? record.value(key).toString().trimmed()
+        : nested_path;
+}
+
+QString resolveExistingRecordFile(const QJsonObject &record,
+                                  const QString &raw_path)
+{
+    const QString trimmed_path = raw_path.trimmed();
+    if (trimmed_path.isEmpty())
+    {
+        return QString();
+    }
+
+    QStringList candidates;
+    if (QDir::isRelativePath(trimmed_path))
+    {
+        const QString output_dir =
+            record.value(QStringLiteral("output_dir")).toString().trimmed();
+        if (!output_dir.isEmpty())
+        {
+            candidates.append(QDir(output_dir).filePath(trimmed_path));
+        }
+    }
+    candidates.append(trimmed_path);
+
+    for (const QString &candidate : candidates)
+    {
+        const QFileInfo info(candidate);
+        if (info.exists() && info.isFile())
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+    }
+    return QString();
+}
+
+bool depthRecordMatchesSource(const QJsonObject &record,
+                              const QString &depth_map_source_path)
+{
+    const QFileInfo source_info(depth_map_source_path);
+    const bool source_is_directory = source_info.isDir();
+    const QString source_path =
+        QDir::cleanPath(source_info.absoluteFilePath());
+    if (source_path.isEmpty())
+    {
+        return false;
+    }
+
+    const QString output_dir =
+        record.value(QStringLiteral("mvs_output_dir")).toString().trimmed();
+    if (source_is_directory && samePath(output_dir, source_path))
+    {
+        return true;
+    }
+
+    const QStringList artifact_keys = {
+        QStringLiteral("depth_png"),
+        QStringLiteral("depth_path"),
+        QStringLiteral("raw_depth_path"),
+        QStringLiteral("confidence_png"),
+        QStringLiteral("raw_confidence_path"),
+        QStringLiteral("valid_mask_path"),
+        QStringLiteral("provenance_path"),
+        QStringLiteral("normal_path")
+    };
+    for (const QString &key : artifact_keys)
+    {
+        const QString artifact_path = record.value(key).toString().trimmed();
+        if (artifact_path.isEmpty())
+        {
+            continue;
+        }
+        if ((source_is_directory &&
+             pathIsInsideDirectory(artifact_path, source_path)) ||
+            (!source_is_directory && samePath(artifact_path, source_path)))
+        {
+            return true;
+        }
+    }
+
+    return !source_is_directory &&
+        samePath(output_dir, source_info.absolutePath());
+}
+
+QStringList matchingDepthSparseClouds(const QJsonObject &project_metadata,
+                                      const QString &depth_map_source_path)
+{
+    QStringList paths;
+    const QJsonArray records =
+        project_metadata.value(QStringLiteral("depth_map_results")).toArray();
+    for (int index = records.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject record = records.at(index).toObject();
+        if (!depthRecordMatchesSource(record, depth_map_source_path))
+        {
+            continue;
+        }
+        const QString sparse_path =
+            record.value(QStringLiteral("source_sparse_cloud"))
+                .toString()
+                .trimmed();
+        if (sparse_path.isEmpty())
+        {
+            continue;
+        }
+        const bool already_present = std::any_of(
+            paths.cbegin(),
+            paths.cend(),
+            [&sparse_path](const QString &candidate)
+            {
+                return samePath(candidate, sparse_path);
+            });
+        if (!already_present)
+        {
+            paths.append(sparse_path);
+        }
+    }
+    return paths;
+}
+
+SparseScaffoldSource scaffoldFromAerialTriangulationResults(
+    const QJsonObject &project_metadata,
+    const QStringList &source_sparse_clouds)
+{
+    const QJsonArray records = project_metadata
+        .value(QStringLiteral("aerial_triangulation_results"))
+        .toArray();
+    for (const QString &source_sparse_cloud : source_sparse_clouds)
+    {
+        for (int index = records.size() - 1; index >= 0; --index)
+        {
+            const QJsonObject record = records.at(index).toObject();
+            const QString raw_point_cloud =
+                atRecordPath(record, QStringLiteral("sparse_cloud_xyz"));
+            const QString point_cloud =
+                resolveExistingRecordFile(record, raw_point_cloud);
+            if (point_cloud.isEmpty() ||
+                (!samePath(source_sparse_cloud, raw_point_cloud) &&
+                 !samePath(source_sparse_cloud, point_cloud)))
+            {
+                continue;
+            }
+
+            const QString points_json = resolveExistingRecordFile(
+                record,
+                atRecordPath(record,
+                             QStringLiteral("sparse_cloud_points_json")));
+            if (!points_json.isEmpty())
+            {
+                return {point_cloud, points_json};
+            }
+        }
+    }
+    return {};
+}
+
+QString chunkRootForDepthSource(const QString &depth_map_source_path)
+{
+    const QFileInfo source_info(depth_map_source_path);
+    QDir current(source_info.isDir()
+                     ? source_info.absoluteFilePath()
+                     : source_info.absolutePath());
+    while (true)
+    {
+        if (current.dirName().compare(QStringLiteral("mvs_output"),
+                                      Qt::CaseInsensitive) == 0)
+        {
+            if (current.cdUp())
+            {
+                return QDir::cleanPath(current.absolutePath());
+            }
+            return QString();
+        }
+
+        const QString before = current.absolutePath();
+        if (!current.cdUp() ||
+            current.absolutePath().compare(before, Qt::CaseInsensitive) == 0)
+        {
+            return QString();
+        }
+    }
+}
+
+SparseScaffoldSource canonicalSparseScaffold(
+    const QString &depth_map_source_path)
+{
+    const QString chunk_root = chunkRootForDepthSource(depth_map_source_path);
+    if (chunk_root.isEmpty())
+    {
+        return {};
+    }
+
+    const QDir sparse_directory(QDir(chunk_root).filePath(
+        QStringLiteral("assets/aerial_triangulation/sfm_sparse")));
+    const QString point_cloud = sparse_directory.filePath(
+        QStringLiteral("sfm_sparse.ply"));
+    const QString points_json = sparse_directory.filePath(
+        QStringLiteral("sfm_sparse_points.json"));
+    const QFileInfo point_cloud_info(point_cloud);
+    const QFileInfo points_json_info(points_json);
+    if (!point_cloud_info.exists() || !point_cloud_info.isFile() ||
+        !points_json_info.exists() || !points_json_info.isFile())
+    {
+        return {};
+    }
+    return {QDir::cleanPath(point_cloud_info.absoluteFilePath()),
+            QDir::cleanPath(points_json_info.absoluteFilePath())};
 }
 
 int consistentProjectInputSignatureVersion(
@@ -253,9 +493,21 @@ QString depthBatchSceneCompatibilityReason(
 }
 
 QString depthBatchFusionEligibilityReason(
-    const xjw::core::project::StoredDepthFramesResult &stored_frames)
+    const xjw::core::project::StoredDepthFramesResult &stored_frames,
+    bool allow_orbital_sparse_scaffold_fallback)
 {
-    constexpr int kMinimumPrimaryFrameCount = 1;
+    const bool orbital_batch = std::all_of(
+        stored_frames.frames.cbegin(),
+        stored_frames.frames.cend(),
+        [](const xjw::core::project::StoredDepthFrameRecord &frame)
+        {
+            return normalizedSceneProfile(frame.sceneProfile) ==
+                QStringLiteral("orbital_object");
+        });
+    const int minimum_primary_frame_count = orbital_batch
+        ? xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(
+              static_cast<int>(stored_frames.frames.size()))
+        : 1;
 
     int accepted_count = 0;
     int validation_only_count = 0;
@@ -279,7 +531,8 @@ QString depthBatchFusionEligibilityReason(
         {
             ++fusion_eligible_count;
         }
-        if (acceptance == QStringLiteral("accepted") && frame.fusionEligible)
+        if (xjw::mvs::isPrimaryFusionFrame(
+                frame.acceptance, frame.fusionEligible))
         {
             ++primary_frame_count;
         }
@@ -291,7 +544,12 @@ QString depthBatchFusionEligibilityReason(
             "所选深度图批次缺少完整的帧质量资格记录（acceptance/fusion_eligible），"
             "无法确认它能安全进入多视融合。请重新估计深度图后再生成模型。");
     }
-    if (primary_frame_count < kMinimumPrimaryFrameCount)
+    const bool sparse_scaffold_can_carry_global_shape =
+        orbital_batch &&
+        allow_orbital_sparse_scaffold_fallback &&
+        primary_frame_count >= 2;
+    if (primary_frame_count < minimum_primary_frame_count &&
+        !sparse_scaffold_can_carry_global_shape)
     {
         return QStringLiteral(
             "所选深度图批次没有足够的融合主帧：accepted=%1，fusion_eligible=%2，"
@@ -300,7 +558,7 @@ QString depthBatchFusionEligibilityReason(
             .arg(accepted_count)
             .arg(fusion_eligible_count)
             .arg(validation_only_count)
-            .arg(kMinimumPrimaryFrameCount);
+            .arg(minimum_primary_frame_count);
     }
     return QString();
 }
@@ -316,11 +574,34 @@ QString projectDepthInputSignature(const QJsonObject &project_metadata,
         kProjectDepthInputSignatureVersion);
 }
 
+SparseScaffoldSource resolveSparseScaffoldSource(
+    const QJsonObject &project_metadata,
+    const QString &depth_map_source_path)
+{
+    if (depth_map_source_path.trimmed().isEmpty())
+    {
+        return {};
+    }
+
+    const SparseScaffoldSource matched_source =
+        scaffoldFromAerialTriangulationResults(
+            project_metadata,
+            matchingDepthSparseClouds(project_metadata,
+                                      depth_map_source_path));
+    if (!matched_source.pointCloudPath.isEmpty() &&
+        !matched_source.pointsJsonPath.isEmpty())
+    {
+        return matched_source;
+    }
+    return canonicalSparseScaffold(depth_map_source_path);
+}
+
 StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QJsonObject &project_metadata,
     const QString &depth_map_source_path,
     int aerial_triangulation_result_index,
-    const QString &expected_scene_profile)
+    const QString &expected_scene_profile,
+    bool allow_orbital_sparse_scaffold_fallback)
 {
     StoredDepthBatchCompatibility result;
     const auto stored_frames = depth_map_source_path.trimmed().isEmpty()
@@ -367,12 +648,15 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
         stored_frames.frames.end(),
         [](const xjw::core::project::StoredDepthFrameRecord &frame)
         {
-            return frame.algorithmRevision == xjw::mvs::kMvsDepthAlgorithmRevision;
+            return frame.algorithmRevision >=
+                    xjw::mvs::kMvsMinimumModelCompatibleRevision &&
+                frame.algorithmRevision <= xjw::mvs::kMvsDepthAlgorithmRevision;
         });
     if (!algorithm_revision_matches)
     {
         result.reason = QStringLiteral(
-            "所选深度图批次由旧版算法生成，不能作为当前模型的几何输入。"
+            "所选深度图批次的算法版本不在当前模型兼容范围内，"
+            "不能作为当前模型的几何输入。"
             "请重新估计深度图后再生成模型。");
         return result;
     }
@@ -387,7 +671,8 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     }
 
     const QString fusion_eligibility_reason = depthBatchFusionEligibilityReason(
-        stored_frames);
+        stored_frames,
+        allow_orbital_sparse_scaffold_fallback);
     if (!fusion_eligibility_reason.isEmpty())
     {
         result.reason = fusion_eligibility_reason;

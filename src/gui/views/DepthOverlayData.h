@@ -69,6 +69,10 @@ std::optional<DepthOverlayArtifact> resolveDepthOverlayArtifact(
     const QString &image_path,
     DepthOverlayLevel level);
 
+DepthOverlayArtifact resolveDepthOverlayArtifactPaths(
+    const DepthOverlayArtifact &artifact,
+    const QString &project_path);
+
 DepthOverlayAvailability resolveDepthOverlayAvailability(
     const QJsonObject &project_metadata,
     const QString &image_path,

@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSignalBlocker>
 #include <QWidgetAction>
 
 namespace
@@ -220,7 +221,26 @@ QJsonObject MainWindow::currentUiSettingsSnapshot() const
         ? _workspacePanels->visibilitySnapshot()
         : QJsonObject{};
     settings[QStringLiteral("dock_layout_version")] = ProjectDockLayoutVersion;
-    settings[QStringLiteral("dock_state")] = QString::fromLatin1(saveState().toBase64());
+    QByteArray dockState;
+    if (_propertiesDockSuppressed
+        && _propertiesDock
+        && _propertiesDockVisibleOutsideReference)
+    {
+        const QSignalBlocker dockBlocker(_propertiesDock);
+        _propertiesDock->show();
+        dockState = saveState();
+        _propertiesDock->hide();
+        settings[QStringLiteral("properties_visible")] = true;
+    }
+    else
+    {
+        dockState = saveState();
+        if (_propertiesDockSuppressed)
+        {
+            settings[QStringLiteral("properties_visible")] = false;
+        }
+    }
+    settings[QStringLiteral("dock_state")] = QString::fromLatin1(dockState.toBase64());
 
     if (_mainMenu && _mainMenu->toggleHenanUniversityBrandAction())
     {

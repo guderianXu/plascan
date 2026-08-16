@@ -7,6 +7,7 @@
 #include <QJsonValue>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include <initializer_list>
 
@@ -27,6 +28,7 @@ QString depthRecordPrimaryPath(const QJsonObject &record);
 QString depthQualityLabel(QString profile);
 QString depthFilterLabel(QString mode);
 bool isDisplayableMeshResult(const QJsonObject &record);
+QStringList displayableMeshAssetPaths(const QJsonObject &record);
 int displayableMeshResultCount(const QJsonArray &modelResults);
 bool isTreeResultKey(const QString &key);
 bool hasTreeResultKeys(const QJsonObject &meta);

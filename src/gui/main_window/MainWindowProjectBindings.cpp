@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "CanvasWidget.h"
@@ -54,7 +55,9 @@
 #include "camera/ForwardIntersectionResultsDialog.h"
 #include "HenuBrandWidget.h"
 #include "ProjectManager.h"
+#include "ProjectTiePointResultService.h"
 #include "project/ProjectIO.h"
+#include "project/SparseResultQuality.h"
 #include "ProjectData.h"
 #include "ProjectDashboardWidget.h"
 #include "PhotoStripWidget.h"
@@ -66,6 +69,7 @@
 #include "ObservationNetworkView.h"
 #include "graph/ObservationNetworkBuilder.h"
 #include "WorkspaceCenterWidget.h"
+#include "CameraSceneWidget.h"
 #include "WorkspacePanelController.h"
 #include "ProjectUiHydrator.h"
 #include "TiePointWorkflowController.h"
@@ -593,15 +597,351 @@ void MainWindow::setupProjectManager()
         {
             connect(_mainMenu->cleanTiePointsAction(), &QAction::triggered, this, [this]()
             {
-                CleanTiePointsDialog dlg(this);
-                if (dlg.exec() == QDialog::Accepted)
+                if (!_projectManager || !_workspaceCenter || !_workspaceCenter->modelView())
                 {
-                    const QString operation = dlg.deleteRequested() ? tr("删除") : tr("筛选");
-                    statusBar()->showMessage(
-                        tr("连接点清理参数已确认：%1，%2，级别 %3")
-                            .arg(dlg.criterionText(), operation, QString::number(dlg.level(), 'g', 3)),
-                        3000);
+                    QMessageBox::warning(this,
+                                         tr("清理连接点"),
+                                         tr("三维视图或项目管理器尚未就绪。"));
+                    return;
                 }
+
+                const QString projectPath = _projectManager->currentProjectPath();
+                const auto selection =
+                    xjw::gui::project::ProjectTiePointResultService::selectCurrent(
+                        _projectManager->currentMeta(), projectPath);
+                if (!selection.isValid())
+                {
+                    QMessageBox::information(this,
+                                             tr("清理连接点"),
+                                             tr("当前项目中没有可清理的连接点成果。"));
+                    return;
+                }
+                if (!xjw::gui::project::isProductionSparseResult(selection.record))
+                {
+                    QString reason = xjw::gui::project::sparseResultBlockingReason(selection.record);
+                    if (reason.trimmed().isEmpty())
+                    {
+                        reason = tr("当前成果不是正式 SfM/BA 连接点，不能执行清理。");
+                    }
+                    QMessageBox::warning(this, tr("清理连接点"), reason);
+                    return;
+                }
+
+                const auto resolveProjectPath = [&projectPath](const QString &storedPath)
+                {
+                    const QString path = storedPath.trimmed();
+                    if (path.isEmpty())
+                    {
+                        return QString();
+                    }
+                    return QFileInfo(path).isAbsolute()
+                        ? QDir::cleanPath(path)
+                        : xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                              projectPath, path);
+                };
+
+                const QJsonObject resultFiles =
+                    selection.record.value(QStringLiteral("files")).toObject();
+                QString sidecarPath = resolveProjectPath(
+                    resultFiles.value(QStringLiteral("sparse_cloud_points_json")).toString());
+                if (sidecarPath.isEmpty())
+                {
+                    const QString outputDir = resolveProjectPath(
+                        selection.record.value(QStringLiteral("output_dir")).toString());
+                    if (!outputDir.isEmpty())
+                    {
+                        sidecarPath = QDir(outputDir).filePath(
+                            QStringLiteral("sparse_cloud_points.json"));
+                    }
+                }
+                if (!QFileInfo(sidecarPath).isFile())
+                {
+                    QMessageBox::warning(
+                        this,
+                        tr("清理连接点"),
+                        tr("当前连接点缺少逐点质量数据，无法进行阈值预览。\n%1")
+                            .arg(sidecarPath));
+                    return;
+                }
+
+                auto *modelView = _workspaceCenter->modelView();
+                modelView->clearTiePointPrunePreview();
+                _workspaceCenter->showTiePointCloudFile(selection.sparseCloudPath, sidecarPath);
+
+                CleanTiePointsDialog dlg(this);
+                using DialogCriterion = CleanTiePointsDialog::Criterion;
+                using QualityCriterion = CameraSceneWidget::TiePointQualityCriterion;
+
+                const auto toQualityCriterion = [](DialogCriterion criterion,
+                                                   QualityCriterion *qualityCriterion)
+                {
+                    if (!qualityCriterion)
+                    {
+                        return false;
+                    }
+                    switch (criterion)
+                    {
+                    case DialogCriterion::ReprojectionError:
+                        *qualityCriterion = QualityCriterion::ReprojectionError;
+                        return true;
+                    case DialogCriterion::ImageCount:
+                        *qualityCriterion = QualityCriterion::ImageCount;
+                        return true;
+                    case DialogCriterion::MinimumTriangulationAngle:
+                        *qualityCriterion = QualityCriterion::MinimumTriangulationAngle;
+                        return true;
+                    case DialogCriterion::None:
+                    case DialogCriterion::ReconstructionUncertainty:
+                    case DialogCriterion::ProjectionAccuracy:
+                        return false;
+                    }
+                    return false;
+                };
+
+                const auto refreshCriterionConfiguration = [&dlg, modelView]()
+                {
+                    const auto configure = [&dlg, modelView](
+                        DialogCriterion dialogCriterion,
+                        QualityCriterion qualityCriterion,
+                        double defaultLevel,
+                        double singleStep,
+                        int decimals)
+                    {
+                        auto configuration = dlg.criterionConfiguration(dialogCriterion);
+                        configuration.available =
+                            modelView->hasTiePointQualityMetadata(qualityCriterion);
+                        configuration.defaultLevel = defaultLevel;
+                        configuration.singleStep = singleStep;
+                        configuration.decimals = decimals;
+                        if (configuration.available)
+                        {
+                            const auto range = modelView->tiePointQualityRange(qualityCriterion);
+                            if (qualityCriterion == QualityCriterion::ReprojectionError)
+                            {
+                                configuration.minimum = 0.0;
+                                configuration.maximum = std::max(
+                                    range.maximum, defaultLevel);
+                            }
+                            else if (qualityCriterion == QualityCriterion::ImageCount)
+                            {
+                                configuration.minimum = std::min(
+                                    range.minimum, defaultLevel);
+                                configuration.maximum = std::max(
+                                    range.maximum, defaultLevel);
+                            }
+                            else
+                            {
+                                configuration.minimum = 0.0;
+                                configuration.maximum = std::max(
+                                    range.maximum, defaultLevel);
+                            }
+                            configuration.unavailableReason.clear();
+                        }
+                        else
+                        {
+                            configuration.unavailableReason =
+                                QObject::tr("正在加载该指标，或当前成果未保存该逐点数据。");
+                        }
+                        dlg.setCriterionConfiguration(dialogCriterion, configuration);
+                    };
+
+                    configure(DialogCriterion::ReprojectionError,
+                              QualityCriterion::ReprojectionError,
+                              1.0,
+                              0.01,
+                              3);
+                    configure(DialogCriterion::ImageCount,
+                              QualityCriterion::ImageCount,
+                              3.0,
+                              1.0,
+                              0);
+                    configure(DialogCriterion::MinimumTriangulationAngle,
+                              QualityCriterion::MinimumTriangulationAngle,
+                              2.0,
+                              0.1,
+                              2);
+                };
+
+                connect(&dlg,
+                        &CleanTiePointsDialog::previewRequested,
+                        &dlg,
+                        [this, modelView, &dlg, toQualityCriterion](
+                            DialogCriterion criterion, double level)
+                        {
+                            QualityCriterion qualityCriterion;
+                            if (!toQualityCriterion(criterion, &qualityCriterion))
+                            {
+                                modelView->clearTiePointPrunePreview();
+                                return;
+                            }
+                            QString errorMessage;
+                            if (!modelView->requestTiePointPrunePreview(
+                                    CameraSceneWidget::TiePointPrunePreviewQuery{
+                                        qualityCriterion, level},
+                                    &errorMessage))
+                            {
+                                dlg.setCandidateCount(-1, -1);
+                                if (!errorMessage.trimmed().isEmpty())
+                                {
+                                    statusBar()->showMessage(errorMessage, 3000);
+                                }
+                            }
+                        });
+                connect(&dlg,
+                        &CleanTiePointsDialog::previewCleared,
+                        &dlg,
+                        [modelView]()
+                        {
+                            modelView->clearTiePointPrunePreview();
+                        });
+                connect(modelView,
+                        &CameraSceneWidget::tiePointPrunePreviewChanged,
+                        &dlg,
+                        [&dlg, modelView](int candidateCount)
+                        {
+                            dlg.setCandidateCount(candidateCount,
+                                                  modelView->tiePointQualityPointCount());
+                        });
+                connect(modelView,
+                        &CameraSceneWidget::tiePointQualityMetadataReady,
+                        &dlg,
+                        [&dlg, refreshCriterionConfiguration](bool ready)
+                        {
+                            refreshCriterionConfiguration();
+                            if (!ready)
+                            {
+                                dlg.setCandidateCount(-1, -1);
+                                return;
+                            }
+                            if (dlg.criterion() == DialogCriterion::None)
+                            {
+                                if (dlg.criterionConfiguration(
+                                        DialogCriterion::ReprojectionError).available)
+                                {
+                                    dlg.setCriterion(DialogCriterion::ReprojectionError);
+                                }
+                                else if (dlg.criterionConfiguration(
+                                             DialogCriterion::ImageCount).available)
+                                {
+                                    dlg.setCriterion(DialogCriterion::ImageCount);
+                                }
+                                else if (dlg.criterionConfiguration(
+                                             DialogCriterion::MinimumTriangulationAngle).available)
+                                {
+                                    dlg.setCriterion(
+                                        DialogCriterion::MinimumTriangulationAngle);
+                                }
+                            }
+                        });
+
+                refreshCriterionConfiguration();
+                if (modelView->tiePointQualityPointCount() > 0)
+                {
+                    if (dlg.criterionConfiguration(
+                            DialogCriterion::ReprojectionError).available)
+                    {
+                        dlg.setCriterion(DialogCriterion::ReprojectionError);
+                    }
+                    else if (dlg.criterionConfiguration(
+                                 DialogCriterion::ImageCount).available)
+                    {
+                        dlg.setCriterion(DialogCriterion::ImageCount);
+                    }
+                    else if (dlg.criterionConfiguration(
+                                 DialogCriterion::MinimumTriangulationAngle).available)
+                    {
+                        dlg.setCriterion(DialogCriterion::MinimumTriangulationAngle);
+                    }
+                }
+
+                if (dlg.exec() != QDialog::Accepted)
+                {
+                    modelView->clearTiePointPrunePreview();
+                    return;
+                }
+
+                const int candidateCount = dlg.candidateCount();
+                const int totalPointCount = dlg.totalPointCount();
+                if (!dlg.deleteRequested())
+                {
+                    statusBar()->showMessage(
+                        tr("已在三维视图高亮 %1 / %2 个候选剔除点（%3，阈值 %4）。")
+                            .arg(candidateCount)
+                            .arg(totalPointCount)
+                            .arg(dlg.criterionText())
+                            .arg(QString::number(dlg.level(), 'g', 5)),
+                        5000);
+                    return;
+                }
+
+                if (candidateCount <= 0 || totalPointCount <= 0
+                    || candidateCount >= totalPointCount)
+                {
+                    modelView->clearTiePointPrunePreview();
+                    QMessageBox::warning(
+                        this,
+                        tr("清理连接点"),
+                        tr("候选点数无效，已取消删除。请调整阈值，保留至少一个连接点。"));
+                    return;
+                }
+
+                const auto answer = QMessageBox::question(
+                    this,
+                    tr("删除候选连接点"),
+                    tr("将删除 %1 / %2 个连接点，并生成新的稀疏点云成果。\n"
+                       "现有深度图、稠密点云、模型、DEM 和 DOM 将失效，需重新生成。\n\n"
+                       "是否继续？")
+                        .arg(candidateCount)
+                        .arg(totalPointCount),
+                    QMessageBox::Yes | QMessageBox::No,
+                    QMessageBox::No);
+                if (answer != QMessageBox::Yes)
+                {
+                    statusBar()->showMessage(tr("已取消删除，候选点仍保持高亮。"), 3000);
+                    return;
+                }
+
+                QJsonObject settings;
+                settings[QStringLiteral("sourceKind")] = QStringLiteral("project_result");
+                settings[QStringLiteral("sourceAtIndex")] = selection.sourceIndex;
+                settings[QStringLiteral("sourceSparseCloudPath")] = selection.sparseCloudPath;
+                settings[QStringLiteral("sourceSidecarPath")] = sidecarPath;
+                settings[QStringLiteral("filterByReprojError")] = false;
+                settings[QStringLiteral("filterByTrackLen")] = false;
+                settings[QStringLiteral("filterByTriAngle")] = false;
+                settings[QStringLiteral("filterByStatistical")] = false;
+                settings[QStringLiteral("filterByDensity")] = false;
+
+                switch (dlg.criterion())
+                {
+                case DialogCriterion::ReprojectionError:
+                    settings[QStringLiteral("filterByReprojError")] = true;
+                    settings[QStringLiteral("maxReprojError")] = dlg.level();
+                    break;
+                case DialogCriterion::ImageCount:
+                    settings[QStringLiteral("filterByTrackLen")] = true;
+                    settings[QStringLiteral("minTrackLen")] =
+                        static_cast<int>(std::lround(dlg.level()));
+                    break;
+                case DialogCriterion::MinimumTriangulationAngle:
+                    settings[QStringLiteral("filterByTriAngle")] = true;
+                    settings[QStringLiteral("minTriAngleDeg")] = dlg.level();
+                    break;
+                case DialogCriterion::None:
+                case DialogCriterion::ReconstructionUncertainty:
+                case DialogCriterion::ProjectionAccuracy:
+                    modelView->clearTiePointPrunePreview();
+                    QMessageBox::warning(this,
+                                         tr("清理连接点"),
+                                         tr("所选标准尚无可执行的剔除算法。"));
+                    return;
+                }
+
+                modelView->clearTiePointPrunePreview();
+                statusBar()->showMessage(
+                    tr("正在后台删除 %1 个候选连接点…").arg(candidateCount),
+                    5000);
+                _projectManager->startSparseCloudOutlierRemovalAsync(settings);
             });
         }
 
@@ -712,6 +1052,16 @@ void MainWindow::setupProjectManager()
             _canvas->setProjectMetadata(meta);
         }
     });
+    connect(_projectManager,
+            &ProjectManager::tiePointResultReady,
+            this,
+            [this](const QString &sparseCloudPath, const QString &sidecarPath)
+            {
+                if (_workspaceCenter && QFileInfo(sparseCloudPath).isFile())
+                {
+                    _workspaceCenter->showTiePointCloudFile(sparseCloudPath, sidecarPath);
+                }
+            });
     connect(_projectManager,
             &ProjectManager::chunkListChanged,
             _dataTree,

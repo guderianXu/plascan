@@ -16,6 +16,8 @@
 #include <QSaveFile>
 #include <QTemporaryDir>
 
+#include <cmath>
+
 namespace
 {
 
@@ -77,6 +79,94 @@ TEST(ModelMeshRendererTest, KeepsNearestTriangleInZBuffer)
     EXPECT_LT(center[1], 20);
     EXPECT_GT(center[2], 235);
     EXPECT_NEAR(render.depth.at<float>(64, 64), 2.0f, 1.0e-3f);
+}
+
+TEST(ModelMeshRendererTest, PerspectiveCorrectsDepthAndVertexColorAcrossSlantedTriangle)
+{
+    xjw::FramePinholeCamera camera;
+    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
+    camera.setPose({1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0},
+                   {0.0, 0.0, 0.0});
+
+    const auto vertex_at_pixel = [&camera](double pixel_x,
+                                           double pixel_y,
+                                           double depth,
+                                           std::uint8_t red,
+                                           std::uint8_t green,
+                                           std::uint8_t blue)
+    {
+        const double pixel[2] = {pixel_x, pixel_y};
+        double world[3] = {};
+        EXPECT_TRUE(camera.unprojectPixel(pixel, depth, world));
+        return xjw::mesh::MeshVertex{
+            static_cast<float>(world[0]),
+            static_cast<float>(world[1]),
+            static_cast<float>(world[2]),
+            0.0f,
+            0.0f,
+            -1.0f,
+            red,
+            green,
+            blue};
+    };
+
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        vertex_at_pixel(32.5, 32.5, 2.0, 255, 0, 0),
+        vertex_at_pixel(96.5, 32.5, 4.0, 0, 255, 0),
+        vertex_at_pixel(64.5, 96.5, 8.0, 0, 0, 255),
+    };
+    mesh.faces = {{{0, 1, 2}}};
+
+    xjw::qc::ModelMeshRenderer renderer;
+    const xjw::qc::ModelRenderResult render =
+        renderer.render(mesh, camera, cv::Size(128, 128));
+
+    ASSERT_TRUE(render.ok) << render.error.toStdString();
+    ASSERT_EQ(render.validMask.at<std::uint8_t>(64, 64), 255);
+    // The screen-space barycentric weights are (1/4, 1/4, 1/2).
+    // Correct projective interpolation therefore gives
+    // Z = 1 / (1/4/2 + 1/4/4 + 1/2/8) = 4, not the affine value 5.5.
+    EXPECT_NEAR(render.depth.at<float>(64, 64), 4.0f, 1.0e-4f);
+    const cv::Vec3b color = render.color.at<cv::Vec3b>(64, 64);
+    EXPECT_NEAR(color[0], 64, 1);
+    EXPECT_NEAR(color[1], 64, 1);
+    EXPECT_NEAR(color[2], 128, 1);
+}
+
+TEST(ModelMeshRendererTest, ClipsTriangleCrossingCameraPlaneInsteadOfDiscardingIt)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        {-100.0f, -0.5f, 2.0f, 0.0f, 0.0f, -1.0f, 0, 0, 255},
+        {100.0f, -0.5f, 2.0f, 0.0f, 0.0f, -1.0f, 0, 0, 255},
+        {0.0f, 0.5f, -1.0f, 0.0f, 0.0f, -1.0f, 255, 0, 0},
+    };
+    mesh.faces = {{{0, 1, 2}}};
+
+    xjw::FramePinholeCamera camera;
+    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
+    camera.setPose({1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0},
+                   {0.0, 0.0, 0.0});
+
+    xjw::qc::ModelMeshRenderer renderer;
+    const xjw::qc::ModelRenderResult render =
+        renderer.render(mesh, camera, cv::Size(128, 128));
+
+    ASSERT_TRUE(render.ok) << render.error.toStdString();
+    EXPECT_EQ(render.visibleTriangleCount, 1);
+    ASSERT_EQ(render.validMask.at<std::uint8_t>(64, 64), 255);
+    const float center_depth = render.depth.at<float>(64, 64);
+    ASSERT_TRUE(std::isfinite(center_depth));
+    EXPECT_NEAR(center_depth, 0.5f / 1.015f, 1.0e-3f);
+    const cv::Vec3b center_color = render.color.at<cv::Vec3b>(64, 64);
+    EXPECT_NEAR(center_color[0], 127, 2);
+    EXPECT_EQ(center_color[1], 0);
+    EXPECT_NEAR(center_color[2], 128, 2);
 }
 
 TEST(ModelImageMetricsTest, MeasuresMaskOverlapAndSymmetricEdgeDistance)

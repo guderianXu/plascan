@@ -172,10 +172,20 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
         depth_properties.insert(
             QStringLiteral("grid_height"),
             record.value(QStringLiteral("grid_height")));
+        const auto sparse_scaffold =
+            xjw::gui::project::resolveSparseScaffoldSource(
+                metadata,
+                cleanPath);
+        const bool allow_sparse_scaffold_fallback =
+            !sparse_scaffold.pointCloudPath.isEmpty() &&
+            !sparse_scaffold.pointsJsonPath.isEmpty();
         const auto compatibility =
             xjw::gui::project::assessStoredDepthBatchCompatibility(
                 metadata,
-                cleanPath);
+                cleanPath,
+                -1,
+                QString(),
+                allow_sparse_scaffold_fallback);
         depth_properties.insert(
             QStringLiteral("depth_batch_compatible"),
             compatibility.compatible);

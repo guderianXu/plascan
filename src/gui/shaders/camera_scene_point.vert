@@ -63,7 +63,9 @@ void main()
     }
 
     vec2 viewportSize = max(ubuf.uViewportSize.xy, vec2(1.0));
-    float selectionScale = ubuf.uRenderModeFlags.z > 0.5 ? 1.35 : 1.0;
+    float selectionScale = ubuf.uRenderModeFlags.z > 0.5
+        ? (ubuf.uRenderModeFlags.w > 1.5 ? 1.50 : 1.35)
+        : 1.0;
     clipPosition.xy += corner * ubuf.uLightDirPointSize.w * selectionScale
         / viewportSize * clipPosition.w;
     gl_Position = clipPosition;
@@ -72,7 +74,9 @@ void main()
     int mode = int(ubuf.uRenderModeFlags.x + 0.5);
     if (ubuf.uRenderModeFlags.z > 0.5)
     {
-        vColor = vec3(1.0, 0.90, 0.20);
+        vColor = ubuf.uRenderModeFlags.w > 1.5
+            ? vec3(1.0, 0.18, 0.38)
+            : vec3(1.0, 0.90, 0.20);
     }
     else if (mode == 1)
     {

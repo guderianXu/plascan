@@ -48,6 +48,8 @@ struct ResolvedModelSource
 {
     QString sourcePointCloudPath;
     QString requestedSourcePath;
+    QString sparseScaffoldPointCloudPath;
+    QString sparseScaffoldPointsPath;
     QString outputRoot;
 };
 
@@ -875,6 +877,15 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
         }
 
         resolvedSource->sourcePointCloudPath = findDenseCloudForDepthSource(projectData, sourcePath);
+        const xjw::gui::project::SparseScaffoldSource sparse_scaffold =
+            xjw::gui::project::resolveSparseScaffoldSource(
+                projectData ? projectData->metadataIncludingResults()
+                            : QJsonObject(),
+                sourcePath);
+        resolvedSource->sparseScaffoldPointCloudPath =
+            sparse_scaffold.pointCloudPath;
+        resolvedSource->sparseScaffoldPointsPath =
+            sparse_scaffold.pointsJsonPath;
         resolvedSource->outputRoot = depthSourceRoot(sourcePath);
         if (resolvedSource->outputRoot.isEmpty())
         {
@@ -1016,12 +1027,24 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         const QString depth_source_path =
             settings.value(QStringLiteral("depthMapSourcePath"))
                 .toString(settings.value(QStringLiteral("source_path")).toString());
+        const QJsonObject project_metadata =
+            _projectData->metadataIncludingResults();
+        const auto sparse_scaffold =
+            xjw::gui::project::resolveSparseScaffoldSource(
+                project_metadata,
+                depth_source_path);
+        const bool allow_sparse_scaffold_fallback =
+            settings.value(QStringLiteral(
+                "tsdfOrbitalSparseScaffoldCompletion")).toBool(true) &&
+            !sparse_scaffold.pointCloudPath.isEmpty() &&
+            !sparse_scaffold.pointsJsonPath.isEmpty();
         const auto batch_compatibility =
             xjw::gui::project::assessStoredDepthBatchCompatibility(
-                _projectData->metadataIncludingResults(),
+                project_metadata,
                 depth_source_path,
                 settings.value(QStringLiteral("at_index")).toInt(-1),
-                settings.value(QStringLiteral("sceneProfile")).toString());
+                settings.value(QStringLiteral("sceneProfile")).toString(),
+                allow_sparse_scaffold_fallback);
         if (!batch_compatibility.compatible)
         {
             QMessageBox::warning(_parentWidget,
@@ -1061,6 +1084,14 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     }
     effectiveSettings[QStringLiteral("source_path")] = resolvedSource.requestedSourcePath;
     effectiveSettings[QStringLiteral("resolved_point_cloud_path")] = resolvedSource.sourcePointCloudPath;
+    if (!resolvedSource.sparseScaffoldPointCloudPath.isEmpty() &&
+        !resolvedSource.sparseScaffoldPointsPath.isEmpty())
+    {
+        effectiveSettings[QStringLiteral("resolved_sparse_scaffold_path")] =
+            resolvedSource.sparseScaffoldPointCloudPath;
+        effectiveSettings[QStringLiteral("resolved_sparse_points_json_path")] =
+            resolvedSource.sparseScaffoldPointsPath;
+    }
     const auto session = _owner->currentSessionContext();
     const QString taskId = xjw::mesh::workflow::createModelRunId();
     const QString runDirectory = QDir(resolvedSource.outputRoot)
@@ -1125,6 +1156,10 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                     .toString(QStringLiteral("point_cloud"));
             request.requestedSourcePath = resolvedSource.requestedSourcePath;
             request.sourcePointCloudPath = resolvedSource.sourcePointCloudPath;
+            request.sparseScaffoldPointCloudPath =
+                resolvedSource.sparseScaffoldPointCloudPath;
+            request.sparseScaffoldPointsPath =
+                resolvedSource.sparseScaffoldPointsPath;
             request.depthMapSourcePath =
                 effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
                     .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());

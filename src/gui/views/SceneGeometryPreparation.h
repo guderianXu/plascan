@@ -141,3 +141,10 @@ PointSelectionPreparation preparePointSelection(
     std::size_t maximumCompactPointCount =
         std::numeric_limits<std::size_t>::max(),
     const std::atomic_bool *cancellationFlag = nullptr);
+
+PointSelectionPreparation prepareIndexedPointSelection(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const QByteArray &scalarData,
+    const std::vector<PointVertexIndex> &indices,
+    const std::atomic_bool *cancellationFlag = nullptr);

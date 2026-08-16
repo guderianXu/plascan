@@ -293,7 +293,7 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
         return result;
     }
 
-    constexpr int texture_stride_floats = 11;
+    constexpr int texture_stride_floats = 12;
     const std::size_t textured_vertex_count = triangle_indices.size();
     const std::size_t texture_float_count = textured_vertex_count * texture_stride_floats;
     if (textured_vertex_count > static_cast<std::size_t>(std::numeric_limits<int>::max())
@@ -318,6 +318,10 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
             faces->getValue(face_index, 0),
             faces->getValue(face_index, 1),
             faces->getValue(face_index, 2)};
+        const bool use_vertex_color_fallback = cloud.hasColors()
+            && cloud.faceTextureIndices()->getValue(face_index, 0) == 0
+            && cloud.faceTextureIndices()->getValue(face_index, 1) == 0
+            && cloud.faceTextureIndices()->getValue(face_index, 2) == 0;
         for (int corner = 0; corner < 3; ++corner)
         {
             const int vertex_index = face_indices[corner];
@@ -342,6 +346,7 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
             const int texture_index = cloud.faceTextureIndices()->getValue(face_index, corner);
             textured_vertices.push_back(cloud.textureCoords()->getValue(texture_index, 0));
             textured_vertices.push_back(cloud.textureCoords()->getValue(texture_index, 1));
+            textured_vertices.push_back(use_vertex_color_fallback ? 1.0f : 0.0f);
         }
     }
     if (isCancellationRequested(cancellationFlag))

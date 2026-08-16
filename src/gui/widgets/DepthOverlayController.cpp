@@ -94,8 +94,11 @@ void DepthOverlayController::request(
         emit overlayFailed(image_path, QStringLiteral("当前照片没有所选级别的深度图"));
         return;
     }
+    const views::DepthOverlayArtifact resolved_artifact =
+        views::resolveDepthOverlayArtifactPaths(*artifact, _projectPath);
 
-    const QString cache_key = cacheKeyForArtifact(*artifact, level, options, image_path);
+    const QString cache_key = cacheKeyForArtifact(
+        resolved_artifact, level, options, image_path);
     QImage overlay;
     QImage intensity_base;
     if (readCache(cache_key, &overlay, &intensity_base))
@@ -107,7 +110,7 @@ void DepthOverlayController::request(
     const QString project_path = _projectPath;
     xjw::gui::tasks::runGuarded(
         this,
-        [artifact = *artifact, options, image_path, project_path]()
+        [artifact = resolved_artifact, options, image_path, project_path]()
         {
             QImage source_image;
             if (options.showIntensity)

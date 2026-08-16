@@ -791,3 +791,89 @@ PointSelectionPreparation preparePointSelection(
     }
     return result;
 }
+
+PointSelectionPreparation prepareIndexedPointSelection(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const QByteArray &scalarData,
+    const std::vector<PointVertexIndex> &indices,
+    const std::atomic_bool *cancellationFlag)
+{
+    PointSelectionPreparation result;
+    if (indices.empty())
+    {
+        return result;
+    }
+    if (strideBytes < 3 * int(sizeof(float))
+        || strideBytes % int(sizeof(float)) != 0
+        || vertexData.isEmpty()
+        || vertexData.size() % strideBytes != 0
+        || indices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        || isCancellationRequested(cancellationFlag))
+    {
+        return result;
+    }
+
+    const std::size_t point_count = static_cast<std::size_t>(
+        vertexData.size() / strideBytes);
+    const std::size_t compact_count = indices.size();
+    const std::size_t maximum_byte_array_size = static_cast<std::size_t>(
+        std::numeric_limits<qsizetype>::max());
+    if (compact_count > maximum_byte_array_size
+            / static_cast<std::size_t>(strideBytes)
+        || compact_count > maximum_byte_array_size / sizeof(float))
+    {
+        return result;
+    }
+    for (std::size_t index = 0; index < compact_count; ++index)
+    {
+        if (index % kCancellationCheckInterval == 0
+            && isCancellationRequested(cancellationFlag))
+        {
+            return {};
+        }
+        if (indices[index] >= point_count
+            || (index > 0 && indices[index - 1] >= indices[index]))
+        {
+            return {};
+        }
+    }
+
+    const bool has_scalars = scalarData.size()
+        == static_cast<qsizetype>(point_count * sizeof(float));
+    result.indices = indices;
+    result.pointCount = static_cast<int>(compact_count);
+    result.vertexData.resize(
+        static_cast<qsizetype>(result.pointCount) * strideBytes);
+    result.scalarData.resize(
+        static_cast<qsizetype>(result.pointCount) * int(sizeof(float)));
+    char *compact_vertices = result.vertexData.data();
+    float *compact_scalars = reinterpret_cast<float *>(result.scalarData.data());
+    const char *source_vertices = vertexData.constData();
+    const float *source_scalars = has_scalars
+        ? reinterpret_cast<const float *>(scalarData.constData())
+        : nullptr;
+    for (int compact_index = 0; compact_index < result.pointCount; ++compact_index)
+    {
+        if (static_cast<std::size_t>(compact_index)
+                % kCancellationCheckInterval == 0
+            && isCancellationRequested(cancellationFlag))
+        {
+            return {};
+        }
+        const std::size_t source_index = static_cast<std::size_t>(
+            indices[static_cast<std::size_t>(compact_index)]);
+        std::memcpy(
+            compact_vertices + static_cast<qsizetype>(compact_index) * strideBytes,
+            source_vertices + static_cast<qsizetype>(source_index) * strideBytes,
+            static_cast<std::size_t>(strideBytes));
+        compact_scalars[compact_index] = source_scalars
+            ? source_scalars[source_index]
+            : 0.0f;
+    }
+    if (isCancellationRequested(cancellationFlag))
+    {
+        return {};
+    }
+    return result;
+}

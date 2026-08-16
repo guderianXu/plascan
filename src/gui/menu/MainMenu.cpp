@@ -554,7 +554,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         QMenu *imageMenu = ensureSubMenu(_mainWindow,
                                          displayMenu,
                                          QStringLiteral("menuModelDisplayImages"),
-                                         tr("显示图像"));
+                                         tr("相机对齐检查"));
         if (!imageMenu)
         {
             return;
@@ -564,9 +564,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                        imageMenu,
                                                        imageMenu,
                                                        QStringLiteral("actionToggleCameraImages"),
-                                                       tr("显示图像"),
+                                                       tr("相机对齐检查"),
                                                        false);
-        _toggleCameraImagesAct->setToolTip(tr("显示或隐藏与当前模型观察方向最接近的相机图像"));
+        _toggleCameraImagesAct->setToolTip(
+            tr("使用 SfM 相机内外参对齐渲染模型，并叠加对应原始影像"));
 
         imageMenu->addSeparator();
 
@@ -574,17 +575,19 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInForeground"),
-                                                                 tr("在前景中显示"),
+                                                                 tr("半透明叠加"),
                                                                  true);
-        _showCameraImagesInForegroundAct->setToolTip(tr("将当前相机图像绘制在三维模型前方，图像覆盖模型"));
+        _showCameraImagesInForegroundAct->setToolTip(
+            tr("将原始影像以 50% 透明度叠加在相机对齐的模型上"));
 
         _showCameraImagesInBackgroundAct = ensureCheckableAction(_mainWindow,
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInBackground"),
-                                                                 tr("在后景中显示"),
+                                                                 tr("原图作为背景"),
                                                                  false);
-        _showCameraImagesInBackgroundAct->setToolTip(tr("将当前相机图像绘制在三维模型后方，模型覆盖图像"));
+        _showCameraImagesInBackgroundAct->setToolTip(
+            tr("先绘制原始影像，再绘制相机对齐的模型"));
 
         auto *displayLayerGroup =
             imageMenu->findChild<QActionGroup *>(QStringLiteral("actionGroupCameraImageDisplayLayer"));
@@ -609,9 +612,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     imageMenu,
                                                     imageMenu,
                                                     QStringLiteral("actionLockCameraImage"),
-                                                    tr("锁定图像"),
+                                                    tr("锁定检查相机"),
                                                     false);
-        _lockCameraImageAct->setToolTip(tr("固定当前相机图像；模型视角仍可自由旋转"));
+        _lockCameraImageAct->setToolTip(
+            tr("固定当前检查相机；切换照片时不跟随"));
 
         QMenu *viewModeMenu = ensureSubMenu(_mainWindow,
                                             modelMenu,
@@ -892,8 +896,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
 
         _toggleCameraImagesAct->setIcon(makeCameraImageToolbarIcon());
-        _toggleCameraImagesAct->setText(tr("显示图像"));
-        _toggleCameraImagesAct->setToolTip(tr("显示图像"));
+        _toggleCameraImagesAct->setText(tr("相机对齐"));
+        _toggleCameraImagesAct->setToolTip(
+            tr("使用 SfM 相机参数检查原图与模型的重投影对齐"));
 
         auto *imageMenu = new QMenu(_toolBar);
         imageMenu->setObjectName(QStringLiteral("menuToolbarCameraImageVisibility"));

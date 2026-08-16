@@ -89,6 +89,7 @@ private:
     void setupLogDock();          // 初始化控制台 Dock 标题栏与菜单状态同步
     void setupHenanUniversityBrand();
     void setHenanUniversityBrandVisible(bool visible);
+    void updatePropertiesDockForCurrentTab();
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
     void showMatchViewer(const QString &initialImagePath = {}, bool modal = true);
@@ -122,6 +123,8 @@ private:
     QDockWidget *_propertiesDock{};
     QDockWidget *_workDock{};
     QDockWidget *_photosDock{};
+    bool _propertiesDockSuppressed{};
+    bool _propertiesDockVisibleOutsideReference{true};
     SelectionPropertiesWidget *_selectionProperties{};
     WorkPanelWidget *_workPanel{};
     PhotoStripWidget *_photoStrip{};

@@ -645,6 +645,9 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
         connect(_sparseReconstructionManager,
             &ProjectSparseReconstructionManager::atProgressFinished,
             this, &ProjectManager::atProgressFinished);
+        connect(_sparseReconstructionManager,
+            &ProjectSparseReconstructionManager::tiePointResultReady,
+            this, &ProjectManager::tiePointResultReady);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineProgressChanged,
             this, &ProjectManager::demPipelineProgressChanged);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineFinished,
@@ -2843,19 +2846,31 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
             xjw::core::project::depthQualityProfileForModelQuality(
                 settings.value(QStringLiteral("quality")).toString(
                     QStringLiteral("high"))));
+    const QJsonObject project_metadata =
+        _projectData->metadataIncludingResults();
     const QString stored_depth_quality = storedDepthBatchQualityProfile(
-        _projectData->metadata(), depth_source);
+        project_metadata, depth_source);
     const bool stored_depth_quality_insufficient =
         !stored_depth_quality.isEmpty() &&
         xjw::core::project::depthQualityRank(stored_depth_quality) <
             xjw::core::project::depthQualityRank(requested_depth_quality);
+    const auto sparse_scaffold =
+        xjw::gui::project::resolveSparseScaffoldSource(
+            project_metadata,
+            depth_source);
+    const bool allow_sparse_scaffold_fallback =
+        settings.value(QStringLiteral(
+            "tsdfOrbitalSparseScaffoldCompletion")).toBool(true) &&
+        !sparse_scaffold.pointCloudPath.isEmpty() &&
+        !sparse_scaffold.pointsJsonPath.isEmpty();
     const auto stored_depth_compatibility =
         source_data == QStringLiteral("depth_maps") && !depth_source.isEmpty()
             ? xjw::gui::project::assessStoredDepthBatchCompatibility(
-                  _projectData->metadata(),
+                  project_metadata,
                   depth_source,
                   settings.value(QStringLiteral("at_index")).toInt(-1),
-                  settings.value(QStringLiteral("sceneProfile")).toString())
+                  settings.value(QStringLiteral("sceneProfile")).toString(),
+                  allow_sparse_scaffold_fallback)
             : xjw::gui::project::StoredDepthBatchCompatibility{};
     const bool stored_depth_batch_incompatible =
         !depth_source.isEmpty() && !stored_depth_compatibility.compatible;

@@ -2,6 +2,7 @@
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
+#include "MvsSourcePairQualityLoader.h"
 #include "PointCloudInputPreparation.h"
 #include "PointCloudWorkflowConfig.h"
 #include "ProjectMetadataOperations.h"
@@ -71,9 +72,22 @@ struct PointCloudTaskResult
     QJsonObject record;
 };
 
+struct DepthEstimationPreparationResult
+{
+    xjw::core::project::PointCloudInputPreparationResult pointCloudInput;
+    xjw::core::project::MvsSourcePairQualityLoadResult sourcePairQuality;
+};
+
 QString utcNowIso()
 {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+}
+
+QString workflowDialogTitle(bool depthMapsOnly)
+{
+    return depthMapsOnly
+        ? QStringLiteral("生成模型")
+        : QStringLiteral("创建点云");
 }
 
 QString patchMatchBackendText(xjw::mvs::PatchMatchBackend backend)
@@ -300,6 +314,11 @@ QJsonObject depthRecordFromArtifact(const QJsonObject &artifact,
     {
         record[it.key()] = it.value();
     }
+    // mvs_manifest.json is mutable workspace bookkeeping. Persisting it as a
+    // project resource makes background project snapshots read the file while
+    // depth workers atomically replace it, which is a sharing violation on
+    // Windows. All reusable state is already copied into this depth record.
+    record.remove(QStringLiteral("manifest_path"));
     if (record.value(QStringLiteral("raw_depth_path")).toString().isEmpty())
     {
         record[QStringLiteral("raw_depth_path")] =
@@ -374,17 +393,17 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     const QJsonObject &settings,
     bool depth_maps_only)
 {
+    const QString dialog_title = workflowDialogTitle(depth_maps_only);
     if (!_owner || !_projectData || !_projectData->hasProject())
     {
-        failTask(QStringLiteral("请先打开项目，并完成正式空中三角测量。"));
+        failTask(QStringLiteral("请先打开项目，并完成正式空中三角测量。"),
+                 dialog_title);
         return false;
     }
     if (_isRunning)
     {
         QMessageBox::information(_parentWidget,
-                                 depth_maps_only
-                                     ? QStringLiteral("生成模型")
-                                     : QStringLiteral("创建点云"),
+                                 dialog_title,
                                  depth_maps_only
                                      ? QStringLiteral("已有深度图或点云任务正在运行，请等待或先取消当前任务。")
                                      : QStringLiteral("已有点云任务正在运行，请等待或先取消当前任务。"));
@@ -397,14 +416,16 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
         metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
     if (at_index < 0 || at_index >= at_results.size())
     {
-        failTask(QStringLiteral("未找到通过质量门控的正式 SfM/BA 稀疏点云结果。"));
+        failTask(QStringLiteral("未找到通过质量门控的正式 SfM/BA 稀疏点云结果。"),
+                 dialog_title);
         return false;
     }
 
     const QJsonObject at_record = at_results.at(at_index).toObject();
     if (!xjw::gui::project::isProductionSparseResult(at_record))
     {
-        failTask(xjw::gui::project::sparseResultBlockingReason(at_record));
+        failTask(xjw::gui::project::sparseResultBlockingReason(at_record),
+                 dialog_title);
         return false;
     }
 
@@ -441,12 +462,14 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     if (!QFileInfo::exists(context->sparseCloudPath))
     {
         failTask(QStringLiteral("正式空三稀疏点云不存在：%1")
-                     .arg(context->sparseCloudPath));
+                     .arg(context->sparseCloudPath),
+                 dialog_title);
         return false;
     }
     if (context->selectedImages.size() < 2)
     {
-        failTask(QStringLiteral("正式空三结果中的注册影像不足 2 张。"));
+        failTask(QStringLiteral("正式空三结果中的注册影像不足 2 张。"),
+                 dialog_title);
         return false;
     }
 
@@ -462,7 +485,8 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     {
         failTask(view_error.isEmpty()
                      ? QStringLiteral("部分注册影像缺少有效相机参数。")
-                     : view_error);
+                     : view_error,
+                 dialog_title);
         return false;
     }
 
@@ -504,7 +528,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
                 context->request.processingDevice);
         if (!unavailable_reason.isEmpty())
         {
-            failTask(unavailable_reason);
+            failTask(unavailable_reason, dialog_title);
             return false;
         }
     }
@@ -521,7 +545,8 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
     if (context->outputDir.isEmpty() || !QDir().mkpath(context->outputDir))
     {
-        failTask(QStringLiteral("无法创建 MVS 输出目录：%1").arg(context->outputDir));
+        failTask(QStringLiteral("无法创建 MVS 输出目录：%1").arg(context->outputDir),
+                 dialog_title);
         return false;
     }
 
@@ -562,15 +587,25 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
         this,
         [context]()
         {
-            return xjw::core::project::preparePointCloudInput(
+            DepthEstimationPreparationResult result;
+            result.pointCloudInput = xjw::core::project::preparePointCloudInput(
                 context->sparseCloudPath,
                 context->views,
                 context->request.processingDevice);
+            if (result.pointCloudInput.ok)
+            {
+                result.sourcePairQuality =
+                    xjw::core::project::loadMvsSourcePairQualities(
+                        xjw::common::project::ProjectIO::imageMatchOutputDir(
+                            context->session.projectPath),
+                        context->selectedImages);
+            }
+            return result;
         },
         [context](
             ProjectPointCloudWorkflowController *self,
             xjw::gui::tasks::TaskOutcome<
-                xjw::core::project::PointCloudInputPreparationResult> outcome)
+                DepthEstimationPreparationResult> outcome)
         {
             if (!self->_owner ||
                 !self->_owner->isCurrentSession(context->session))
@@ -582,7 +617,8 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
             {
                 self->failTask(outcome.errorMessage.isEmpty()
                                    ? QStringLiteral("稀疏点云预处理失败。")
-                                   : outcome.errorMessage);
+                                   : outcome.errorMessage,
+                               workflowDialogTitle(context->depthMapsOnly));
                 return;
             }
             if (self->_cancelFlag &&
@@ -592,10 +628,12 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                 return;
             }
 
-            auto prepared = std::move(*outcome.value);
+            auto preparation = std::move(*outcome.value);
+            auto prepared = std::move(preparation.pointCloudInput);
             if (!prepared.ok)
             {
-                self->failTask(prepared.errorMessage);
+                self->failTask(prepared.errorMessage,
+                               workflowDialogTitle(context->depthMapsOnly));
                 return;
             }
 
@@ -610,6 +648,30 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
             config.saveIntermediateDepthMaps = true;
             config.intermediateDir =
                 xjw::common::io::toUtf8Path(context->outputDir);
+            const auto &pair_quality = preparation.sourcePairQuality;
+            LOG_INFO(QStringLiteral(
+                         "[MVS] 源像对审计：files=%1 pairs=%2 verified=%3 "
+                         "failed=%4 missing_stats=%5 incompatible=%6")
+                         .arg(pair_quality.matchFileCount)
+                         .arg(pair_quality.catalogPairCount)
+                         .arg(pair_quality.verifiedPairCount)
+                         .arg(pair_quality.failedPairCount)
+                         .arg(pair_quality.missingStatisticsPairCount)
+                         .arg(pair_quality.incompatibleVariantCount));
+            if (pair_quality.matchFileCount <= 0)
+            {
+                LOG_WARN(QStringLiteral(
+                    "[MVS] 项目匹配目录没有可审计的 `.pimatch` 分片，"
+                    "源视图将回退到稀疏轨迹几何。"));
+            }
+            else if (pair_quality.verifiedPairCount <= 0)
+            {
+                LOG_WARN(QStringLiteral(
+                    "[MVS] 当前影像集合没有通过几何验证的 `.pimatch` 像对，"
+                    "源视图将回退到稀疏轨迹几何。"));
+            }
+            xjw::core::project::applyMvsSourcePairQualities(
+                &config, std::move(preparation.sourcePairQuality));
             generator->setViews(context->views);
             generator->setSparseCloud(prepared.cloud);
             generator->setConfig(config);
@@ -680,7 +742,8 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                             self->failTask(
                                 context->depthError.isEmpty()
                                     ? QStringLiteral("深度图估计失败或已取消。")
-                                    : context->depthError);
+                                    : context->depthError,
+                                workflowDialogTitle(context->depthMapsOnly));
                             return;
                         }
                         if (context->saveAfterEachStep && self->_projectData)
@@ -726,13 +789,21 @@ void ProjectPointCloudWorkflowController::startFusion(
         return;
     }
 
-    const auto stored = xjw::core::project::collectStoredDepthFramesForDirectory(
+    const auto discovered = xjw::core::project::collectStoredDepthFramesForDirectory(
         _projectData->metadata(), context->outputDir);
-    if (!stored.status.ok || stored.frames.size() < 2)
+    if (!discovered.status.ok || discovered.frames.size() < 2)
     {
-        failTask(stored.status.ok
+        failTask(discovered.status.ok
                      ? QStringLiteral("可融合深度图不足 2 帧。")
-                     : stored.status.errorMessage);
+                     : discovered.status.errorMessage);
+        return;
+    }
+
+    const auto stored =
+        xjw::core::project::selectFusionEligibleStoredDepthFrames(discovered);
+    if (!stored.status.ok)
+    {
+        failTask(stored.status.errorMessage);
         return;
     }
 

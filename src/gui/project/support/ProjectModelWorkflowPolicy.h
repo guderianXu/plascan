@@ -17,6 +17,12 @@ struct StoredDepthBatchCompatibility
     QString reason;
 };
 
+struct SparseScaffoldSource
+{
+    QString pointCloudPath;
+    QString pointsJsonPath;
+};
+
 inline int recommendedInteractiveModelWorkerCount(int ideal_thread_count)
 {
     const int available_threads = ideal_thread_count > 0
@@ -34,6 +40,11 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QJsonObject &project_metadata,
     const QString &depth_map_source_path = QString(),
     int aerial_triangulation_result_index = -1,
-    const QString &expected_scene_profile = QString());
+    const QString &expected_scene_profile = QString(),
+    bool allow_orbital_sparse_scaffold_fallback = false);
+
+SparseScaffoldSource resolveSparseScaffoldSource(
+    const QJsonObject &project_metadata,
+    const QString &depth_map_source_path);
 
 } // namespace xjw::gui::project

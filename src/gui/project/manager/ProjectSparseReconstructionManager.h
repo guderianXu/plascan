@@ -31,6 +31,9 @@ public:
 signals:
     void atProgressChanged(const QString &stage, int percent);
     void atProgressFinished(bool success);
+    // 当前正式连接点成果被替换后发出，供三维视图立即切换到新点云。
+    void tiePointResultReady(const QString &sparseCloudPath,
+                             const QString &sidecarPath);
 
 private:
     void finalizeTriangulationSuccess(const xjw::core::project::TriangulationServiceResult &result,

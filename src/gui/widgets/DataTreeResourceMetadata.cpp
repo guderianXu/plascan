@@ -111,10 +111,26 @@ bool isDisplayableMeshResult(const QJsonObject &record)
         return false;
     }
 
-    return !record.value(QStringLiteral("final_model_path")).toString().isEmpty()
-        || !record.value(QStringLiteral("model_obj")).toString().isEmpty()
-        || !record.value(QStringLiteral("model_ply")).toString().isEmpty()
-        || !record.value(QStringLiteral("mesh_ply")).toString().isEmpty();
+    return !displayableMeshAssetPaths(record).isEmpty();
+}
+
+QStringList displayableMeshAssetPaths(const QJsonObject &record)
+{
+    QStringList paths;
+    const auto append_unique = [&paths](const QString &value)
+    {
+        const QString path = value.trimmed();
+        if (!path.isEmpty() && !paths.contains(path, Qt::CaseInsensitive))
+        {
+            paths.push_back(path);
+        }
+    };
+
+    append_unique(record.value(QStringLiteral("model_ply")).toString());
+    append_unique(record.value(QStringLiteral("mesh_ply")).toString());
+    append_unique(record.value(QStringLiteral("model_obj")).toString());
+    append_unique(record.value(QStringLiteral("final_model_path")).toString());
+    return paths;
 }
 
 int displayableMeshResultCount(const QJsonArray &modelResults)
@@ -126,9 +142,10 @@ int displayableMeshResultCount(const QJsonArray &modelResults)
         {
             continue;
         }
-        if (isDisplayableMeshResult(value.toObject()))
+        const QJsonObject record = value.toObject();
+        if (isDisplayableMeshResult(record))
         {
-            ++count;
+            count += displayableMeshAssetPaths(record).size();
         }
     }
     return count;

@@ -4,6 +4,12 @@
 #include <QString>
 #include <QVector>
 
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <vector>
+
 namespace xjw::gui::tie_points
 {
 
@@ -31,11 +37,62 @@ struct ImageCountMetadata
     bool isValidFor(qsizetype pointCount) const;
 };
 
+enum class QualityCriterion
+{
+    ReprojectionError,
+    ImageCount,
+    MinimumTriangulationAngle
+};
+
+struct PrunePreviewQuery
+{
+    QualityCriterion criterion = QualityCriterion::ReprojectionError;
+    double threshold = 0.0;
+
+    bool isValid() const;
+};
+
+struct QualityMetadata
+{
+    QVector<double> reprojectionErrors;
+    QVector<int> imageCounts;
+    QVector<double> minimumTriangulationAngles;
+    ScalarRange reprojectionErrorRange;
+    ScalarRange imageCountRange;
+    ScalarRange minimumTriangulationAngleRange;
+    qsizetype sourcePointCount = 0;
+    QString errorMessage;
+
+    bool isValidFor(qsizetype pointCount) const;
+    bool hasCriterion(QualityCriterion criterion,
+                      qsizetype pointCount = -1) const;
+    ScalarRange range(QualityCriterion criterion) const;
+};
+
+struct PruneCandidateQueryResult
+{
+    std::vector<std::uint32_t> indices;
+    qsizetype candidateCount = 0;
+    QString errorMessage;
+
+    bool succeeded() const { return errorMessage.isEmpty(); }
+};
+
 QColor elevationColor(double elevation, const ScalarRange &range);
 QColor imageCountColor(int imageCount, const ScalarRange &range);
 QColor scalarRampColor(double normalizedValue);
 float pointSizeForMode(ColorMode mode);
 QString inferSidecarPath(const QString &pointCloudPath);
 ImageCountMetadata loadImageCountMetadata(const QString &sidecarPath);
+QualityMetadata loadQualityMetadata(
+    const QString &sidecarPath,
+    const std::atomic_bool *cancellationFlag = nullptr);
+PruneCandidateQueryResult queryPruneCandidates(
+    const QualityMetadata &metadata,
+    const PrunePreviewQuery &query,
+    qsizetype pointCount,
+    const std::atomic_bool *cancellationFlag = nullptr,
+    std::size_t maximumReturnedIndices =
+        std::numeric_limits<std::size_t>::max());
 
 } // namespace xjw::gui::tie_points

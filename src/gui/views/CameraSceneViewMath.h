@@ -5,6 +5,8 @@
 #include <QMatrix4x4>
 #include <QPointF>
 #include <QQuaternion>
+#include <QRectF>
+#include <QSize>
 #include <QVector>
 #include <QVector2D>
 #include <QVector3D>
@@ -130,6 +132,15 @@ QMatrix4x4 calibratedProjection(float focalX,
                                 float farPlane,
                                 int uAxisSign,
                                 int vAxisSign);
+
+// 将 SfM 的 camera-to-world 外参转换为 Qt/OpenGL 视图矩阵。
+// 输出坐标使用相机前方为 -Z，并保留 SfM 像素投影所需的 X/Y/Z 比值。
+QMatrix4x4 calibratedCameraView(const QVector3D &cameraCenter,
+                                const QMatrix3x3 &cameraToWorld,
+                                bool depthAxisFlipped);
+
+// 在渲染目标中按原始影像宽高比计算居中的 letterbox/pillarbox 视口。
+QRectF fittedImageViewport(const QSize &renderSize, const QSize &imageSize);
 
 QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
                                            const QVector3D &right,

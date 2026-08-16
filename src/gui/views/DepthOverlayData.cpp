@@ -212,12 +212,15 @@ QString resolvedArtifactPath(const QString &path, const QString &project_path)
     {
         return {};
     }
-    const QFileInfo artifact_info(QDir::fromNativeSeparators(path));
+    QString portable_path = path.trimmed();
+    portable_path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    portable_path = QDir::cleanPath(portable_path);
+    const QFileInfo artifact_info(portable_path);
     if (artifact_info.isAbsolute() || project_path.trimmed().isEmpty())
     {
         return artifact_info.absoluteFilePath();
     }
-    return QFileInfo(QFileInfo(project_path).absoluteDir(), path).absoluteFilePath();
+    return QFileInfo(QFileInfo(project_path).absoluteDir(), portable_path).absoluteFilePath();
 }
 
 QImage buildIntensityBase(const QImage &source_image,
@@ -311,6 +314,17 @@ std::optional<DepthOverlayArtifact> resolveDepthOverlayArtifact(
     return std::nullopt;
 }
 
+DepthOverlayArtifact resolveDepthOverlayArtifactPaths(
+    const DepthOverlayArtifact &artifact,
+    const QString &project_path)
+{
+    DepthOverlayArtifact resolved = artifact;
+    resolved.rawDepthPath = resolvedArtifactPath(artifact.rawDepthPath, project_path);
+    resolved.validMaskPath = resolvedArtifactPath(artifact.validMaskPath, project_path);
+    resolved.previewPath = resolvedArtifactPath(artifact.previewPath, project_path);
+    return resolved;
+}
+
 DepthOverlayAvailability resolveDepthOverlayAvailability(
     const QJsonObject &project_metadata,
     const QString &image_path,
@@ -328,9 +342,10 @@ DepthOverlayAvailability resolveDepthOverlayAvailability(
     const auto artifact = resolveDepthOverlayArtifact(project_metadata, image_path, level);
     if (artifact)
     {
-        const QString raw_path = resolvedArtifactPath(artifact->rawDepthPath, project_path);
-        const QString mask_path = resolvedArtifactPath(artifact->validMaskPath, project_path);
-        if (!QFileInfo::exists(raw_path) || !QFileInfo::exists(mask_path))
+        const DepthOverlayArtifact resolved_artifact =
+            resolveDepthOverlayArtifactPaths(*artifact, project_path);
+        if (!QFileInfo::exists(resolved_artifact.rawDepthPath) ||
+            !QFileInfo::exists(resolved_artifact.validMaskPath))
         {
             result.code = DepthOverlayAvailabilityCode::ArtifactMissing;
             result.reason = QStringLiteral("该级别的深度文件或有效掩码不存在，请重新生成深度图。");
