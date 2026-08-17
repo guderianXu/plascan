@@ -29,9 +29,11 @@ float cameraHalfExtent()
 void main()
 {
     vec3 direction = normalize(instanceForward);
+    float halfExtent = cameraHalfExtent();
+    vec3 segmentOrigin = instanceCenter + instanceRight * halfExtent;
     vec3 worldPosition = gl_VertexIndex == 0
-        ? instanceCenter
-        : instanceCenter + direction * cameraHalfExtent() * instanceUvRect.w;
+        ? segmentOrigin
+        : segmentOrigin + direction * halfExtent * instanceUvRect.w;
     vColor = instanceUvRect.xyz;
     gl_Position = ubuf.uMVP * vec4(worldPosition, 1.0);
 }

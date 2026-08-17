@@ -240,9 +240,8 @@ private:
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
     QPointF projectToScreen(const QVector3D &p, bool *ok = nullptr) const;
     SceneMatrices sceneMatrices() const;
-    bool cameraAlignmentActive() const;
+    bool cameraImageRegistrationActive() const;
     QSize displayedCameraImageSize() const;
-    QRectF cameraAlignmentViewport(const QSize &renderSize) const;
 
     // 将向量从本地空间旋转到当前视图空间（应用 _viewRot）
     QVector3D applyViewRotation(const QVector3D &v) const;
@@ -454,7 +453,6 @@ private:
 
     struct RhiImagePipelineSet
     {
-        QScopedPointer<QRhiBuffer> vertexBuffer;
         QScopedPointer<QRhiBuffer> uniformBuffer;
         QScopedPointer<QRhiTexture> texture;
         QScopedPointer<QRhiSampler> sampler;
@@ -462,8 +460,6 @@ private:
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
         QSize textureSize;
         QString uploadedImageKey;
-        QString uploadedGeometryKey;
-        bool geometryDirty = true;
         bool pipelineDirty = true;
     };
 
@@ -539,12 +535,15 @@ private:
     static_assert(offsetof(SceneUniforms, scalarRange) == 60 * sizeof(float));
     static_assert(sizeof(SceneUniforms) == 64 * sizeof(float));
 
-    struct alignas(16) ImagePlaneUniforms
+    struct alignas(16) ProjectedImageUniforms
     {
         std::array<float, 16> mvp{};
+        std::array<float, 16> sourceView{};
+        std::array<float, 4> intrinsics{};
+        std::array<float, 4> imageGeometry{};
         std::array<float, 4> composition{};
     };
-    static_assert(sizeof(ImagePlaneUniforms) == 20 * sizeof(float));
+    static_assert(sizeof(ProjectedImageUniforms) == 44 * sizeof(float));
 
     struct alignas(16) CameraPlaneUniforms
     {
@@ -752,7 +751,7 @@ private:
     bool _showGizmo = true;                       // 操控球是否可见（默认可见）
     bool _showCameras = true;                     // 相机平面卡片和文件名标签是否可见（默认可见）
     bool _showCameraThumbnails = true;
-    bool _showCameraLocalAxes = false;
+    bool _showCameraLocalAxes = true;
     bool _showCameraImage = false;
     CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Foreground;
     bool _cameraImageLocked = false;

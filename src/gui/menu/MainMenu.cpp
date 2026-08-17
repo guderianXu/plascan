@@ -554,7 +554,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         QMenu *imageMenu = ensureSubMenu(_mainWindow,
                                          displayMenu,
                                          QStringLiteral("menuModelDisplayImages"),
-                                         tr("相机对齐检查"));
+                                         tr("模型视角影像配准"));
         if (!imageMenu)
         {
             return;
@@ -564,10 +564,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                        imageMenu,
                                                        imageMenu,
                                                        QStringLiteral("actionToggleCameraImages"),
-                                                       tr("相机对齐检查"),
+                                                       tr("自动匹配影像"),
                                                        false);
         _toggleCameraImagesAct->setToolTip(
-            tr("使用 SfM 相机内外参对齐渲染模型，并叠加对应原始影像"));
+            tr("根据当前模型观察方向自动选择最接近的 SfM 照片，并调整照片大小和方向完成配准"));
 
         imageMenu->addSeparator();
 
@@ -575,19 +575,19 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInForeground"),
-                                                                 tr("半透明叠加"),
+                                                                 tr("半透明表面叠加"),
                                                                  true);
         _showCameraImagesInForegroundAct->setToolTip(
-            tr("将原始影像以 50% 透明度叠加在相机对齐的模型上"));
+            tr("将自动匹配的照片按 SfM 相机投影到真实网格表面，并以 50% 透明度叠加"));
 
         _showCameraImagesInBackgroundAct = ensureCheckableAction(_mainWindow,
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInBackground"),
-                                                                 tr("原图作为背景"),
+                                                                 tr("原图表面投影"),
                                                                  false);
         _showCameraImagesInBackgroundAct->setToolTip(
-            tr("先绘制原始影像，再绘制相机对齐的模型"));
+            tr("将自动匹配的照片不透明投影到真实网格表面"));
 
         auto *displayLayerGroup =
             imageMenu->findChild<QActionGroup *>(QStringLiteral("actionGroupCameraImageDisplayLayer"));
@@ -612,10 +612,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     imageMenu,
                                                     imageMenu,
                                                     QStringLiteral("actionLockCameraImage"),
-                                                    tr("锁定检查相机"),
+                                                    tr("锁定当前影像"),
                                                     false);
         _lockCameraImageAct->setToolTip(
-            tr("固定当前检查相机；切换照片时不跟随"));
+            tr("固定当前匹配照片；模型仍可自由旋转、平移和缩放"));
 
         QMenu *viewModeMenu = ensureSubMenu(_mainWindow,
                                             modelMenu,
@@ -868,7 +868,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     nullptr,
                                                     QStringLiteral("actionToggleLocalAxes"),
                                                     tr("显示本地轴"),
-                                                    false);
+                                                    true);
         _toggleLocalAxesAct->setToolTip(tr("显示或隐藏每个相机的本地 X/Y/Z 坐标轴"));
 
         auto *cameraMenu = new QMenu(_toolBar);
@@ -896,9 +896,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
 
         _toggleCameraImagesAct->setIcon(makeCameraImageToolbarIcon());
-        _toggleCameraImagesAct->setText(tr("相机对齐"));
+        _toggleCameraImagesAct->setText(tr("影像配准"));
         _toggleCameraImagesAct->setToolTip(
-            tr("使用 SfM 相机参数检查原图与模型的重投影对齐"));
+            tr("按当前模型视角自动匹配并配准 SfM 原始影像"));
 
         auto *imageMenu = new QMenu(_toolBar);
         imageMenu->setObjectName(QStringLiteral("menuToolbarCameraImageVisibility"));

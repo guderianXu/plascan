@@ -67,6 +67,7 @@ namespace
 
 constexpr int kCameraThumbnailWidth = 220;
 constexpr int kCameraThumbnailHeight = 160;
+constexpr double kCameraCardHalfExtentPixels = 44.0;
 constexpr int kSmallCameraAtlasSize = 2048;
 constexpr int kLargeCameraAtlasSize = 4096;
 constexpr int kSmallCameraAtlasCapacity =
@@ -550,7 +551,6 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
     _cameraResourceFailed = false;
     _activeImageResourceFailed = false;
     _renderWarning.clear();
-    _imagePipeline.geometryDirty = true;
     _poseIndexByNormalizedPath.clear();
     _poseIndexByNormalizedPath.reserve(_poses.size());
     for (qsizetype index = 0; index < _poses.size(); ++index)
@@ -702,17 +702,7 @@ void CameraSceneWidget::setShowCameraImage(bool show)
             _activeImageResourceFailed = false;
             _imagePipeline.pipelineDirty = true;
             _pipelinesDirty = true;
-            const int highlighted_pose_index = _poseIndexByNormalizedPath.value(
-                _highlightedCameraPath, -1);
-            if (!_cameraImageLocked && highlighted_pose_index >= 0)
-            {
-                _activeCameraImagePoseIndex = highlighted_pose_index;
-                _imagePipeline.geometryDirty = true;
-            }
-            else
-            {
-                updateActiveCameraForView();
-            }
+            updateActiveCameraForView();
             if (_cameraImageLocked)
             {
                 refreshLockedCameraImage();
@@ -744,7 +734,6 @@ void CameraSceneWidget::setCameraImageLocked(bool locked)
     }
 
     _cameraImageLocked = locked;
-    _imagePipeline.geometryDirty = true;
     if (_cameraImageLocked)
     {
         refreshLockedCameraImage();
@@ -762,24 +751,12 @@ void CameraSceneWidget::setCameraImageLocked(bool locked)
 void CameraSceneWidget::setHighlightedCameraPath(const QString &imagePath)
 {
     const QString normalizedPath = normalizedCameraPath(imagePath);
-    const int highlighted_pose_index =
-        _poseIndexByNormalizedPath.value(normalizedPath, -1);
-    const bool alignment_camera_changed = _showCameraImage
-        && !_cameraImageLocked
-        && highlighted_pose_index >= 0
-        && highlighted_pose_index != _activeCameraImagePoseIndex;
-    if (_highlightedCameraPath == normalizedPath && !alignment_camera_changed)
+    if (_highlightedCameraPath == normalizedPath)
     {
         return;
     }
 
     _highlightedCameraPath = normalizedPath;
-    if (alignment_camera_changed)
-    {
-        _activeCameraImagePoseIndex = highlighted_pose_index;
-        _activeImageResourceFailed = false;
-        _imagePipeline.geometryDirty = true;
-    }
     _thumbnailPipeline.instancesDirty = true;
     updateCameraOverlay();
 }
@@ -832,7 +809,6 @@ void CameraSceneWidget::clearProjectScene()
     _cameraThumbnailLoadCompleted = 0;
     _activeCameraImagePoseIndex = -1;
     _lockedCameraImagePoseIndex = -1;
-    _imagePipeline.geometryDirty = true;
     _highlightedCameraPath.clear();
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = false;
@@ -919,7 +895,6 @@ void CameraSceneWidget::applyCloudSpatialSummary(const CloudSpatialSummary &summ
 {
     _cloudSpatialSummary = summary;
     _cacheDirty = true;
-    _imagePipeline.geometryDirty = true;
 }
 
 void CameraSceneWidget::applyPointPreparation(PointRenderPreparation preparation)
@@ -1942,40 +1917,6 @@ CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
 
-    if (cameraAlignmentActive())
-    {
-        const CameraPose &pose = _poses.at(displayedCameraImagePoseIndex());
-        const QSize image_size = displayedCameraImageSize();
-        const QVector3D forward =
-            xjw::gui::camera_scene::cameraForwardDirection(
-                pose.rotation, pose.depthAxisFlipped);
-        const float center_depth = QVector3D::dotProduct(
-            center - pose.center, forward);
-        const float near_plane = qMax(
-            1.0e-4f,
-            qMin(qMax(center_depth, 1.0f) * 0.01f,
-                 qMax(radius, 1.0e-2f) * 0.01f));
-        const float far_plane = qMax(
-            near_plane + 1.0f,
-            qMax(center_depth, 0.0f) + qMax(radius * 8.0f, 1.0f));
-
-        SceneMatrices matrices;
-        matrices.modelView = xjw::gui::camera_scene::calibratedCameraView(
-            pose.center, pose.rotation, pose.depthAxisFlipped);
-        matrices.projection = xjw::gui::camera_scene::calibratedProjection(
-            pose.focalX,
-            pose.focalY,
-            pose.principalX,
-            pose.principalY,
-            image_size.width(),
-            image_size.height(),
-            near_plane,
-            far_plane,
-            pose.uAxisSign,
-            pose.vAxisSign);
-        return matrices;
-    }
-
     const float distance = static_cast<float>(
         static_cast<double>(radius) * 3.2 / _zoomScale);
     const float nearPlane = distance * 0.001f;
@@ -1999,10 +1940,11 @@ CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const
     return matrices;
 }
 
-bool CameraSceneWidget::cameraAlignmentActive() const
+bool CameraSceneWidget::cameraImageRegistrationActive() const
 {
     const int pose_index = displayedCameraImagePoseIndex();
-    if (!_showCameraImage || pose_index < 0 || pose_index >= _poses.size())
+    if (!_showCameraImage || !_meshHasFaces || _meshIsPointPreview
+        || pose_index < 0 || pose_index >= _poses.size())
     {
         return false;
     }
@@ -2019,7 +1961,8 @@ bool CameraSceneWidget::cameraAlignmentActive() const
 QSize CameraSceneWidget::displayedCameraImageSize() const
 {
     const int pose_index = displayedCameraImagePoseIndex();
-    if (pose_index < 0 || pose_index >= _poses.size())
+    if (!_meshHasFaces || _meshIsPointPreview
+        || pose_index < 0 || pose_index >= _poses.size())
     {
         return {};
     }
@@ -2034,16 +1977,6 @@ QSize CameraSceneWidget::displayedCameraImageSize() const
         pose.imagePath, CameraImagePlaneMode::Image).size();
 }
 
-QRectF CameraSceneWidget::cameraAlignmentViewport(const QSize &renderSize) const
-{
-    if (!cameraAlignmentActive())
-    {
-        return QRectF(QPointF(), QSizeF(renderSize));
-    }
-    return xjw::gui::camera_scene::fittedImageViewport(
-        renderSize, displayedCameraImageSize());
-}
-
 QPointF CameraSceneWidget::projectToScreen(const QVector3D &p, bool *ok) const
 {
     const SceneMatrices matrices = sceneMatrices();
@@ -2054,16 +1987,10 @@ QPointF CameraSceneWidget::projectToScreen(const QVector3D &p, bool *ok) const
     }
     QVector3D ndc(clip.x() / clip.w(), clip.y() / clip.w(), clip.z() / clip.w());
     if (ok) *ok = true;
-    const QRectF viewport = cameraAlignmentViewport(size());
-    const QPointF scene_offset = cameraAlignmentActive()
-        ? QPointF()
-        : _sceneOffsetPx;
-    const float sx = float(viewport.left()
-        + (ndc.x() * 0.5f + 0.5f) * viewport.width()
-        + scene_offset.x());
-    const float sy = float(viewport.top()
-        + (1.0f - (ndc.y() * 0.5f + 0.5f)) * viewport.height()
-        + scene_offset.y());
+    const float sx = float((ndc.x() * 0.5f + 0.5f) * width()
+        + _sceneOffsetPx.x());
+    const float sy = float((1.0f - (ndc.y() * 0.5f + 0.5f)) * height()
+        + _sceneOffsetPx.y());
     return QPointF(sx, sy);
 }
 
@@ -2117,7 +2044,7 @@ float CameraSceneWidget::cameraImagePlaneHalfExtent(
             height(),
             _zoomScale,
             45.0f,
-            34.0);
+            kCameraCardHalfExtentPixels);
     if (screenScaledExtent > 0.0f)
     {
         return screenScaledExtent;
@@ -2477,9 +2404,9 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
         }
     }
     if (result.mode == CameraImagePlaneMode::Image
-        || (image_dimensions_changed && pose_index == displayedCameraImagePoseIndex()))
+        || (image_dimensions_changed
+            && pose_index == displayedCameraImagePoseIndex()))
     {
-        _imagePipeline.geometryDirty = true;
         updateCursor();
     }
     if (result.mode == CameraImagePlaneMode::Thumbnail)
@@ -2555,7 +2482,6 @@ void CameraSceneWidget::updateActiveCameraForView()
     if (_activeCameraImagePoseIndex != selected_pose_index)
     {
         _activeCameraImagePoseIndex = selected_pose_index;
-        _imagePipeline.geometryDirty = true;
     }
 }
 
@@ -2594,14 +2520,9 @@ void CameraSceneWidget::refreshLockedCameraImage()
     }
 
     const CameraPose &pose = _poses.at(poseIndex);
-    const QString previous_path = _lockedCameraImagePath;
     _lockedCameraImagePath = pose.imagePath;
     _lockedCameraImageName = pose.name;
     _lockedCameraImagePoseIndex = poseIndex;
-    if (normalizedCameraPath(previous_path) != normalizedCameraPath(_lockedCameraImagePath))
-    {
-        _imagePipeline.geometryDirty = true;
-    }
 }
 
 void CameraSceneWidget::drawFloorPivotCross(QPainter &painter) const
@@ -2646,7 +2567,7 @@ bool CameraSceneWidget::cameraDirectionLeaderSegment(const CameraPose &pose,
     // 使用相同 MVP 变换。卡片随后写入深度缓冲并遮住中心部分，留下从
     // 照片平面边缘自然延伸的反向光轴，避免二维覆盖层缩放后产生脱节。
     *start = pose.center;
-    *end = pose.center - forward.normalized() * planeHalfExtent * 1.35f;
+    *end = pose.center - forward.normalized() * planeHalfExtent * 0.75f;
     return true;
 }
 
@@ -2821,12 +2742,6 @@ void CameraSceneWidget::clampSceneOffset()
 //   - 默认              → 开放手型光标
 void CameraSceneWidget::updateCursor()
 {
-    if (cameraAlignmentActive())
-    {
-        setCursor(Qt::ArrowCursor);
-        return;
-    }
-
     if (_manualPruneMode && _manualSelecting)
     {
         setCursor(Qt::CrossCursor);
@@ -3012,14 +2927,11 @@ void CameraSceneWidget::releaseImagePipelineResources()
 {
     _imagePipeline.pipeline.reset();
     _imagePipeline.bindings.reset();
-    _imagePipeline.vertexBuffer.reset();
     _imagePipeline.uniformBuffer.reset();
     _imagePipeline.texture.reset();
     _imagePipeline.sampler.reset();
     _imagePipeline.textureSize = QSize();
     _imagePipeline.uploadedImageKey.clear();
-    _imagePipeline.uploadedGeometryKey.clear();
-    _imagePipeline.geometryDirty = true;
     _imagePipeline.pipelineDirty = true;
 }
 
@@ -3077,8 +2989,6 @@ void CameraSceneWidget::rollbackResourceUpdateState()
 
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _imagePipeline.uploadedImageKey.clear();
-    _imagePipeline.uploadedGeometryKey.clear();
-    _imagePipeline.geometryDirty = true;
     _thumbnailPoseIndicesPendingCommit.clear();
     _thumbnailCacheKeysPendingCommit.clear();
     releaseCameraThumbnailPipelineResources();
@@ -4228,21 +4138,12 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         return true;
     }
 
-    if (!_imagePipeline.vertexBuffer)
-    {
-        _imagePipeline.vertexBuffer.reset(rhi()->newBuffer(
-            QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, 6 * 5 * sizeof(float)));
-        if (!_imagePipeline.vertexBuffer->create())
-        {
-            releaseImagePipelineResources();
-            _renderError = QStringLiteral("GPU 照片顶点缓冲创建失败。");
-            return false;
-        }
-    }
     if (!_imagePipeline.uniformBuffer)
     {
         _imagePipeline.uniformBuffer.reset(rhi()->newBuffer(
-            QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(ImagePlaneUniforms)));
+            QRhiBuffer::Dynamic,
+            QRhiBuffer::UniformBuffer,
+            sizeof(ProjectedImageUniforms)));
         if (!_imagePipeline.uniformBuffer->create())
         {
             releaseImagePipelineResources();
@@ -4270,30 +4171,13 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     QImage texture_upload_image;
     if (texture_upload_pending)
     {
-        // 源图作为屏幕空间检查层使用；统一上传为不带源 alpha 的 RGBX，
+        // 照片由网格片元按 SfM 相机参数反查，源 alpha 不参与覆盖范围；
         // 最终透明度由合成 uniform 控制。
         texture_upload_image = image;
         if (rhi()->isYUpInNDC())
         {
             texture_upload_image = texture_upload_image.mirrored();
         }
-    }
-
-    const bool geometry_upload_pending = _imagePipeline.geometryDirty
-        || _imagePipeline.uploadedGeometryKey != image_key;
-    std::array<float, 30> geometry_vertices{};
-    if (geometry_upload_pending)
-    {
-        // 影像与模型共享同一个 fitted viewport。该四边形直接覆盖 NDC，
-        // 不再假设模型位于某个单一世界深度平面。
-        geometry_vertices = {
-             1.0f,  1.0f, 0.0f, 1.0f, 0.0f,
-            -1.0f,  1.0f, 0.0f, 0.0f, 0.0f,
-            -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,
-             1.0f,  1.0f, 0.0f, 1.0f, 0.0f,
-            -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,
-             1.0f, -1.0f, 0.0f, 1.0f, 1.0f,
-        };
     }
 
     if (!_imagePipeline.sampler)
@@ -4315,24 +4199,12 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
                                   updates,
                                   image_key,
                                   texture_upload_pending,
-                                  texture_upload_image,
-                                  geometry_upload_pending,
-                                  geometry_vertices]()
+                                  texture_upload_image]()
     {
         if (texture_upload_pending)
         {
             updates->uploadTexture(_imagePipeline.texture.data(), texture_upload_image);
             _imagePipeline.uploadedImageKey = image_key;
-        }
-        if (geometry_upload_pending)
-        {
-            updates->updateDynamicBuffer(
-                _imagePipeline.vertexBuffer.data(),
-                0,
-                sizeof(geometry_vertices),
-                geometry_vertices.data());
-            _imagePipeline.uploadedGeometryKey = image_key;
-            _imagePipeline.geometryDirty = false;
         }
     };
 
@@ -4380,10 +4252,10 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     }
 
     QRhiVertexInputLayout input_layout;
-    input_layout.setBindings({QRhiVertexInputBinding(5 * sizeof(float))});
+    input_layout.setBindings({QRhiVertexInputBinding(
+        quint32(_meshBuffer.strideBytes))});
     input_layout.setAttributes({
         QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
-        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 3 * sizeof(float)),
     });
 
     _imagePipeline.pipeline.reset(rhi()->newGraphicsPipeline());
@@ -4396,8 +4268,9 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     _imagePipeline.pipeline->setShaderResourceBindings(_imagePipeline.bindings.data());
     _imagePipeline.pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     _imagePipeline.pipeline->setSampleCount(sampleCount());
-    _imagePipeline.pipeline->setDepthTest(false);
+    _imagePipeline.pipeline->setDepthTest(true);
     _imagePipeline.pipeline->setDepthWrite(false);
+    _imagePipeline.pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
     _imagePipeline.pipeline->setCullMode(QRhiGraphicsPipeline::None);
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
@@ -4768,8 +4641,8 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
             _renderError = error;
             return false;
         }
-        const QShader image_fragment_shader = loadSceneShader(
-            QStringLiteral(":/shaders/camera_scene_image.frag.qsb"), &error);
+        const QShader camera_fragment_shader = loadSceneShader(
+            QStringLiteral(":/shaders/camera_scene_camera.frag.qsb"), &error);
         if (!error.isEmpty())
         {
             _renderError = error;
@@ -4812,7 +4685,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         _thumbnailPipeline.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
         _thumbnailPipeline.pipeline->setShaderStages({
             QRhiShaderStage(QRhiShaderStage::Vertex, camera_vertex_shader),
-            QRhiShaderStage(QRhiShaderStage::Fragment, image_fragment_shader),
+            QRhiShaderStage(QRhiShaderStage::Fragment, camera_fragment_shader),
         });
         _thumbnailPipeline.pipeline->setVertexInputLayout(instance_layout);
         _thumbnailPipeline.pipeline->setShaderResourceBindings(
@@ -4865,7 +4738,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
     QVector<QVector<float>> atlas_instances(_thumbnailPipeline.atlasPages.size());
     solid_instances.reserve(_poses.size() * kCameraInstanceStrideFloats);
     highlighted_instances.reserve(kCameraInstanceStrideFloats);
-    const int segment_multiplier = _showCameraLocalAxes ? 4 : 1;
+    const int segment_multiplier = _showCameraLocalAxes ? 3 : 1;
     segment_instances.reserve(
         _poses.size() * segment_multiplier * kCameraInstanceStrideFloats);
     int leader_count = 0;
@@ -4890,13 +4763,14 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
 
     auto append_segment = [](QVector<float> *target,
                              const CameraPose &pose,
+                             const QVector3D &origin_offset,
                              const QVector3D &direction,
                              const QVector3D &color,
                              float length_scale)
     {
         target->append({
             pose.center.x(), pose.center.y(), pose.center.z(), 0.0f,
-            0.0f, 0.0f, 0.0f, 0.0f,
+            origin_offset.x(), origin_offset.y(), origin_offset.z(), 0.0f,
             0.0f, 0.0f, 0.0f, 0.0f,
             direction.x(), direction.y(), direction.z(), 0.0f,
             color.x(), color.y(), color.z(), length_scale,
@@ -4906,15 +4780,17 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
     for (qsizetype pose_index = 0; pose_index < _poses.size(); ++pose_index)
     {
         const CameraPose &pose = _poses.at(pose_index);
+        const bool highlighted = isCameraHighlighted(pose);
         const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
             pose.rotation, pose.depthAxisFlipped);
-        if (!forward.isNull())
+        if (!_showCameraLocalAxes && !forward.isNull())
         {
             append_segment(&segment_instances,
                            pose,
+                           QVector3D(),
                            forward,
                            QVector3D(0.10f, 0.10f, 0.10f),
-                           -1.35f);
+                           -0.75f);
             ++leader_count;
         }
         int atlas_page_index = -1;
@@ -4948,7 +4824,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         {
             append_instance(&atlas_instances[atlas_page_index], pose, uv_rect);
         }
-        else if (isCameraHighlighted(pose))
+        else if (highlighted)
         {
             append_instance(&highlighted_instances, pose, uv_rect);
         }
@@ -4964,18 +4840,25 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         {
             const auto axes = xjw::gui::camera_scene::cameraLocalAxes(
                 pose.rotation, pose.depthAxisFlipped);
+            // Metashape 风格：三轴从相机平面的外侧角点伸出，不能从卡片
+            // 中心开始，否则 X/Y 轴会被蓝色面或缩略图完全覆盖。
+            const QVector3D axis_origin_offset =
+                axes.x * 1.05f + axes.y * 0.78f;
             append_segment(&segment_instances,
                            pose,
+                           axis_origin_offset,
                            axes.x,
                            QVector3D(220.0f, 55.0f, 55.0f) / 255.0f,
                            0.75f);
             append_segment(&segment_instances,
                            pose,
+                           axis_origin_offset,
                            axes.y,
                            QVector3D(35.0f, 165.0f, 70.0f) / 255.0f,
                            0.75f);
             append_segment(&segment_instances,
                            pose,
+                           axis_origin_offset,
                            axes.z,
                            QVector3D(45.0f, 105.0f, 225.0f) / 255.0f,
                            0.75f);
@@ -5080,28 +4963,11 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         static_cast<float>(qMax(1, height())),
         static_cast<float>(_zoomScale),
         static_cast<float>(xjw::gui::camera_scene::cameraPlaneScreenHalfExtentPixels(
-            _zoomScale, 34.0)),
+            _zoomScale, kCameraCardHalfExtentPixels)),
         qMax(1.0e-5f, sceneRadius() * 0.065f),
     };
     _thumbnailPipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(
         &uniforms, sizeof(uniforms));
-
-    const int segment_draw_count = _showCameraLocalAxes
-            && !isNavigationDragging()
-        ? _thumbnailPipeline.segmentInstanceCount
-        : _thumbnailPipeline.leaderInstanceCount;
-    if (_thumbnailPipeline.leaderPipeline
-        && _thumbnailPipeline.leaderBindings
-        && _thumbnailPipeline.leaderInstanceBuffer
-        && segment_draw_count > 0)
-    {
-        cb->setGraphicsPipeline(_thumbnailPipeline.leaderPipeline.data());
-        cb->setShaderResources(_thumbnailPipeline.leaderBindings.data());
-        const QRhiCommandBuffer::VertexInput instance_input(
-            _thumbnailPipeline.leaderInstanceBuffer.data(), 0);
-        cb->setVertexInput(0, 1, &instance_input);
-        cb->draw(2, quint32(segment_draw_count));
-    }
 
     cb->setGraphicsPipeline(_thumbnailPipeline.pipeline.data());
     auto draw_instances = [cb](const auto &resource)
@@ -5123,15 +4989,34 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
     {
         draw_instances(page);
     }
+
+    // 本地轴在相机面之后绘制，避免共面片段被卡片遮住。
+    const int segment_draw_count = _showCameraLocalAxes
+            && !isNavigationDragging()
+        ? _thumbnailPipeline.segmentInstanceCount
+        : _thumbnailPipeline.leaderInstanceCount;
+    if (_thumbnailPipeline.leaderPipeline
+        && _thumbnailPipeline.leaderBindings
+        && _thumbnailPipeline.leaderInstanceBuffer
+        && segment_draw_count > 0)
+    {
+        cb->setGraphicsPipeline(_thumbnailPipeline.leaderPipeline.data());
+        cb->setShaderResources(_thumbnailPipeline.leaderBindings.data());
+        const QRhiCommandBuffer::VertexInput instance_input(
+            _thumbnailPipeline.leaderInstanceBuffer.data(), 0);
+        cb->setVertexInput(0, 1, &instance_input);
+        cb->draw(2, quint32(segment_draw_count));
+    }
 }
 
 void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb,
                                               const QMatrix4x4 &mvp,
                                               float opacity)
 {
-    if (!cb || !cameraAlignmentActive() || _activeImageResourceFailed
-        || !_imagePipeline.pipeline || !_imagePipeline.vertexBuffer
-        || !_imagePipeline.uniformBuffer)
+    if (!cb || !cameraImageRegistrationActive() || _activeImageResourceFailed
+        || !_imagePipeline.pipeline || !_imagePipeline.uniformBuffer
+        || !_meshBuffer.vertexBuffer || !_meshTriangleIndices.indexBuffer
+        || _meshTriangleIndices.indexCount <= 0)
     {
         return;
     }
@@ -5141,27 +5026,51 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb,
     {
         return;
     }
+    const CameraPose &pose = _poses.at(pose_index);
     const QString active_key = cameraPlaneImageKey(
-        _poses.at(pose_index).imagePath, CameraImagePlaneMode::Image);
+        pose.imagePath, CameraImagePlaneMode::Image);
     if (_imagePipeline.uploadedImageKey != active_key)
     {
         return;
     }
-    if (_imagePipeline.geometryDirty
-        || _imagePipeline.uploadedGeometryKey != active_key)
+
+    const QSize image_size = displayedCameraImageSize();
+    if (!image_size.isValid())
     {
         return;
     }
-    ImagePlaneUniforms uniforms;
+    const QMatrix4x4 source_view =
+        xjw::gui::camera_scene::calibratedCameraView(
+            pose.center, pose.rotation, pose.depthAxisFlipped);
+    ProjectedImageUniforms uniforms;
     std::copy_n(mvp.constData(), 16, uniforms.mvp.begin());
+    std::copy_n(source_view.constData(), 16, uniforms.sourceView.begin());
+    uniforms.intrinsics = {
+        pose.focalX,
+        pose.focalY,
+        pose.principalX,
+        pose.principalY,
+    };
+    uniforms.imageGeometry = {
+        float(image_size.width()),
+        float(image_size.height()),
+        pose.uAxisSign < 0 ? -1.0f : 1.0f,
+        pose.vAxisSign < 0 ? -1.0f : 1.0f,
+    };
     uniforms.composition[0] = qBound(0.0f, opacity, 1.0f);
     _imagePipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(
         &uniforms, sizeof(uniforms));
     cb->setGraphicsPipeline(_imagePipeline.pipeline.data());
     cb->setShaderResources(_imagePipeline.bindings.data());
-    const QRhiCommandBuffer::VertexInput vertex_input(_imagePipeline.vertexBuffer.data(), 0);
-    cb->setVertexInput(0, 1, &vertex_input);
-    cb->draw(6);
+    const QRhiCommandBuffer::VertexInput vertex_input(
+        _meshBuffer.vertexBuffer.data(), 0);
+    cb->setVertexInput(0,
+                       1,
+                       &vertex_input,
+                       _meshTriangleIndices.indexBuffer.data(),
+                       0,
+                       QRhiCommandBuffer::IndexUInt32);
+    cb->drawIndexed(quint32(_meshTriangleIndices.indexCount));
 }
 
 void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb,
@@ -5480,18 +5389,13 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
     _renderError.clear();
 
     const SceneMatrices matrices = sceneMatrices();
-    const bool alignment_active = cameraAlignmentActive();
     QMatrix4x4 shift;
     shift.setToIdentity();
-    if (!alignment_active)
-    {
-        shift.translate(float(2.0 * _sceneOffsetPx.x() / qMax(1, width())),
-                        float(-2.0 * _sceneOffsetPx.y() / qMax(1, height())),
-                        0.0f);
-    }
+    shift.translate(float(2.0 * _sceneOffsetPx.x() / qMax(1, width())),
+                    float(-2.0 * _sceneOffsetPx.y() / qMax(1, height())),
+                    0.0f);
     const QMatrix4x4 mv = matrices.modelView;
     const QMatrix4x4 mvp = rhi()->clipSpaceCorrMatrix() * shift * matrices.projection * mv;
-    const QMatrix4x4 image_mvp = rhi()->clipSpaceCorrMatrix();
 
     cb->beginPass(renderTarget(),
                   QColor::fromRgbF(1.0f, 1.0f, 1.0f, 1.0f),
@@ -5499,11 +5403,8 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
                   updates);
     commitResourceUpdateState();
     const QSize pixelSize = renderTarget()->pixelSize();
-    const QRectF viewport = cameraAlignmentViewport(pixelSize);
-    cb->setViewport(QRhiViewport(float(viewport.x()),
-                                float(viewport.y()),
-                                float(viewport.width()),
-                                float(viewport.height())));
+    cb->setViewport(QRhiViewport(
+        0.0f, 0.0f, float(pixelSize.width()), float(pixelSize.height())));
 
     SceneUniforms uniforms;
     std::copy_n(mvp.constData(), 16, uniforms.mvp.begin());
@@ -5519,19 +5420,14 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
         }
     }
     std::copy_n(normal_matrix.constData(), 16, uniforms.normalMatrix.begin());
-    if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Background)
-    {
-        drawActiveCameraImage(cb, image_mvp, 1.0f);
-    }
     drawSceneGeometry(cb, uniforms, mvp);
-    if (!alignment_active)
-    {
-        drawCameraThumbnails(cb, mvp, mv);
-    }
-    if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground)
-    {
-        drawActiveCameraImage(cb, image_mvp, 0.5f);
-    }
+    drawActiveCameraImage(
+        cb,
+        mvp,
+        _cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground
+            ? 0.5f
+            : 1.0f);
+    drawCameraThumbnails(cb, mvp, mv);
 
     cb->endPass();
 
@@ -6069,12 +5965,6 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
     setFocus();
     _lastMousePos = event->pos();
 
-    if (cameraAlignmentActive())
-    {
-        event->accept();
-        return;
-    }
-
     if (_manualPruneMode && event->button() == Qt::ForwardButton)
     {
         if (_manualSelectionRunning)
@@ -6179,13 +6069,6 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (cameraAlignmentActive())
-    {
-        _lastMousePos = event->pos();
-        event->accept();
-        return;
-    }
-
     if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::LeftButton))
     {
         _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
@@ -6325,12 +6208,6 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void CameraSceneWidget::wheelEvent(QWheelEvent *event)
 {
-    if (cameraAlignmentActive())
-    {
-        event->accept();
-        return;
-    }
-
     if (isNavigationDragging())
     {
         event->ignore();
@@ -6381,8 +6258,7 @@ void CameraSceneWidget::resetView()
 
 void CameraSceneWidget::applyZoomFactor(double factor)
 {
-    if (cameraAlignmentActive()
-        || !std::isfinite(factor) || factor <= 0.0)
+    if (!std::isfinite(factor) || factor <= 0.0)
     {
         return;
     }

@@ -8364,7 +8364,7 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleGizmoAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
-    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("相机对齐检查"));
+    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("模型视角影像配准"));
     ASSERT_NE(imageMenu, nullptr);
     EXPECT_TRUE(imageMenu->actions().contains(menu.toggleCameraImagesAction()));
     EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInForegroundAction()));
@@ -8382,16 +8382,16 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     menu.toggleCameraThumbnailsAction()->setChecked(false);
     EXPECT_FALSE(menu.toggleCameraThumbnailsAction()->isChecked());
 
-    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("相机对齐"));
+    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("影像配准"));
     EXPECT_TRUE(menu.toggleCameraImagesAction()->isCheckable());
     EXPECT_FALSE(menu.toggleCameraImagesAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("半透明叠加"));
+    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("半透明表面叠加"));
     EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isCheckable());
     EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("原图作为背景"));
+    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("原图表面投影"));
     EXPECT_TRUE(menu.showCameraImagesInBackgroundAction()->isCheckable());
     EXPECT_FALSE(menu.showCameraImagesInBackgroundAction()->isChecked());
-    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定检查相机"));
+    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定当前影像"));
     EXPECT_TRUE(menu.lockCameraImageAction()->isCheckable());
     EXPECT_FALSE(menu.lockCameraImageAction()->isChecked());
 }
@@ -8821,7 +8821,7 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleCameraVisibilityButton)
 
     EXPECT_EQ(menu.toggleLocalAxesAction()->text(), QStringLiteral("显示本地轴"));
     EXPECT_TRUE(menu.toggleLocalAxesAction()->isCheckable());
-    EXPECT_FALSE(menu.toggleLocalAxesAction()->isChecked());
+    EXPECT_TRUE(menu.toggleLocalAxesAction()->isChecked());
 }
 
 TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
@@ -8838,7 +8838,7 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
     EXPECT_EQ(imageButton->defaultAction(), menu.toggleCameraImagesAction());
     EXPECT_EQ(imageButton->popupMode(), QToolButton::MenuButtonPopup);
     EXPECT_EQ(imageButton->toolTip(),
-              QStringLiteral("使用 SfM 相机参数检查原图与模型的重投影对齐"));
+              QStringLiteral("按当前模型视角自动匹配并配准 SfM 原始影像"));
     EXPECT_EQ(imageButton->iconSize(), QSize(26, 26));
     EXPECT_EQ(imageButton->size(), QSize(50, 36));
     EXPECT_TRUE(imageButton->styleSheet().isEmpty());
@@ -9087,7 +9087,7 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnQrhiGpu)
         "std::copy_n(mvp.constData(), 16, uniforms.mvp.begin())")));
     const qsizetype scene_uniform_start = header.indexOf(QStringLiteral("struct alignas(16) SceneUniforms"));
     const qsizetype scene_uniform_end = header.indexOf(
-        QStringLiteral("struct alignas(16) ImagePlaneUniforms"), scene_uniform_start);
+        QStringLiteral("struct alignas(16) ProjectedImageUniforms"), scene_uniform_start);
     ASSERT_GE(scene_uniform_start, 0);
     ASSERT_GT(scene_uniform_end, scene_uniform_start);
     EXPECT_FALSE(header.mid(scene_uniform_start, scene_uniform_end - scene_uniform_start)
@@ -9148,8 +9148,9 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.leaderPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
+    EXPECT_FALSE(source.contains(QStringLiteral("registeredCameraImagePlaneCorners()")));
+    EXPECT_FALSE(source.contains(QStringLiteral("calibratedImagePlaneCorners(")));
     EXPECT_TRUE(source.contains(QStringLiteral("calibratedCameraView(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraAlignmentViewport(pixelSize)")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));
     EXPECT_FALSE(source.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));

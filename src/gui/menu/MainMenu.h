@@ -350,8 +350,8 @@ private:
     QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图
     QAction *_toggleLocalAxesAct{}; ///< 工具栏相机菜单中的本地轴显示开关
     QAction *_toggleCameraImagesAct{}; ///< 启用 SfM 相机对齐检查
-    QAction *_showCameraImagesInForegroundAct{}; ///< 半透明叠加当前原始影像
-    QAction *_showCameraImagesInBackgroundAct{}; ///< 将当前原始影像作为背景
+    QAction *_showCameraImagesInForegroundAct{}; ///< 半透明投影当前原始影像到网格表面
+    QAction *_showCameraImagesInBackgroundAct{}; ///< 不透明投影当前原始影像到网格表面
     QAction *_lockCameraImageAct{}; ///< 锁定当前检查相机
     QAction *_tiePointColorModeAct{}; ///< 连接点原始 RGB 颜色
     QAction *_tiePointElevationModeAct{}; ///< 连接点按高程着色

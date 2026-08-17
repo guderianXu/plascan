@@ -110,46 +110,51 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         return;
     }
 
-    if (cameraAlignmentActive())
+    if (cameraImageRegistrationActive())
     {
-        const QRectF viewport = cameraAlignmentViewport(size());
-        painter.setPen(QPen(QColor(48, 118, 210, 190), 1.0));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRect(viewport.adjusted(0.5, 0.5, -0.5, -0.5));
-
         const int pose_index = displayedCameraImagePoseIndex();
         const CameraPose &pose = _poses.at(pose_index);
         const QString composition =
             _cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground
-            ? tr("原图/模型 50% 叠加")
-            : tr("原图背景/模型覆盖");
-        const QString label = tr("SfM 相机对齐检查 · %1 · %2")
-            .arg(QFileInfo(pose.imagePath).fileName(), composition);
+            ? tr("原图/网格 50% 表面投影")
+            : tr("原图网格表面投影");
+        const QString lock_state = _cameraImageLocked
+            ? tr("已锁定")
+            : tr("自动匹配");
+        const QString label = tr("模型视角影像配准 · %1 · %2 · %3")
+            .arg(QFileInfo(pose.imagePath).fileName(), lock_state, composition);
         QRectF label_rect(painter.fontMetrics().boundingRect(label));
         label_rect = label_rect.adjusted(-8.0, -5.0, 8.0, 5.0);
-        label_rect.translate(viewport.left() + 10.0, viewport.top() + 10.0);
+        label_rect.translate(10.0, 10.0);
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(25, 31, 42, 184));
         painter.drawRoundedRect(label_rect, 4.0, 4.0);
         painter.setPen(Qt::white);
         painter.drawText(label_rect, Qt::AlignCenter, label);
-
-        if (!_renderWarning.isEmpty())
+    }
+    else if (_showCameraImage && !_poses.isEmpty())
+    {
+        QString label;
+        if (!_meshHasFaces || _meshIsPointPreview)
         {
-            const QRect warning_rect = QRect(
-                14, height() - 112, qMax(120, width() - 150), 44)
-                .intersected(rect().adjusted(8, 8, -8, -8));
-            painter.setPen(QPen(QColor(166, 102, 20), 1.0));
-            painter.setBrush(QColor(255, 244, 214, 232));
-            painter.drawRoundedRect(warning_rect, 5.0, 5.0);
-            painter.setPen(QColor(116, 70, 12));
-            painter.drawText(warning_rect.adjusted(9, 5, -9, -5),
-                             Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
-                             _renderWarning);
+            label = tr("影像配准不可用：请加载带三角面的网格模型");
         }
-        drawPlyLoadProgressOverlay(painter);
-        drawCameraThumbnailProgressOverlay(painter);
-        return;
+        else if (displayedCameraImagePoseIndex() < 0)
+        {
+            label = tr("影像配准：当前视角没有方向相近的 SfM 照片，请旋转模型（阈值 30°）");
+        }
+        else
+        {
+            label = tr("影像配准：正在载入匹配照片...");
+        }
+        QRectF label_rect(painter.fontMetrics().boundingRect(label));
+        label_rect = label_rect.adjusted(-8.0, -5.0, 8.0, 5.0);
+        label_rect.translate(10.0, 10.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(116, 70, 12, 196));
+        painter.drawRoundedRect(label_rect, 4.0, 4.0);
+        painter.setPen(Qt::white);
+        painter.drawText(label_rect, Qt::AlignCenter, label);
     }
 
     painter.save();

@@ -14,6 +14,7 @@ layout(std140, binding = 0) uniform CameraPlaneUniforms
 } ubuf;
 
 layout(location = 0) out vec2 uv;
+layout(location = 1) out vec2 cardUv;
 
 float cameraHalfExtent()
 {
@@ -43,5 +44,6 @@ void main()
     uv = vec2(
         corner.x > 0.0 ? instanceUvRect.z : instanceUvRect.x,
         corner.y > 0.0 ? instanceUvRect.y : instanceUvRect.w);
+    cardUv = corner * 0.5 + vec2(0.5);
     gl_Position = ubuf.uMVP * vec4(worldPosition, 1.0);
 }

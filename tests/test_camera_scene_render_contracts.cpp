@@ -39,25 +39,30 @@ TEST(CameraSceneRenderContractTest, RegistersQrhiCameraImageShaders)
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_image.vert")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_image.frag")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_camera.vert")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_camera.frag")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_camera_leader.vert")));
 }
 
-TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAfterGeometry)
+TEST(CameraSceneRenderContractTest, DrawsDepthAwarePhotoProjectionAfterGeometry)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
-    const qsizetype background = source.indexOf(
-        QStringLiteral("_cameraImageDisplayLayer == CameraImageDisplayLayer::Background"));
-    const qsizetype first_image_draw = source.indexOf(QStringLiteral("drawActiveCameraImage(cb"), background);
-    const qsizetype geometry_draw = source.indexOf(QStringLiteral("drawSceneGeometry(cb"), first_image_draw);
+    const qsizetype render_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"));
+    const qsizetype geometry_draw = source.indexOf(
+        QStringLiteral("drawSceneGeometry(cb"), render_start);
+    const qsizetype image_draw = source.indexOf(
+        QStringLiteral("drawActiveCameraImage("), geometry_draw);
     const qsizetype foreground = source.indexOf(
-        QStringLiteral("_cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground"), geometry_draw);
-    const qsizetype second_image_draw = source.indexOf(QStringLiteral("drawActiveCameraImage(cb"), foreground);
+        QStringLiteral("_cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground"),
+        image_draw);
+    const qsizetype thumbnail_draw = source.indexOf(
+        QStringLiteral("drawCameraThumbnails(cb"), image_draw);
 
-    EXPECT_GE(background, 0);
-    EXPECT_GT(first_image_draw, background);
-    EXPECT_GT(geometry_draw, first_image_draw);
-    EXPECT_GT(foreground, geometry_draw);
-    EXPECT_GT(second_image_draw, foreground);
+    ASSERT_GE(render_start, 0);
+    EXPECT_GT(geometry_draw, render_start);
+    EXPECT_GT(image_draw, geometry_draw);
+    EXPECT_GT(foreground, image_draw);
+    EXPECT_GT(thumbnail_draw, foreground);
 }
 
 TEST(CameraSceneInteractionContractTest, UsesStableOrbitOutsideTheGizmo)
@@ -192,7 +197,7 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
 }
 
-TEST(CameraSceneRenderContractTest, ForegroundImageUsesScreenSpaceAlphaComposition)
+TEST(CameraSceneRenderContractTest, ForegroundImageProjectsOntoMeshWithAlphaComposition)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -200,13 +205,12 @@ TEST(CameraSceneRenderContractTest, ForegroundImageUsesScreenSpaceAlphaCompositi
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(header.contains(QStringLiteral("std::array<float, 4> composition{}")));
-    EXPECT_FALSE(header.contains(
-        QStringLiteral("displayedCameraImagePlaneCorners() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("struct alignas(16) ProjectedImageUniforms")));
     EXPECT_TRUE(source.contains(QStringLiteral("Format_RGBX8888")));
-    EXPECT_TRUE(source.contains(QStringLiteral(
-        "drawActiveCameraImage(cb, image_mvp, 0.5f)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawActiveCameraImage(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("? 0.5f")));
     EXPECT_TRUE(source.contains(QStringLiteral("blend.srcColor = QRhiGraphicsPipeline::SrcAlpha")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraAlignmentViewport(pixelSize)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_meshTriangleIndices.indexBuffer.data()")));
     EXPECT_FALSE(source.contains(QStringLiteral("foregroundCameraImageOcclusionPath")));
 }
 
@@ -270,6 +274,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneViewMath.cpp"));
     const QString leaderShader =
         readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_camera_leader.vert"));
+    const QString cameraShader =
+        readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_camera.frag"));
 
     EXPECT_TRUE(header.contains(QStringLiteral("bool cameraDirectionLeaderSegment")));
     EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
@@ -304,6 +310,15 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "fullDynamicBufferUpdateForCurrentFrame(")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("leaderPipeline")));
+    EXPECT_TRUE(source.contains(QStringLiteral("camera_scene_camera.frag.qsb")));
+    EXPECT_FALSE(source.mid(
+        source.indexOf(QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline")),
+        source.indexOf(QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"))
+            - source.indexOf(QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline")))
+        .contains(QStringLiteral("camera_scene_image.frag.qsb")));
+    EXPECT_TRUE(cameraShader.contains(QStringLiteral("uniform sampler2D cameraTexture")));
+    EXPECT_TRUE(cameraShader.contains(QStringLiteral("layout(location = 0) in vec2 uv")));
+    EXPECT_TRUE(cameraShader.contains(QStringLiteral("borderMask")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_instances")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("cb->draw(2")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("segmentInstanceCount")));
@@ -345,8 +360,11 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
     EXPECT_TRUE(header.contains(QStringLiteral("int segmentInstanceCount = 0")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("segment_instances")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("cameraLocalAxes(")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("axis_origin_offset")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("append_segment(")));
     EXPECT_TRUE(leaderShader.contains(QStringLiteral("normalize(instanceForward)")));
+    EXPECT_TRUE(leaderShader.contains(QStringLiteral(
+        "segmentOrigin = instanceCenter + instanceRight * halfExtent")));
     EXPECT_TRUE(leaderShader.contains(QStringLiteral("instanceUvRect.xyz")));
     EXPECT_TRUE(leaderShader.contains(QStringLiteral("instanceUvRect.w")));
 }
@@ -888,7 +906,7 @@ TEST(CameraSceneRenderContractTest, RefreshedCameraImagesInvalidateGpuUploadStat
     EXPECT_TRUE(header.contains(QStringLiteral(
         "std::array<float, 16> mvp{};")));
     EXPECT_TRUE(header.contains(QStringLiteral(
-        "static_assert(sizeof(ImagePlaneUniforms) == 20 * sizeof(float));")));
+        "static_assert(sizeof(ProjectedImageUniforms) == 44 * sizeof(float));")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "if (_imagePipeline.uploadedImageKey == key)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
@@ -1009,35 +1027,49 @@ TEST(CameraSceneRenderContractTest, TiePointMetadataWaitsForCloudAndBlocksConcur
         "_isTiePointCloud && _tiePointMetadataLoading")));
 }
 
-TEST(CameraSceneRenderContractTest, ImageModeUsesTheCalibratedSfmCameraMatrix)
+TEST(CameraSceneRenderContractTest, ImageRegistrationPreservesTheCurrentModelView)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(QStringLiteral(
         "CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const"));
-    const qsizetype end = source.indexOf(QStringLiteral("QPointF CameraSceneWidget::projectToScreen"), start);
+    const qsizetype end = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::cameraImageRegistrationActive() const"), start);
 
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
-    EXPECT_TRUE(block.contains(QStringLiteral("cameraAlignmentActive()")));
-    EXPECT_TRUE(block.contains(QStringLiteral("calibratedCameraView(")));
-    EXPECT_TRUE(block.contains(QStringLiteral("calibratedProjection(")));
-    EXPECT_TRUE(block.contains(QStringLiteral("pose.focalX")));
+    EXPECT_FALSE(block.contains(QStringLiteral("cameraImageRegistrationActive()")));
+    EXPECT_FALSE(block.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_FALSE(block.contains(QStringLiteral("calibratedProjection(")));
     EXPECT_TRUE(block.contains(QStringLiteral("model.rotate(_viewRot)")));
+
+    const qsizetype drawStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawActiveCameraImage"));
+    const qsizetype sceneStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawSceneGeometry"), drawStart);
+    ASSERT_GE(drawStart, 0);
+    ASSERT_GT(sceneStart, drawStart);
+    const QString drawBlock = source.mid(drawStart, sceneStart - drawStart);
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("pose.focalX")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("drawIndexed(")));
 }
 
-TEST(CameraSceneRenderContractTest, CameraImageShaderCompositesAScreenSpaceQuad)
+TEST(CameraSceneRenderContractTest, CameraImageShaderProjectsPhotoOntoMeshFragments)
 {
     const QString vertexShader = readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_image.vert"));
     const QString fragmentShader = readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_image.frag"));
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("layout(location = 0) in vec3 position")));
-    EXPECT_TRUE(vertexShader.contains(QStringLiteral("uniform ImagePlaneUniforms")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("uniform ProjectedImageUniforms")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uMVP * vec4(position, 1.0)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("const QMatrix4x4 image_mvp = rhi()->clipSpaceCorrMatrix()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("1.0f,  1.0f, 0.0f, 1.0f, 0.0f")));
-    EXPECT_FALSE(source.contains(QStringLiteral("displayedCameraImagePlaneCorners")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("uSourceView * vec4(position, 1.0)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("const QMatrix4x4 image_mvp")));
+    EXPECT_FALSE(source.contains(QStringLiteral("registeredCameraImagePlaneCorners()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_meshBuffer.vertexBuffer.data()")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("pixelX / ubuf.imageGeometry.x")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("discard")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("ubuf.composition.x")));
 }
 
@@ -1077,7 +1109,7 @@ TEST(CameraSceneRenderContractTest, RenderPipelinesConsumePreformattedImages)
         "result.textureImage.convertToFormat(QImage::Format_RGBA8888)")));
 }
 
-TEST(CameraSceneRenderContractTest, ActiveImageUsesAReusableScreenQuad)
+TEST(CameraSceneRenderContractTest, ActiveImageReusesIndexedMeshForDepthAwareProjection)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -1099,15 +1131,17 @@ TEST(CameraSceneRenderContractTest, ActiveImageUsesAReusableScreenQuad)
 
     const QString ensureBlock = source.mid(ensureStart, ensureEnd - ensureStart);
     const QString drawBlock = source.mid(drawStart, sceneStart - drawStart);
-    EXPECT_TRUE(header.contains(QStringLiteral("QString uploadedGeometryKey")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool geometryDirty = true")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("_imagePipeline.geometryDirty")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("updates->updateDynamicBuffer(")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("_imagePipeline.vertexBuffer.data()")));
-    EXPECT_FALSE(drawBlock.contains(QStringLiteral("updateDynamicBuffer(")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_imagePipeline.uploadedGeometryKey")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("不再假设模型位于某个单一世界深度平面")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_imagePipeline.planeCorners")));
+    EXPECT_FALSE(header.contains(QStringLiteral("QString uploadedGeometryKey")));
+    EXPECT_FALSE(header.contains(QStringLiteral("bool geometryDirty = true")));
+    EXPECT_FALSE(ensureBlock.contains(QStringLiteral("updateDynamicBuffer(")));
+    EXPECT_FALSE(ensureBlock.contains(QStringLiteral("_imagePipeline.vertexBuffer")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(false)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_meshBuffer.vertexBuffer.data()")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_meshTriangleIndices.indexBuffer.data()")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("cb->drawIndexed(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("calibratedImagePlaneCorners(")));
 }
 
 TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
@@ -1132,7 +1166,7 @@ TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
     EXPECT_FALSE(displayedBlock.contains(QStringLiteral("for (qsizetype index")));
 }
 
-TEST(CameraSceneRenderContractTest, HighlightedPhotoDrivesUnlockedAlignmentCamera)
+TEST(CameraSceneRenderContractTest, HighlightedPhotoDoesNotOverrideAutomaticViewMatching)
 {
     const QString source = readProjectFile(
         QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
@@ -1144,10 +1178,40 @@ TEST(CameraSceneRenderContractTest, HighlightedPhotoDrivesUnlockedAlignmentCamer
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
 
-    EXPECT_TRUE(block.contains(QStringLiteral("_showCameraImage")));
-    EXPECT_TRUE(block.contains(QStringLiteral("!_cameraImageLocked")));
-    EXPECT_TRUE(block.contains(QStringLiteral("_activeCameraImagePoseIndex =")));
-    EXPECT_TRUE(block.contains(QStringLiteral("highlighted_pose_index")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_highlightedCameraPath = normalizedPath")));
+    EXPECT_FALSE(block.contains(QStringLiteral("_activeCameraImagePoseIndex =")));
+    EXPECT_FALSE(block.contains(QStringLiteral("highlighted_pose_index")));
+}
+
+TEST(CameraSceneRenderContractTest, RegisteredImageKeepsModelNavigationAndViewDrivenSelection)
+{
+    const QString source = readProjectFile(
+        QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const qsizetype pressStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mousePressEvent"));
+    const qsizetype moveStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mouseMoveEvent"), pressStart);
+    const qsizetype releaseStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mouseReleaseEvent"), moveStart);
+    const qsizetype wheelStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::wheelEvent"), releaseStart);
+    const qsizetype zoomInStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::zoomIn"), wheelStart);
+
+    ASSERT_GE(pressStart, 0);
+    ASSERT_GT(moveStart, pressStart);
+    ASSERT_GT(releaseStart, moveStart);
+    ASSERT_GT(wheelStart, releaseStart);
+    ASSERT_GT(zoomInStart, wheelStart);
+
+    const QString pressBlock = source.mid(pressStart, moveStart - pressStart);
+    const QString moveBlock = source.mid(moveStart, releaseStart - moveStart);
+    const QString wheelBlock = source.mid(wheelStart, zoomInStart - wheelStart);
+    EXPECT_FALSE(pressBlock.contains(QStringLiteral("cameraImageRegistrationActive()")));
+    EXPECT_TRUE(moveBlock.contains(QStringLiteral("updateActiveCameraForView()")));
+    EXPECT_FALSE(moveBlock.contains(QStringLiteral("cameraImageRegistrationActive()")));
+    EXPECT_TRUE(wheelBlock.contains(QStringLiteral("applyZoomFactor(factor)")));
+    EXPECT_FALSE(wheelBlock.contains(QStringLiteral("cameraImageRegistrationActive()")));
 }
 
 TEST(CameraSceneRenderContractTest, MainWorkspaceCopiesCompleteCameraDisplayPose)
@@ -1191,7 +1255,7 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
         QStringLiteral("showTiePointCloudFile(path, sidecarPath)")));
 }
 
-TEST(CameraSceneRenderContractTest, TiePointsUseGpuDepthAndCalibratedCameraAlignment)
+TEST(CameraSceneRenderContractTest, TiePointsUseGpuDepthAndViewMatchedImageRegistration)
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -1206,7 +1270,9 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuDepthAndCalibratedCameraAlign
         QStringLiteral("TiePointColorMode::Elevation")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::ImageCount")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("selectCameraForView(")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("calibratedImagePlaneCorners(")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 
     const qsizetype drawStart = sceneSource.indexOf(
