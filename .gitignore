@@ -18,6 +18,8 @@ data/
 data/*
 testData/photogrammetry_benchmarks/
 testData/火星数据/
+testData/tw2/
+testData/tw600/
 build*
 !scripts/build_win/
 !scripts/build_win/**

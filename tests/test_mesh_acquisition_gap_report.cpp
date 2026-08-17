@@ -29,7 +29,7 @@ xjw::mesh::MeshBoundaryEdgeAttribution edge(
     std::array<float, 3> midpoint,
     xjw::mesh::MeshBoundaryAttributionReason primary,
     xjw::mesh::MeshBoundaryAttributionReason cause,
-    std::uint16_t source_mask)
+    xjw::mesh::DepthGeometrySourceMask source_mask)
 {
     xjw::mesh::MeshBoundaryEdgeAttribution result;
     result.midpoint = midpoint;
@@ -65,13 +65,15 @@ TEST(MeshAcquisitionGapReportTest, AccountsForEveryEdgeAndSourceWithoutDuplicati
              xjw::mesh::MeshBoundaryAttributionReason::ExtractionOrPostprocess,
              0)};
     QStringList labels;
+    std::vector<int> source_indices;
     for (int index = 0; index < 16; ++index)
     {
         labels.append(QStringLiteral("frame_%1").arg(index));
+        source_indices.push_back(100 + index);
     }
 
     const QJsonObject report = xjw::mesh::buildMeshAcquisitionGapReport(
-        edges, makeLayout(), labels, 16);
+        edges, makeLayout(), labels, source_indices, 16, true);
 
     EXPECT_EQ(report.value(QStringLiteral("boundary_edge_count")).toInt(), 4);
     EXPECT_TRUE(report.value(QStringLiteral("records_complete")).toBool());
@@ -98,18 +100,26 @@ TEST(MeshAcquisitionGapReportTest, AccountsForEveryEdgeAndSourceWithoutDuplicati
     }
     EXPECT_EQ(binned_edge_count, 3);
 
-    const QJsonArray frames = report.value(QStringLiteral("frames")).toArray();
-    ASSERT_EQ(frames.size(), 16);
-    EXPECT_EQ(frames[0].toObject()
+    const QJsonArray sources = report.value(QStringLiteral("sources")).toArray();
+    ASSERT_EQ(sources.size(), 16);
+    EXPECT_EQ(sources[0].toObject()
                   .value(QStringLiteral("participating_edge_count"))
                   .toInt(),
               2);
-    EXPECT_EQ(frames[1].toObject()
+    EXPECT_EQ(sources[1].toObject()
                   .value(QStringLiteral("participating_edge_count"))
                   .toInt(),
               1);
+    EXPECT_EQ(sources[0].toObject()
+                  .value(QStringLiteral("source_slot"))
+                  .toInt(),
+              0);
+    EXPECT_EQ(sources[0].toObject()
+                  .value(QStringLiteral("source_index"))
+                  .toInt(),
+              100);
     EXPECT_TRUE(report.value(
-        QStringLiteral("source_mask_frame_mapping_complete")).toBool());
+        QStringLiteral("source_mask_source_mapping_complete")).toBool());
     EXPECT_EQ(report.value(QStringLiteral("highest_risk_sectors"))
                   .toArray()
                   .size(),
@@ -122,19 +132,29 @@ TEST(MeshAcquisitionGapReportTest, AccountsForEveryEdgeAndSourceWithoutDuplicati
                   .value(QStringLiteral("root_cause"))
                   .toString(),
               QStringLiteral("depth_spread"));
+    const QString encoded_source_mask = targets[0].toObject()
+        .value(QStringLiteral("source_mask"))
+        .toString();
+    EXPECT_EQ(encoded_source_mask.size(), 66);
+    EXPECT_EQ(encoded_source_mask,
+              QStringLiteral("0x") + QString(63, QLatin1Char('0')) +
+                  QStringLiteral("3"));
 }
 
-TEST(MeshAcquisitionGapReportTest, DeclaresSourceMaskLimitBeyondSixteenFrames)
+TEST(MeshAcquisitionGapReportTest, DeclaresIncompleteSourceMappingExplicitly)
 {
     QStringList labels;
+    std::vector<int> source_indices;
     for (int index = 0; index < 16; ++index)
     {
         labels.append(QStringLiteral("frame_%1").arg(index));
+        source_indices.push_back(index);
     }
     const QJsonObject report = xjw::mesh::buildMeshAcquisitionGapReport(
-        {}, makeLayout(), labels, 20);
+        {}, makeLayout(), labels, source_indices, 20, false);
 
     EXPECT_FALSE(report.value(
-        QStringLiteral("source_mask_frame_mapping_complete")).toBool());
-    EXPECT_EQ(report.value(QStringLiteral("frames")).toArray().size(), 16);
+        QStringLiteral("source_mask_source_mapping_complete")).toBool());
+    EXPECT_EQ(report.value(QStringLiteral("input_frame_count")).toInt(), 20);
+    EXPECT_EQ(report.value(QStringLiteral("sources")).toArray().size(), 16);
 }

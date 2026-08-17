@@ -268,6 +268,59 @@ TEST(SceneGeometryPreparationTest, KeepsIndicesWithoutDuplicatingOversizedSelect
     EXPECT_TRUE(selection.scalarData.isEmpty());
 }
 
+TEST(SceneGeometryPreparationTest, CompactsQualityCandidatesByOriginalPointIndex)
+{
+    const SceneRenderCloud cloud = makePointCloud({
+        QVector3D(10.0f, 0.0f, 0.0f),
+        QVector3D(20.0f, 0.0f, 0.0f),
+        QVector3D(30.0f, 0.0f, 0.0f),
+        QVector3D(40.0f, 0.0f, 0.0f)});
+    const PointRenderPreparation prepared = preparePointRenderData(
+        cloud, {2, 4, 6, 8});
+    constexpr int stride_bytes = 9 * int(sizeof(float));
+
+    const PointSelectionPreparation selection = prepareIndexedPointSelection(
+        prepared.vertexData,
+        stride_bytes,
+        prepared.scalarData,
+        {1U, 3U});
+
+    ASSERT_TRUE(selection.isValid());
+    EXPECT_EQ(selection.indices, (std::vector<PointVertexIndex>{1U, 3U}));
+    const float *vertices = reinterpret_cast<const float *>(
+        selection.vertexData.constData());
+    EXPECT_FLOAT_EQ(vertices[0], 20.0f);
+    EXPECT_FLOAT_EQ(vertices[9], 40.0f);
+    const float *scalars = reinterpret_cast<const float *>(
+        selection.scalarData.constData());
+    EXPECT_FLOAT_EQ(scalars[0], 4.0f);
+    EXPECT_FLOAT_EQ(scalars[1], 8.0f);
+}
+
+TEST(SceneGeometryPreparationTest, RejectsInvalidOrCancelledQualityCandidateIndices)
+{
+    const PointRenderPreparation prepared = preparePointRenderData(
+        makePointCloud({QVector3D(), QVector3D(1.0f, 0.0f, 0.0f)}));
+    constexpr int stride_bytes = 9 * int(sizeof(float));
+    EXPECT_FALSE(prepareIndexedPointSelection(
+        prepared.vertexData,
+        stride_bytes,
+        prepared.scalarData,
+        {1U, 0U}).isValid());
+    EXPECT_FALSE(prepareIndexedPointSelection(
+        prepared.vertexData,
+        stride_bytes,
+        prepared.scalarData,
+        {2U}).isValid());
+    std::atomic_bool cancelled{true};
+    EXPECT_FALSE(prepareIndexedPointSelection(
+        prepared.vertexData,
+        stride_bytes,
+        prepared.scalarData,
+        {0U},
+        &cancelled).isValid());
+}
+
 TEST(SceneGeometryPreparationTest, IgnoresPointsOutsideClipDepthOrWithNonFiniteClip)
 {
     const SceneRenderCloud cloud = makePointCloud({

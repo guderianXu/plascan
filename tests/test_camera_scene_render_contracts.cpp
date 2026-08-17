@@ -192,33 +192,22 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
 }
 
-TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneContent)
+TEST(CameraSceneRenderContractTest, ForegroundImageUsesScreenSpaceAlphaComposition)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
-    EXPECT_TRUE(header.contains(
-        QStringLiteral("QVector<QVector3D> displayedCameraImagePlaneCorners() const")));
-    EXPECT_TRUE(header.contains(
-        QStringLiteral("QPainterPath foregroundCameraImageOcclusionPath() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::array<float, 4> composition{}")));
+    EXPECT_FALSE(header.contains(
+        QStringLiteral("displayedCameraImagePlaneCorners() const")));
     EXPECT_TRUE(source.contains(QStringLiteral("Format_RGBX8888")));
-
-    const qsizetype overlayStart = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
-    const qsizetype floorCross = source.indexOf(
-        QStringLiteral("drawFloorPivotCross(painter);"), overlayStart);
-    ASSERT_GE(overlayStart, 0);
-    ASSERT_GT(floorCross, overlayStart);
-    const QString overlayBlock = source.mid(overlayStart, floorCross - overlayStart);
-    EXPECT_TRUE(overlayBlock.contains(
-        QStringLiteral("foregroundCameraImageOcclusionPath()")));
-    EXPECT_TRUE(overlayBlock.contains(
-        QStringLiteral("visibleScene.subtracted(foregroundImageOcclusion)")));
-    EXPECT_TRUE(overlayBlock.contains(
-        QStringLiteral("painter.setClipPath(visibleScene, Qt::IntersectClip)")));
-    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "drawActiveCameraImage(cb, image_mvp, 0.5f)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("blend.srcColor = QRhiGraphicsPipeline::SrcAlpha")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraAlignmentViewport(pixelSize)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("foregroundCameraImageOcclusionPath")));
 }
 
 TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuResources)
@@ -711,6 +700,106 @@ TEST(CameraSceneRenderContractTest, PointScalarsAndSelectionHighlightStayOnGpu)
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("if (vSelected < 0.5)")));
 }
 
+TEST(CameraSceneRenderContractTest, TiePointPrunePreviewIsIndependentAndLatestWins)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString vertexShader =
+        readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_point.vert"));
+    const qsizetype draw_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawPointCloud"));
+    const qsizetype draw_end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawTexturedMesh"), draw_start);
+    const qsizetype request_start = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::requestTiePointPrunePreview"));
+    const qsizetype metadata_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::startTiePointMetadataLoad"),
+        request_start);
+    ASSERT_GE(draw_start, 0);
+    ASSERT_GT(draw_end, draw_start);
+    ASSERT_GE(request_start, 0);
+    ASSERT_GT(metadata_start, request_start);
+    const QString draw_block = source.mid(draw_start, draw_end - draw_start);
+    const QString preview_block = source.mid(
+        request_start, metadata_start - request_start);
+
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("RhiBufferSet _prunePreviewPointBuffer")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("RhiBufferSet _prunePreviewScalarBuffer")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("RhiPipelineSet _prunePreviewPointPipeline")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("RhiBufferSet _manualHighlightPointBuffer")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("requestTiePointPrunePreview")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("clearTiePointPrunePreview")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("tiePointQualityMetadataReady")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("tiePointPrunePreviewChanged")));
+    EXPECT_TRUE(preview_block.contains(QStringLiteral("runGuardedWithOutcome(")));
+    EXPECT_TRUE(preview_block.contains(QStringLiteral("queryPruneCandidates(")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("prepareIndexedPointSelection(")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("kMaximumRenderedPruneCandidates")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("result.candidateCount")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("_tiePointPrunePreviewGeneration")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("_tiePointPrunePreviewCancellation")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("load_generation == self->_loadGen")));
+    EXPECT_TRUE(preview_block.contains(
+        QStringLiteral("kMaximumRenderedPruneCandidates")));
+    EXPECT_FALSE(preview_block.contains(
+        QStringLiteral("std::vector<PointVertexIndex> sampled")));
+    const qsizetype prune_draw = draw_block.indexOf(
+        QStringLiteral("_prunePreviewPointPipeline"));
+    const qsizetype manual_draw = draw_block.indexOf(
+        QStringLiteral("_highlightPointPipeline"), prune_draw + 1);
+    ASSERT_GE(prune_draw, 0);
+    ASSERT_GT(manual_draw, prune_draw);
+    EXPECT_TRUE(draw_block.contains(
+        QStringLiteral("renderModeFlags[3] = 2.0f")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("vec3(1.0, 0.18, 0.38)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("disable_prune_preview")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "候选高亮缓冲不可用，已继续显示基础场景")));
+}
+
+TEST(CameraSceneRenderContractTest, CleanTiePointsWiresPreviewDeleteAndReload)
+{
+    const QString mainWindow = readProjectFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
+    const QString manager = readProjectFile(
+        QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
+
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "ProjectTiePointResultService::selectCurrent")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "&CleanTiePointsDialog::previewRequested")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "requestTiePointPrunePreview(")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "startSparseCloudOutlierRemovalAsync(settings)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "settings[QStringLiteral(\"filterByStatistical\")] = false")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "settings[QStringLiteral(\"filterByDensity\")] = false")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "&ProjectManager::tiePointResultReady")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "showTiePointCloudFile(sparseCloudPath, sidecarPath)")));
+    EXPECT_TRUE(manager.contains(QStringLiteral(
+        "emit self->tiePointResultReady(operationResult.sparseCloudPath")));
+}
+
 TEST(CameraSceneRenderContractTest, DeduplicatesCameraPosesByImageIdentity)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
@@ -799,7 +888,7 @@ TEST(CameraSceneRenderContractTest, RefreshedCameraImagesInvalidateGpuUploadStat
     EXPECT_TRUE(header.contains(QStringLiteral(
         "std::array<float, 16> mvp{};")));
     EXPECT_TRUE(header.contains(QStringLiteral(
-        "static_assert(sizeof(ImagePlaneUniforms) == 16 * sizeof(float));")));
+        "static_assert(sizeof(ImagePlaneUniforms) == 20 * sizeof(float));")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "if (_imagePipeline.uploadedImageKey == key)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
@@ -910,15 +999,17 @@ TEST(CameraSceneRenderContractTest, TiePointMetadataWaitsForCloudAndBlocksConcur
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "const bool cloud_not_ready = point_count == 0")));
+    EXPECT_TRUE(source.contains(QStringLiteral("if (cloud_not_ready)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("else if (metadata_matches_cloud)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "if (cloud_not_ready || metadata_matches_cloud)")));
+        "self->_tiePointQualityMetadata = std::move(result.metadata)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "const bool tie_point_metadata_matches")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "_isTiePointCloud && _tiePointMetadataLoading")));
 }
 
-TEST(CameraSceneRenderContractTest, ImageModeKeepsTheFreeOrbitViewMatrix)
+TEST(CameraSceneRenderContractTest, ImageModeUsesTheCalibratedSfmCameraMatrix)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(QStringLiteral(
@@ -928,23 +1019,26 @@ TEST(CameraSceneRenderContractTest, ImageModeKeepsTheFreeOrbitViewMatrix)
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(block.contains(QStringLiteral("cameraAlignmentActive()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_TRUE(block.contains(QStringLiteral("calibratedProjection(")));
+    EXPECT_TRUE(block.contains(QStringLiteral("pose.focalX")));
     EXPECT_TRUE(block.contains(QStringLiteral("model.rotate(_viewRot)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("displayedCameraImagePoseIndex")));
-    EXPECT_FALSE(block.contains(QStringLiteral("_showCameraImage")));
 }
 
-TEST(CameraSceneRenderContractTest, CameraImageShaderProjectsAWorldSpacePlane)
+TEST(CameraSceneRenderContractTest, CameraImageShaderCompositesAScreenSpaceQuad)
 {
     const QString vertexShader = readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_image.vert"));
+    const QString fragmentShader = readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_image.frag"));
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("layout(location = 0) in vec3 position")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uniform ImagePlaneUniforms")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uMVP * vec4(position, 1.0)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners")));
-    EXPECT_FALSE(source.contains(QStringLiteral("const float image_half_extent")));
-    EXPECT_FALSE(source.contains(QStringLiteral("thumbnail_half_extent * 5.2f")));
-    EXPECT_FALSE(source.contains(QStringLiteral("activeCameraImageViewportScale")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const QMatrix4x4 image_mvp = rhi()->clipSpaceCorrMatrix()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("1.0f,  1.0f, 0.0f, 1.0f, 0.0f")));
+    EXPECT_FALSE(source.contains(QStringLiteral("displayedCameraImagePlaneCorners")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("ubuf.composition.x")));
 }
 
 TEST(CameraSceneRenderContractTest, RenderPipelinesConsumePreformattedImages)
@@ -983,7 +1077,7 @@ TEST(CameraSceneRenderContractTest, RenderPipelinesConsumePreformattedImages)
         "result.textureImage.convertToFormat(QImage::Format_RGBA8888)")));
 }
 
-TEST(CameraSceneRenderContractTest, ActiveImageGeometryIsUploadedOnlyWhenDirtyAndCornersAreCached)
+TEST(CameraSceneRenderContractTest, ActiveImageUsesAReusableScreenQuad)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -996,37 +1090,24 @@ TEST(CameraSceneRenderContractTest, ActiveImageGeometryIsUploadedOnlyWhenDirtyAn
         QStringLiteral("bool CameraSceneWidget::ensureSolidCameraBatchResource"), ensureStart);
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawActiveCameraImage"));
-    const qsizetype cornersStart = source.indexOf(
-        QStringLiteral("QVector<QVector3D> CameraSceneWidget::displayedCameraImagePlaneCorners"),
-        drawStart);
-    const qsizetype foregroundStart = source.indexOf(
-        QStringLiteral("QPainterPath CameraSceneWidget::foregroundCameraImageOcclusionPath"),
-        cornersStart);
     const qsizetype sceneStart = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::drawSceneGeometry"), foregroundStart);
+        QStringLiteral("void CameraSceneWidget::drawSceneGeometry"), drawStart);
     ASSERT_GE(ensureStart, 0);
     ASSERT_GT(ensureEnd, ensureStart);
     ASSERT_GE(drawStart, 0);
-    ASSERT_GT(cornersStart, drawStart);
-    ASSERT_GT(foregroundStart, cornersStart);
-    ASSERT_GT(sceneStart, foregroundStart);
+    ASSERT_GT(sceneStart, drawStart);
 
     const QString ensureBlock = source.mid(ensureStart, ensureEnd - ensureStart);
-    const QString drawBlock = source.mid(drawStart, cornersStart - drawStart);
-    const QString cornersBlock = source.mid(cornersStart, foregroundStart - cornersStart);
-    const QString foregroundBlock = source.mid(foregroundStart, sceneStart - foregroundStart);
+    const QString drawBlock = source.mid(drawStart, sceneStart - drawStart);
     EXPECT_TRUE(header.contains(QStringLiteral("QString uploadedGeometryKey")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QVector<QVector3D> planeCorners")));
     EXPECT_TRUE(header.contains(QStringLiteral("bool geometryDirty = true")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("_imagePipeline.geometryDirty")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("updates->updateDynamicBuffer(")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("_imagePipeline.vertexBuffer.data()")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("updateDynamicBuffer(")));
-    EXPECT_FALSE(drawBlock.contains(QStringLiteral("displayedCameraImagePlaneCorners()")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("_imagePipeline.uploadedGeometryKey")));
-    EXPECT_TRUE(cornersBlock.contains(QStringLiteral("!_imagePipeline.geometryDirty")));
-    EXPECT_TRUE(cornersBlock.contains(QStringLiteral("return _imagePipeline.planeCorners")));
-    EXPECT_TRUE(foregroundBlock.contains(QStringLiteral("displayedCameraImagePlaneCorners()")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("不再假设模型位于某个单一世界深度平面")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_imagePipeline.planeCorners")));
 }
 
 TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
@@ -1049,6 +1130,24 @@ TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
     ASSERT_GE(selectionCall, 0);
     EXPECT_EQ(updateBlock.indexOf(QStringLiteral("_poses.at(index).imagePath"), selectionCall), -1);
     EXPECT_FALSE(displayedBlock.contains(QStringLiteral("for (qsizetype index")));
+}
+
+TEST(CameraSceneRenderContractTest, HighlightedPhotoDrivesUnlockedAlignmentCamera)
+{
+    const QString source = readProjectFile(
+        QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const qsizetype start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::setHighlightedCameraPath"));
+    const qsizetype end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::clearHighlightedCamera"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("_showCameraImage")));
+    EXPECT_TRUE(block.contains(QStringLiteral("!_cameraImageLocked")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_activeCameraImagePoseIndex =")));
+    EXPECT_TRUE(block.contains(QStringLiteral("highlighted_pose_index")));
 }
 
 TEST(CameraSceneRenderContractTest, MainWorkspaceCopiesCompleteCameraDisplayPose)
@@ -1082,7 +1181,7 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
             "src/gui/main_window/MainWindowProjectBindings.cpp"));
 
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("loadTiePointCloudFromFile")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("loadImageCountMetadata")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("loadQualityMetadata")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("TiePointColorMode::Elevation")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("TiePointColorMode::ImageCount")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawTiePointLegend(painter)")));
@@ -1092,7 +1191,7 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
         QStringLiteral("showTiePointCloudFile(path, sidecarPath)")));
 }
 
-TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
+TEST(CameraSceneRenderContractTest, TiePointsUseGpuDepthAndCalibratedCameraAlignment)
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -1107,7 +1206,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
         QStringLiteral("TiePointColorMode::Elevation")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::ImageCount")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("CameraImagePlaneAxes")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("calibratedCameraView(")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 
     const qsizetype drawStart = sceneSource.indexOf(
@@ -1350,6 +1449,26 @@ TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedMo
         "self->setModelColorMode(ModelColorMode::Solid)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "self->setModelColorMode(ModelColorMode::Shaded)")));
+}
+
+TEST(CameraSceneRenderContractTest, ShadedTexturedModelKeepsPhotoColorAndAddsLighting)
+{
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString vertexShader = readProjectFile(QStringLiteral(
+        "src/gui/shaders/camera_scene_textured_mesh.vert"));
+    const QString fragmentShader = readProjectFile(QStringLiteral(
+        "src/gui/shaders/camera_scene_textured_mesh.frag"));
+
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "_modelColorMode == ModelColorMode::Texture ||\n"
+        "              _modelColorMode == ModelColorMode::Shaded")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("vViewPosition")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("if (mode == 1)")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "baseColor = mix(textureColor, vertexColor, fallbackWeight)")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "baseColor = linearToSrgb(srgbToLinear(baseColor) * shape)")));
 }
 
 TEST(CameraSceneRenderContractTest, ColorModeSwitchesOnlyUpdateUniformDrivenState)

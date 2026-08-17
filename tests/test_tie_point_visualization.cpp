@@ -12,12 +12,17 @@ namespace
 {
 
 using xjw::gui::tie_points::ImageCountMetadata;
+using xjw::gui::tie_points::PrunePreviewQuery;
+using xjw::gui::tie_points::QualityCriterion;
+using xjw::gui::tie_points::QualityMetadata;
 using xjw::gui::tie_points::ScalarRange;
 using xjw::gui::tie_points::elevationColor;
 using xjw::gui::tie_points::imageCountColor;
 using xjw::gui::tie_points::inferSidecarPath;
 using xjw::gui::tie_points::loadImageCountMetadata;
+using xjw::gui::tie_points::loadQualityMetadata;
 using xjw::gui::tie_points::pointSizeForMode;
+using xjw::gui::tie_points::queryPruneCandidates;
 using xjw::gui::tie_points::scalarRampColor;
 
 TEST(TiePointVisualizationTest, ElevationRunsFromBlueLowToRedHigh)
@@ -102,6 +107,202 @@ TEST(TiePointVisualizationTest, InfersMetashapeStyleSparseSidecarNames)
 
     EXPECT_EQ(inferSidecarPath(directory.filePath(QStringLiteral("sfm_sparse.ply"))),
               sidecarPath);
+}
+
+TEST(TiePointVisualizationTest, LoadsAllQualityFieldsInOriginalPointOrder)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("quality.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QJsonArray points{
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                    {QStringLiteral("track_len"), 8},
+                    {QStringLiteral("min_tri_angle_deg"), 6.0}},
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+                    {QStringLiteral("track_len"), 2},
+                    {QStringLiteral("min_tri_angle_deg"), 1.5}},
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 1.2},
+                    {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("min_tri_angle_deg"), 3.0}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+                   .toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+
+    ASSERT_TRUE(metadata.errorMessage.isEmpty());
+    ASSERT_TRUE(metadata.isValidFor(3));
+    EXPECT_EQ(metadata.reprojectionErrors, QVector<double>({0.4, 2.5, 1.2}));
+    EXPECT_EQ(metadata.imageCounts, QVector<int>({8, 2, 4}));
+    EXPECT_EQ(metadata.minimumTriangulationAngles,
+              QVector<double>({6.0, 1.5, 3.0}));
+    EXPECT_DOUBLE_EQ(metadata.reprojectionErrorRange.minimum, 0.4);
+    EXPECT_DOUBLE_EQ(metadata.reprojectionErrorRange.maximum, 2.5);
+    EXPECT_DOUBLE_EQ(metadata.imageCountRange.minimum, 2.0);
+    EXPECT_DOUBLE_EQ(metadata.imageCountRange.maximum, 8.0);
+}
+
+TEST(TiePointVisualizationTest, KeepsAvailableCriteriaWhenOneFieldIsMissing)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("partial.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QJsonArray points{
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                    {QStringLiteral("track_len"), 8}},
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+                    {QStringLiteral("track_len"), 2}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+                   .toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ReprojectionError, 2));
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ImageCount, 2));
+    EXPECT_FALSE(metadata.hasCriterion(
+        QualityCriterion::MinimumTriangulationAngle, 2));
+    EXPECT_TRUE(metadata.minimumTriangulationAngles.isEmpty());
+    const auto candidates = queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, 1.0}, 2);
+    ASSERT_TRUE(candidates.succeeded());
+    EXPECT_EQ(candidates.indices, (std::vector<std::uint32_t>{1U}));
+}
+
+TEST(TiePointVisualizationTest, MissingImageCountKeepsReprojectionPreviewAvailable)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("without_track_len.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QJsonArray points{
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                    {QStringLiteral("min_tri_angle_deg"), 6.0}},
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+                    {QStringLiteral("min_tri_angle_deg"), 1.5}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+                   .toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ReprojectionError, 2));
+    EXPECT_FALSE(metadata.hasCriterion(QualityCriterion::ImageCount, 2));
+    EXPECT_TRUE(metadata.hasCriterion(
+        QualityCriterion::MinimumTriangulationAngle, 2));
+    const auto candidates = queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, 1.0}, 2);
+    ASSERT_TRUE(candidates.succeeded());
+    EXPECT_EQ(candidates.indices, (std::vector<std::uint32_t>{1U}));
+}
+
+TEST(TiePointVisualizationTest, ZeroPlaceholderAnglesAreNotOfferedForCleaning)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("zero_angles.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QJsonArray points{
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                    {QStringLiteral("track_len"), 3},
+                    {QStringLiteral("min_tri_angle_deg"), 0.0}},
+        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.8},
+                    {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("min_tri_angle_deg"), 0.0}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+                   .toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ReprojectionError, 2));
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ImageCount, 2));
+    EXPECT_FALSE(metadata.hasCriterion(
+        QualityCriterion::MinimumTriangulationAngle, 2));
+}
+
+TEST(TiePointVisualizationTest, QueriesPruneCandidatesWithCriterionDirection)
+{
+    QualityMetadata metadata;
+    metadata.sourcePointCount = 4;
+    metadata.reprojectionErrors = {0.4, 2.5, 1.2, 3.0};
+    metadata.imageCounts = {8, 2, 4, 1};
+    metadata.minimumTriangulationAngles = {6.0, 1.5, 3.0, 0.5};
+
+    const auto reprojection = queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, 1.5}, 4);
+    const auto image_count = queryPruneCandidates(
+        metadata, {QualityCriterion::ImageCount, 3.0}, 4);
+    const auto angle = queryPruneCandidates(
+        metadata, {QualityCriterion::MinimumTriangulationAngle, 2.0}, 4);
+
+    ASSERT_TRUE(reprojection.succeeded());
+    EXPECT_EQ(reprojection.candidateCount, 2);
+    EXPECT_EQ(reprojection.indices, (std::vector<std::uint32_t>{1U, 3U}));
+    ASSERT_TRUE(image_count.succeeded());
+    EXPECT_EQ(image_count.candidateCount, 2);
+    EXPECT_EQ(image_count.indices, (std::vector<std::uint32_t>{1U, 3U}));
+    ASSERT_TRUE(angle.succeeded());
+    EXPECT_EQ(angle.candidateCount, 2);
+    EXPECT_EQ(angle.indices, (std::vector<std::uint32_t>{1U, 3U}));
+}
+
+TEST(TiePointVisualizationTest, BoundsLargeCandidateResultsWithStableEvenSampling)
+{
+    constexpr qsizetype point_count = 250'001;
+    QualityMetadata metadata;
+    metadata.sourcePointCount = point_count;
+    metadata.reprojectionErrors.fill(2.0, point_count);
+
+    const auto candidates = queryPruneCandidates(
+        metadata,
+        {QualityCriterion::ReprojectionError, 1.0},
+        point_count,
+        nullptr,
+        5);
+
+    ASSERT_TRUE(candidates.succeeded());
+    EXPECT_EQ(candidates.candidateCount, point_count);
+    EXPECT_EQ(candidates.indices,
+              (std::vector<std::uint32_t>{0U, 62'500U, 125'000U,
+                                          187'500U, 250'000U}));
+
+    const auto count_only = queryPruneCandidates(
+        metadata,
+        {QualityCriterion::ReprojectionError, 1.0},
+        point_count,
+        nullptr,
+        0);
+    ASSERT_TRUE(count_only.succeeded());
+    EXPECT_EQ(count_only.candidateCount, point_count);
+    EXPECT_TRUE(count_only.indices.empty());
+}
+
+TEST(TiePointVisualizationTest, RejectsMismatchedOrCancelledCandidateQueries)
+{
+    QualityMetadata metadata;
+    metadata.sourcePointCount = 2;
+    metadata.reprojectionErrors = {0.4, 2.5};
+    EXPECT_FALSE(queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, 1.0}, -9).succeeded());
+    EXPECT_FALSE(queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, 1.0}, 3).succeeded());
+    EXPECT_FALSE(queryPruneCandidates(
+        metadata, {QualityCriterion::ReprojectionError, -1.0}, 2).succeeded());
+    EXPECT_FALSE(queryPruneCandidates(
+        metadata, {QualityCriterion::ImageCount, 2.5}, 2).succeeded());
+
+    std::atomic_bool cancelled{true};
+    EXPECT_FALSE(queryPruneCandidates(
+        metadata,
+        {QualityCriterion::ReprojectionError, 1.0},
+        2,
+        &cancelled).succeeded());
 }
 
 } // namespace

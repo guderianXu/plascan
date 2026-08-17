@@ -16,6 +16,18 @@ std::size_t sampleIndex(int x, int y, int z)
     return static_cast<std::size_t>((z * 4 + y) * 4 + x);
 }
 
+std::size_t sampleIndex(const std::array<int, 3> &sampleDimensions,
+                        int x,
+                        int y,
+                        int z)
+{
+    return (static_cast<std::size_t>(z) *
+                static_cast<std::size_t>(sampleDimensions[1]) +
+            static_cast<std::size_t>(y)) *
+            static_cast<std::size_t>(sampleDimensions[0]) +
+        static_cast<std::size_t>(x);
+}
+
 std::vector<float> makeEnclosedConfiguration(std::uint32_t configuration)
 {
     std::vector<float> field(64u, 1.0f);
@@ -66,6 +78,51 @@ TEST(Mc33IsoSurfaceExtractorTest, EnclosedBinaryConfigurationsAreWatertight)
     EXPECT_EQ(total_triangles, 8108u);
 }
 
+TEST(Mc33IsoSurfaceExtractorTest,
+     FullySupportedBinaryConfigurationsMatchUnfilteredExtraction)
+{
+    if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        GTEST_SKIP() << "MC33 dependency is not configured";
+    }
+
+    const std::vector<std::uint8_t> support(64u, 1u);
+    xjw::mesh::Mc33IsoSurfaceOptions options;
+    options.requireSupportedSignChange = true;
+    for (std::uint32_t configuration = 1; configuration < 256; ++configuration)
+    {
+        const std::vector<float> field = makeEnclosedConfiguration(configuration);
+        const auto baseline = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
+            {0.0f, 0.0f, 0.0f},
+            {3.0f, 3.0f, 3.0f},
+            {3, 3, 3},
+            field);
+        const auto filtered = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
+            {0.0f, 0.0f, 0.0f},
+            {3.0f, 3.0f, 3.0f},
+            {3, 3, 3},
+            field,
+            support,
+            options);
+
+        ASSERT_TRUE(baseline.ok)
+            << "configuration=" << configuration
+            << " error=" << baseline.errorMessage;
+        ASSERT_TRUE(filtered.ok)
+            << "configuration=" << configuration
+            << " error=" << filtered.errorMessage;
+        EXPECT_EQ(filtered.statistics.rejectedUnsupportedCellFaceCount, 0u)
+            << "configuration=" << configuration;
+        EXPECT_EQ(filtered.mesh.faces.size(), baseline.mesh.faces.size())
+            << "configuration=" << configuration;
+        const auto quality = xjw::mesh::evaluateMeshTopologyQuality(filtered.mesh);
+        EXPECT_EQ(quality.boundaryEdgeCount, 0u)
+            << "configuration=" << configuration;
+        EXPECT_EQ(quality.nonManifoldEdgeCount, 0u)
+            << "configuration=" << configuration;
+    }
+}
+
 TEST(Mc33IsoSurfaceExtractorTest, PreservesBoundsAndSupportMask)
 {
     if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
@@ -98,16 +155,20 @@ TEST(Mc33IsoSurfaceExtractorTest, PreservesBoundsAndSupportMask)
     }
     support.front() = 0u;
 
+    xjw::mesh::Mc33IsoSurfaceOptions options;
+    options.requireSupportedSignChange = true;
     const auto result = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
         {2.0f, -3.0f, 5.0f},
         {6.0f, 3.0f, 7.0f},
         {cells, cells, cells},
         field,
-        support);
+        support,
+        options);
 
     ASSERT_TRUE(result.ok) << result.errorMessage;
     ASSERT_FALSE(result.mesh.empty());
     EXPECT_EQ(result.statistics.supportMaskedSampleCount, 1u);
+    EXPECT_EQ(result.statistics.rejectedUnsupportedCellFaceCount, 0u);
     const auto quality = xjw::mesh::evaluateMeshTopologyQuality(result.mesh);
     EXPECT_EQ(quality.boundaryEdgeCount, 0);
     EXPECT_EQ(quality.nonManifoldEdgeCount, 0);
@@ -164,5 +225,117 @@ TEST(Mc33IsoSurfaceExtractorTest,
     for (const xjw::mesh::MeshVertex &vertex : result.mesh.vertices)
     {
         EXPECT_GT(vertex.x, 1.0f);
+    }
+}
+
+TEST(Mc33IsoSurfaceExtractorTest,
+     MixedSupportCellRetainsOnlySupportedCrossingEdges)
+{
+    if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        GTEST_SKIP() << "MC33 dependency is not configured";
+    }
+
+    const std::array<int, 3> sample_dimensions{2, 2, 2};
+    std::vector<float> field(8u, -1.0f);
+    std::vector<std::uint8_t> support(8u, 1u);
+    field[sampleIndex(sample_dimensions, 1, 0, 0)] = 1.0f;
+    support[sampleIndex(sample_dimensions, 0, 1, 1)] = 0u;
+
+    xjw::mesh::Mc33IsoSurfaceOptions options;
+    options.requireSupportedSignChange = true;
+    const auto result = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 1.0f, 1.0f},
+        {1, 1, 1},
+        field,
+        support,
+        options);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage;
+    ASSERT_EQ(result.mesh.faces.size(), 1u);
+    EXPECT_EQ(result.mesh.vertices.size(), 3u);
+    EXPECT_GT(result.statistics.rejectedUnsupportedCellFaceCount, 0u);
+    for (const xjw::mesh::MeshVertex &vertex : result.mesh.vertices)
+    {
+        EXPECT_LT(vertex.y + vertex.z, 0.75f);
+    }
+}
+
+TEST(Mc33IsoSurfaceExtractorTest,
+     TwoCellSeamRejectsUnsupportedForcedOutsideSurface)
+{
+    if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        GTEST_SKIP() << "MC33 dependency is not configured";
+    }
+
+    const std::array<int, 3> sample_dimensions{3, 2, 2};
+    std::vector<float> field(12u, -1.0f);
+    std::vector<std::uint8_t> support(12u, 1u);
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            field[sampleIndex(sample_dimensions, 2, y, z)] = 1.0f;
+            support[sampleIndex(sample_dimensions, 0, y, z)] = 0u;
+        }
+    }
+
+    xjw::mesh::Mc33IsoSurfaceOptions options;
+    options.requireSupportedSignChange = true;
+    const auto result = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
+        {0.0f, 0.0f, 0.0f},
+        {2.0f, 1.0f, 1.0f},
+        {2, 1, 1},
+        field,
+        support,
+        options);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage;
+    ASSERT_FALSE(result.mesh.empty());
+    EXPECT_GT(result.statistics.rejectedUnsupportedCellFaceCount, 0u);
+    for (const xjw::mesh::MeshVertex &vertex : result.mesh.vertices)
+    {
+        EXPECT_NEAR(vertex.x, 1.5f, 1.0e-5f);
+    }
+}
+
+TEST(Mc33IsoSurfaceExtractorTest,
+     ExactIsoSampleUsesConnectivityPositiveSideConvention)
+{
+    if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        GTEST_SKIP() << "MC33 dependency is not configured";
+    }
+
+    const std::array<int, 3> sample_dimensions{3, 2, 2};
+    std::vector<float> field(12u, -1.0f);
+    std::vector<std::uint8_t> support(12u, 1u);
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            field[sampleIndex(sample_dimensions, 1, y, z)] = 0.0f;
+            field[sampleIndex(sample_dimensions, 2, y, z)] = 1.0f;
+            support[sampleIndex(sample_dimensions, 2, y, z)] = 0u;
+        }
+    }
+
+    xjw::mesh::Mc33IsoSurfaceOptions options;
+    options.requireSupportedSignChange = true;
+    const auto result = xjw::mesh::Mc33IsoSurfaceExtractor::extract(
+        {0.0f, 0.0f, 0.0f},
+        {2.0f, 1.0f, 1.0f},
+        {2, 1, 1},
+        field,
+        support,
+        options);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage;
+    ASSERT_FALSE(result.mesh.empty());
+    for (const xjw::mesh::MeshVertex &vertex : result.mesh.vertices)
+    {
+        EXPECT_NEAR(vertex.x, 1.0f, 1.0e-5f);
     }
 }

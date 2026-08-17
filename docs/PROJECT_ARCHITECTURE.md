@@ -271,9 +271,9 @@ core/
 │   ├── DenseCloudRefinementService.h/cpp # 流式 PLY 多轮细化与内存回退，供 CLI/工作流复用
 │   ├── StreamingDepthFusionService.h/cpp # 融合窗口、帧缓存、共识配置和分批聚合编排
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
-│   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash 和 source plan
+│   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash、source plan 与几何来源位序
 │   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
-│   ├── MvsImagePreprocessor.h/cpp # 原图去畸变并生成正深度、零畸变的 FramePinholeCamera 工作值
+│   ├── MvsImagePreprocessor.h/cpp # 原图与 valid mask 共用去畸变映射，并生成正深度、零畸变工作相机
 │   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
 │   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
 │   ├── DepthPyramidPolicy.h/cpp # 从最终质量档生成 4D/2D/D 三级 PatchMatch 调度
@@ -287,12 +287,14 @@ core/
 │   ├── DepthCrossViewHoleRepair.h/cpp # 一致性过滤后以三源逆深度簇保守补回环拍对象缺面
 │   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/锚定插值来源编码与统计
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
+│   ├── DepthFrameQualificationPolicy.h # GUI/模型/点云共享的主融合帧资格与环拍覆盖数量契约
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── DepthMemoryPolicy.h/cpp # 图像/深度/可见图/保存队列/后端 staging 饱和估算与 eager/bounded 决策
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
 │   ├── DepthPoseAlignmentRefiner.h/cpp # 锚定尺度的鲁棒点到平面局部 SE(3) 派生位姿细化
 │   ├── DepthPoseRefinementStage.h/cpp # 默认关闭的跨视深度候选采样、安全门与派生相机输出
 │   ├── PatchMatchEstimator.cpp  # PatchMatch 公共校验、后端选择和回退
+│   ├── PatchMatchHostUtils.h/cpp # 三后端共享的 double 局部相对位姿与无效值感知、尺度稳定深度滤波
 │   ├── PatchMatchCPU.cpp        # 可独立构建的 CPU PatchMatch 实现
 │   ├── PatchMatchCUDA.cu/h     # 按设备隔离工作区与图像缓存的 CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # 无 CUDA 构建的 GPU 接口存根
@@ -305,7 +307,7 @@ core/
 │   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
-│   ├── EpipolarRectifier.h/cpp # 极线校正
+│   ├── EpipolarRectifier.h/cpp # 极线校正、工作相机深度范围转换及原相机 Z_cam 回投
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
 │   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
 │   ├── DenseCloudBuilder.h/cpp # 密集云构建器与点云过滤
@@ -317,6 +319,12 @@ core/
 │       ├── test_mvs_depth_pose_alignment.cpp
 │       ├── test_mvs_types.cpp
 │       └── test_mvs_pipeline.cpp
+│
+├── project_workflows/          # GUI/CLI 共享的项目级摄影测量工作流配置与资源适配
+│   ├── MvsSourcePairQualityLoader.h/cpp # `.pimatch` 几何审计到 MVS source pair 质量的统一桥接
+│   ├── PointCloudInputPreparation.h/cpp # 正式稀疏点云加载、过滤与 MVS 输入准备
+│   ├── PointCloudWorkflowConfig.h/cpp # 点云/深度质量档位到核心配置的统一转换
+│   └── ProjectWorkflowOperations.h/cpp # 稀疏点后处理与地形产品等项目工作流入口
 │
 ├── dense_match/                # 密集匹配模块 (新, 将逐步替换 mvs 中的匹配)
 │   ├── README.md               # 模块文档 (详见该文件)
@@ -339,6 +347,11 @@ core/
 │   ├── SurfaceReconstructor.h/cpp           # 表面重建主流程
 │   ├── SurfaceReconstructorHeightGrid.h/cpp # 高度格网方法
 │   ├── SurfaceReconstructorPostprocess.h/cpp # 网格清理、边界环拆分、质量补洞及退化微孔保拓扑收缩
+│   ├── SparseSfmPointQualityReader.h/cpp # 流式读取逐点 SfM 质量 sidecar，避免大 JSON DOM 峰值
+│   ├── SparseOrbitalScaffoldBuilder.h/cpp # 质量过滤、离群点剔除、体素降采样及径向外法向
+│   ├── ScreenedPoissonSurfaceBuilder.h/cpp # 官方 Screened Poisson 的固定版本适配器
+│   ├── MeshVoxelTopologyRepair.h/cpp # 保守体素化、闭运算、MC33/三角质量优化及闭合 genus-0 回退
+│   ├── OrbitalSparseScaffoldSurfaceBuilder.h/cpp # 环拍稀疏全局载体的 fail-closed 编排
 │   ├── MeshIO.cpp              # 网格文件 I/O
 │   ├── TextureMapper.h/cpp     # 纹理配置/结果门面及无相机时的顶点色回退
 │   ├── CameraTextureMapper.cpp # camera_projected_atlas_v3 兼容路径与 v4 调度
@@ -350,6 +363,7 @@ core/
 │   ├── TextureAtlasMaxRects.cpp # 有操作预算的确定性无旋转 MaxRects 实现
 │   ├── TextureAtlasSampling.h/cpp # 逐纹素深度/掩膜复核、实样本 medoid 与 Natural 鲁棒融合
 │   ├── TextureAtlasBaker.cpp   # 图集光栅化、边界填充、锐化及 OBJ/MTL/PNG 输出
+│   ├── StudioForegroundMask.h/cpp # 黑色摄影背景检测、主体轮廓提取与可复用前景掩模
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色
 │   ├── MeshQuadricSimplifier.h/cpp # 目标面数驱动、边界/锐边/翻转约束的 QEM 自适应简化
@@ -357,6 +371,8 @@ core/
 │   ├── OpenMeshSimplifier.h/cpp # OpenMesh 拓扑约束减面、法向翻转保护与限位平滑
 │   ├── BoundaryAwareVoxelSimplifier.h/cpp # 多视图剪影保护、内部开放边界可聚类的体素简化后备
 │   ├── MeshTopologyQuality.h/cpp # 开放边/非流形/连通分量/三角形长宽比质量门及保拓扑边翻转优化
+│   ├── DepthTsdfFinalQualityGate.h/cpp # TSDF 写出前硬质量门；观测曲面仅放宽开放边比例
+│   ├── DepthTsdfRecoveryTransaction.h/cpp # TSDF 恢复候选的基线/候选拓扑事务验收与 support 回滚
 │   ├── MeshBoundaryAttribution.h/cpp # 最终开放边归因、阶段边界统计和原因着色调试 PLY
 │   ├── MeshAcquisitionGapReport.h/cpp # 开放边根因、12×3 表面方位、逐帧来源覆盖与补拍/重算建议 JSON
 │   ├── MeshIsotropicRemesher.h/cpp # 内部高长宽比区域的短边合并、长边拆分与拓扑/法向保护
@@ -412,7 +428,7 @@ core/
 │   ├── SurveyControlImport.h/cpp # GCP/检查点/比例尺 CSV 导入为 survey_control metadata
 │   ├── SurveyControlReport.h/cpp # GCP/检查点/比例尺 metadata 统计和残差状态汇总
 │   ├── PointCloudAlignment.h/cpp # 点云完整 Sim3 / 最近邻 ICP 配准与 beg/end error CSV
-│   ├── ModelMeshRenderer.h/cpp # CPU tile 并行 z-buffer，将 PLY 网格投影到 MVS 实际相机
+│   ├── ModelMeshRenderer.h/cpp # CPU tile 并行 z-buffer，以 reciprocal-Z 和透视正确属性投影 PLY 网格
 │   ├── ModelImageMetrics.h/cpp # 轮廓、覆盖、边缘、SSIM/PSNR 影像空间指标
 │   ├── ModelGeometryComparator.h/cpp # 连通分量与参考点云双向最近邻 A+C 几何验收
 │   ├── ModelImageQualityEvaluator.h/cpp # GUI/CLI 可复用的统一门控、诊断图和 JSON/CSV 报告
@@ -592,21 +608,21 @@ gui/
 │   │   ├── MapProjectDialogLayout.cpp     # 投影、参数、区域、输出和进度分组布局
 │   │   ├── MapProjectDialogSettings.cpp   # 稳定 token、设置往返、输入校验与控件联动
 │   │   └── MapProjectDialogEstimate.cpp   # DEM 元数据读取、真实像元/范围和内存估算
-│   ├── tie_points/             # 连接点创建/清理/查看与重叠分析
+│   ├── tie_points/             # 连接点创建/清理/查看与重叠分析；清理对话框将阈值滑块连到后台候选预览
 │   ├── shared/                 # 对话框共享样式与布局辅助
 │   └── README.md               # 分类规则与新增对话框约束
 │
 ├── widgets/                    # 自定义 Qt 控件
 │   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
-│   ├── MatchPointBatchItem.h/cpp       # 匹配查看器单图元批量端点绘制，避免逐点 QGraphicsItem
-│   ├── MatchSpatialIndex.h/cpp         # 匹配点二维网格索引与可视区域候选查询
-│   ├── MatchGpuRenderer.h/cpp          # 基于 QRhi 的匹配线与端点 GPU 批量渲染器
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
 │   ├── DualImageViewer.h/cpp           # 双图并列查看器，显式选择稀疏连线或左右影像视差目标
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
 │   ├── DisparityHeatmapOverlay.h/cpp   # 异步视差热力图，按目标 viewport 变换做像素配准
 │   ├── PhotoStripWidget.h/cpp          # 可视区缩略图、有界预取队列与 LRU 缓存
 │   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中任务、实时用时和进度
+│   ├── MatchPointBatchItem.h/cpp       # 匹配查看器单图元批量端点绘制，避免逐点 QGraphicsItem
+│   ├── MatchSpatialIndex.h/cpp         # 匹配点二维网格索引与可视区域候选查询
+│   ├── MatchGpuRenderer.h/cpp          # 基于 QRhi 的匹配线与端点 GPU 批量渲染器
 │   ├── DataTreeWidget.h/cpp            # Metashape 式工作区汇总 → Chunk → 资源分组树
 │   ├── WorkspaceSectionIcons.h/cpp     # 工作区、Chunk、影像及成果类型语义图标
 │   ├── ReferencePanelWidget.h/cpp      # 相机参考、标记、标尺三段树及源值/估计值/误差模式
@@ -623,7 +639,7 @@ gui/
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
 │   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成、取消及结果登记
 │   │   ├── ProjectMaskInferenceAdapter.h/cpp         # U2Net/BiRefNet 后端适配和实际模型/设备/engine 元数据
-│   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
+│   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建与连接点质量剔除，产出一致的 PLY/sidecar 并通知三维视图刷新
 │   │   ├── ProjectPointCloudWorkflowController.h/cpp # 点云工作流协调：深度估计/复用、流式融合与结果登记
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 局部 DEM、原生小天体全球 DEM/DOM、取消与 Chunk 隔离登记
@@ -664,12 +680,13 @@ gui/
 │   ├── LayerOverlayItems.h/cpp          # 批量特征/残差覆盖层及后台蒙版轮廓数据准备
 │   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
 │   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
-│   ├── CameraSceneWidget.h/cpp           # 三维场景生命周期、模型/点云与相机的 RHI 渲染及交互
+│   ├── CameraSceneWidget.h/cpp           # 三维场景生命周期、模型/点云与相机的 RHI 渲染及交互；独立红色层异步预览候选剔除连接点
 │   ├── CameraSceneWidgetOverlay.cpp      # 三维场景的 QPainter 交互覆盖层与相机标签绘制
 │   ├── CameraSceneWidgetLegends.cpp      # 三维场景的图例和后台加载进度绘制
 │   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
 │   ├── ObjRenderPreparation.h/cpp       # 静态网格 VBO、三角/线框 IBO 与 UV 接缝流准备
 │   ├── SceneGeometryPreparation.h/cpp   # 点云 GPU 数据、空间分块、视锥/LOD 计划与后台框选
+│   ├── TiePointVisualization.h/cpp       # 连接点逐点质量解析、指标范围与有界候选索引采样
 │   ├── PointCloudEditPreparation.h/cpp  # 点云增量删除、撤销数据与 GPU 数据重建
 │   └── PointCloudSnapshotIO.h/cpp       # 点云编辑暂存、格式分派与同目录原子替换
 │
@@ -842,6 +859,19 @@ MenuWorkflowController
 可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与
 非零顶点数检查。
 
+MVS 深度统一表示与工件 `camera_model` 对应相机坐标系的正向 `Z_cam`，无效值为 0。原始畸变域、
+去畸变工作域和极线校正域不能混用：影像及 valid mask 使用同一去畸变映射；校正域深度返回工作域时，
+按校正相机反投影并重新计算原工作相机的轴向深度，confidence/support 等标量属性只做最近邻重映射。
+极线校正的搜索范围也先转换到校正相机的 `Z_cam`。PatchMatch 的 CPU/CUDA/OpenCL 相对位姿统一在
+double 世界坐标中形成局部基线后再降为 float，深度后处理只统计有效邻域并使用对数深度范围权重，
+避免无效零值污染以及米/毫米单位改变滤波结果。跨视几何尚未计算时，质量门把该指标标记为不可用，
+不得由光度置信度推算伪造的一致性分数。
+
+从 MVS revision 37 起，逐像素 `geometry_source_mask` 的 bit 位序由独立的
+`geometry_source_indices` 持久化；它表示一致性与跨视修复实际使用的来源序列，不能用较短的 PatchMatch
+`source_indices` 代替。写入、复用、完整性审计和 TSDF 载入都会检查表长、重复/非法来源及表长外置位；
+模型工作流拒绝 revision 37 以前缺少精确位序契约的环拍深度工件，要求重新估计深度图。
+
 工作区树只显示一个不可打开的聚合“深度图”节点，用于表明当前深度帧数量、质量档位和
 过滤模式；不会为每帧深度或预览图创建独立资源。聚合节点支持整组删除，删除时清理最终层、
 Level 1/2/3 栅格及对应项目元数据，但不会删除源照片。照片工具栏的“显示深度图”按
@@ -899,6 +929,14 @@ OpenCL 默认用两个主机准备槽覆盖初始帧和一致性后残余重估�
 调用间空档、队列内非 kernel 时间和端到端 kernel duty，避免把任务管理器的低频采样尖峰直接当成
 设备空闲。
 
+深度回归工具位于 `scripts/validation`。`compare_plascan_depth_runs.py` 对两个 workspace 的最终帧按
+`ref_index + image basename` 配对，报告 pooled coverage、mask IoU、相对深度、几何支持、逆深度离散度
+和 acceptance 转移，并提供可选质量门禁；批次分位数使用确定性有界 reservoir，精确保留计数、均值和
+最大值。`compare_mvs_depth_to_metashape.py` 将原始深度残差、诊断性全局尺度归一化后的形状残差，以及
+匹配相机中心成对距离推导的参考坐标尺度分开报告，避免把不同坐标单位误判为 PatchMatch 深度尺度错误。
+2026-08-12 三类真实数据结果见
+`docs/benchmarks/2026-08-12-depth-rendering-real-data-validation.md`。
+
 PlaPoint 的 CPU-owned 高层接口对稀疏/稠密点云预处理独立执行 CUDA → OpenCL → CPU 选择，覆盖
 体素降采样、统计/半径离群点过滤、KNN 法向估计和高度格网；显式设备请求不静默替换。OpenCL 的公共
 基础设施由 PlaMatrix 提供，要求 OpenCL C 1.2，包括设备枚举与选择、context/command queue、
@@ -934,7 +972,32 @@ A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节�
 且带弱相机支持顶点的终端悬挂三角形，以及只有一条开放边但三个顶点均为弱支持的薄片，并执行两轮
 限位边界平滑；候选面和实际移除面数会单独记录。PLY
 
-环拍任意 3D 模型默认使用双分辨率隐式表面路径。72 级规则网格执行可见性占据图割：深度前方提供
+当环拍小天体的局部深度未通过完整性/拓扑判定、自然背景策略已经生效，并且工作区提供正式 SfM PLY
+与逐点质量 sidecar JSON 的完整配对时，模型工作流优先调用
+`OrbitalSparseScaffoldSurfaceBuilder` 构造独立的闭合全局载体。PLY 与 sidecar 被视为不可拆分的同源工件：
+`SparseSfmPointQualityReader` 流式读取 `point_xyz`、`track_len`、`rms_reproj_px` 和
+`triangulation_angle_deg`/`min_tri_angle_deg` 字段，不把数百 MiB 的 JSON 一次性展开为 DOM；读取后
+必须同时验证点数和逐点坐标与 PLY 对齐。默认只保留轨迹长度至少 3、重投影 RMS 不大于 `1.5 px`、
+最小三角化角不小于
+`5°` 的点，再执行有限值、全局径向及统计离群点过滤和 PlaPoint 体素降采样，并以鲁棒中心生成向外径向
+法向。稀疏 SfM 点不注入 TSDF，因为它们不具备深度像素的自由空间和实测表面语义。
+
+过滤后的有向点由 `ScreenedPoissonSurfaceBuilder` 交给官方
+[PoissonRecon](https://github.com/mkazhdan/PoissonRecon) Screened Poisson 实现；源码固定在 commit
+`262b0f539d404057d1f36e1adc07fc9388678899`。默认参数为 depth 9、`pointWeight=4`、
+`samplesPerNode=1.5`、scale 1.1、8 次求解迭代、CG 精度 `1e-3`，并启用 manifold 提取。无效样本和零
+法向被拒绝，`pointWeight` 必须严格大于 0，不能静默退化为非 screened Poisson。这里的官方适配器与
+PlaPoint 通用表面重建中的 Poisson/PCG 后端是两条独立实现，环拍稀疏全局载体使用前者。
+
+Poisson 输出先只保留最大面连通分量，剔除卫星碎片。若该分量还不是单连通、闭合、genus-0 的二流形，
+`MeshVoxelTopologyRepair` 必须执行保守三角形体素化、六邻域外部空域洪泛和从小到大的形态学闭运算；
+必要时只保留最大实体分量。候选只有在体素实体为单分量且 Euler 数为 1、其边界为单分量闭合二流形且
+表面 Euler 数为 2 时才能返回。已选择该补全分支后，配对不完整、sidecar 缺失或错位、过滤后点数不足、
+Screened Poisson 失败、拓扑修复无法证明上述条件，或最终深度完整性/质量门失败，都会立即停止写出，
+不会仅凭原始 PLY 或旧载体静默继续。两项稀疏工件均未提供时不会伪装成该补全分支，仍由常规 TSDF
+交付门决定是否允许输出。
+
+常规环拍任意 3D 深度主体使用双分辨率隐式表面路径。72 级规则网格执行可见性占据图割：深度前方提供
 空域证据，深度邻域提供表面/实体证据，轮廓只作有界先验；占据体按“柄修复、良构修复、内部气泡
 清理”循环到固定点。该规则网格只是低分辨率的内外符号/拓扑先验，不再把单元外壳直接作为最终
 网格。完成器把其符号约束与原生高分辨率 TSDF 残差合成，然后由 MC33 在 192/384 级场上插值真实

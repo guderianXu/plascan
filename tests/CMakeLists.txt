@@ -601,6 +601,17 @@ target_link_libraries(test_project_resource_cleanup PRIVATE
 )
 gtest_discover_tests(test_project_resource_cleanup)
 
+add_executable(test_mvs_source_pair_quality_loader
+    test_mvs_source_pair_quality_loader.cpp
+)
+target_link_libraries(test_mvs_source_pair_quality_loader PRIVATE
+    project_workflows
+    image_matching
+    Qt6::Core
+    GTest::gtest_main
+)
+gtest_discover_tests(test_mvs_source_pair_quality_loader)
+
 # ==============================================================================
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
@@ -1016,6 +1027,9 @@ plascan_add_python_unittest(SummarizeMvsDepthProvenanceTest test_summarize_mvs_d
 plascan_add_python_unittest(ModelProvenanceTest test_model_provenance)
 plascan_add_python_unittest(BundleAdjustmentCudaContractsTest test_ba_cuda_contracts)
 plascan_add_python_unittest(ComparePointCloudToLidarTest test_compare_point_cloud_to_lidar)
+plascan_add_python_unittest(CompareMvsDepthToMetashapeTest test_compare_mvs_depth_to_metashape)
+plascan_add_python_unittest(ComparePlascanDepthRunsTest test_compare_plascan_depth_runs)
+plascan_add_python_unittest(MvsWorkspaceIntegrityAuditTest test_audit_mvs_workspace_integrity)
 plascan_add_python_unittest(DemGridToHeightPlyTest test_dem_grid_to_height_ply)
 plascan_add_python_unittest(VerifyMarkerPdfTest test_verify_marker_pdf)
 
@@ -1074,6 +1088,88 @@ target_include_directories(test_mesh_reconstructor PRIVATE
 )
 gtest_discover_tests(test_mesh_reconstructor)
 
+add_executable(test_screened_poisson_surface_builder
+    test_screened_poisson_surface_builder.cpp
+)
+target_link_libraries(test_screened_poisson_surface_builder PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_screened_poisson_surface_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_screened_poisson_surface_builder)
+
+add_executable(test_sparse_orbital_scaffold_builder
+    test_sparse_orbital_scaffold_builder.cpp
+)
+target_link_libraries(test_sparse_orbital_scaffold_builder PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_sparse_orbital_scaffold_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_sparse_orbital_scaffold_builder)
+
+add_executable(test_mesh_voxel_topology_repair
+    test_mesh_voxel_topology_repair.cpp
+)
+target_link_libraries(test_mesh_voxel_topology_repair PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_mesh_voxel_topology_repair PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_mesh_voxel_topology_repair)
+
+add_executable(test_depth_tsdf_final_quality_gate
+    test_depth_tsdf_final_quality_gate.cpp
+)
+target_link_libraries(test_depth_tsdf_final_quality_gate PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_depth_tsdf_final_quality_gate PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_depth_tsdf_final_quality_gate)
+
+add_executable(test_depth_tsdf_recovery_transaction
+    test_depth_tsdf_recovery_transaction.cpp
+)
+target_link_libraries(test_depth_tsdf_recovery_transaction PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_depth_tsdf_recovery_transaction PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_depth_tsdf_recovery_transaction)
+
+add_executable(test_depth_auxiliary_bridge_selector
+    test_depth_auxiliary_bridge_selector.cpp
+)
+target_link_libraries(test_depth_auxiliary_bridge_selector PRIVATE
+    meshing
+    GTest::gtest_main
+)
+target_include_directories(test_depth_auxiliary_bridge_selector PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_depth_auxiliary_bridge_selector)
+
 add_executable(test_model_output_policy
     test_model_output_policy.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelResultPolicy.cpp
@@ -1117,6 +1213,18 @@ target_include_directories(test_depth_measured_support_connectivity PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mesh
 )
 gtest_discover_tests(test_depth_measured_support_connectivity)
+
+add_executable(test_depth_geometry_source_encoding
+    test_depth_geometry_source_encoding.cpp
+)
+target_link_libraries(test_depth_geometry_source_encoding PRIVATE
+    meshing
+    GTest::gtest_main
+)
+target_include_directories(test_depth_geometry_source_encoding PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_depth_geometry_source_encoding)
 
 # ==============================================================================
 # test_camera_scene_view_math — 三维相机视角选择、深度排序与校准投影

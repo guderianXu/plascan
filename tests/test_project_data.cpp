@@ -2434,6 +2434,30 @@ TEST(ProjectDataTest, UpsertResultRecordPersistsThroughProjectDataContract)
     EXPECT_EQ(depthResults.first().toObject().value(QStringLiteral("grid_height")).toInt(), 600);
 }
 
+TEST(PortableProjectFormatTest, NormalizeDropsTransientMvsManifestResource)
+{
+    const QJsonObject depth_record{
+        {QStringLiteral("depth_png"), QStringLiteral("E:/project/mvs_output/depth_0.png")},
+        {QStringLiteral("raw_depth_path"), QStringLiteral("E:/project/mvs_output/depth_0.bin")},
+        {QStringLiteral("manifest_path"), QStringLiteral("E:/project/mvs_output/mvs_manifest.json")}};
+    const QJsonObject report_record{
+        {QStringLiteral("manifest_path"), QStringLiteral("E:/project/report_manifest.json")}};
+    const QJsonObject normalized = PortableProjectFormat::normalizeProjectResults(
+        QJsonObject{
+            {QStringLiteral("depth_map_results"), QJsonArray{depth_record}},
+            {QStringLiteral("report_results"), QJsonArray{report_record}}});
+
+    const QJsonObject normalized_depth = normalized.value(
+        QStringLiteral("depth_map_results")).toArray().first().toObject();
+    EXPECT_FALSE(normalized_depth.contains(QStringLiteral("manifest_path")));
+    EXPECT_TRUE(normalized_depth.contains(QStringLiteral("schema_version")));
+
+    const QJsonObject normalized_report = normalized.value(
+        QStringLiteral("report_results")).toArray().first().toObject();
+    EXPECT_EQ(normalized_report.value(QStringLiteral("manifest_path")).toString(),
+              QStringLiteral("E:/project/report_manifest.json"));
+}
+
 TEST(ProjectDataTest, UpsertResultRecordKeepsSameFileNameInDifferentDirectories)
 {
     QTemporaryDir dir;

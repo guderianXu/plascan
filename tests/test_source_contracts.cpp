@@ -493,7 +493,7 @@ TEST(SfmSourceContractTest, SequencePnpRecoveryRunsOnlyAfterStandardPnpFails)
         "findRegisteredSequenceNeighbor(imageId,",
         "&previousImageId",
         "&nextImageId",
-        "if (!pnpResult.success && makeSequenceInitialPoseGuess",
+        "auto solveSequenceRecovery = [&]",
         "hasDirectPrevious && hasDirectNext",
         "hasDirectPrevious != hasDirectNext",
         "recoveryOptions.allowRelaxedInlierRatio = true",
@@ -502,6 +502,18 @@ TEST(SfmSourceContractTest, SequencePnpRecoveryRunsOnlyAfterStandardPnpFails)
         "bracketedSequencePnpMinInlierRatio",
         "bracketedSequencePnpMinInliers",
     });
+
+    const int regular_branch = indexOfOrFail(registration, "// 常规增量阶段");
+    const int standard_pnp = indexOfOrFail(
+        registration,
+        "pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);",
+        regular_branch);
+    const int failure_gate = indexOfOrFail(
+        registration, "if (!pnpResult.success)", standard_pnp);
+    const int sequence_recovery = indexOfOrFail(
+        registration, "pnpResult = solveSequenceRecovery();", failure_gate);
+    EXPECT_LT(standard_pnp, failure_gate);
+    EXPECT_LT(failure_gate, sequence_recovery);
 }
 
 TEST(SfmSourceContractTest, MatchGeometryFilteringUsesSeededSerialUsac)
@@ -848,6 +860,154 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
 
     expectNotContainsAll(manager, {
         "深度图源需要先融合为密集点云，但未找到可复用的 dense_cloud.ply",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest,
+     SparseScaffoldCompletionUpdatesEffectiveDiagnosticsAfterSuccess)
+{
+    const QString workflow = readSourceFile(
+        QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString scaffold_block = sectionBetween(
+        workflow,
+        "if (sparse_scaffold_completion_requested)",
+        "const bool direct_visibility_occupancy_output");
+
+    expectContainsAll(scaffold_block, {
+        "if (!sparse_scaffold_completion.ok)",
+        "output_mesh = &sparse_scaffold_completion.mesh",
+        R"("effective_observation_only_surface")] = false)",
+        R"(QStringLiteral("effective_interpolation")] =)",
+        R"(QStringLiteral("sparse_scaffold_completion"))",
+    });
+    const int failure_guard = indexOfOrFail(
+        scaffold_block, "if (!sparse_scaffold_completion.ok)");
+    const int selected_output = indexOfOrFail(
+        scaffold_block, "output_mesh = &sparse_scaffold_completion.mesh");
+    const int interpolation_diagnostic = indexOfOrFail(
+        scaffold_block,
+        R"(QStringLiteral("effective_interpolation")] =)");
+    EXPECT_LT(failure_guard, selected_output);
+    EXPECT_LT(selected_output, interpolation_diagnostic);
+}
+
+TEST(GuiAlgorithmAlignmentContractTest,
+     FinalSelectedMeshIsColorizedBeforeItIsSavedOrTextured)
+{
+    const QString workflow = readSourceFile(
+        QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString final_output_block = sectionBetween(
+        workflow,
+        "if (options.calculateVertexColors && !output_mesh->hasVertexColors)",
+        "if (result.ok && !tsdf.boundaryAttributionDebugMesh.empty())");
+
+    expectContainsAll(final_output_block, {
+        "MeshColorizer::colorize",
+        "output_mesh, final_color_views, color_options",
+        "addFinalMeshColorStatistics",
+        "saveMeshAndOptionalTexture(*output_mesh",
+    });
+    const int colorize = indexOfOrFail(
+        final_output_block, "MeshColorizer::colorize");
+    const int save = indexOfOrFail(
+        final_output_block, "saveMeshAndOptionalTexture(*output_mesh");
+    EXPECT_LT(colorize, save);
+}
+
+TEST(GuiAlgorithmAlignmentContractTest,
+     TextureOnlyUsesTemporaryVertexColoredMeshWithoutRewritingOriginal)
+{
+    const QString workflow = readSourceFile(
+        QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString texture_block = sectionBetween(
+        workflow,
+        "WorkflowResult buildTextureOnly",
+        "} // namespace xjw::mesh::workflow");
+
+    expectContainsAll(texture_block, {
+        "TriMesh::loadPLY",
+        "!source_mesh.hasVertexColors",
+        "MeshColorizer::colorize",
+        R"(QStringLiteral(".texture_source_colored.ply"))",
+        "texture_mesh_path = temporary_colored_mesh_path",
+        "generateCameraTexturedModelFromMeshFile",
+        "QFile::remove(temporary_colored_mesh_path)",
+    });
+    expectNotContainsAll(texture_block, {
+        "source_mesh.savePLY(xjw::common::io::toUtf8Path(request.meshPath)",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest,
+     SparseScaffoldAssistedOrbitalModelBypassesOnlyTheDepthOnlyFrameMinimum)
+{
+    const QString workflow = readSourceFile(
+        QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString manager = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    const QString policy = readSourceFile(
+        QStringLiteral("src/gui/project/support/ProjectModelWorkflowPolicy.cpp"));
+
+    expectContainsAll(workflow, {
+        "sparse_scaffold_low_primary_bypass_applied",
+        "loaded.primaryFrameCount >= 2",
+        "sparse_scaffold_completion_enabled",
+        "sparse_scaffold_pair_provided",
+        "sparse_scaffold_observation_policy_active",
+        "interpolationIsDisabled(effective_settings)",
+        "!sparse_scaffold_low_primary_bypass_applied",
+    });
+    expectNotContainsAll(workflow, {
+        "丝川",
+        "Itokawa",
+    });
+    expectContainsAll(manager, {
+        "resolveSparseScaffoldSource",
+        "allow_sparse_scaffold_fallback",
+        "assessStoredDepthBatchCompatibility",
+    });
+    expectContainsAll(policy, {
+        "allow_orbital_sparse_scaffold_fallback",
+        "primary_frame_count >= 2",
+        "!sparse_scaffold_can_carry_global_shape",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest,
+     CarrierSurfaceDenoisingRelaxesAreaOnlyWithVolumeAndTopologyGuards)
+{
+    const QString workflow = readSourceFile(
+        QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString guard = sectionBetween(
+        workflow,
+        "FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising",
+        "bool visibilityOccupancyDepthRefinementEnabled");
+    expectContainsAll(guard, {
+        "bool allowCarrierAreaRelaxation",
+        "meshAbsoluteOrientedVolume(*mesh)",
+        "meshAbsoluteOrientedVolume(candidate)",
+        "hasSameFaceIndexBuffer(*mesh, candidate)",
+        "result.qualityBefore.closedTwoManifold",
+        "result.qualityAfter.closedTwoManifold",
+        "result.absoluteVolumeRatio >= 0.98",
+        "result.absoluteVolumeRatio <= 1.02",
+        "triangle_quality_not_worse",
+        "normal_quality_not_worse",
+        "normal_quality_improved",
+        "carrier_area_relaxation_eligible ? 0.60 : 0.96",
+    });
+
+    const QString call = sectionBetween(
+        workflow,
+        "const bool final_surface_denoising_enabled",
+        "if (options.enableDepthCompletenessDiagnostics");
+    expectContainsAll(call, {
+        "output_mesh == &sparse_scaffold_completion.mesh",
+        "direct_visibility_occupancy_output",
+        "allow_carrier_area_relaxation",
+        "final_surface_denoising_volume_before",
+        "final_surface_denoising_volume_after",
+        "final_surface_denoising_volume_ratio",
     });
 }
 

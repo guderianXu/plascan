@@ -9,6 +9,7 @@
 #include "ProjectResourceCleanupService.h"
 #include "ProjectTiePointResultService.h"
 #include "ProjectData.h"
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthFrameUtils.h"
 #include "ProjectFilesManager.h"
 #include "ProjectDashboardSummary.h"
@@ -302,6 +303,48 @@ TEST(DepthOverlayControllerTest, UnrelatedFrameCompletionDoesNotCancelCurrentOve
         image_path));
 
     QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 1, 5000);
+}
+
+TEST(DepthOverlayControllerTest, LoadsRelativeArtifactsFromProjectDirectory)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString project_path = directory.filePath(QStringLiteral("relative.plascan"));
+    const QString image_path = directory.filePath(QStringLiteral("current.png"));
+    const QString artifact_directory = directory.filePath(QStringLiteral("depth_artifacts"));
+    ASSERT_TRUE(QDir().mkpath(artifact_directory));
+    const QString depth_path = QDir(artifact_directory).filePath(QStringLiteral("current.bin"));
+    const QString mask_path = QDir(artifact_directory).filePath(QStringLiteral("current_mask.png"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        depth_path, (cv::Mat_<float>(1, 2) << 2.0f, 4.0f)).ok);
+    ASSERT_TRUE(cv::imwrite(mask_path.toStdString(),
+                           cv::Mat(1, 2, CV_8UC1, cv::Scalar(255))));
+
+    const QJsonObject record{
+        {QStringLiteral("ref_image"), image_path},
+        {QStringLiteral("raw_depth_path"), QStringLiteral("depth_artifacts\\current.bin")},
+        {QStringLiteral("valid_mask_path"),
+         QStringLiteral("depth_artifacts\\current_mask.png")}
+    };
+    xjw::gui::widgets::DepthOverlayController controller;
+    controller.setProjectPath(project_path);
+    controller.setProjectMetadata(QJsonObject{
+        {QStringLiteral("depth_map_results"), QJsonArray{record}}
+    });
+    QSignalSpy ready_spy(
+        &controller,
+        &xjw::gui::widgets::DepthOverlayController::overlayReady);
+    QSignalSpy failed_spy(
+        &controller,
+        &xjw::gui::widgets::DepthOverlayController::overlayFailed);
+
+    controller.request(
+        image_path,
+        xjw::gui::views::DepthOverlayLevel::Final,
+        xjw::gui::views::DepthOverlayRenderOptions{});
+
+    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 1, 5000);
+    EXPECT_EQ(failed_spy.count(), 0);
 }
 
 TEST(DepthOverlayDataTest, RejectsArtifactWithoutRequiredValidMask)
@@ -1791,6 +1834,152 @@ TEST(DepthFrameUtilsTest, ResolvesPlannedFusionSourcesWithinStoredBatch)
               std::vector<int>({2}));
 }
 
+TEST(DepthFrameUtilsTest, StoredFusionUsesArtifactCameraInsteadOfCurrentProjectCamera)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString raw_depth_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("depth_7.bin"));
+    const QString geometry_support_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("depth_7_geometry_support.bin"));
+    const QString inverse_depth_spread_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("depth_7_inverse_depth_spread.bin"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        raw_depth_path,
+        cv::Mat(2, 2, CV_32FC1, cv::Scalar(3.0f))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_support_path,
+        cv::Mat(2, 2, CV_16UC1, cv::Scalar(2))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        inverse_depth_spread_path,
+        cv::Mat(2, 2, CV_32FC1, cv::Scalar(0.01f))).ok);
+
+    xjw::core::project::StoredDepthFrameRecord stored;
+    stored.rawDepthPath = raw_depth_path;
+    stored.rawGeometrySupportPath = geometry_support_path;
+    stored.rawInverseDepthSpreadPath = inverse_depth_spread_path;
+    // The camera was persisted for a 4x4 grid, while this stored depth artifact
+    // was subsequently reduced to 2x2. The stored camera remains authoritative
+    // and must be scaled to the loaded raster instead of replaced by the current camera.
+    stored.gridWidth = 4;
+    stored.gridHeight = 4;
+    stored.cameraModel = QJsonObject{
+        {QStringLiteral("fx"), 400.0},
+        {QStringLiteral("fy"), 410.0},
+        {QStringLiteral("cx"), 1.0},
+        {QStringLiteral("cy"), 1.0},
+        {QStringLiteral("rotation_world_to_camera"),
+         QJsonArray{1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0}},
+        {QStringLiteral("camera_center"), QJsonArray{3.0, 4.0, 5.0}}
+    };
+
+    const xjw::FramePinholeCamera current_camera =
+        makeCamera(30.0, 40.0, 50.0, 1200.0, 1210.0);
+    xjw::mvs::FusionConfig fusion_config;
+    fusion_config.confidenceThresh = 0.0f;
+    fusion_config.enableAdaptiveConfidenceFilter = false;
+    fusion_config.doInpaint = false;
+    fusion_config.enableLocalDepthOutlierFilter = false;
+    fusion_config.enableSpeckleFilter = false;
+
+    const auto result = xjw::core::project::buildStoredFusionFrame(
+        stored, current_camera, fusion_config, 2);
+
+    ASSERT_TRUE(result.status.ok) << qPrintable(result.status.errorMessage);
+    EXPECT_DOUBLE_EQ(result.frame.sourceCamera.focalX(), current_camera.focalX());
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel.focalX(), 200.0);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel.focalY(), 205.0);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel.principalX(), 0.5);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel.principalY(), 0.5);
+    ASSERT_TRUE(result.frame.cameraModel.imageSize().has_value());
+    EXPECT_EQ(result.frame.cameraModel.imageSize()->samples, 2);
+    EXPECT_EQ(result.frame.cameraModel.imageSize()->lines, 2);
+    const std::array<double, 3> stored_center = result.frame.cameraModel.cameraCenter();
+    EXPECT_EQ(stored_center, (std::array<double, 3>{3.0, 4.0, 5.0}));
+    ASSERT_EQ(result.frame.geometrySupportCount.type(), CV_16UC1);
+    EXPECT_EQ(result.frame.geometrySupportCount.at<std::uint16_t>(0, 0), 2);
+
+    stored.cameraModel = {};
+    stored.gridWidth = 2;
+    stored.gridHeight = 2;
+    const auto legacy_result = xjw::core::project::buildStoredFusionFrame(
+        stored, current_camera, fusion_config, 2);
+    ASSERT_TRUE(legacy_result.status.ok)
+        << qPrintable(legacy_result.status.errorMessage);
+    EXPECT_DOUBLE_EQ(legacy_result.frame.cameraModel.focalX(),
+                     current_camera.focalX());
+    EXPECT_EQ(legacy_result.frame.cameraModel.cameraCenter(),
+              current_camera.cameraCenter());
+}
+
+TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QDir directory(temp_dir.path());
+    const QString raw_depth_path = directory.filePath(QStringLiteral("depth_9.bin"));
+    const QString geometry_support_path = directory.filePath(
+        QStringLiteral("depth_9_geometry_support.bin"));
+    const QString inverse_depth_spread_path = directory.filePath(
+        QStringLiteral("depth_9_inverse_depth_spread.bin"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        raw_depth_path,
+        cv::Mat(4, 4, CV_32FC1, cv::Scalar(5.0f))).ok);
+
+    xjw::core::project::StoredDepthFrameRecord stored;
+    stored.rawDepthPath = raw_depth_path;
+    stored.rawGeometrySupportPath = geometry_support_path;
+    stored.rawInverseDepthSpreadPath = inverse_depth_spread_path;
+    stored.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
+    stored.gridWidth = 4;
+    stored.gridHeight = 4;
+
+    xjw::mvs::FusionConfig fusion_config;
+    fusion_config.confidenceThresh = 0.0f;
+    fusion_config.enableAdaptiveConfidenceFilter = false;
+    fusion_config.doInpaint = false;
+    fusion_config.enableLocalDepthOutlierFilter = false;
+    fusion_config.enableSpeckleFilter = false;
+    const xjw::FramePinholeCamera camera = makeCamera(0.0, 0.0, 0.0);
+
+    const auto missing_evidence = xjw::core::project::buildStoredFusionFrame(
+        stored, camera, fusion_config, 2, 2);
+    EXPECT_FALSE(missing_evidence.status.ok);
+    EXPECT_TRUE(missing_evidence.status.errorMessage.contains(
+        QStringLiteral("几何支持")));
+
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_support_path,
+        cv::Mat(4, 4, CV_8UC1, cv::Scalar(2))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        inverse_depth_spread_path,
+        cv::Mat(4, 4, CV_32FC1, cv::Scalar(0.01f))).ok);
+    const auto malformed_evidence = xjw::core::project::buildStoredFusionFrame(
+        stored, camera, fusion_config, 2, 2);
+    EXPECT_FALSE(malformed_evidence.status.ok);
+    EXPECT_TRUE(malformed_evidence.status.errorMessage.contains(
+        QStringLiteral("类型或尺寸")));
+
+    cv::Mat geometry_support(4, 4, CV_16UC1, cv::Scalar(1));
+    geometry_support(cv::Rect(2, 0, 2, 2)).setTo(cv::Scalar(2));
+    geometry_support(cv::Rect(0, 2, 2, 2)).setTo(cv::Scalar(3));
+    geometry_support(cv::Rect(2, 2, 2, 2)).setTo(cv::Scalar(4));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_support_path, geometry_support).ok);
+
+    const auto loaded = xjw::core::project::buildStoredFusionFrame(
+        stored, camera, fusion_config, 2, 2);
+    ASSERT_TRUE(loaded.status.ok) << qPrintable(loaded.status.errorMessage);
+    ASSERT_EQ(loaded.frame.depthMap.size(), cv::Size(2, 2));
+    ASSERT_EQ(loaded.frame.geometrySupportCount.type(), CV_16UC1);
+    EXPECT_EQ(loaded.frame.geometrySupportCount.at<std::uint16_t>(0, 0), 1);
+    EXPECT_EQ(loaded.frame.geometrySupportCount.at<std::uint16_t>(0, 1), 2);
+    EXPECT_EQ(loaded.frame.geometrySupportCount.at<std::uint16_t>(1, 0), 3);
+    EXPECT_EQ(loaded.frame.geometrySupportCount.at<std::uint16_t>(1, 1), 4);
+}
+
 TEST(DepthFrameUtilsTest, StoredDepthCollectionCanSelectRequestedBatchDirectory)
 {
     QTemporaryDir first_batch;
@@ -1837,6 +2026,48 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionCanSelectRequestedBatchDirectory)
     }
 }
 
+TEST(DepthFrameUtilsTest, StoredFusionSelectionRequiresAcceptedEligiblePrimaryFrames)
+{
+    xjw::core::project::StoredDepthFramesResult stored;
+    stored.status = {true, QString()};
+    stored.batchDir = QStringLiteral("E:/tmp/mvs_output");
+
+    xjw::core::project::StoredDepthFrameRecord accepted;
+    accepted.refImage = QStringLiteral("accepted.jpg");
+    accepted.acceptance = QStringLiteral("accepted");
+    accepted.fusionEligible = true;
+    stored.frames.push_back(accepted);
+
+    xjw::core::project::StoredDepthFrameRecord validation;
+    validation.refImage = QStringLiteral("validation.jpg");
+    validation.acceptance = QStringLiteral("validation_only");
+    validation.fusionEligible = true;
+    stored.frames.push_back(validation);
+
+    xjw::core::project::StoredDepthFrameRecord rejected;
+    rejected.refImage = QStringLiteral("rejected.jpg");
+    rejected.acceptance = QStringLiteral("rejected");
+    rejected.fusionEligible = false;
+    stored.frames.push_back(rejected);
+
+    auto selected =
+        xjw::core::project::selectFusionEligibleStoredDepthFrames(stored);
+    EXPECT_FALSE(selected.status.ok);
+    EXPECT_TRUE(selected.status.errorMessage.contains(
+        QStringLiteral("同时满足=1/3")));
+    EXPECT_TRUE(selected.status.errorMessage.contains(
+        QStringLiteral("不是目录权限问题")));
+
+    accepted.refImage = QStringLiteral("accepted_2.jpg");
+    stored.frames.push_back(accepted);
+    selected = xjw::core::project::selectFusionEligibleStoredDepthFrames(stored);
+    ASSERT_TRUE(selected.status.ok) << selected.status.errorMessage.toStdString();
+    ASSERT_EQ(selected.frames.size(), 2u);
+    EXPECT_EQ(selected.frames[0].refImage, QStringLiteral("accepted.jpg"));
+    EXPECT_EQ(selected.frames[1].refImage, QStringLiteral("accepted_2.jpg"));
+    EXPECT_EQ(selected.batchDir, stored.batchDir);
+}
+
 TEST(ModelWorkflowPolicyTest, InteractiveModelWorkersLeaveGuiHeadroom)
 {
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(32), 30);
@@ -1845,6 +2076,134 @@ TEST(ModelWorkflowPolicyTest, InteractiveModelWorkersLeaveGuiHeadroom)
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(4), 2);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(2), 1);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(-1), 2);
+}
+
+TEST(ModelWorkflowPolicyTest, SparseScaffoldMatchesSelectedDepthLineage)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString selected_depth_dir =
+        QDir(temp_dir.path()).filePath(QStringLiteral("selected_depth"));
+    const QString unrelated_depth_dir =
+        QDir(temp_dir.path()).filePath(QStringLiteral("unrelated_depth"));
+    ASSERT_TRUE(QDir().mkpath(selected_depth_dir));
+    ASSERT_TRUE(QDir().mkpath(unrelated_depth_dir));
+
+    const QString selected_ply =
+        QDir(temp_dir.path()).filePath(QStringLiteral("selected_sparse.ply"));
+    const QString selected_json =
+        QDir(temp_dir.path()).filePath(QStringLiteral("selected_points.json"));
+    const QString unrelated_ply =
+        QDir(temp_dir.path()).filePath(QStringLiteral("unrelated_sparse.ply"));
+    const QString unrelated_json =
+        QDir(temp_dir.path()).filePath(QStringLiteral("unrelated_points.json"));
+    for (const QString &path : {
+             selected_ply, selected_json, unrelated_ply, unrelated_json})
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("{}");
+    }
+
+    QJsonObject metadata;
+    metadata[QStringLiteral("depth_map_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("mvs_output_dir"), selected_depth_dir},
+            {QStringLiteral("source_sparse_cloud"), selected_ply}},
+        QJsonObject{
+            {QStringLiteral("mvs_output_dir"), unrelated_depth_dir},
+            {QStringLiteral("source_sparse_cloud"), unrelated_ply}}
+    };
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("files"),
+                     QJsonObject{
+                         {QStringLiteral("sparse_cloud_xyz"), selected_ply},
+                         {QStringLiteral("sparse_cloud_points_json"), selected_json}}}},
+        QJsonObject{{QStringLiteral("files"),
+                     QJsonObject{
+                         {QStringLiteral("sparse_cloud_xyz"), unrelated_ply},
+                         {QStringLiteral("sparse_cloud_points_json"), unrelated_json}}}}
+    };
+
+    const auto source = xjw::gui::project::resolveSparseScaffoldSource(
+        metadata,
+        selected_depth_dir);
+    EXPECT_EQ(source.pointCloudPath,
+              QDir::cleanPath(QFileInfo(selected_ply).absoluteFilePath()));
+    EXPECT_EQ(source.pointsJsonPath,
+              QDir::cleanPath(QFileInfo(selected_json).absoluteFilePath()));
+}
+
+TEST(ModelWorkflowPolicyTest, SparseScaffoldRequiresPointQualitySidecar)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString depth_dir =
+        QDir(temp_dir.path()).filePath(QStringLiteral("depth"));
+    const QString sparse_ply =
+        QDir(temp_dir.path()).filePath(QStringLiteral("sparse.ply"));
+    ASSERT_TRUE(QDir().mkpath(depth_dir));
+    QFile sparse_file(sparse_ply);
+    ASSERT_TRUE(sparse_file.open(QIODevice::WriteOnly));
+    sparse_file.write("ply");
+    sparse_file.close();
+
+    QJsonObject metadata;
+    metadata[QStringLiteral("depth_map_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("mvs_output_dir"), depth_dir},
+            {QStringLiteral("source_sparse_cloud"), sparse_ply}}
+    };
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("files"),
+                     QJsonObject{
+                         {QStringLiteral("sparse_cloud_xyz"), sparse_ply},
+                         {QStringLiteral("sparse_cloud_points_json"),
+                          QDir(temp_dir.path()).filePath(
+                              QStringLiteral("missing_points.json"))}}}}
+    };
+
+    const auto source = xjw::gui::project::resolveSparseScaffoldSource(
+        metadata,
+        depth_dir);
+    EXPECT_TRUE(source.pointCloudPath.isEmpty());
+    EXPECT_TRUE(source.pointsJsonPath.isEmpty());
+}
+
+TEST(ModelWorkflowPolicyTest, SparseScaffoldUsesCanonicalChunkFallbackAsPair)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString chunk_root =
+        QDir(temp_dir.path()).filePath(QStringLiteral("chunk"));
+    const QString depth_dir =
+        QDir(chunk_root).filePath(QStringLiteral("mvs_output/depth_batch"));
+    const QString sparse_dir = QDir(chunk_root).filePath(
+        QStringLiteral("assets/aerial_triangulation/sfm_sparse"));
+    ASSERT_TRUE(QDir().mkpath(depth_dir));
+    ASSERT_TRUE(QDir().mkpath(sparse_dir));
+
+    const QString sparse_ply =
+        QDir(sparse_dir).filePath(QStringLiteral("sfm_sparse.ply"));
+    const QString points_json =
+        QDir(sparse_dir).filePath(QStringLiteral("sfm_sparse_points.json"));
+    for (const QString &path : {sparse_ply, points_json})
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("{}");
+    }
+
+    const auto source = xjw::gui::project::resolveSparseScaffoldSource(
+        QJsonObject(),
+        depth_dir);
+    EXPECT_EQ(source.pointCloudPath,
+              QDir::cleanPath(QFileInfo(sparse_ply).absoluteFilePath()));
+    EXPECT_EQ(source.pointsJsonPath,
+              QDir::cleanPath(QFileInfo(points_json).absoluteFilePath()));
 }
 
 TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureTracksImagesCamerasAndAerialTriangulation)
@@ -3079,6 +3438,38 @@ TEST(CodeStyleTest, ReferencePanelWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral(R"(\bm_[A-Za-z][A-Za-z0-9_]*\b)"));
     EXPECT_FALSE(legacyMemberPattern.match(header).hasMatch());
     EXPECT_FALSE(legacyMemberPattern.match(source).hasMatch());
+}
+
+TEST(ReferencePanelWidgetTest, KeepsCameraReferenceControlsReadableInNarrowDock)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/widgets/ReferencePanelWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceImportToolbar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceViewToolbar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setTextElideMode(Qt::ElideMiddle)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("header()->resizeSection(0, 168)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraSection->setMinimumHeight(150)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("splitter->setStretchFactor(0, 2)")));
+}
+
+TEST(MainWindowLayoutTest, SuppressesPropertiesDockOnReferenceTab)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowLayout.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("void updatePropertiesDockForCurrentTab();")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_leftTabs->currentWidget() == _referencePanel")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_propertiesDock->hide();")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_propertiesDock->setVisible(_propertiesDockVisibleOutsideReference);")));
 }
 
 TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
@@ -5164,6 +5555,8 @@ TEST(SparsePointWorkflowUtilsTest, ProjectResultModeUsesSidecarWhenExternalPathS
     EXPECT_EQ(sidecar.value(QStringLiteral("point_count")).toInt(), 2);
     EXPECT_TRUE(sidecar.value(QStringLiteral("quality_metrics_available")).toBool(false));
     EXPECT_FALSE(sidecar.contains(QStringLiteral("source_ply")));
+    EXPECT_FALSE(sidecar.value(QStringLiteral("quality")).toObject().contains(
+        QStringLiteral("points")));
 }
 
 TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSidecarHasNoColors)
@@ -5221,6 +5614,116 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSideca
     EXPECT_EQ(outputCloud->colors()->getValue(1, 0), 70);
     EXPECT_EQ(outputCloud->colors()->getValue(1, 1), 80);
     EXPECT_EQ(outputCloud->colors()->getValue(1, 2), 90);
+}
+
+TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesPointJsonAndRefreshesQuality)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("sparse_cloud_points.json"));
+
+    const QJsonArray sourcePoints{
+        QJsonObject{
+            {QStringLiteral("point_id"), 101},
+            {QStringLiteral("point_xyz"), QJsonArray{0.0, 0.0, 0.0}},
+            {QStringLiteral("track_len"), 1},
+            {QStringLiteral("rms_reproj_px"), 9.0},
+            {QStringLiteral("min_tri_angle_deg"), 3.0},
+            {QStringLiteral("observations"), QJsonArray{
+                 QJsonObject{{QStringLiteral("image_id"), 0}}}}
+        },
+        QJsonObject{
+            {QStringLiteral("point_id"), 202},
+            {QStringLiteral("point_xyz"), QJsonArray{1.0, 0.0, 0.0}},
+            {QStringLiteral("track_len"), 3},
+            {QStringLiteral("rms_reproj_px"), 0.4},
+            {QStringLiteral("min_tri_angle_deg"), 4.0},
+            {QStringLiteral("observations"), QJsonArray{
+                 QJsonObject{{QStringLiteral("image_id"), 1},
+                             {QStringLiteral("residual_norm_px"), 0.25}}}},
+            {QStringLiteral("extension"), QJsonObject{
+                 {QStringLiteral("owner"), QStringLiteral("first-kept")}}}
+        },
+        QJsonObject{
+            {QStringLiteral("point_id"), 303},
+            {QStringLiteral("point_xyz"), QJsonArray{2.0, 0.0, 0.0}},
+            {QStringLiteral("track_len"), 4},
+            {QStringLiteral("rms_reproj_px"), 0.6},
+            {QStringLiteral("min_tri_angle_deg"), 5.0},
+            {QStringLiteral("observations"), QJsonArray{
+                 QJsonObject{{QStringLiteral("image_id"), 2},
+                             {QStringLiteral("custom_observation"), true}}}},
+            {QStringLiteral("future_metric"), 42.5}
+        }
+    };
+    QJsonObject sourceQuality = xjw::gui::project::buildSparseQualityMetadata(
+        sourcePoints,
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction,
+        QString(),
+        QString(),
+        3);
+    sourceQuality[QStringLiteral("point_count")] = 999;
+    sourceQuality[QStringLiteral("mean_reproj_px")] = 99.0;
+    sourceQuality[QStringLiteral("quality_extension")] = QStringLiteral("preserve-me");
+    QJsonObject sourceRoot = xjw::gui::project::mergeSparseQualityIntoRecord(
+        QJsonObject{{QStringLiteral("points"), sourcePoints},
+                    {QStringLiteral("quality_metrics_available"), true}},
+        sourceQuality);
+    QString writeError;
+    ASSERT_TRUE(xjw::gui::project::writeJsonObjectFile(
+        sidecarPath, sourceRoot, &writeError)) << writeError.toStdString();
+
+    xjw::gui::project::SparsePointContext context;
+    context.sidecarPath = sidecarPath;
+    context.selectedImages = {
+        QStringLiteral("1.jpg"), QStringLiteral("2.jpg"), QStringLiteral("3.jpg")};
+
+    const QJsonObject settings{
+        {QStringLiteral("sourceKind"), QStringLiteral("project_result")},
+        {QStringLiteral("filterByReprojError"), false},
+        {QStringLiteral("filterByTrackLen"), true},
+        {QStringLiteral("minTrackLen"), 3},
+        {QStringLiteral("filterByTriAngle"), false},
+        {QStringLiteral("filterByStatistical"), false},
+        {QStringLiteral("filterByDensity"), false}
+    };
+    xjw::gui::project::SparsePointOperationResult result;
+    QString errorMessage;
+    const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_preserved"));
+    ASSERT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(
+        context, settings, outputDir, &result, &errorMessage)) << errorMessage.toStdString();
+
+    QFile outputFile(result.sidecarPath);
+    ASSERT_TRUE(outputFile.open(QIODevice::ReadOnly));
+    const QJsonObject outputRoot = QJsonDocument::fromJson(outputFile.readAll()).object();
+    const QJsonArray outputPoints = outputRoot.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(outputPoints.size(), 2);
+    EXPECT_EQ(outputPoints.at(0).toObject(), sourcePoints.at(1).toObject());
+    EXPECT_EQ(outputPoints.at(1).toObject(), sourcePoints.at(2).toObject());
+
+    const QJsonObject quality = outputRoot.value(QStringLiteral("quality")).toObject();
+    EXPECT_EQ(outputRoot.value(QStringLiteral("point_count")).toInt(), 2);
+    EXPECT_EQ(quality.value(QStringLiteral("point_count")).toInt(), 2);
+    EXPECT_DOUBLE_EQ(quality.value(QStringLiteral("mean_reproj_px")).toDouble(), 0.5);
+    EXPECT_EQ(quality.value(QStringLiteral("track_len_histogram")).toObject()
+                  .value(QStringLiteral("3")).toInt(),
+              1);
+    EXPECT_EQ(quality.value(QStringLiteral("track_len_histogram")).toObject()
+                  .value(QStringLiteral("4")).toInt(),
+              1);
+    EXPECT_EQ(quality.value(QStringLiteral("quality_extension")).toString(),
+              QStringLiteral("preserve-me"));
+    EXPECT_EQ(quality.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindSparsePostprocess);
+    EXPECT_EQ(quality.value(QStringLiteral("source_result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    EXPECT_EQ(QDir::cleanPath(quality.value(QStringLiteral("source_result_ref")).toString()),
+              QDir::cleanPath(sidecarPath));
+    EXPECT_EQ(result.extraRecord.value(QStringLiteral("quality")).toObject(), quality);
+    EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(result.extraRecord));
 }
 
 TEST(MainMenuTest, FileImportMenuExposesReferenceAndCameraActions)
@@ -7861,7 +8364,7 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleGizmoAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
-    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("显示图像"));
+    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("相机对齐检查"));
     ASSERT_NE(imageMenu, nullptr);
     EXPECT_TRUE(imageMenu->actions().contains(menu.toggleCameraImagesAction()));
     EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInForegroundAction()));
@@ -7879,16 +8382,16 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     menu.toggleCameraThumbnailsAction()->setChecked(false);
     EXPECT_FALSE(menu.toggleCameraThumbnailsAction()->isChecked());
 
-    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("显示图像"));
+    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("相机对齐"));
     EXPECT_TRUE(menu.toggleCameraImagesAction()->isCheckable());
     EXPECT_FALSE(menu.toggleCameraImagesAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("在前景中显示"));
+    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("半透明叠加"));
     EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isCheckable());
     EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("在后景中显示"));
+    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("原图作为背景"));
     EXPECT_TRUE(menu.showCameraImagesInBackgroundAction()->isCheckable());
     EXPECT_FALSE(menu.showCameraImagesInBackgroundAction()->isChecked());
-    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定图像"));
+    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定检查相机"));
     EXPECT_TRUE(menu.lockCameraImageAction()->isCheckable());
     EXPECT_FALSE(menu.lockCameraImageAction()->isChecked());
 }
@@ -8334,7 +8837,8 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
 
     EXPECT_EQ(imageButton->defaultAction(), menu.toggleCameraImagesAction());
     EXPECT_EQ(imageButton->popupMode(), QToolButton::MenuButtonPopup);
-    EXPECT_EQ(imageButton->toolTip(), QStringLiteral("显示图像"));
+    EXPECT_EQ(imageButton->toolTip(),
+              QStringLiteral("使用 SfM 相机参数检查原图与模型的重投影对齐"));
     EXPECT_EQ(imageButton->iconSize(), QSize(26, 26));
     EXPECT_EQ(imageButton->size(), QSize(50, 36));
     EXPECT_TRUE(imageButton->styleSheet().isEmpty());
@@ -8644,7 +9148,8 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.leaderPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
-    EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners")));
+    EXPECT_TRUE(source.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraAlignmentViewport(pixelSize)")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));
     EXPECT_FALSE(source.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
@@ -8793,6 +9298,16 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
         << "The GUI thread must not hash and copy every image.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
         << "The old synchronous path scans and updates metadata inside the action handler.";
+}
+
+TEST(ProjectUiCommandsTest, ImageDialogsExcludeDotDirectoryEntries)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QDir::NoDotAndDotDot")))
+        << "Ctrl+A must not select '.' or '..' and navigate away from the image directory.";
 }
 
 TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuringOpen)
@@ -12391,6 +12906,52 @@ TEST(DataTreeWidgetTest, DoesNotShowPointOnlyModelRecordAsThreeDModel)
     EXPECT_EQ(modelSection, nullptr);
 }
 
+TEST(DataTreeWidgetTest, KeepsOriginalMeshBesideGeneratedTextureModel)
+{
+    DataTreeWidget tree;
+    const QString plyPath = QStringLiteral(
+        "E:/projects/model_runs/run-1/products/model_from_mesh.ply");
+    const QString objPath = QStringLiteral(
+        "E:/projects/model_runs/run-1/texture_runs/texture-1/textured_model.obj");
+    const QJsonObject record{
+        {QStringLiteral("model_ply"), plyPath},
+        {QStringLiteral("mesh_ply"), plyPath},
+        {QStringLiteral("model_obj"), objPath},
+        {QStringLiteral("final_model_path"), objPath},
+        {QStringLiteral("textured"), true},
+        {QStringLiteral("vertex_count"), 120},
+        {QStringLiteral("face_count"), 240}
+    };
+    tree.loadFromJson(QJsonObject{
+        {QStringLiteral("images"), QJsonArray()},
+        {QStringLiteral("model_results"), QJsonArray{record}}
+    });
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+    QStandardItem *modelSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("3D模型 (2)")))
+        {
+            modelSection = item;
+            break;
+        }
+    }
+
+    ASSERT_NE(modelSection, nullptr);
+    ASSERT_EQ(modelSection->rowCount(), 2);
+    EXPECT_EQ(modelSection->child(0, 1)->text(), plyPath);
+    EXPECT_FALSE(modelSection->child(0, 0)->text().contains(
+        QStringLiteral("[纹理]")));
+    EXPECT_EQ(modelSection->child(1, 1)->text(), objPath);
+    EXPECT_TRUE(modelSection->child(1, 0)->text().contains(
+        QStringLiteral("[纹理]")));
+}
+
 TEST(DataTreeWidgetTest, ShowsAlignedPhotoRatioAndHidesEmptySections)
 {
     DataTreeWidget tree;
@@ -14542,7 +15103,7 @@ TEST(CameraSceneWidgetTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_EQ(prepared.triangleIndexCount, 6);
     EXPECT_EQ(prepared.wireframeIndexCount, 10);
     EXPECT_EQ(prepared.texturedVertexCount, 6);
-    EXPECT_EQ(prepared.texturedStrideBytes, 11 * static_cast<int>(sizeof(float)));
+    EXPECT_EQ(prepared.texturedStrideBytes, 12 * static_cast<int>(sizeof(float)));
     const float *renderVertices = reinterpret_cast<const float *>(
         prepared.texturedVertexData.constData());
     EXPECT_FLOAT_EQ(renderVertices[6], -1.0f);
@@ -14550,8 +15111,50 @@ TEST(CameraSceneWidgetTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_FLOAT_EQ(renderVertices[8], -1.0f);
     EXPECT_FLOAT_EQ(renderVertices[9], 0.0f);
     EXPECT_FLOAT_EQ(renderVertices[10], 0.0f);
-    EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 9], 0.25f);
-    EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 10], 0.25f);
+    EXPECT_FLOAT_EQ(renderVertices[11], 0.0f);
+    EXPECT_FLOAT_EQ(renderVertices[3 * 12 + 9], 0.25f);
+    EXPECT_FLOAT_EQ(renderVertices[3 * 12 + 10], 0.25f);
+    EXPECT_FLOAT_EQ(renderVertices[3 * 12 + 11], 0.0f);
+}
+
+TEST(CameraSceneWidgetTest, TexturedMeshMarksDegenerateFallbackUvFacesForVertexColor)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString objPath = QDir(tempDir.path()).filePath(QStringLiteral("fallback.obj"));
+    QFile file(objPath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream stream(&file);
+    stream << "v 0 0 0 255 0 0\n"
+           << "v 1 0 0 0 255 0\n"
+           << "v 1 1 0 0 0 255\n"
+           << "v 0 1 0 255 255 255\n"
+           << "vt 0.5 0.5\n"
+           << "vt 1 0\n"
+           << "vt 1 1\n"
+           << "f 1/1 2/2 3/3\n"
+           << "f 1/1 3/1 4/1\n";
+    stream.flush();
+    file.close();
+
+    auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+    ASSERT_TRUE(cloud != nullptr);
+    ASSERT_TRUE(cloud->hasColors());
+
+    const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
+    ASSERT_TRUE(prepared.hasTexturedGeometry());
+    ASSERT_EQ(prepared.texturedVertexCount, 6);
+    ASSERT_EQ(prepared.texturedStrideBytes, 12 * static_cast<int>(sizeof(float)));
+    const float *vertices = reinterpret_cast<const float *>(
+        prepared.texturedVertexData.constData());
+
+    EXPECT_FLOAT_EQ(vertices[0 * 12 + 11], 0.0f);
+    EXPECT_FLOAT_EQ(vertices[1 * 12 + 11], 0.0f);
+    EXPECT_FLOAT_EQ(vertices[2 * 12 + 11], 0.0f);
+    EXPECT_FLOAT_EQ(vertices[3 * 12 + 11], 1.0f);
+    EXPECT_FLOAT_EQ(vertices[4 * 12 + 11], 1.0f);
+    EXPECT_FLOAT_EQ(vertices[5 * 12 + 11], 1.0f);
 }
 
 TEST(CameraSceneWidgetTest, StreamingObjReaderReportsProgressAndPreservesGeometry)
@@ -14777,18 +15380,21 @@ TEST(CameraSceneWidgetTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_TRUE(source.contains(QStringLiteral("drawTexturedMesh")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "self->setModelColorMode(ModelColorMode::Texture)")));
-    EXPECT_FALSE(source.contains(QStringLiteral(
+    EXPECT_TRUE(source.contains(QStringLiteral(
         "if (mode == ModelColorMode::Texture ||")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiTexturedMeshPipelineSet")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("1.0 - aTexCoord.y")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("aColor")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("aVertexColorFallback")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("sampler2D modelTexture")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("texture(modelTexture, vTexCoord)")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
-        "fragColor = vec4(textureColor, 1.0)")));
-    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("vColor")));
-    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("textureWeight")));
-    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
+        "mix(textureColor, vertexColor, fallbackWeight)")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("vColor")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("vVertexColorFallback")));
+    EXPECT_TRUE(preparationSource.contains(QStringLiteral("use_vertex_color_fallback")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("if (mode == 1)")));
     EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.55 + 0.75 * diff")));
 }
 
@@ -15128,7 +15734,8 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchRejectsExplicitSceneProfileMismatc
     EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("航拍地形")));
 }
 
-TEST(ModelWorkflowPolicyTest, StoredDepthBatchRejectsPreviousAlgorithmRevision)
+TEST(ModelWorkflowPolicyTest,
+     StoredDepthBatchRejectsRevisionBeforeCurrentModelCompatibility)
 {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
@@ -15142,12 +15749,15 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchRejectsPreviousAlgorithmRevision)
         true);
     ASSERT_FALSE(metadata.isEmpty());
 
-    QJsonArray records = metadata.value(QStringLiteral("depth_map_results")).toArray();
+    ASSERT_GT(xjw::mvs::kMvsMinimumModelCompatibleRevision,
+              xjw::mvs::kMvsSparseAbsoluteDepthResidualRevision);
+    QJsonArray records = metadata.value(
+        QStringLiteral("depth_map_results")).toArray();
     for (int index = 0; index < records.size(); ++index)
     {
         QJsonObject record = records.at(index).toObject();
         record[QStringLiteral("algorithm_revision")] =
-            xjw::mvs::kMvsDepthAlgorithmRevision - 1;
+            xjw::mvs::kMvsSparseAbsoluteDepthResidualRevision;
         records[index] = record;
     }
     metadata[QStringLiteral("depth_map_results")] = records;
@@ -15157,7 +15767,41 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchRejectsPreviousAlgorithmRevision)
             metadata,
             temp_dir.path());
     EXPECT_FALSE(compatibility.compatible);
-    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("旧版算法")));
+    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("模型兼容范围")));
+}
+
+TEST(ModelWorkflowPolicyTest,
+     StoredDepthBatchAcceptsMinimumModelCompatibleRevision)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    QJsonObject metadata = makeStoredDepthPolicyMetadata(
+        temp_dir.path(),
+        {QStringLiteral("aerial_terrain"), QStringLiteral("aerial_terrain"),
+         QStringLiteral("aerial_terrain")},
+        {QStringLiteral("accepted"), QStringLiteral("accepted"),
+         QStringLiteral("accepted")},
+        {1, 1, 1},
+        true);
+    ASSERT_FALSE(metadata.isEmpty());
+
+    QJsonArray records = metadata.value(
+        QStringLiteral("depth_map_results")).toArray();
+    for (int index = 0; index < records.size(); ++index)
+    {
+        QJsonObject record = records.at(index).toObject();
+        record[QStringLiteral("algorithm_revision")] =
+            xjw::mvs::kMvsMinimumModelCompatibleRevision;
+        records[index] = record;
+    }
+    metadata[QStringLiteral("depth_map_results")] = records;
+
+    const auto compatibility =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_TRUE(compatibility.compatible)
+        << compatibility.reason.toStdString();
 }
 
 TEST(ModelWorkflowPolicyTest, StoredDepthBatchRejectsMissingCurrentSceneMetadata)
@@ -15247,6 +15891,108 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchAcceptsPrimaryWithAuxiliaryFrames)
             temp_dir.path());
     EXPECT_TRUE(compatibility.compatible)
         << compatibility.reason.toStdString();
+}
+
+TEST(ModelWorkflowPolicyTest,
+     OrbitalBatchRequiresQuarterCoverageOfGenuinePrimaryFrames)
+{
+    constexpr int kFrameCount = 222;
+    const int minimum_primary_count =
+        xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(kFrameCount);
+    ASSERT_EQ(minimum_primary_count, 56);
+
+    std::vector<QString> scene_profiles(
+        kFrameCount, QStringLiteral("orbital_object"));
+    std::vector<QString> acceptances(
+        kFrameCount, QStringLiteral("validation_only"));
+    std::vector<int> fusion_eligibility(kFrameCount, 0);
+    for (int index = 0; index < minimum_primary_count - 1; ++index)
+    {
+        acceptances[index] = QStringLiteral("accepted");
+        fusion_eligibility[index] = 1;
+    }
+    acceptances[minimum_primary_count - 1] = QStringLiteral("rejected");
+    fusion_eligibility[minimum_primary_count - 1] = 1;
+
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    QJsonObject metadata = makeStoredDepthPolicyMetadata(
+        temp_dir.path(),
+        scene_profiles,
+        acceptances,
+        fusion_eligibility,
+        false);
+    ASSERT_FALSE(metadata.isEmpty());
+
+    auto compatibility =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_FALSE(compatibility.compatible);
+    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("accepted=55")));
+    EXPECT_TRUE(compatibility.reason.contains(
+        QStringLiteral("fusion_eligible=56")));
+    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("至少需要 56")));
+
+    QJsonArray records = metadata.value(
+        QStringLiteral("depth_map_results")).toArray();
+    QJsonObject final_required_record = records.at(
+        minimum_primary_count - 1).toObject();
+    final_required_record[QStringLiteral("acceptance")] =
+        QStringLiteral("accepted");
+    records[minimum_primary_count - 1] = final_required_record;
+    metadata[QStringLiteral("depth_map_results")] = records;
+
+    compatibility = xjw::gui::project::assessStoredDepthBatchCompatibility(
+        metadata,
+        temp_dir.path());
+    EXPECT_TRUE(compatibility.compatible)
+        << compatibility.reason.toStdString();
+}
+
+TEST(ModelWorkflowPolicyTest,
+     OrbitalBatchAllowsSparseScaffoldToCarryGlobalShapeWithLocalDepthEvidence)
+{
+    constexpr int kFrameCount = 222;
+    constexpr int kPrimaryFrameCount = 18;
+    std::vector<QString> scene_profiles(
+        kFrameCount, QStringLiteral("orbital_object"));
+    std::vector<QString> acceptances(
+        kFrameCount, QStringLiteral("validation_only"));
+    std::vector<int> fusion_eligibility(kFrameCount, 0);
+    for (int index = 0; index < kPrimaryFrameCount; ++index)
+    {
+        acceptances[index] = QStringLiteral("accepted");
+        fusion_eligibility[index] = 1;
+    }
+
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QJsonObject metadata = makeStoredDepthPolicyMetadata(
+        temp_dir.path(),
+        scene_profiles,
+        acceptances,
+        fusion_eligibility,
+        false);
+    ASSERT_FALSE(metadata.isEmpty());
+
+    const auto depth_only =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_FALSE(depth_only.compatible);
+    EXPECT_TRUE(depth_only.reason.contains(QStringLiteral("accepted=18")));
+    EXPECT_TRUE(depth_only.reason.contains(QStringLiteral("至少需要 56")));
+
+    const auto sparse_scaffold_assisted =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path(),
+            -1,
+            QString(),
+            true);
+    EXPECT_TRUE(sparse_scaffold_assisted.compatible)
+        << sparse_scaffold_assisted.reason.toStdString();
 }
 
 int main(int argc, char **argv)

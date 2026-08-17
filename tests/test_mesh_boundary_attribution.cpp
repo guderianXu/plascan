@@ -44,7 +44,7 @@ TEST(MeshBoundaryAttributionTest, AssignsEveryBoundaryEdgeToExtraction)
     const std::vector<float> tsdf(8, 0.1f);
     const std::vector<float> weight(8, 1.0f);
     const std::vector<float> surface_weight(8, 1.0f);
-    const std::vector<std::uint16_t> source_masks(8, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(8, 0x3);
     const std::vector<std::uint16_t> spread(8, 100);
     const std::vector<std::uint8_t> supported(8, 1);
 
@@ -101,7 +101,7 @@ TEST(MeshBoundaryAttributionTest, DistinguishesMissingAndWeakSources)
     const std::vector<float> tsdf(8, 0.1f);
     std::vector<float> weight(8, 0.0f);
     const std::vector<float> surface_weight(8, 1.0f);
-    const std::vector<std::uint16_t> source_masks(8, 0x1);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(8, 0x1);
     const std::vector<std::uint16_t> spread(
         8, std::numeric_limits<std::uint16_t>::max());
     const std::vector<std::uint8_t> supported(8, 0);
@@ -138,7 +138,7 @@ TEST(MeshBoundaryAttributionTest, TreatsPartialCellSupportAsSupportGateBoundary)
     const std::vector<float> tsdf(8, 0.1f);
     const std::vector<float> weight(8, 1.0f);
     const std::vector<float> surface_weight(8, 1.0f);
-    const std::vector<std::uint16_t> source_masks(8, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(8, 0x3);
     const std::vector<std::uint16_t> spread(8, 100);
     std::vector<std::uint8_t> supported(8, 1);
     supported[0] = 0;

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "PatchMatchCUDA.h"
+#include "PatchMatchHostUtils.h"
 #include "FramePinholeCamera.h"
 
 #include <opencv2/imgproc.hpp>
@@ -258,6 +259,198 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         << "Recovered CPU depth should stay close to the expected plane depth";
     EXPECT_GT(meanConfidence, 0.35)
         << "Recovered CPU depth should have meaningful confidence";
+}
+
+TEST(PatchMatchHostCameraDataTest,
+     PreservesRelativePoseAfterLargeCommonWorldTranslation)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    constexpr double source_center[3] = {1.0, -0.25, 0.5};
+    constexpr double translated_reference_center[3] = {
+        100000000.0, -200000000.0, 300000000.0};
+    constexpr double translated_source_center[3] = {
+        100000001.0, -200000000.25, 300000000.5};
+
+    const auto reference = makeCamera(
+        800.0, 790.0, 320.0, 240.0, 1, 1,
+        identity, reference_center, false).normalizedForPositiveDepth();
+    const auto source = makeCamera(
+        810.0, 805.0, 318.0, 242.0, 1, 1,
+        identity, source_center, false).normalizedForPositiveDepth();
+    const auto translated_reference = makeCamera(
+        800.0, 790.0, 320.0, 240.0, 1, 1,
+        identity, translated_reference_center, false).normalizedForPositiveDepth();
+    const auto translated_source = makeCamera(
+        810.0, 805.0, 318.0, 242.0, 1, 1,
+        identity, translated_source_center, false).normalizedForPositiveDepth();
+
+    const auto local_data = xjw::mvs::buildPatchMatchSourceCameraData(
+        reference, source, 2);
+    const auto translated_data = xjw::mvs::buildPatchMatchSourceCameraData(
+        translated_reference, translated_source, 2);
+
+    for (std::size_t index = 0; index < local_data.size(); ++index)
+    {
+        EXPECT_FLOAT_EQ(translated_data[index], local_data[index])
+            << "camera data element " << index;
+    }
+    EXPECT_FLOAT_EQ(local_data[13], -1.0f);
+    EXPECT_FLOAT_EQ(local_data[14], 0.25f);
+    EXPECT_FLOAT_EQ(local_data[15], -0.5f);
+}
+
+TEST(PatchMatchCpuRegressionTest,
+     DepthIsInvariantToLargeCommonWorldTranslation)
+{
+    constexpr int image_width = 96;
+    constexpr int image_height = 72;
+    constexpr double focal = 80.0;
+    constexpr int disparity = 8;
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    constexpr double source_center[3] = {1.0, 0.0, 0.0};
+    constexpr double translated_reference_center[3] = {
+        100000000.0, -200000000.0, 300000000.0};
+    constexpr double translated_source_center[3] = {
+        100000001.0, -200000000.0, 300000000.0};
+
+    const cv::Mat reference_image = makeTexturedImage(image_width, image_height);
+    cv::Mat source_image = makeShiftedImage(reference_image, disparity);
+    cv::GaussianBlur(source_image, source_image, cv::Size(3, 3), 0.0);
+
+    const auto reference = makeCamera(
+        focal, focal, image_width * 0.5, image_height * 0.5,
+        1, 1, identity, reference_center, false).normalizedForPositiveDepth();
+    const auto source = makeCamera(
+        focal, focal, image_width * 0.5, image_height * 0.5,
+        1, 1, identity, source_center, false).normalizedForPositiveDepth();
+    const auto translated_reference = makeCamera(
+        focal, focal, image_width * 0.5, image_height * 0.5,
+        1, 1, identity, translated_reference_center,
+        false).normalizedForPositiveDepth();
+    const auto translated_source = makeCamera(
+        focal, focal, image_width * 0.5, image_height * 0.5,
+        1, 1, identity, translated_source_center,
+        false).normalizedForPositiveDepth();
+
+    xjw::mvs::PatchMatchConfig config;
+    config.useCuda = false;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
+    config.downsampleFactor = 2;
+    config.numIterations = 4;
+    config.patchHalf = 2;
+    config.confidenceThresh = 0.15f;
+    config.doMedianBlur = false;
+    config.doBilateralFilter = false;
+
+    const auto estimate = [&](const xjw::FramePinholeCamera &reference_camera,
+                              const xjw::FramePinholeCamera &source_camera,
+                              cv::Mat *depth,
+                              cv::Mat *confidence)
+    {
+        std::string error;
+        EXPECT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+            reference_image,
+            std::vector<cv::Mat>{source_image},
+            reference_camera,
+            std::vector<xjw::FramePinholeCamera>{source_camera},
+            5.0f,
+            15.0f,
+            config,
+            *depth,
+            confidence,
+            &error)) << error;
+    };
+
+    cv::Mat local_depth;
+    cv::Mat local_confidence;
+    cv::Mat translated_depth;
+    cv::Mat translated_confidence;
+    estimate(reference, source, &local_depth, &local_confidence);
+    estimate(translated_reference,
+             translated_source,
+             &translated_depth,
+             &translated_confidence);
+
+    ASSERT_FALSE(local_depth.empty());
+    ASSERT_EQ(translated_depth.size(), local_depth.size());
+    EXPECT_DOUBLE_EQ(cv::norm(local_depth, translated_depth, cv::NORM_INF), 0.0);
+    EXPECT_DOUBLE_EQ(
+        cv::norm(local_confidence, translated_confidence, cv::NORM_INF), 0.0);
+}
+
+TEST(PatchMatchDepthPostprocessTest,
+     PreservesInvalidHolesAndDoesNotPullEdgesTowardZero)
+{
+    cv::Mat depth(15, 17, CV_32FC1, cv::Scalar(0.0f));
+    depth(cv::Rect(2, 3, 6, 9)).setTo(10.0f);
+    depth(cv::Rect(9, 3, 6, 9)).setTo(20.0f);
+    depth.at<float>(7, 4) = 100.0f;
+    depth.at<float>(7, 11) = 200.0f;
+    depth.at<float>(6, 5) = 0.0f;
+    const cv::Mat original_valid_mask = depth > 0.0f;
+
+    xjw::mvs::PatchMatchConfig config;
+    config.doMedianBlur = true;
+    config.medianKernelSize = 5;
+    config.doBilateralFilter = true;
+    config.bilateralD = 9;
+    config.bilateralSigmaColor = 50.0f;
+    config.bilateralSigmaSpace = 5.0f;
+    xjw::mvs::postprocessPatchMatchDepth(depth, config);
+
+    const cv::Mat filtered_valid_mask = depth > 0.0f;
+    EXPECT_EQ(cv::countNonZero(original_valid_mask != filtered_valid_mask), 0);
+    EXPECT_FLOAT_EQ(depth.at<float>(6, 5), 0.0f);
+    EXPECT_NEAR(depth.at<float>(7, 4), 10.0f, 0.05f);
+    EXPECT_NEAR(depth.at<float>(7, 11), 20.0f, 0.1f);
+    EXPECT_NEAR(depth.at<float>(7, 7), 10.0f, 0.05f);
+    EXPECT_NEAR(depth.at<float>(7, 9), 20.0f, 0.1f);
+}
+
+TEST(PatchMatchDepthPostprocessTest,
+     IsInvariantToUniformDepthScale)
+{
+    cv::Mat base(19, 23, CV_32FC1, cv::Scalar(0.0f));
+    for (int row = 2; row < base.rows - 2; ++row)
+    {
+        for (int column = 2; column < base.cols - 2; ++column)
+        {
+            if ((row + 2 * column) % 11 == 0)
+            {
+                continue;
+            }
+            base.at<float>(row, column) = column < base.cols / 2
+                ? 8.0f + 0.02f * static_cast<float>(row)
+                : 16.0f + 0.03f * static_cast<float>(row);
+        }
+    }
+
+    cv::Mat small = base * 1.0e-4f;
+    cv::Mat large = base * 1.0e4f;
+    xjw::mvs::PatchMatchConfig config;
+    config.doMedianBlur = true;
+    config.medianKernelSize = 5;
+    config.doBilateralFilter = true;
+    config.bilateralD = 7;
+    config.bilateralSigmaColor = 40.0f;
+    config.bilateralSigmaSpace = 3.0f;
+
+    xjw::mvs::postprocessPatchMatchDepth(base, config);
+    xjw::mvs::postprocessPatchMatchDepth(small, config);
+    xjw::mvs::postprocessPatchMatchDepth(large, config);
+    small *= 1.0e4f;
+    large *= 1.0e-4f;
+
+    EXPECT_LT(cv::norm(base, small, cv::NORM_INF), 2.0e-4);
+    EXPECT_LT(cv::norm(base, large, cv::NORM_INF), 2.0e-4);
+    EXPECT_EQ(cv::countNonZero((base > 0.0f) != (small > 0.0f)), 0);
+    EXPECT_EQ(cv::countNonZero((base > 0.0f) != (large > 0.0f)), 0);
 }
 
 CudaPatchMatchRunStats runCudaPatchMatchSmallPlane(bool useParallelSweep)

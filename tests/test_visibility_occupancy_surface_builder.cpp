@@ -317,6 +317,87 @@ TEST(VisibilityOccupancySurfaceBuilderTest, MissingDepthStaysUnknownNotEmpty)
     EXPECT_GT(result.statistics.fullSampleCountAfterCleanup, 100U);
 }
 
+TEST(VisibilityOccupancySurfaceBuilderTest,
+     DepthRayOnlyModeIgnoresSupportMaskSilhouette)
+{
+    std::vector<SyntheticFrame> black_mask_frames = makeSphereFrames();
+    std::vector<SyntheticFrame> white_mask_frames = makeSphereFrames();
+    for (SyntheticFrame &frame : black_mask_frames)
+    {
+        frame.support.setTo(cv::Scalar(0));
+    }
+    for (SyntheticFrame &frame : white_mask_frames)
+    {
+        frame.support.setTo(cv::Scalar(255));
+    }
+    auto options = makeOptions();
+    options.useSupportMaskSilhouette = false;
+
+    const auto black_mask =
+        xjw::mesh::VisibilityOccupancySurfaceBuilder::build(
+            {-1.0f, -1.0f, -1.0f},
+            {1.0f, 1.0f, 1.0f},
+            makeViews(black_mask_frames),
+            options);
+    const auto white_mask =
+        xjw::mesh::VisibilityOccupancySurfaceBuilder::build(
+            {-1.0f, -1.0f, -1.0f},
+            {1.0f, 1.0f, 1.0f},
+            makeViews(white_mask_frames),
+            options);
+
+    ASSERT_TRUE(black_mask.ok) << black_mask.error;
+    ASSERT_TRUE(white_mask.ok) << white_mask.error;
+    EXPECT_EQ(black_mask.occupied, white_mask.occupied);
+    EXPECT_EQ(
+        black_mask.signedDistanceSamples,
+        white_mask.signedDistanceSamples);
+    EXPECT_EQ(
+        black_mask.statistics.depthEmptyVoteCount,
+        white_mask.statistics.depthEmptyVoteCount);
+    EXPECT_EQ(
+        black_mask.statistics.depthFullVoteCount,
+        white_mask.statistics.depthFullVoteCount);
+    EXPECT_EQ(black_mask.statistics.silhouetteInsideVoteCount, 0U);
+    EXPECT_EQ(black_mask.statistics.silhouetteOutsideVoteCount, 0U);
+    EXPECT_EQ(
+        black_mask.statistics.silhouetteFullPriorCandidateSampleCount,
+        0U);
+    EXPECT_EQ(black_mask.statistics.silhouetteFullPriorSampleCount, 0U);
+    EXPECT_EQ(
+        black_mask.statistics.closingSilhouetteEmptyProtectedSampleCount,
+        0U);
+}
+
+TEST(VisibilityOccupancySurfaceBuilderTest,
+     DepthRayOnlyModeLeavesMissingDepthUnknown)
+{
+    std::vector<SyntheticFrame> frames = makeSphereFrames();
+    for (SyntheticFrame &frame : frames)
+    {
+        frame.valid.setTo(cv::Scalar(0));
+        frame.support.setTo(cv::Scalar(255));
+    }
+    auto options = makeOptions();
+    options.useSupportMaskSilhouette = false;
+
+    const auto result = xjw::mesh::VisibilityOccupancySurfaceBuilder::build(
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        makeViews(frames),
+        options);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.statistics.depthEmptyVoteCount, 0U);
+    EXPECT_EQ(result.statistics.depthFullVoteCount, 0U);
+    EXPECT_EQ(result.statistics.silhouetteInsideVoteCount, 0U);
+    EXPECT_EQ(result.statistics.silhouetteOutsideVoteCount, 0U);
+    EXPECT_EQ(result.statistics.silhouetteFullPriorSampleCount, 0U);
+    EXPECT_EQ(
+        result.error,
+        "visibility occupancy cut contains no full samples");
+}
+
 TEST(VisibilityOccupancySurfaceBuilderTest, DepthSupportedPriorKeepsClosedSphereInterior)
 {
     const std::vector<SyntheticFrame> frames = makeSphereFrames();

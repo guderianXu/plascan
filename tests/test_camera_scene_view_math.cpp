@@ -352,6 +352,57 @@ TEST(CameraSceneViewMathTest, CalibratedProjectionMapsOpticalAxisToPrincipalPoin
     EXPECT_NEAR((1.0f - (ndc.y() * 0.5f + 0.5f)) * 1000.0f, 400.0f, 1e-3f);
 }
 
+TEST(CameraSceneViewMathTest, SfMCameraViewAndProjectionRecoverObservedPixels)
+{
+    QMatrix3x3 camera_to_world;
+    camera_to_world.fill(0.0f);
+    camera_to_world(0, 0) = 1.0f;
+    camera_to_world(1, 1) = 1.0f;
+    camera_to_world(2, 2) = 1.0f;
+    const QVector3D camera_center(10.0f, 20.0f, 30.0f);
+    const QMatrix4x4 view = calibratedCameraView(
+        camera_center, camera_to_world, false);
+    const QMatrix4x4 projection = calibratedProjection(
+        1000.0f, 1000.0f, 600.0f, 400.0f, 1600, 1000, 0.1f, 100.0f, 1, 1);
+
+    const QVector4D camera_point = view * QVector4D(
+        camera_center + QVector3D(2.0f, 3.0f, 8.0f), 1.0f);
+    EXPECT_NEAR(camera_point.x(), 2.0f, 1.0e-5f);
+    EXPECT_NEAR(camera_point.y(), 3.0f, 1.0e-5f);
+    EXPECT_NEAR(camera_point.z(), -8.0f, 1.0e-5f);
+
+    const QVector3D ndc = (projection * camera_point).toVector3DAffine();
+    EXPECT_NEAR((ndc.x() * 0.5f + 0.5f) * 1600.0f, 850.0f, 1.0e-3f);
+    EXPECT_NEAR((1.0f - (ndc.y() * 0.5f + 0.5f)) * 1000.0f, 775.0f, 1.0e-3f);
+}
+
+TEST(CameraSceneViewMathTest, FlippedDepthAxisPreservesSignedPinholeRatios)
+{
+    QMatrix3x3 camera_to_world;
+    camera_to_world.fill(0.0f);
+    camera_to_world(0, 0) = 1.0f;
+    camera_to_world(1, 1) = 1.0f;
+    camera_to_world(2, 2) = 1.0f;
+    const QMatrix4x4 view = calibratedCameraView(
+        QVector3D(), camera_to_world, true);
+    const QMatrix4x4 projection = calibratedProjection(
+        1000.0f, 1000.0f, 600.0f, 400.0f, 1600, 1000, 0.1f, 100.0f, 1, 1);
+
+    const QVector3D ndc = (projection * view
+        * QVector4D(2.0f, 3.0f, -8.0f, 1.0f)).toVector3DAffine();
+    EXPECT_NEAR((ndc.x() * 0.5f + 0.5f) * 1600.0f, 350.0f, 1.0e-3f);
+    EXPECT_NEAR((1.0f - (ndc.y() * 0.5f + 0.5f)) * 1000.0f, 25.0f, 1.0e-3f);
+}
+
+TEST(CameraSceneViewMathTest, FitsImageViewportWithoutChangingItsAspectRatio)
+{
+    EXPECT_EQ(fittedImageViewport(QSize(1600, 900), QSize(1000, 1000)),
+              QRectF(350.0, 0.0, 900.0, 900.0));
+    EXPECT_EQ(fittedImageViewport(QSize(900, 1600), QSize(1600, 900)),
+              QRectF(0.0, 546.875, 900.0, 506.25));
+    EXPECT_TRUE(fittedImageViewport(QSize(), QSize(1600, 900)).isEmpty());
+}
+
 TEST(CameraSceneViewMathTest, InvalidIntrinsicsUseFiniteFortyFiveDegreeFallback)
 {
     const QMatrix4x4 projection = calibratedProjection(

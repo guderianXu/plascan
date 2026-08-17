@@ -17,7 +17,7 @@ struct Fixture
     std::vector<float> weight;
     std::vector<float> surfaceWeight;
     std::vector<float> observationWeight;
-    std::vector<std::uint16_t> sourceMask;
+    std::vector<xjw::mesh::DepthGeometrySourceMask> sourceMask;
     std::vector<std::uint16_t> spread;
     std::vector<std::uint16_t> geometrySupport;
     std::vector<std::uint8_t> supported;

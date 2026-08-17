@@ -147,7 +147,7 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 ## Git 与提交
 
-- 每一次修改代码后都要 commit。
+- 每一次修改代码后不需要 commit，除非我进行了要求。
 - 除非用户主动、明确要求创建或使用分支，否则不要创建新分支，也不要切换到其它分支；
   默认在当前分支完成修改、验证和提交。不能仅因为任务类型、开发惯例或工具建议而自行开分支。
 - 分支管理建议：

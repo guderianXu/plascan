@@ -82,6 +82,79 @@ def finite_quantile(values: np.ndarray, quantile: float) -> float | None:
     return float(np.quantile(finite, quantile)) if finite.size else None
 
 
+def summarize_global_scale_alignment(depth_ratios: np.ndarray) -> dict[str, object]:
+    """Separate a robust global scale offset from local depth-shape error."""
+    ratios = np.asarray(depth_ratios, dtype=np.float64)
+    ratios = ratios[np.isfinite(ratios) & (ratios > 0.0)]
+    if not ratios.size:
+        return {
+            "method": "candidate_depth * reciprocal(pooled_depth_ratio_p50)",
+            "sample_count": 0,
+            "candidate_to_reference_scale": None,
+            "relative_residual_p50": None,
+            "relative_residual_p90": None,
+            "relative_residual_p95": None,
+            "relative_residual_p99": None,
+            "relative_residual_mean": None,
+        }
+
+    candidate_to_reference_scale = 1.0 / float(np.quantile(ratios, 0.50))
+    relative_residual = np.abs(
+        ratios * candidate_to_reference_scale - 1.0
+    )
+    return {
+        "method": "candidate_depth * reciprocal(pooled_depth_ratio_p50)",
+        "sample_count": int(ratios.size),
+        "candidate_to_reference_scale": candidate_to_reference_scale,
+        "relative_residual_p50": finite_quantile(relative_residual, 0.50),
+        "relative_residual_p90": finite_quantile(relative_residual, 0.90),
+        "relative_residual_p95": finite_quantile(relative_residual, 0.95),
+        "relative_residual_p99": finite_quantile(relative_residual, 0.99),
+        "relative_residual_mean": float(np.mean(relative_residual)),
+    }
+
+
+def summarize_camera_center_scale(
+    candidate_centers: list[np.ndarray],
+    reference_centers: list[np.ndarray],
+    depth_alignment_scale: float | None,
+) -> dict[str, object]:
+    """Estimate reference/candidate coordinate scale without pose alignment."""
+    pair_distance_ratios: list[float] = []
+    for first in range(len(candidate_centers)):
+        for second in range(first + 1, len(candidate_centers)):
+            candidate_distance = float(
+                np.linalg.norm(candidate_centers[first] - candidate_centers[second])
+            )
+            reference_distance = float(
+                np.linalg.norm(reference_centers[first] - reference_centers[second])
+            )
+            if candidate_distance > 0.0 and reference_distance > 0.0:
+                pair_distance_ratios.append(reference_distance / candidate_distance)
+
+    ratios = np.asarray(pair_distance_ratios, dtype=np.float64)
+    ratios = ratios[np.isfinite(ratios) & (ratios > 0.0)]
+    median_ratio = finite_quantile(ratios, 0.50)
+    scale_difference = None
+    if median_ratio is not None and depth_alignment_scale is not None:
+        scale_difference = depth_alignment_scale / median_ratio - 1.0
+    return {
+        "method": "pairwise_camera_distance(reference/candidate)",
+        "matched_camera_count": len(candidate_centers),
+        "pair_count": int(ratios.size),
+        "reference_to_candidate_scale_p10": finite_quantile(ratios, 0.10),
+        "reference_to_candidate_scale_p50": median_ratio,
+        "reference_to_candidate_scale_p90": finite_quantile(ratios, 0.90),
+        "reference_to_candidate_scale_mean": (
+            float(np.mean(ratios)) if ratios.size else None
+        ),
+        "reference_to_candidate_scale_stddev": (
+            float(np.std(ratios)) if ratios.size else None
+        ),
+        "depth_alignment_scale_relative_difference": scale_difference,
+    }
+
+
 def colorize_depth(depth: np.ndarray, valid: np.ndarray, low: float, high: float) -> np.ndarray:
     scale = max(high - low, np.finfo(np.float32).eps)
     normalized = np.clip((depth - low) / scale, 0.0, 1.0)
@@ -171,6 +244,8 @@ def main() -> int:
     all_relative_residuals: list[np.ndarray] = []
     all_depth_ratios: list[np.ndarray] = []
     diagnostic_panels: list[np.ndarray] = []
+    candidate_camera_centers: list[np.ndarray] = []
+    reference_camera_centers: list[np.ndarray] = []
     diagnostic_dir = args.diagnostic_dir.resolve() if args.diagnostic_dir else None
     missing_frame_indices: list[int] = []
     if diagnostic_dir:
@@ -183,6 +258,19 @@ def main() -> int:
             missing_frame_indices.append(index)
             continue
         candidate_path = resolve_candidate_depth_path(frame, mvs_root)
+        candidate_center = np.asarray(
+            frame.get("camera_model", {}).get("camera_center", []),
+            dtype=np.float64,
+        )
+        reference_transform = np.asarray(
+            reference_record.get("camera_to_chunk", []), dtype=np.float64
+        )
+        if candidate_center.shape == (3,) and reference_transform.shape == (4, 4):
+            if np.all(np.isfinite(candidate_center)) and np.all(
+                np.isfinite(reference_transform[:3, 3])
+            ):
+                candidate_camera_centers.append(candidate_center)
+                reference_camera_centers.append(reference_transform[:3, 3])
         reference_path = metashape_root / reference_record["depth_path"]
         candidate = read_fast_float_matrix(candidate_path)
         reference = cv2.imread(str(reference_path), cv2.IMREAD_UNCHANGED)
@@ -250,6 +338,12 @@ def main() -> int:
 
     combined = np.concatenate(all_relative_residuals) if all_relative_residuals else np.array([])
     combined_ratios = np.concatenate(all_depth_ratios) if all_depth_ratios else np.array([])
+    global_scale_alignment = summarize_global_scale_alignment(combined_ratios)
+    camera_center_scale = summarize_camera_center_scale(
+        candidate_camera_centers,
+        reference_camera_centers,
+        global_scale_alignment["candidate_to_reference_scale"],
+    )
     report = {
         "mvs_manifest": str(mvs_manifest_path),
         "metashape_export": str(metashape_root),
@@ -264,6 +358,8 @@ def main() -> int:
             "depth_ratio_p50": finite_quantile(combined_ratios, 0.50),
             "depth_ratio_p10": finite_quantile(combined_ratios, 0.10),
             "depth_ratio_p90": finite_quantile(combined_ratios, 0.90),
+            "global_scale_alignment": global_scale_alignment,
+            "camera_center_scale": camera_center_scale,
             "within_0_2_percent": float(np.mean(combined <= 0.002)) if combined.size else None,
             "within_1_percent": float(np.mean(combined <= 0.01)) if combined.size else None,
             "mean_candidate_only_fraction": float(

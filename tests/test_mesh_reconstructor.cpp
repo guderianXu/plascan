@@ -2,6 +2,7 @@
 
 #include "DepthMapMeshBuilder.h"
 #include "DepthConstrainedSurfaceRefiner.h"
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthFusionFramePolicy.h"
 #include "DepthMeshCompleteness.h"
 #include "DepthImplicitFieldRegularizer.h"
@@ -9,6 +10,7 @@
 #include "DepthVisibilityHistogram.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "DepthTsdfCellSheetRecovery.h"
+#include "DepthTsdfRecoveryTransaction.h"
 #include "AdaptiveTsdfOctree.h"
 #include "BoundaryAwareVoxelSimplifier.h"
 #include "result/OperationResult.h"
@@ -18,6 +20,7 @@
 #include "MeshQuadricSimplifier.h"
 #include "MeshIsotropicRemesher.h"
 #include "MeshTopologyQuality.h"
+#include "MvsWorkspaceManifest.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "PointCloudPreprocess.h"
 #include "SurfaceReconstructor.h"
@@ -26,6 +29,7 @@
 #include "TextureMapper.h"
 #include "TextureAtlasPacker.h"
 #include "TextureAtlasSampling.h"
+#include "TriangleDistanceIndex.h"
 #include "VisualHullReconstructor.h"
 #include "VisualHullFieldEvaluator.h"
 #include "VisualHullDepthRefiner.h"
@@ -2174,7 +2178,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     const std::vector<float> tsdf{
         0.2f, 0.3f, -0.2f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f};
     const std::vector<float> weight(8, 1.0f);
-    const std::vector<std::uint16_t> source_masks(8, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(8, 0x3);
     std::vector<std::uint8_t> eligible(8, 0);
     eligible[2] = 1;
     std::vector<std::uint8_t> supported(8, 0);
@@ -2209,7 +2213,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     const std::vector<float> tsdf{
         0.2f, 0.3f, -0.2f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f};
     const std::vector<float> weight(8, 1.0f);
-    const std::vector<std::uint16_t> source_masks(8, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(8, 0x3);
     std::vector<std::uint8_t> eligible(8, 0);
     eligible[2] = 1;
     std::vector<std::uint8_t> supported(8, 0);
@@ -2247,7 +2251,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     std::vector<float> tsdf(12, 0.4f);
     tsdf[index(1, 0, 0)] = -0.2f;
     const std::vector<float> weight(12, 1.0f);
-    const std::vector<std::uint16_t> source_masks(12, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(12, 0x3);
     std::vector<std::uint8_t> eligible(12, 0);
     eligible[index(1, 0, 0)] = 1;
     std::vector<std::uint8_t> supported(12, 0);
@@ -2283,7 +2287,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     tsdf[index(1, 0, 0)] = -0.2f;
     tsdf[index(2, 0, 0)] = -0.3f;
     const std::vector<float> weight(12, 1.0f);
-    const std::vector<std::uint16_t> source_masks(12, 0x3);
+    const std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(12, 0x3);
     std::vector<std::uint8_t> eligible(12, 0);
     eligible[index(1, 0, 0)] = 1;
     std::vector<std::uint8_t> supported(12, 0);
@@ -2328,7 +2332,7 @@ TEST(DepthTsdfCellSheetRecoveryTest,
 
     std::vector<float> tsdf(18, 0.3f);
     std::vector<float> weight(18, 1.0f);
-    std::vector<std::uint16_t> source_masks(18, 0x3);
+    std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(18, 0x3);
     std::vector<std::uint8_t> eligible(18, 0);
     std::vector<std::uint8_t> supported(18, 0);
     for (int y = 0; y <= 2; ++y)
@@ -2382,7 +2386,7 @@ TEST(DepthTsdfCellSheetRecoveryTest, RejectsAComponentBelowTheCellLimit)
 
     std::vector<float> tsdf(18, 0.3f);
     std::vector<float> weight(18, 1.0f);
-    std::vector<std::uint16_t> source_masks(18, 0x3);
+    std::vector<xjw::mesh::DepthGeometrySourceMask> source_masks(18, 0x3);
     std::vector<std::uint8_t> eligible(18, 0);
     std::vector<std::uint8_t> supported(18, 0);
     for (int y = 0; y <= 2; ++y)
@@ -2437,6 +2441,32 @@ TEST(DepthTsdfSurfaceBuilderTest, MemoryFailureDoesNotLowerResolution)
     EXPECT_EQ(result.layout.cells[0], 320);
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("320")));
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("bytes")));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, OrbitalGapRecoveryAllocationIncludesSourceEvidence)
+{
+    xjw::mesh::DepthTsdfOptions base_options;
+    base_options.resolution = 24;
+    const auto base = xjw::mesh::DepthTsdfSurfaceBuilder::validateAllocation(
+        std::array<float, 3>{0.0f, 0.0f, 0.0f},
+        std::array<float, 3>{1.0f, 1.0f, 1.0f},
+        base_options);
+    ASSERT_TRUE(base.ok) << base.errorMessage.toStdString();
+
+    xjw::mesh::DepthTsdfOptions gap_options = base_options;
+    gap_options.enableOrbitalGapBoundaryRecovery = true;
+    const auto with_gap =
+        xjw::mesh::DepthTsdfSurfaceBuilder::validateAllocation(
+            std::array<float, 3>{0.0f, 0.0f, 0.0f},
+            std::array<float, 3>{1.0f, 1.0f, 1.0f},
+            gap_options);
+    ASSERT_TRUE(with_gap.ok) << with_gap.errorMessage.toStdString();
+
+    constexpr std::uint64_t kEvidenceBytesPerSample =
+        sizeof(xjw::mesh::DepthGeometrySourceMask) +
+        sizeof(std::uint16_t) + sizeof(float) * 3u;
+    EXPECT_EQ(with_gap.layout.requiredBytes - base.layout.requiredBytes,
+              with_gap.layout.sampleCount * kEvidenceBytesPerSample);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxisBounds)
@@ -2533,6 +2563,7 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
             artifact.inverseDepthSpreadPath = inverseDepthSpreadPath;
             artifact.crossViewRepairedMaskPath = repairedMaskPath;
             artifact.sourceIndices = {1, 2, 3};
+            artifact.geometrySourceIndices = {1, 2, 3};
         }
         artifact.validMaskPath = depthMaskPath;
         artifact.supportMaskPath = supportMaskPath;
@@ -2569,6 +2600,28 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_FALSE(loaded.frames.front().auxiliarySurfaceOnly);
     EXPECT_FALSE(loaded.frames.at(3).auxiliarySurfaceOnly);
     EXPECT_TRUE(loaded.frames.back().auxiliarySurfaceOnly);
+
+    auto memory_limited_artifacts = artifacts;
+    for (auto &artifact : memory_limited_artifacts)
+    {
+        artifact.gridWidth = 100000;
+        artifact.gridHeight = 100000;
+    }
+    const auto memory_limited =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            memory_limited_artifacts, 1);
+    ASSERT_TRUE(memory_limited.ok)
+        << memory_limited.errorMessage.toStdString();
+    ASSERT_EQ(memory_limited.frames.size(), 3);
+    EXPECT_EQ(memory_limited.primaryFrameCount, 3);
+    EXPECT_EQ(memory_limited.auxiliaryFrameCount, 0);
+    EXPECT_TRUE(std::all_of(
+        memory_limited.frames.cbegin(),
+        memory_limited.frames.cend(),
+        [](const xjw::mesh::DepthTsdfFrame &frame)
+        {
+            return !frame.auxiliarySurfaceOnly;
+        }));
 
     auto auxiliary_only_artifacts = artifacts;
     for (auto &artifact : auxiliary_only_artifacts)
@@ -2622,6 +2675,8 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         QStringLiteral("mvs_manifest.json"));
     std::ofstream manifest(manifest_path.toStdString(), std::ios::binary);
     manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("algorithm_revision"),
+         xjw::mvs::kMvsDepthAlgorithmRevision},
         {QStringLiteral("frames"), auxiliary_frames_json}})
                     .toJson(QJsonDocument::Compact)
                     .toStdString();
@@ -2658,7 +2713,8 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_FLOAT_EQ(
         loaded.frames.front().inverseDepthRelativeSpread.at<float>(0, 0), 0.01f);
     EXPECT_EQ(loaded.frames.front().crossViewRepairedMask.type(), CV_8UC1);
-    EXPECT_EQ(loaded.frames.front().sourceIndices, QVector<int>({1, 2, 3}));
+    EXPECT_EQ(loaded.frames.front().geometrySourceIndices,
+              QVector<int>({1, 2, 3}));
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).geometrySourceMask), 0);
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).inverseDepthMean), 0);
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).inverseDepthRelativeSpread), 0);
@@ -2732,6 +2788,49 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_EQ(candidate_bounds.sampleCount,
               candidate_bounds.candidateSampleCount);
     EXPECT_LT(candidate_bounds.minimum[2], 1.0f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     PerFrameCoverageBoundsPreserveOrbitalSectorExtrema)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames;
+    for (int frame_index = 0; frame_index < 20; ++frame_index)
+    {
+        xjw::mesh::DepthTsdfFrame frame;
+        frame.refIndex = frame_index;
+        frame.camera.setIntrinsics(100.0, 100.0, 60.0, 60.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.depth = cv::Mat(120, 120, CV_32FC1, cv::Scalar(2.0f));
+        if (frame_index < 3)
+        {
+            frame.depth(cv::Rect(114, 0, 6, 120)).setTo(4.0f);
+        }
+        frame.depthValidMask = cv::Mat(
+            frame.depth.size(), CV_8UC1, cv::Scalar(255));
+        frame.supportMask = cv::Mat(
+            frame.depth.size(), CV_8UC1, cv::Scalar(255));
+        frames.push_back(std::move(frame));
+    }
+
+    const auto global_bounds =
+        xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(
+            frames, false, false);
+    const auto per_frame_bounds =
+        xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(
+            frames, false, true);
+
+    ASSERT_TRUE(global_bounds.ok) << global_bounds.errorMessage.toStdString();
+    ASSERT_TRUE(per_frame_bounds.ok)
+        << per_frame_bounds.errorMessage.toStdString();
+    EXPECT_LT(global_bounds.maximum[2], 3.0f);
+    EXPECT_GT(per_frame_bounds.maximum[2], 4.0f);
+    EXPECT_TRUE(per_frame_bounds.selectionReason.contains(
+        QStringLiteral("per_frame_coverage")));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -2934,6 +3033,31 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_FLOAT_EQ(sample.adaptiveGeometrySupportWeight, 0.4f);
     EXPECT_FLOAT_EQ(sample.adaptiveGeometryEffectiveViewCount, 1.5f);
     EXPECT_FLOAT_EQ(sample.adaptiveGeometryConflictRatio, 0.1f);
+
+    auto discrete_fallback_artifacts = artifacts;
+    for (auto &artifact : discrete_fallback_artifacts)
+    {
+        artifact.useDiscreteGeometryFallback = true;
+    }
+    const auto discrete_fallback =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            discrete_fallback_artifacts);
+    ASSERT_TRUE(discrete_fallback.ok)
+        << discrete_fallback.errorMessage.toStdString();
+    ASSERT_EQ(discrete_fallback.frames.size(), 3);
+    EXPECT_FALSE(
+        discrete_fallback.frames.front().useAdaptiveGeometryEvidence);
+    const auto discrete_sample =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            discrete_fallback.frames.front(),
+            discrete_fallback.frames.front().depthValidMask,
+            cv::Point2d(1.0, 0.0),
+            0.25f,
+            false,
+            0.02f);
+    ASSERT_TRUE(discrete_sample.valid);
+    EXPECT_FALSE(discrete_sample.useAdaptiveGeometryEvidence);
+    EXPECT_EQ(discrete_sample.geometrySupportCount, 4);
 
     auto legacy_artifacts = artifacts;
     for (auto &artifact : legacy_artifacts)
@@ -3444,6 +3568,63 @@ TEST(DepthTsdfSurfaceBuilderTest,
         evaluation.baselineTopologicalComplexity);
     EXPECT_EQ(evaluation.rejectionFlags, 0U);
     EXPECT_TRUE(evaluation.accepted);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     MeasuredSupportTopologyTransactionRollsBackRejectedSupport)
+{
+    xjw::mesh::MeshTopologyQualityStatistics baseline;
+    baseline.validFaceCount = 100;
+    baseline.boundaryEdgeCount = 8;
+    baseline.nonManifoldEdgeCount = 0;
+    baseline.nonManifoldVertexCount = 0;
+    baseline.componentCount = 1;
+    baseline.topologicalComplexity = 2;
+    baseline.largestComponentFaceRatio = 1.0;
+    baseline.extremeAspectFaceRatio = 0.01;
+    xjw::mesh::MeshTopologyQualityStatistics candidate = baseline;
+    candidate.validFaceCount = 104;
+    candidate.boundaryEdgeCount = baseline.boundaryEdgeCount;
+    const std::vector<std::uint8_t> baseline_support{1, 0, 1, 0};
+    std::vector<std::uint8_t> candidate_support{1, 1, 1, 1};
+    xjw::mesh::DepthTsdfStatistics statistics;
+
+    const bool accepted = xjw::mesh::DepthTsdfSurfaceBuilder::
+        finalizeMeasuredSupportTopologyTransaction(
+            baseline,
+            candidate,
+            baseline_support,
+            2,
+            &candidate_support,
+            &statistics);
+
+    EXPECT_FALSE(accepted);
+    EXPECT_EQ(candidate_support, baseline_support);
+    EXPECT_TRUE(statistics.measuredSupportTopologyTransactionEvaluated);
+    EXPECT_FALSE(statistics.measuredSupportTopologyTransactionAccepted);
+    EXPECT_NE(
+        statistics.measuredSupportTopologyTransactionRejectionFlags &
+            xjw::mesh::DepthTsdfRecoveryTransactionBoundaryNotReduced,
+        0U);
+    EXPECT_EQ(statistics.measuredSupportRecoveredSampleCount, 2U);
+    EXPECT_EQ(statistics.measuredSupportAppliedRecoveredSampleCount, 0U);
+    EXPECT_EQ(
+        statistics.measuredSupportTopologyTransactionBaselineBoundaryEdgeCount,
+        8);
+    EXPECT_EQ(
+        statistics.measuredSupportTopologyTransactionCandidateBoundaryEdgeCount,
+        8);
+
+    xjw::mesh::DepthTsdfResult result;
+    result.statistics = statistics;
+    const QJsonObject json =
+        xjw::mesh::DepthTsdfSurfaceBuilder::statisticsToJson(result);
+    EXPECT_TRUE(json.value(QStringLiteral(
+        "measured_support_topology_transaction_evaluated")).toBool());
+    EXPECT_FALSE(json.value(QStringLiteral(
+        "measured_support_topology_transaction_accepted")).toBool());
+    EXPECT_EQ(json.value(QStringLiteral(
+        "measured_support_applied_recovered_sample_count")).toInt(), 0);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -4208,6 +4389,60 @@ TEST(DepthFusionFramePolicyTest, IdentifiesGapBoundaryAndOppositeFrames)
         1);
 }
 
+TEST(DepthFusionFramePolicyTest,
+     SelectsAuxiliaryViewsByCameraCoverageInsteadOfReferenceOrder)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const auto make_view = [=](int frame_index,
+                               int ref_index,
+                               double angle_degrees)
+    {
+        const double angle = angle_degrees * kPi / 180.0;
+        xjw::mesh::DepthFusionView view;
+        view.frameIndex = frame_index;
+        view.refIndex = ref_index;
+        view.cameraCenter = {std::cos(angle), std::sin(angle), 0.0};
+        return view;
+    };
+
+    std::vector<xjw::mesh::DepthFusionView> fixed_views;
+    for (int index = 0; index < 6; ++index)
+    {
+        fixed_views.push_back(make_view(index, 100 + index, index * 40.0));
+    }
+    const std::vector<xjw::mesh::DepthFusionView> candidates{
+        make_view(0, 1, 220.0),
+        make_view(1, 900, 320.0),
+        make_view(2, 2, 280.0),
+        make_view(3, 800, 240.0)};
+
+    const std::vector<int> selected =
+        xjw::mesh::DepthFusionFramePolicy::
+            selectCoverageComplementaryCandidates(
+                fixed_views, candidates, 3);
+
+    ASSERT_EQ(selected.size(), 3u);
+    EXPECT_EQ(selected.front(), 2);
+    EXPECT_EQ(
+        std::set<int>(selected.cbegin(), selected.cend()),
+        (std::set<int>{1, 2, 3}));
+
+    std::vector<xjw::mesh::DepthFusionView> combined = fixed_views;
+    combined.insert(combined.end(), candidates.cbegin(), candidates.cend());
+    std::vector<float> weights(combined.size(), 0.0f);
+    std::fill_n(weights.begin(), fixed_views.size(), 1.0f);
+    for (const int candidate_index : selected)
+    {
+        weights[fixed_views.size() +
+                static_cast<std::size_t>(candidate_index)] = 1.0f;
+    }
+    const auto coverage =
+        xjw::mesh::DepthFusionFramePolicy::evaluateOrbitalCoverage(
+            combined, weights);
+    ASSERT_TRUE(coverage.valid);
+    EXPECT_LE(coverage.maximumAngularGapDegrees, 40.5);
+}
+
 TEST(DepthMeshCompletenessTest, RejectsAClosedLookingMeshThatExplainsOnlyHalfTheDepth)
 {
     const QVector<xjw::mesh::DepthTsdfFrame> frames =
@@ -4295,6 +4530,75 @@ TEST(DepthMeshCompletenessTest,
     ASSERT_TRUE(completeness.available);
     EXPECT_TRUE(completeness.gatePassed);
     EXPECT_GT(completeness.minimumFrameRecall, 0.98);
+}
+
+TEST(TriangleDistanceIndexTest, OwnsIndexedTrianglesAcrossMeshMutation)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        {-2.0f, -2.0f, 2.0f},
+        {2.0f, -2.0f, 2.0f},
+        {2.0f, 2.0f, 2.0f},
+        {-2.0f, 2.0f, 2.0f}
+    };
+    mesh.faces = {{{0, 1, 2}}, {{0, 2, 3}}};
+    xjw::mesh::TriangleDistanceIndex index(mesh);
+
+    mesh.vertices.clear();
+    mesh.faces.clear();
+
+    EXPECT_NEAR(
+        index.nearestDistanceSquared({0.5, -0.25, 2.1}), 0.01, 1.0e-9);
+}
+
+TEST(DepthMeshCompletenessTest,
+     AuxiliaryAndRuntimeRejectedDepthDoNotControlTheHardGate)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    xjw::mesh::DepthTsdfFrame auxiliary = frames.front();
+    auxiliary.refIndex = 99;
+    auxiliary.auxiliarySurfaceOnly = true;
+    auxiliary.depth = frames.front().depth.clone();
+    auxiliary.depth.setTo(8.0f);
+    frames.push_back(std::move(auxiliary));
+    xjw::mesh::DepthTsdfFrame runtime_rejected = frames.front();
+    runtime_rejected.refIndex = 100;
+    runtime_rejected.depth = frames.front().depth.clone();
+    runtime_rejected.depth.setTo(8.0f);
+    frames.push_back(std::move(runtime_rejected));
+
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        {-2.0f, -2.0f, 2.0f},
+        {2.0f, -2.0f, 2.0f},
+        {2.0f, 2.0f, 2.0f},
+        {-2.0f, 2.0f, 2.0f}};
+    mesh.faces = {{{0, 1, 2}}, {{0, 2, 3}}};
+
+    xjw::mesh::DepthMeshCompletenessOptions options;
+    options.tolerance = 0.02;
+    options.minimumP10FrameRecall = 0.75;
+    options.minimumMedianFrameRecall = 0.85;
+    const auto all_frames = xjw::mesh::DepthMeshCompleteness::evaluate(
+        mesh, frames, options);
+    options.excludeAuxiliaryFrames = true;
+    const auto primary_frames = xjw::mesh::DepthMeshCompleteness::evaluate(
+        mesh, frames, options);
+    options.excludedRefIndices = {100};
+    const auto retained_frames = xjw::mesh::DepthMeshCompleteness::evaluate(
+        mesh, frames, options);
+
+    ASSERT_TRUE(all_frames.available);
+    ASSERT_TRUE(primary_frames.available);
+    ASSERT_TRUE(retained_frames.available);
+    EXPECT_FALSE(all_frames.gatePassed);
+    EXPECT_FALSE(primary_frames.gatePassed);
+    EXPECT_TRUE(retained_frames.gatePassed);
+    EXPECT_EQ(all_frames.frames.size(), 5);
+    EXPECT_EQ(primary_frames.frames.size(), 4);
+    EXPECT_EQ(retained_frames.frames.size(), 3);
+    EXPECT_GT(retained_frames.minimumFrameRecall, 0.98);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, RobustFrameRejectionRemovesBoundedLowTail)
@@ -4573,6 +4877,120 @@ TEST(DepthTsdfSurfaceBuilderTest,
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
+     ObservationOnlyFinalMeshSplitsPinchedBoundaryFansWithoutHoleFilling)
+{
+    if (!xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        GTEST_SKIP() << "MC33 dependency is not configured";
+    }
+
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    for (xjw::mesh::DepthTsdfFrame &frame : frames)
+    {
+        frame.camera.setIntrinsics(60.0, 60.0, 24.0, 18.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+    }
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 512ull * 1024ull * 1024ull;
+    options.enableMc33IsoSurfaceExtraction = true;
+    options.minimumComponentFaces = 2;
+    options.minimumComponentFaceRatio = 0.0f;
+    options.fillSmallBoundaryHoles = false;
+    options.splitPinchedBoundaryVertices = false;
+
+    // These two observed sphere fronts produce a deterministic MC33 support
+    // boundary where disconnected face fans meet at one vertex.
+    constexpr double kRadius = 0.45;
+    constexpr double kCenterZ = 2.5;
+    constexpr double kHalfSeparation = 0.436;
+    cv::Mat depth(36, 48, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat mask(36, 48, CV_8UC1, cv::Scalar(0));
+    for (int row = 0; row < depth.rows; ++row)
+    {
+        for (int column = 0; column < depth.cols; ++column)
+        {
+            const std::array<double, 3> ray{
+                (column - 24.0) / 60.0,
+                (row - 18.0) / 60.0,
+                1.0};
+            const double ray_squared =
+                ray[0] * ray[0] + ray[1] * ray[1] + 1.0;
+            double nearest_depth = std::numeric_limits<double>::infinity();
+            for (const double center_x :
+                 {-kHalfSeparation, kHalfSeparation})
+            {
+                const double ray_dot_center =
+                    ray[0] * center_x + ray[2] * kCenterZ;
+                const double center_squared =
+                    center_x * center_x + kCenterZ * kCenterZ;
+                const double discriminant =
+                    ray_dot_center * ray_dot_center -
+                    ray_squared * (center_squared - kRadius * kRadius);
+                if (discriminant < 0.0)
+                {
+                    continue;
+                }
+                const double candidate_depth =
+                    (ray_dot_center - std::sqrt(discriminant)) /
+                    ray_squared;
+                if (candidate_depth > 0.0)
+                {
+                    nearest_depth =
+                        std::min(nearest_depth, candidate_depth);
+                }
+            }
+            if (std::isfinite(nearest_depth))
+            {
+                depth.at<float>(row, column) =
+                    static_cast<float>(nearest_depth);
+                mask.at<std::uint8_t>(row, column) = 255;
+            }
+        }
+    }
+    for (xjw::mesh::DepthTsdfFrame &frame : frames)
+    {
+        frame.depth = depth.clone();
+        frame.depthValidMask = mask.clone();
+        frame.supportMask = mask.clone();
+    }
+
+    const auto unsplit =
+        xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+    ASSERT_TRUE(unsplit.ok) << unsplit.errorMessage.toStdString();
+    const auto topology_before =
+        xjw::mesh::evaluateMeshTopologyQuality(unsplit.mesh);
+    ASSERT_GT(topology_before.nonManifoldVertexCount, 0);
+    EXPECT_EQ(topology_before.nonManifoldEdgeCount, 0);
+    EXPECT_EQ(unsplit.statistics.splitPinchedBoundaryVertexCount, 0);
+
+    options.splitPinchedBoundaryVertices = true;
+    const auto split =
+        xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+    ASSERT_TRUE(split.ok) << split.errorMessage.toStdString();
+    const auto topology_after =
+        xjw::mesh::evaluateMeshTopologyQuality(split.mesh);
+
+    EXPECT_FALSE(options.fillSmallBoundaryHoles);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+    EXPECT_GT(split.statistics.splitPinchedBoundaryVertexCount, 0);
+    EXPECT_EQ(split.statistics.filledBoundaryHoleCount, 0);
+    EXPECT_EQ(split.statistics.addedHoleFillFaceCount, 0);
+    EXPECT_EQ(topology_after.nonManifoldVertexCount, 0);
+    EXPECT_EQ(topology_after.nonManifoldEdgeCount, 0);
+    EXPECT_EQ(split.mesh.faceCount(), unsplit.mesh.faceCount());
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
      RunsAdaptiveVisibilityHistogramOctreeAndSparseTgvStage)
 {
     const QVector<xjw::mesh::DepthTsdfFrame> frames =
@@ -4629,7 +5047,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
     {
         xjw::mesh::DepthTsdfFrame &frame = frames[frame_index];
-        frame.sourceIndices = {0, 1, 2};
+        frame.geometrySourceIndices = {0, 1, 2};
         frame.geometrySourceMask = cv::Mat(
             frame.depth.size(), CV_16UC1, cv::Scalar(0x0003));
         frame.inverseDepthRelativeSpread = cv::Mat(
@@ -4678,7 +5096,7 @@ TEST(DepthTsdfSurfaceBuilderTest, RecoversOneVoxelSurfacePatchWithStableSourceEv
                     2.0f + 0.005f * static_cast<float>(column - 24);
             }
         }
-        frame.sourceIndices = {0, 1, 2};
+        frame.geometrySourceIndices = {0, 1, 2};
         frame.geometrySourceMask = cv::Mat(
             frame.depth.size(), CV_16UC1, cv::Scalar(0x0003));
         frame.inverseDepthRelativeSpread = cv::Mat(
@@ -4747,7 +5165,7 @@ TEST(DepthImplicitFieldRegularizerTest,
     const std::size_t sample_count = 125;
     std::vector<float> observation(sample_count, 1.0f);
     std::vector<float> weight(sample_count, 1.0f);
-    std::vector<std::uint16_t> sources(sample_count, 0);
+    std::vector<xjw::mesh::DepthGeometrySourceMask> sources(sample_count, 0);
     std::vector<std::uint8_t> eligible(sample_count, 0);
     std::vector<float> field = observation;
     std::vector<std::uint8_t> supported(sample_count, 0);
@@ -4827,7 +5245,7 @@ TEST(DepthImplicitFieldRegularizerTest,
     }
     std::vector<float> field = observation;
     std::vector<float> weight(sample_count, 1.0f);
-    std::vector<std::uint16_t> sources(sample_count, 0x0003);
+    std::vector<xjw::mesh::DepthGeometrySourceMask> sources(sample_count, 0x0003);
     std::vector<std::uint8_t> eligible(sample_count, 0);
     std::vector<std::uint8_t> supported(sample_count, 1);
     const auto roughness = [&field, &index]()
@@ -4912,7 +5330,7 @@ TEST(AdaptiveTsdfOctreeTest,
     const std::size_t sample_count = 512;
     std::vector<float> field(sample_count, 1.0f);
     std::vector<float> weight(sample_count, 1.0f);
-    std::vector<std::uint16_t> sources(sample_count, 0x0003);
+    std::vector<xjw::mesh::DepthGeometrySourceMask> sources(sample_count, 0x0003);
     std::vector<std::uint8_t> active(sample_count, 1);
     std::vector<std::uint8_t> supported(sample_count, 1);
     std::vector<xjw::mesh::DepthVisibilityHistogram> histograms(sample_count);
@@ -5422,6 +5840,115 @@ TEST(MeshColorizerTest, CoherentFaceColorUsesOnePrimaryViewForTheWholeFace)
         EXPECT_EQ(vertex.r, 200);
         EXPECT_EQ(vertex.g, 150);
         EXPECT_EQ(vertex.b, 100);
+    }
+}
+
+TEST(MeshColorizerTest, RejectsDarkStudioBackgroundBeforeVertexAndFaceColoring)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[0].x = -0.1f; mesh.vertices[0].y = -0.1f; mesh.vertices[0].z = 2.0f;
+    mesh.vertices[1].x = 0.1f; mesh.vertices[1].y = -0.1f; mesh.vertices[1].z = 2.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 0.1f; mesh.vertices[2].z = 2.0f;
+    for (auto &vertex : mesh.vertices)
+    {
+        vertex.nz = 1.0f;
+    }
+    xjw::mesh::Triangle face;
+    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    mesh.faces.push_back(face);
+
+    auto make_view = []()
+    {
+        xjw::mesh::MeshColorView view;
+        view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
+        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
+                                                   0.0, 1.0, 0.0,
+                                                   0.0, 0.0, 1.0},
+                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(2.0f));
+        view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.9f));
+        view.depthValidMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
+        view.supportMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
+        return view;
+    };
+
+    xjw::mesh::MeshColorView studio_view = make_view();
+    studio_view.colorBgr = cv::Mat::zeros(64, 64, CV_8UC3);
+    cv::rectangle(studio_view.colorBgr,
+                  cv::Rect(3, 20, 16, 25),
+                  cv::Scalar(200, 200, 200),
+                  cv::FILLED);
+    studio_view.qualityWeight = 5.0f;
+    xjw::mesh::MeshColorView valid_view = make_view();
+    valid_view.colorBgr = cv::Mat(
+        64, 64, CV_8UC3, cv::Scalar(30, 100, 180));
+
+    xjw::mesh::MeshColorOptions options;
+    options.maximumVoxelSize = 0.01f;
+    options.propagationPasses = 0;
+    options.speckleCleanupPasses = 0;
+    options.coherentFacePrimaryViews = true;
+    const auto statistics = xjw::mesh::MeshColorizer::colorize(
+        &mesh,
+        QVector<xjw::mesh::MeshColorView>{studio_view, valid_view},
+        options);
+
+    EXPECT_GE(statistics.rejectedMaskCount, 3u);
+    EXPECT_EQ(statistics.coherentPrimaryViewFaceCount, 1);
+    EXPECT_EQ(statistics.coherentPrimaryViewVertexCount, 3);
+    for (const auto &vertex : mesh.vertices)
+    {
+        EXPECT_EQ(vertex.r, 180);
+        EXPECT_EQ(vertex.g, 100);
+        EXPECT_EQ(vertex.b, 30);
+    }
+}
+
+TEST(MeshColorizerTest, UsesScaledColorCameraForFullResolutionPhotographs)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[0].x = -0.05f; mesh.vertices[0].y = -0.05f; mesh.vertices[0].z = 2.0f;
+    mesh.vertices[1].x = 0.05f; mesh.vertices[1].y = -0.05f; mesh.vertices[1].z = 2.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 0.05f; mesh.vertices[2].z = 2.0f;
+    for (auto &vertex : mesh.vertices)
+    {
+        vertex.nz = 1.0f;
+    }
+    xjw::mesh::Triangle face;
+    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    mesh.faces.push_back(face);
+
+    xjw::mesh::MeshColorView view;
+    view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
+    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
+                                               0.0, 1.0, 0.0,
+                                               0.0, 0.0, 1.0},
+                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(2.0f));
+    view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.9f));
+    view.depthValidMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
+    view.supportMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
+    view.colorBgr = cv::Mat(128, 128, CV_8UC3, cv::Scalar(80, 80, 80));
+    cv::rectangle(view.colorBgr,
+                  cv::Rect(55, 55, 19, 19),
+                  cv::Scalar(10, 20, 230),
+                  cv::FILLED);
+
+    xjw::mesh::MeshColorOptions options;
+    options.maximumVoxelSize = 0.01f;
+    options.propagationPasses = 0;
+    options.speckleCleanupPasses = 0;
+    const auto statistics = xjw::mesh::MeshColorizer::colorize(
+        &mesh, QVector<xjw::mesh::MeshColorView>{view}, options);
+
+    EXPECT_EQ(statistics.reliablyColoredVertexCount, 3);
+    for (const auto &vertex : mesh.vertices)
+    {
+        EXPECT_EQ(vertex.r, 230);
+        EXPECT_EQ(vertex.g, 20);
+        EXPECT_EQ(vertex.b, 10);
     }
 }
 
@@ -6629,6 +7156,23 @@ TEST(MeshPostprocessTest, WeldsCoincidentVerticesBeforeComponentFiltering)
     EXPECT_EQ(mesh.faceCount(), 2);
 }
 
+TEST(DepthTsdfSurfaceBuilderTest,
+     VoxelFallbackContinuesAnyStalledSimplificationAboveTarget)
+{
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAttemptVoxelFallbackSimplification(217012, 120000, false));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAttemptVoxelFallbackSimplification(120000, 120000, false));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAttemptVoxelFallbackSimplification(217012, 120000, true));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAttemptVoxelFallbackSimplification(217012, 0, false));
+}
+
 TEST(MeshPostprocessTest,
      AbsoluteToleranceWeldsLargeOffsetMarchingCubesVertices)
 {
@@ -6941,11 +7485,152 @@ TEST(MeshWorkflowSettingsTest,
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
 
     EXPECT_TRUE(options.excludeAnchoredInterpolationObservations);
+    EXPECT_FALSE(options.enableAuxiliarySurfaceOnlyIntegration);
+    EXPECT_TRUE(options.enableAuxiliaryBridgeOnlyIntegration);
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
     EXPECT_FALSE(options.collectAcquisitionGapReport);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     StrictObservationOnlyUsesOnlyQualifiedGraphBridgeCore)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    for (xjw::mesh::DepthTsdfFrame &frame : frames)
+    {
+        frame.sceneProfile = QStringLiteral("orbital_object");
+        frame.algorithmRevision = xjw::mvs::kMvsGeometrySourceOrdinalRevision;
+    }
+    frames[0].geometrySourceIndices = {1};
+    frames[1].geometrySourceIndices = {0};
+    frames[2].geometrySourceIndices = {99};
+
+    xjw::mesh::DepthTsdfFrame bridge = frames[1];
+    bridge.refIndex = 99;
+    bridge.geometrySourceIndices = {1};
+    bridge.auxiliarySurfaceOnly = true;
+    bridge.auxiliaryBridgeEligible = true;
+    bridge.validWithinMaskRatio = 0.98;
+    bridge.consistencyRetentionRatio = 0.99;
+    bridge.largestComponentRatio = 0.99;
+    bridge.meanConfidence = 0.75;
+    bridge.sparseAbsoluteDepthMedianLogError = 0.005;
+    bridge.sourceViewCount = 4;
+    bridge.trustedGeometryCorePixelCount = 10000;
+    bridge.geometrySupportCount = cv::Mat(
+        bridge.depth.size(), CV_16UC1, cv::Scalar(4));
+    bridge.geometrySourceMask = cv::Mat(
+        bridge.depth.size(), CV_16UC1, cv::Scalar(0x0007));
+    bridge.inverseDepthRelativeSpread = cv::Mat(
+        bridge.depth.size(), CV_32FC1, cv::Scalar(0.005f));
+    frames.push_back(std::move(bridge));
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+    options.enableAuxiliarySurfaceOnlyIntegration = false;
+    options.enableAuxiliaryBridgeOnlyIntegration = true;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(
+        frames, options);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+    EXPECT_EQ(result.statistics.auxiliaryBridgePrimaryComponentCount, 2);
+    EXPECT_TRUE(result.statistics.auxiliaryBridgeGraphConnected);
+    EXPECT_FALSE(result.statistics.auxiliaryBridgeSelectionFailClosed);
+    EXPECT_TRUE(result.statistics.effectiveAuxiliaryBridgeOnlyIntegration);
+    EXPECT_EQ(result.statistics.auxiliaryBridgeRefIndices,
+              QVector<int>({99}));
+    EXPECT_EQ(result.statistics.geometryInputFrameCount, 4);
+    EXPECT_EQ(result.statistics.excludedAuxiliarySurfaceOnlyFrameCount, 0);
+    EXPECT_EQ(result.statistics.auxiliaryBridgeRejectedGeometrySupportCount, 0);
+    EXPECT_EQ(result.statistics.auxiliaryBridgeRejectedSourceCount, 0);
+    EXPECT_EQ(result.statistics.auxiliaryBridgeRejectedSpreadCount, 0);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     AuxiliaryFrameCannotChangeStrictObservationOnlyMesh)
+{
+    const QVector<xjw::mesh::DepthTsdfFrame> primary_frames =
+        makeSyntheticPlaneFrames(false);
+    QVector<xjw::mesh::DepthTsdfFrame> augmented_frames = primary_frames;
+    xjw::mesh::DepthTsdfFrame auxiliary = primary_frames.front();
+    auxiliary.refIndex = 99;
+    auxiliary.auxiliarySurfaceOnly = true;
+    auxiliary.depth = cv::Mat(
+        auxiliary.depth.size(), CV_32FC1, cv::Scalar(20.0f));
+    augmented_frames.push_back(std::move(auxiliary));
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+    options.enableAuxiliarySurfaceOnlyIntegration = false;
+
+    const auto baseline = xjw::mesh::DepthTsdfSurfaceBuilder::build(
+        primary_frames, options);
+    const auto augmented = xjw::mesh::DepthTsdfSurfaceBuilder::build(
+        augmented_frames, options);
+
+    ASSERT_TRUE(baseline.ok) << baseline.errorMessage.toStdString();
+    ASSERT_TRUE(augmented.ok) << augmented.errorMessage.toStdString();
+    EXPECT_EQ(augmented.statistics.inputFrameCount, 4);
+    EXPECT_EQ(augmented.statistics.geometryInputFrameCount, 3);
+    EXPECT_EQ(augmented.statistics.acceptedFrameCount, 3);
+    EXPECT_FALSE(
+        augmented.statistics.effectiveAuxiliarySurfaceOnlyIntegration);
+    EXPECT_EQ(
+        augmented.statistics.excludedAuxiliarySurfaceOnlyFrameCount, 1);
+    EXPECT_EQ(augmented.statistics.excludedAuxiliarySurfaceOnlyRefIndices,
+              QVector<int>({99}));
+    EXPECT_EQ(augmented.layout.boundsMin, baseline.layout.boundsMin);
+    EXPECT_EQ(augmented.layout.boundsMax, baseline.layout.boundsMax);
+    ASSERT_EQ(augmented.mesh.vertices.size(), baseline.mesh.vertices.size());
+    ASSERT_EQ(augmented.mesh.faces.size(), baseline.mesh.faces.size());
+    for (std::size_t index = 0; index < baseline.mesh.vertices.size(); ++index)
+    {
+        const auto &actual = augmented.mesh.vertices[index];
+        const auto &expected = baseline.mesh.vertices[index];
+        EXPECT_FLOAT_EQ(actual.x, expected.x);
+        EXPECT_FLOAT_EQ(actual.y, expected.y);
+        EXPECT_FLOAT_EQ(actual.z, expected.z);
+    }
+    for (std::size_t index = 0; index < baseline.mesh.faces.size(); ++index)
+    {
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            EXPECT_EQ(augmented.mesh.faces[index].v[corner],
+                      baseline.mesh.faces[index].v[corner]);
+        }
+    }
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     StrictObservationOnlyRequiresEnoughPrimaryFrames)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    frames.back().auxiliarySurfaceOnly = true;
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.enableAuxiliarySurfaceOnlyIntegration = false;
+    options.minimumInputFrames = 3;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(
+        frames, options);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("primary=2")));
+    EXPECT_EQ(result.statistics.inputFrameCount, 3);
+    EXPECT_EQ(result.statistics.geometryInputFrameCount, 2);
+    EXPECT_EQ(result.statistics.excludedAuxiliarySurfaceOnlyFrameCount, 1);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)
@@ -6993,6 +7678,56 @@ TEST(MeshWorkflowSettingsTest,
         options.uncertaintyAdaptiveMaximumTruncationVoxels, 14.0f);
     EXPECT_EQ(options.uncertaintyAdaptiveMaximumSamplesPerFrame, 4096);
     EXPECT_EQ(options.uncertaintyAdaptiveMinimumSampleCount, 256);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     VisibilityOccupancyDepthRayInteriorBandRejectsUnboundedInterior)
+{
+    const QJsonObject settings{
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyUseSupportMaskSilhouette"), false},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyBehindSurfaceBandPixelFootprints"),
+         100.0}};
+
+    const auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 256);
+
+    EXPECT_FALSE(options.visibilityOccupancyUseSupportMaskSilhouette);
+    EXPECT_FLOAT_EQ(
+        options.visibilityOccupancyBehindSurfaceBandPixelFootprints,
+        16.0f);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     OrbitalTopologyDefaultsRequireSphereLikeClosedBody)
+{
+    const QJsonObject settings;
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 256);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 256);
+
+    EXPECT_FLOAT_EQ(options.topologyQualityMaximumClosedGenus, 0.0f);
+    EXPECT_EQ(options.topologyQualityMaximumTopologicalComplexity, 0);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     OrbitalTopologyHonorsExplicitNonSphereOverride)
+{
+    const QJsonObject settings{
+        {QStringLiteral("tsdfTopologyQualityMaximumClosedGenus"), 3.0},
+        {QStringLiteral(
+             "tsdfTopologyQualityMaximumTopologicalComplexity"), 8}};
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 256);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 256);
+
+    EXPECT_FLOAT_EQ(options.topologyQualityMaximumClosedGenus, 3.0f);
+    EXPECT_EQ(options.topologyQualityMaximumTopologicalComplexity, 8);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
@@ -7573,7 +8308,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfInterpolationControlsBoundedHoleFilling)
 }
 
 TEST(MeshWorkflowSettingsTest,
-     DisabledInterpolationRetainsHighResolutionOrbitalSurface)
+     DisabledInterpolationUsesOnlySupportedOrbitalSurface)
 {
     const QJsonObject settings{
         {QStringLiteral("interpolation"), QStringLiteral("disabled")},
@@ -7590,8 +8325,11 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableSilhouetteAwareFinalHoleFill);
     EXPECT_FALSE(options.enableVisibilityConstrainedFinalHoleFill);
     EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
-    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.visibilityOccupancyAlignCarrierGrid);
+    EXPECT_FALSE(options.visibilityOccupancyNativeCarrierExtraction);
     EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_EQ(options.visibilityOccupancySilhouetteFullPriorCapacity, 0);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
@@ -7607,16 +8345,64 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
-    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+    EXPECT_FLOAT_EQ(options.minimumComponentFaceRatio, 0.05f);
+    EXPECT_FALSE(options.enableAuxiliarySurfaceOnlyIntegration);
+    EXPECT_TRUE(options.enableAuxiliaryBridgeOnlyIntegration);
 }
 
 TEST(MeshWorkflowSettingsTest,
-     DisabledInterpolationHonorsExplicitOccupancyBoundaryExtraction)
+     OrbitalComponentCleanupHonorsExplicitRatio)
+{
+    const QJsonObject settings{
+        {QStringLiteral("tsdfMinimumComponentFaceRatio"), 0.03}};
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 384);
+
+    EXPECT_FLOAT_EQ(options.minimumComponentFaceRatio, 0.03f);
+}
+
+TEST(MeshWorkflowSettingsTest, EvidenceAwareBoundsCanBeDisabledExplicitly)
+{
+    const QJsonObject settings{
+        {QStringLiteral("tsdfEvidenceAwareBounds"), false},
+        {QStringLiteral("tsdfPerFrameCoverageBounds"), true}
+    };
+
+    const auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
+
+    EXPECT_FALSE(options.useEvidenceAwareBounds);
+    EXPECT_TRUE(options.preservePerFrameCoverageBounds);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     DisabledInterpolationOverridesExplicitUnsupportedCompletionRequests)
 {
     const QJsonObject settings{
         {QStringLiteral("interpolation"), QStringLiteral("disabled")},
         {QStringLiteral("simplifyTargetFaces"), 60000},
-        {QStringLiteral("tsdfVisibilityOccupancyCellBoundaryExtraction"), true}
+        {QStringLiteral("tsdfVisibilityOccupancyCompletion"), true},
+        {QStringLiteral("tsdfVisibilityOccupancyAlignCarrierGrid"), true},
+        {QStringLiteral("tsdfVisibilityOccupancyNativeCarrierExtraction"), true},
+        {QStringLiteral("tsdfVisibilityOccupancyCellBoundaryExtraction"), true},
+        {QStringLiteral("tsdfVisibilityOccupancySilhouetteFullPriorCapacity"), 12},
+        {QStringLiteral("tsdfVisibilityOccupancyDepthRefinement"), true},
+        {QStringLiteral("tsdfVisualHullSignedDistanceCompletion"), true},
+        {QStringLiteral("tsdfGeometryZeroCrossingRecovery"), true},
+        {QStringLiteral("tsdfCrossViewAnchoredSurfaceRecovery"), true},
+        {QStringLiteral("tsdfGeometryZeroCrossingCellSheets"), true},
+        {QStringLiteral("tsdfContourBandZeroCrossingSupport"), true},
+        {QStringLiteral("tsdfSurfacePatchSupport"), true},
+        {QStringLiteral("tsdfAdaptiveTgvRecoverUnsupportedSamples"), true},
+        {QStringLiteral("tsdfImplicitRegularizationRecoverAxialGaps"), true},
+        {QStringLiteral("tsdfSilhouetteAwareFinalHoleFill"), true},
+        {QStringLiteral("tsdfVisibilityConstrainedFinalHoleFill"), true},
+        {QStringLiteral("tsdfTinyBoundaryLoopCollapse"), true},
+        {QStringLiteral("tsdfMc33RequireSupportedSignChange"), false}
     };
     auto options =
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
@@ -7624,8 +8410,26 @@ TEST(MeshWorkflowSettingsTest,
     xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
         settings, &options, 256);
 
-    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
-    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.visibilityOccupancyAlignCarrierGrid);
+    EXPECT_FALSE(options.visibilityOccupancyNativeCarrierExtraction);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_EQ(options.visibilityOccupancySilhouetteFullPriorCapacity, 0);
+    EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
+    EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
+    EXPECT_FALSE(options.enableSurfacePatchSupport);
+    EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
+    EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
+    EXPECT_FALSE(options.enableSilhouetteAwareFinalHoleFill);
+    EXPECT_FALSE(options.enableVisibilityConstrainedFinalHoleFill);
+    EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+    EXPECT_FALSE(
+        xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+            settings, true));
 }
 
 TEST(MeshWorkflowSettingsTest,
@@ -7646,7 +8450,8 @@ TEST(MeshWorkflowSettingsTest,
         settings, &options, 320);
 
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
-    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.visibilityOccupancyNativeCarrierExtraction);
     EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
@@ -7662,7 +8467,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
-    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
 }
 
 TEST(MeshWorkflowSettingsTest,
@@ -7737,6 +8542,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableRobustFrameQualityWeighting);
     EXPECT_FALSE(options.enableRobustFrameQualityRejection);
     EXPECT_TRUE(options.enableOrbitalFrameCoverageProtection);
+    EXPECT_TRUE(options.preservePerFrameCoverageBounds);
     EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_TRUE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
@@ -7792,6 +8598,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalCompletionDefaultsAlsoApplyBelowHighDetail
     xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(settings, &options);
 
     EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.preservePerFrameCoverageBounds);
     EXPECT_EQ(options.visibilityOccupancyResolution, 72);
     EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
@@ -7799,6 +8606,9 @@ TEST(MeshWorkflowSettingsTest, OrbitalCompletionDefaultsAlsoApplyBelowHighDetail
     EXPECT_EQ(options.visibilityOccupancyMaximumHandleRepairPasses, 8);
     EXPECT_TRUE(options.visibilityOccupancyTopologyLockedResidualBlend);
     EXPECT_FLOAT_EQ(options.visibilityOccupancyDetailBlend, 1.0f);
+    EXPECT_EQ(options.triangleQualityOptimizationMaximumPasses, 12);
+    EXPECT_EQ(options.triangleQualityTangentialRelaxationPasses, 8);
+    EXPECT_EQ(options.triangleQualityIsotropicRemeshingPasses, 4);
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalDepthRefinementDefaultsOnAndHonorsOverrides)
@@ -7813,6 +8623,11 @@ TEST(MeshWorkflowSettingsTest, OrbitalDepthRefinementDefaultsOnAndHonorsOverride
     EXPECT_TRUE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
         QJsonObject{{QStringLiteral("tsdfVisibilityOccupancyDepthRefinement"), true}},
         false));
+    EXPECT_FALSE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+        QJsonObject{
+            {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+            {QStringLiteral("tsdfVisibilityOccupancyDepthRefinement"), true}},
+        true));
 }
 
 TEST(MeshWorkflowSettingsTest,
@@ -7894,6 +8709,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
         {QStringLiteral("tsdfRobustFrameQualityWeighting"), false},
         {QStringLiteral("tsdfRobustFrameQualityRejection"), false},
         {QStringLiteral("tsdfOrbitalFrameCoverageProtection"), false},
+        {QStringLiteral("tsdfPerFrameCoverageBounds"), false},
         {QStringLiteral("tsdfOrbitalGapBoundaryRecovery"), false},
         {QStringLiteral("tsdfEvidenceSupportWeightDecoupling"), false},
         {QStringLiteral("tsdfEvidenceSupportWeightExponent"), 0.80},
@@ -7952,6 +8768,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
     EXPECT_FALSE(options.enableRobustFrameQualityWeighting);
     EXPECT_FALSE(options.enableRobustFrameQualityRejection);
     EXPECT_FALSE(options.enableOrbitalFrameCoverageProtection);
+    EXPECT_FALSE(options.preservePerFrameCoverageBounds);
     EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_FALSE(options.enableEvidenceSupportWeightDecoupling);
     EXPECT_FLOAT_EQ(options.evidenceSupportWeightExponent, 0.80f);
@@ -8171,16 +8988,58 @@ TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSur
         true, true, true, 0.60, 10000, 100000));
 }
 
-TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesSafeResolutionForSevereCollapse)
+TEST(DepthMapMeshBuilderTest,
+     ModelWorkflowRejectsManifestBeforeCurrentCompatibilityRevision)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_depth_mesh_old_revision_rejection_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_0.bin").put('\0');
+    const int old_revision =
+        xjw::mvs::kMvsMinimumModelCompatibleRevision - 1;
+    std::ofstream manifest(root / "mvs_manifest.json");
+    manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("algorithm_revision"), old_revision},
+        {QStringLiteral("frames"), QJsonArray{QJsonObject{
+            {QStringLiteral("ref_index"), 0},
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("algorithm_revision"), old_revision},
+            {QStringLiteral("raw_depth_path"), QStringLiteral("depth_0.bin")}}}}})
+                    .toJson(QJsonDocument::Compact)
+                    .toStdString();
+    manifest.close();
+
+    xjw::mesh::workflow::DepthMapMeshBuildRequest request;
+    request.depthMapSourcePath = QString::fromStdString(root.string());
+    request.outputRoot = QString::fromStdString((root / "model").string());
+    request.settings[QStringLiteral("reconstruction_mode")] =
+        QStringLiteral("depth_tsdf");
+
+    const auto result = xjw::mesh::workflow::buildMeshFromDepthMaps(request);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(QStringLiteral(
+                  "incompatible_depth_frame_count")).toInt(),
+              1);
+    EXPECT_TRUE(result.errorMessage.contains(QString::number(old_revision)));
+    EXPECT_TRUE(result.errorMessage.contains(QString::number(
+        xjw::mvs::kMvsMinimumModelCompatibleRevision)));
+    EXPECT_TRUE(result.errorMessage.contains(
+        QStringLiteral("不兼容的算法版本")));
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesStagedResolutionForSevereCollapse)
 {
     EXPECT_EQ(
         xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
             320, true, 0.1328, 0.0062, 0.75, 0.40),
-        96);
+        256);
     EXPECT_EQ(
         xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
             160, true, 0.3972, 0.2111, 0.75, 0.40),
-        96);
+        0);
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryPreservesPassingAndMinimumResolutionMeshes)
@@ -8191,7 +9050,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryPreservesPassingAndMinimumResolut
         0);
     EXPECT_EQ(
         xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
-            96, true, 0.10, 0.01, 0.75, 0.40),
+            176, true, 0.10, 0.01, 0.75, 0.40),
         0);
     EXPECT_EQ(
         xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
@@ -8199,12 +9058,44 @@ TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryPreservesPassingAndMinimumResolut
         0);
 }
 
-TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesSafeResolutionForModerateFailures)
+TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesStagedResolutionForModerateFailures)
 {
     EXPECT_EQ(
         xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
             320, true, 0.60, 0.30, 0.75, 0.40),
-        96);
+        256);
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            256, true, 0.60, 0.30, 0.75, 0.40),
+        176);
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalFusionRequiresBroadPrimaryFrameCoverage)
+{
+    EXPECT_EQ(
+        xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(222),
+        56);
+    EXPECT_EQ(
+        xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(16),
+        4);
+    EXPECT_EQ(
+        xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(9),
+        3);
+    EXPECT_EQ(xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(0), 3);
+}
+
+TEST(MeshWorkflowSettingsTest, PrimaryFusionFrameRequiresBothQualifications)
+{
+    EXPECT_TRUE(xjw::mvs::isPrimaryFusionFrame(
+        QStringLiteral("accepted"), true));
+    EXPECT_TRUE(xjw::mvs::isPrimaryFusionFrame(
+        QStringLiteral(" ACCEPTED "), true));
+    EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
+        QStringLiteral("accepted"), false));
+    EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
+        QStringLiteral("validation_only"), true));
+    EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
+        QStringLiteral("rejected"), true));
 }
 
 TEST(DepthMapMeshBuilderTest, VisualHullDefaultsUseBoundedSurfaceSmoothing)
@@ -8237,6 +9128,7 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
             "raw_inverse_depth_spread_path": "depth_0_inverse_depth_spread.bin",
             "cross_view_repaired_mask_path": "depth_0_cross_view_repaired_mask.png",
             "source_indices": [3, 7],
+            "geometry_source_indices": [3, 7, 9],
             "source_view_count": 4,
             "valid_coverage": 0.08,
             "depth_confidence_mean": 0.78,
@@ -8296,6 +9188,8 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
     EXPECT_TRUE(frames.front().crossViewRepairedMaskPath.endsWith(
         QStringLiteral("depth_0_cross_view_repaired_mask.png")));
     EXPECT_EQ(frames.front().sourceIndices, QVector<int>({3, 7}));
+    EXPECT_EQ(frames.front().geometrySourceIndices,
+              QVector<int>({3, 7, 9}));
 }
 
 TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePaths)
@@ -8647,6 +9541,24 @@ TEST(TextureMapperTest, AtlasPackerUsesFragmentedSpaceWithoutDownscaling)
     }
 }
 
+TEST(TextureMapperTest, AtlasPackerHonorsExplicitUpscaleLimit)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(10, 8), QRect()}
+    };
+
+    const auto default_packed =
+        xjw::mesh::TextureAtlasPacker::pack(items, 64, 0);
+    const auto upscaled = xjw::mesh::TextureAtlasPacker::pack(
+        items, 64, 0, {}, {}, 2.0f);
+
+    ASSERT_TRUE(default_packed.ok);
+    ASSERT_TRUE(upscaled.ok);
+    EXPECT_FLOAT_EQ(default_packed.scale, 1.0f);
+    EXPECT_FLOAT_EQ(upscaled.scale, 2.0f);
+    EXPECT_EQ(upscaled.items.front().packedRect.size(), QSize(20, 16));
+}
+
 TEST(TextureMapperTest, AtlasPackerSearchesNonMonotonicMaxRectsStates)
 {
     const QVector<xjw::mesh::TextureAtlasItem> items{
@@ -8944,6 +9856,51 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     obj_buffer << obj_file.rdbuf();
     EXPECT_NE(obj_buffer.str().find("vt "), std::string::npos);
     EXPECT_NE(obj_buffer.str().find("usemtl material0"), std::string::npos);
+}
+
+TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_subpixel_face_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = root / "subpixel_triangle.ply";
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    points(0, 0) = -0.01f; points(0, 1) = -0.01f; points(0, 2) = 2.0f;
+    points(1, 0) = 0.03f;  points(1, 1) = -0.01f; points(1, 2) = 2.0f;
+    points(2, 0) = -0.01f; points(2, 1) = 0.03f;  points(2, 2) = 2.0f;
+    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(
+        std::move(points));
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    faces(0, 0) = 0;
+    faces(0, 1) = 1;
+    faces(0, 2) = 2;
+    mesh.setFaces(std::move(faces));
+    plapoint::io::writePly<float>(
+        mesh_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::Disabled;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            root.string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{
+                makeTextureTestView(cv::Scalar(20, 80, 220))},
+            &result,
+            &error)) << error;
+
+    EXPECT_EQ(result.mappedFaceCount, 1);
+    EXPECT_EQ(result.unmappedFaceCount, 0);
+    EXPECT_EQ(result.rejectedResolutionCount, 0U);
 }
 
 TEST(TextureMapperTest, CameraAtlasExtrudesEdgesWhenHoleFillIsDisabled)
@@ -9426,12 +10383,9 @@ TEST(TextureMapperTest, CameraAtlasDoesNotSampleBackgroundAcrossMaskedFaceInteri
     faces(0, 0) = 0; faces(0, 1) = 1; faces(0, 2) = 2;
     mesh.setFaces(std::move(faces));
     plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
-    for (int row = 0; row < 3; ++row)
-    {
-        colors(row, 0) = 180;
-        colors(row, 1) = 130;
-        colors(row, 2) = 80;
-    }
+    colors(0, 0) = 255; colors(0, 1) = 0;   colors(0, 2) = 0;
+    colors(1, 0) = 0;   colors(1, 1) = 255; colors(1, 2) = 0;
+    colors(2, 0) = 0;   colors(2, 1) = 0;   colors(2, 2) = 255;
     mesh.setColors(std::move(colors));
     plapoint::io::writePly<float>(
         ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
@@ -9467,4 +10421,28 @@ TEST(TextureMapperTest, CameraAtlasDoesNotSampleBackgroundAcrossMaskedFaceInteri
     EXPECT_GT(fallback[0], 0);
     EXPECT_GT(fallback[1], 0);
     EXPECT_GT(fallback[2], 0);
+
+    const auto textured_mesh = plapoint::io::readObj<float>(result.modelObjPath);
+    ASSERT_TRUE(textured_mesh != nullptr);
+    ASSERT_TRUE(textured_mesh->hasTextureCoords());
+    ASSERT_TRUE(textured_mesh->hasFaceTextureIndices());
+    const std::array<cv::Vec3b, 3> expected_colors{
+        cv::Vec3b(0, 0, 255),
+        cv::Vec3b(0, 255, 0),
+        cv::Vec3b(255, 0, 0)};
+    for (int corner = 0; corner < 3; ++corner)
+    {
+        const int texture_index =
+            textured_mesh->faceTextureIndices()->getValue(0, corner);
+        EXPECT_GT(texture_index, 0);
+        const float u = textured_mesh->textureCoords()->getValue(texture_index, 0);
+        const float v = textured_mesh->textureCoords()->getValue(texture_index, 1);
+        const int column = std::clamp(
+            static_cast<int>(std::floor(u * atlas.cols)), 0, atlas.cols - 1);
+        const int row = std::clamp(
+            static_cast<int>(std::floor((1.0f - v) * atlas.rows)),
+            0,
+            atlas.rows - 1);
+        EXPECT_EQ(atlas.at<cv::Vec3b>(row, column), expected_colors[corner]);
+    }
 }

@@ -24,6 +24,41 @@ directory.
 COLMAP photometric or geometric depth maps by image name. The camera models
 must be identical.
 
+`compare_plascan_depth_runs.py` compares two PlaScan `mvs_manifest.json`
+runs by `ref_index` and image basename. It reports pooled valid coverage,
+mask IoU, relative depth differences, geometry support, inverse-depth spread,
+acceptance transitions, and illegal values. Optional CLI thresholds turn the
+report into a regression gate; a gate failure still writes the JSON report and
+returns exit code 2. Large-run quantiles use a deterministic bounded reservoir,
+while counts, means, maxima, and mask metrics remain exact.
+
+`compare_mvs_depth_to_metashape.py` compares PlaScan depth with float depth
+exported by `export_metashape_depth_maps.py`. In addition to absolute residuals
+and mask overlap, it reports a diagnostic global scale factor, the residual
+shape error after applying that factor, and the rigid-invariant scale implied
+by matched camera-center pair distances. The scale-aligned values must not be
+used as proof of absolute scale accuracy.
+
+`summarize_mvs_depth_provenance.py` verifies that every final valid depth pixel
+belongs to exactly one persisted provenance class and that every referenced
+provenance artifact exists.
+
+`audit_mvs_workspace_integrity.py` audits an `mvs_manifest.json` before depth
+fusion. It summarizes frame completion/acceptance/fusion eligibility and
+algorithm revisions, decodes every completed frame's support mask to verify its
+path, dimensions, nonzero coverage, and all-white/all-black state, and reports
+the persisted sparse absolute-depth residual distributions. Coverage differing
+from `mask_coverage` by more than `1e-6` is an integrity failure by default.
+The concise result is printed to the terminal; pass `--output` to retain the
+complete per-frame JSON audit:
+
+```powershell
+.\.venv\Scripts\python.exe `
+  scripts\validation\audit_mvs_workspace_integrity.py `
+  E:\path\to\mvs_output\mvs_manifest.json `
+  --output E:\path\to\validation\mvs_workspace_integrity.json
+```
+
 `compare_mesh_geometry.py` reports topology, triangle quality, bidirectional
 point-to-surface distance, and normal agreement. Prefer binary PLY inputs;
 parsing large textured OBJ files with `trimesh` is substantially slower. When
@@ -37,11 +72,14 @@ Run all scripts with the repository Python environment:
 ```powershell
 .\.venv\Scripts\python.exe scripts\validation\prepare_plascan_colmap.py --help
 .\.venv\Scripts\python.exe scripts\validation\compare_depth_maps.py --help
+.\.venv\Scripts\python.exe scripts\validation\compare_plascan_depth_runs.py --help
+.\.venv\Scripts\python.exe scripts\validation\compare_mvs_depth_to_metashape.py --help
 .\.venv\Scripts\python.exe scripts\validation\compare_mesh_geometry.py --help
+.\.venv\Scripts\python.exe scripts\validation\audit_mvs_workspace_integrity.py --help
 ```
 
-Python dependencies used by the comparison scripts are `numpy`, `Pillow`,
-`scipy`, `rtree`, and `trimesh`.
+Python dependencies used by the comparison scripts are `numpy`, OpenCV,
+`Pillow`, `scipy`, `rtree`, and `trimesh`.
 
 ## Reproducible mesh-quality baseline
 
