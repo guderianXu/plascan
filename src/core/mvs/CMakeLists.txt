@@ -49,6 +49,7 @@ set(MVS_CXX_SOURCES
     DepthFrameUtils.cpp
     DepthComputeScheduler.cpp
     GpuDeviceLease.cpp
+    LearnedDepthCandidateGate.cpp
     MvsSourcePlanner.cpp
     MvsVisibilityGraphBuilder.cpp
     MvsQualityReport.cpp
@@ -111,6 +112,7 @@ set(MVS_HEADERS
     DepthFrameUtils.h
     DepthComputeScheduler.h
     GpuDeviceLease.h
+    LearnedDepthCandidateGate.h
     DenseCloudBuilder.h
     DepthMapGenerator.h
     PatchMatchPhotometricCost.h
@@ -454,6 +456,7 @@ if(BUILD_TESTS)
         add_executable(test_mvs_pipeline
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_pipeline.cpp
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_depth_frame_quality_gate.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_learned_depth_candidate_gate.cpp
         )
         if(CMAKE_CUDA_COMPILER)
             set_target_properties(test_mvs_pipeline PROPERTIES

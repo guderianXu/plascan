@@ -27,6 +27,7 @@ enum class MvsSourceTier
 {
     VerifiedPair,
     TrackGeometryBackfill,
+    StrictPairAuditBackfill,
     SequenceFallback
 };
 
@@ -108,6 +109,13 @@ struct MvsSourcePlannerOptions
     float failedPairBackfillMinimumCoverage = 0.1875f;
     float failedPairBackfillMinimumWilsonLowerBound = 0.50f;
     float failedPairBackfillMaximumAngleDeg = 65.0f;
+    bool allowStrictFailedPairBackfill = false;
+    int strictFailedPairBackfillMinimumInliers = 24;
+    int strictFailedPairBackfillMinimumMatches = 32;
+    int strictFailedPairBackfillMinimumSharedTracks = 40;
+    float strictFailedPairBackfillMinimumCoverage = 0.30f;
+    float strictFailedPairBackfillMinimumWilsonLowerBound = 0.65f;
+    float strictFailedPairBackfillMaximumAngleDeg = 55.0f;
     float minSourceQualityScore = 0.0f;
     bool allowWeakKnownOverlap = true;
     bool requireVerifiedPairGeometry = false;

@@ -45,11 +45,55 @@ float medianOfSortedValues(const std::vector<float> &values)
 
 float calibrateDepthConfidence(const DepthConfidenceComponents &components)
 {
-    return unitValue(components.photometric) *
-           unitValue(components.support) *
-           unitValue(components.uniqueness) *
-           unitValue(components.geometry) *
-           unitValue(components.texture);
+    constexpr float kFloor = 0.01f;
+    float weighted_log_sum = 0.0f;
+    float weight_sum = 0.0f;
+    const auto add_component = [&](float value, float weight)
+    {
+        weighted_log_sum += weight * std::log(std::max(kFloor, unitValue(value)));
+        weight_sum += weight;
+    };
+    add_component(components.photometric, 0.22f);
+    add_component(components.support, 0.13f);
+    add_component(components.uniqueness, 0.10f);
+    add_component(components.geometry, 0.30f);
+    add_component(components.texture, 0.10f);
+    if (std::isfinite(components.absoluteGeometry)
+        && components.absoluteGeometry >= 0.0f)
+    {
+        add_component(components.absoluteGeometry, 0.25f);
+    }
+    return weight_sum > 0.0f
+        ? unitValue(std::exp(weighted_log_sum / weight_sum))
+        : 0.0f;
+}
+
+float geometryErrorConfidence(const SparseDepthResidualSummary &residual)
+{
+    if (!residual.available || residual.validSampleCount <= 0
+        || !std::isfinite(residual.medianAbsoluteLogError)
+        || residual.medianAbsoluteLogError < 0.0f)
+    {
+        return -1.0f;
+    }
+
+    // One confidence e-fold corresponds to one percent absolute log-depth
+    // error. Sparse coverage controls how strongly this independent geometry
+    // observation may move the frame confidence away from neutral evidence.
+    const float error_score = std::exp(
+        -residual.medianAbsoluteLogError / 0.01f);
+    const float sample_strength = std::min(
+        1.0f,
+        static_cast<float>(residual.validSampleCount) / 64.0f);
+    const float valid_ratio = residual.projectedSampleCount > 0
+        ? std::clamp(
+              static_cast<float>(residual.validSampleCount)
+                  / static_cast<float>(residual.projectedSampleCount),
+              0.0f,
+              1.0f)
+        : 0.0f;
+    const float evidence_strength = sample_strength * valid_ratio;
+    return std::pow(std::max(0.01f, error_score), evidence_strength);
 }
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews)
@@ -226,6 +270,9 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         ? input.multiViewConsistency
         : 1.0f;
     components.texture = input.largestComponentRatio;
+    components.absoluteGeometry = geometryErrorConfidence(
+        input.sparseDepthResidual);
+    decision.confidenceComponents = components;
     decision.calibratedConfidence = calibrateDepthConfidence(components);
 
     if (input.depthAtSearchBoundaryRatio > 0.45f)

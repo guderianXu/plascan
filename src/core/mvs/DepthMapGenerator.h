@@ -28,6 +28,7 @@
 #include "MvsVisibilityGraphBuilder.h"
 #include "MvsViewSelection.h"
 #include "MvsWorkspaceManifest.h"
+#include "LearnedDepthCandidateGate.h"
 #include "SparseCloudPreprocessor.h"
 
 #include <QObject>
@@ -75,6 +76,7 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
     QSharedPointer<cv::Mat> targetedGapRecoveredMask; ///< 定向二源 PatchMatch 恢复像素 (CV_8U)
     QSharedPointer<cv::Mat> residualReestimatedMask; ///< 一致性后局部 PatchMatch 恢复像素 (CV_8U)
+    QSharedPointer<cv::Mat> learnedCandidateAcceptedMask; ///< 学习候选通过独立几何门控的像素 (CV_8U)
     QSharedPointer<cv::Mat> depthProvenance; ///< 最终深度来源码 (CV_8U, DepthProvenance)
     QSharedPointer<cv::Mat> missingReasonMap; ///< 最终缺失像素的逐像素原因码 (CV_8U)
     QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
@@ -84,6 +86,7 @@ struct DepthFrameResult
     QJsonObject crossViewRepairDiagnostics; ///< 跨视补回和锚定插值的逐原因统计
     QJsonObject targetedGapRecoveryDiagnostics; ///< 缺口定向 PatchMatch 请求、接受和拒绝统计
     QJsonObject residualReestimationDiagnostics; ///< 一致性后残余缺口局部实测恢复统计
+    QJsonObject learnedCandidateDiagnostics; ///< 学习候选加载与最终几何门控统计
     QJsonObject poseRefinementDiagnostics; ///< 深度约束位姿细化候选与安全门诊断
     FramePinholeCamera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
@@ -140,6 +143,7 @@ struct DepthFrameResult
         crossViewRepairedMask.clear();
         targetedGapRecoveredMask.clear();
         residualReestimatedMask.clear();
+        learnedCandidateAcceptedMask.clear();
         depthProvenance.clear();
         missingReasonMap.clear();
         validMask.clear();
@@ -400,6 +404,7 @@ private:
     void crossCheckDepthConsistency();
     bool crossCheckDepthConsistencyStreaming();
     void recoverResidualDepthAfterConsistency();
+    void applyLearnedDepthCandidatesAfterConsistency();
     void runDepthPoseRefinementCandidateStage(bool residentDepthFrames);
 
     /// 保存单帧深度图预览、原始深度和置信图，并通知 GUI 更新项目结果树

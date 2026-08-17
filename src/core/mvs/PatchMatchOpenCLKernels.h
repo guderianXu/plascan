@@ -17,7 +17,7 @@ inline constexpr const char *kPatchMatchOpenClSourcePrefix = R"CLC(
 #define REFERENCE_TILE_SIZE (WORK_GROUP_SIZE + 2 * MAX_PATCH_RADIUS)
 #define CHECKERBOARD_TILE_WIDTH (2 * WORK_GROUP_SIZE + 2 * MAX_PATCH_RADIUS)
 
-inline float sample_bilinear(__global const float *image,
+static inline float sample_bilinear(__global const float *image,
                              int width,
                              int height,
                              float x,
@@ -38,7 +38,7 @@ inline float sample_bilinear(__global const float *image,
     return top * (1.0f - ty) + bottom * ty;
 }
 
-inline int source_mask_valid(__global const uchar *masks,
+static inline int source_mask_valid(__global const uchar *masks,
                              int source_index,
                              int pixel_count,
                              int width,
@@ -64,7 +64,7 @@ inline int source_mask_valid(__global const uchar *masks,
         && masks[base + (y0 + 1) * width + x0 + 1] != 0;
 }
 
-inline float3 reference_ray(int x,
+static inline float3 reference_ray(int x,
                             int y,
                             float inv_fx,
                             float inv_fy,
@@ -76,7 +76,7 @@ inline float3 reference_ray(int x,
                     1.0f);
 }
 
-inline float4 face_normal_toward_camera(float4 normal, float3 ray)
+static inline float4 face_normal_toward_camera(float4 normal, float3 ray)
 {
     float length_squared = dot(normal.xyz, normal.xyz);
     if (!(length_squared > 1.0e-10f) || !isfinite(length_squared))
@@ -92,7 +92,7 @@ inline float4 face_normal_toward_camera(float4 normal, float3 ray)
     return normal;
 }
 
-inline uint patchmatch_hash(uint value)
+static inline uint patchmatch_hash(uint value)
 {
     value ^= value >> 16;
     value *= 0x7feb352du;
@@ -101,13 +101,13 @@ inline uint patchmatch_hash(uint value)
     return value ^ (value >> 16);
 }
 
-inline float patchmatch_random(uint *state)
+static inline float patchmatch_random(uint *state)
 {
     *state = patchmatch_hash(*state + 0x9e3779b9u);
     return (float)(*state & 0x00ffffffu) * (1.0f / 16777216.0f);
 }
 
-inline float4 random_facing_normal(uint *state, float3 ray)
+static inline float4 random_facing_normal(uint *state, float3 ray)
 {
     float z = patchmatch_random(state) * 2.0f - 1.0f;
     float angle = patchmatch_random(state) * 6.28318530718f;
@@ -119,7 +119,7 @@ inline float4 random_facing_normal(uint *state, float3 ray)
     return face_normal_toward_camera(normal, ray);
 }
 
-inline float4 perturb_facing_normal(float4 normal,
+static inline float4 perturb_facing_normal(float4 normal,
                                     float amount,
                                     uint *state,
                                     float3 ray)
@@ -132,7 +132,7 @@ inline float4 perturb_facing_normal(float4 normal,
     return face_normal_toward_camera(normal + amount * perturbation, ray);
 }
 
-inline int same_plane_hypothesis(float left_depth,
+static inline int same_plane_hypothesis(float left_depth,
                                  float4 left_normal,
                                  float right_depth,
                                  float4 right_normal)
@@ -143,7 +143,7 @@ inline int same_plane_hypothesis(float left_depth,
         && left_normal.z == right_normal.z;
 }
 
-inline float propagated_plane_depth(int from_x,
+static inline float propagated_plane_depth(int from_x,
                                     int from_y,
                                     float from_depth,
                                     float4 normal,
@@ -166,7 +166,7 @@ inline float propagated_plane_depth(int from_x,
     return depth > 0.0f && isfinite(depth) ? depth : 0.0f;
 }
 
-inline void compose_plane_homography(float4 normal,
+static inline void compose_plane_homography(float4 normal,
                                      float plane_distance,
                                      __global const float *camera,
                                      float inv_fx,
@@ -218,8 +218,10 @@ inline void compose_plane_homography(float4 normal,
     homography[8] = source_z_offset
         + inverse_cx * source_z_column + inverse_cy * source_z_row;
 }
+)CLC";
 
-inline float source_ncc(int center_x,
+inline constexpr const char *kPatchMatchOpenClSourcePhotometric = R"CLC(
+static inline float source_ncc(int center_x,
                         int center_y,
                         float depth,
                         float4 normal,
@@ -257,8 +259,18 @@ inline float source_ncc(int center_x,
     float sum_reference_squared = 0.0f;
     float sum_source_squared = 0.0f;
     float sum_product = 0.0f;
+    float sum_reference_gradient = 0.0f;
+    float sum_source_gradient = 0.0f;
+    float sum_reference_gradient_squared = 0.0f;
+    float sum_source_gradient_squared = 0.0f;
+    float sum_gradient_product = 0.0f;
     int candidate_count = 0;
     int valid_count = 0;
+    int gradient_candidate_count = 0;
+    int gradient_valid_count = 0;
+    int census_candidate_count = 0;
+    int census_valid_count = 0;
+    int census_agreement_count = 0;
     float3 center_ray = reference_ray(
         center_x, center_y, inv_fx, inv_fy, cx, cy);
     float plane_distance = depth * dot(normal.xyz, center_ray);
@@ -275,6 +287,41 @@ inline float source_ncc(int center_x,
                              cx,
                              cy,
                              homography);
+    float center_projected_x = homography[0] * (float)center_x
+        + homography[1] * (float)center_y + homography[2];
+    float center_projected_y = homography[3] * (float)center_x
+        + homography[4] * (float)center_y + homography[5];
+    float center_projected_z = homography[6] * (float)center_x
+        + homography[7] * (float)center_y + homography[8];
+    float center_source_x = fabs(center_projected_z) > 1.0e-6f
+        ? center_projected_x / center_projected_z
+        : -1.0f;
+    float center_source_y = fabs(center_projected_z) > 1.0e-6f
+        ? center_projected_y / center_projected_z
+        : -1.0f;
+    int center_tile_x = center_x - tile_origin_x + MAX_PATCH_RADIUS;
+    int center_tile_y = center_y - tile_origin_y + MAX_PATCH_RADIUS;
+    float reference_center = reference_tile[
+        center_tile_y * reference_tile_stride + center_tile_x];
+    int center_valid = center_source_x >= 0.0f && center_source_y >= 0.0f
+        && center_source_x < (float)(width - 1)
+        && center_source_y < (float)(height - 1)
+        && source_mask_valid(source_masks,
+                             source_index,
+                             pixel_count,
+                             width,
+                             height,
+                             center_source_x,
+                             center_source_y,
+                             has_source_masks);
+    float source_center = center_valid
+        ? sample_bilinear(source,
+                          width,
+                          height,
+                          center_source_x,
+                          center_source_y)
+        : -1.0f;
+    center_valid = center_valid && source_center >= 0.0f;
 
     for (int dy = -radius; dy <= radius; dy += step)
     {
@@ -324,6 +371,8 @@ inline float source_ncc(int center_x,
             // source-mask lookup for a trusted reference sample contributes
             // to the minimum valid-patch ratio denominator.
             ++candidate_count;
+            gradient_candidate_count += 2;
+            ++census_candidate_count;
 
             if (fabs(plane_denominator) < 1.0e-6f)
             {
@@ -367,6 +416,117 @@ inline float source_ncc(int center_x,
             sum_source_squared += source_value * source_value;
             sum_product += reference_value * source_value;
             ++valid_count;
+)CLC";
+
+inline constexpr const char *kPatchMatchOpenClSourceGradientCensus = R"CLC(
+
+            int gradient_valid = reference_x > 0 && reference_y > 0
+                && reference_x + 1 < width && reference_y + 1 < height;
+            if (gradient_valid && has_reference_mask)
+            {
+                gradient_valid =
+                    reference_mask_tile[tile_index - 1] != 0
+                    && reference_mask_tile[tile_index + 1] != 0
+                    && reference_mask_tile[
+                        tile_index - reference_tile_stride] != 0
+                    && reference_mask_tile[
+                        tile_index + reference_tile_stride] != 0;
+            }
+            gradient_valid = gradient_valid
+                && source_x - 1.0f >= 0.0f
+                && source_y - 1.0f >= 0.0f
+                && source_x + 1.0f < (float)(width - 1)
+                && source_y + 1.0f < (float)(height - 1)
+                && source_mask_valid(source_masks,
+                                     source_index,
+                                     pixel_count,
+                                     width,
+                                     height,
+                                     source_x - 1.0f,
+                                     source_y,
+                                     has_source_masks)
+                && source_mask_valid(source_masks,
+                                     source_index,
+                                     pixel_count,
+                                     width,
+                                     height,
+                                     source_x + 1.0f,
+                                     source_y,
+                                     has_source_masks)
+                && source_mask_valid(source_masks,
+                                     source_index,
+                                     pixel_count,
+                                     width,
+                                     height,
+                                     source_x,
+                                     source_y - 1.0f,
+                                     has_source_masks)
+                && source_mask_valid(source_masks,
+                                     source_index,
+                                     pixel_count,
+                                     width,
+                                     height,
+                                     source_x,
+                                     source_y + 1.0f,
+                                     has_source_masks);
+            if (gradient_valid)
+            {
+                float reference_gradient_x = 0.5f
+                    * (reference_tile[tile_index + 1]
+                       - reference_tile[tile_index - 1]);
+                float reference_gradient_y = 0.5f
+                    * (reference_tile[tile_index + reference_tile_stride]
+                       - reference_tile[tile_index - reference_tile_stride]);
+                float source_gradient_x = 0.5f
+                    * (sample_bilinear(source,
+                                       width,
+                                       height,
+                                       source_x + 1.0f,
+                                       source_y)
+                       - sample_bilinear(source,
+                                         width,
+                                         height,
+                                         source_x - 1.0f,
+                                         source_y));
+                float source_gradient_y = 0.5f
+                    * (sample_bilinear(source,
+                                       width,
+                                       height,
+                                       source_x,
+                                       source_y + 1.0f)
+                       - sample_bilinear(source,
+                                         width,
+                                         height,
+                                         source_x,
+                                         source_y - 1.0f));
+                sum_reference_gradient += reference_gradient_x
+                    + reference_gradient_y;
+                sum_source_gradient += source_gradient_x + source_gradient_y;
+                sum_reference_gradient_squared +=
+                    reference_gradient_x * reference_gradient_x
+                    + reference_gradient_y * reference_gradient_y;
+                sum_source_gradient_squared +=
+                    source_gradient_x * source_gradient_x
+                    + source_gradient_y * source_gradient_y;
+                sum_gradient_product +=
+                    reference_gradient_x * source_gradient_x
+                    + reference_gradient_y * source_gradient_y;
+                gradient_valid_count += 2;
+            }
+
+            if (center_valid)
+            {
+                float reference_delta = reference_value - reference_center;
+                float source_delta = source_value - source_center;
+                int reference_rank = reference_delta > 0.01f
+                    ? 1
+                    : (reference_delta < -0.01f ? -1 : 0);
+                int source_rank = source_delta > 0.01f
+                    ? 1
+                    : (source_delta < -0.01f ? -1 : 0);
+                ++census_valid_count;
+                census_agreement_count += reference_rank == source_rank;
+            }
         }
     }
 
@@ -388,9 +548,58 @@ inline float source_ncc(int center_x,
         return 0.0f;
     }
     float covariance = sum_product * inverse_count - mean_reference * mean_source;
-    return clamp((covariance / sqrt(variance_product) + 1.0f) * 0.5f,
-                 0.0f,
-                 1.0f);
+    float intensity_score = clamp(
+        (covariance / sqrt(variance_product) + 1.0f) * 0.5f,
+        0.0f,
+        1.0f);
+    float weighted_score = 0.50f * intensity_score;
+    float weight_sum = 0.50f;
+
+    int gradient_required = max(
+        4,
+        (int)ceil((float)gradient_candidate_count * minimum_mask_ratio));
+    if (gradient_valid_count >= gradient_required)
+    {
+        float inverse_gradient_count = 1.0f / (float)gradient_valid_count;
+        float mean_reference_gradient =
+            sum_reference_gradient * inverse_gradient_count;
+        float mean_source_gradient =
+            sum_source_gradient * inverse_gradient_count;
+        float variance_reference_gradient = fmax(
+            0.0f,
+            sum_reference_gradient_squared * inverse_gradient_count
+                - mean_reference_gradient * mean_reference_gradient);
+        float variance_source_gradient = fmax(
+            0.0f,
+            sum_source_gradient_squared * inverse_gradient_count
+                - mean_source_gradient * mean_source_gradient);
+        float gradient_variance_product =
+            variance_reference_gradient * variance_source_gradient;
+        if (gradient_variance_product >= 1.0e-10f)
+        {
+            float gradient_covariance =
+                sum_gradient_product * inverse_gradient_count
+                - mean_reference_gradient * mean_source_gradient;
+            float gradient_score = clamp(
+                (gradient_covariance / sqrt(gradient_variance_product) + 1.0f)
+                    * 0.5f,
+                0.0f,
+                1.0f);
+            weighted_score += 0.30f * gradient_score;
+            weight_sum += 0.30f;
+        }
+    }
+
+    int census_required = max(
+        4,
+        (int)ceil((float)census_candidate_count * minimum_mask_ratio));
+    if (census_valid_count >= census_required)
+    {
+        weighted_score += 0.20f
+            * (float)census_agreement_count / (float)census_valid_count;
+        weight_sum += 0.20f;
+    }
+    return weighted_score / weight_sum;
 }
 )CLC";
 

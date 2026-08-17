@@ -108,27 +108,58 @@ QVector<MeshColorView> prepareColorViews(const QVector<MeshColorView> &views)
         {
             continue;
         }
-        StudioForegroundMask foreground = buildStudioForegroundMask(view.colorBgr);
-        if (!foreground.isUsableForColorSampling())
+        cv::Mat foreground_mask;
+        if (view.supportMask.type() == CV_8UC1 &&
+            view.supportMask.rows > 0 && view.supportMask.cols > 0)
+        {
+            cv::resize(view.supportMask,
+                       foreground_mask,
+                       view.colorBgr.size(),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
+            const float support_coverage =
+                static_cast<float>(cv::countNonZero(foreground_mask)) /
+                std::max(1, foreground_mask.rows * foreground_mask.cols);
+            if (support_coverage < 0.03f || support_coverage > 0.98f)
+            {
+                foreground_mask.release();
+            }
+        }
+        if (foreground_mask.empty())
+        {
+            StudioForegroundMask foreground =
+                buildStudioForegroundMask(view.colorBgr);
+            if (foreground.isUsableForColorSampling())
+            {
+                foreground_mask = std::move(foreground.mask);
+            }
+        }
+        if (foreground_mask.empty())
         {
             continue;
         }
 
         const double image_scale = std::min(
-            foreground.mask.cols / 640.0, foreground.mask.rows / 480.0);
+            foreground_mask.cols / 640.0, foreground_mask.rows / 480.0);
         const int safe_interior_radius = std::max(
             2, static_cast<int>(std::lround(4.0 * image_scale)));
         const cv::Mat kernel = cv::getStructuringElement(
             cv::MORPH_ELLIPSE,
             cv::Size(safe_interior_radius * 2 + 1,
                      safe_interior_radius * 2 + 1));
-        cv::erode(foreground.mask, view.colorForegroundMask, kernel);
+        cv::erode(foreground_mask, view.colorForegroundMask, kernel);
     }
     return prepared_views;
 }
 
 std::vector<float> exposureGains(const QVector<MeshColorView> &views, bool enabled)
 {
+    std::vector<float> gains(static_cast<std::size_t>(views.size()), 1.0f);
+    if (!enabled)
+    {
+        return gains;
+    }
     std::vector<float> luminances(static_cast<std::size_t>(views.size()), 0.0f);
     std::vector<float> valid_luminances;
     for (int index = 0; index < views.size(); ++index)
@@ -142,7 +173,7 @@ std::vector<float> exposureGains(const QVector<MeshColorView> &views, bool enabl
         if (view.colorForegroundMask.type() == CV_8UC1 &&
             view.colorForegroundMask.size() == view.colorBgr.size())
         {
-            mask = view.colorForegroundMask;
+            mask = view.colorForegroundMask.clone();
         }
         if (view.supportMask.type() == CV_8UC1 &&
             view.depthValidMask.type() == CV_8UC1 &&
@@ -171,8 +202,7 @@ std::vector<float> exposureGains(const QVector<MeshColorView> &views, bool enabl
     }
 
     const float target = median(valid_luminances);
-    std::vector<float> gains(static_cast<std::size_t>(views.size()), 1.0f);
-    if (!enabled || target <= 1.0f)
+    if (target <= 1.0f)
     {
         return gains;
     }
@@ -462,6 +492,8 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     {
         return statistics;
     }
+    statistics.visibilityOnlyFallbackEnabled =
+        options.allowVisibilityOnlyFallback;
     int maximum_workers = 1;
 #ifdef MESHING_OPENMP
     maximum_workers = std::max(1, omp_get_max_threads());
@@ -475,6 +507,13 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
         std::max(1, std::min(
             static_cast<int>(mesh->vertices.size()), maximum_workers)));
     const QVector<MeshColorView> prepared_views = prepareColorViews(views);
+    statistics.colorForegroundViewCount = static_cast<int>(std::count_if(
+        prepared_views.cbegin(),
+        prepared_views.cend(),
+        [](const MeshColorView &view)
+        {
+            return !view.colorForegroundMask.empty();
+        }));
     const std::vector<float> gains = exposureGains(
         prepared_views, options.compensateExposure);
     const std::vector<cv::Mat> visibility_depths = visibilityDepths(
@@ -491,8 +530,15 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     std::uint64_t rejected_visibility_count = 0;
     std::uint64_t rejected_view_angle_count = 0;
     std::uint64_t rejected_color_outlier_count = 0;
+    std::uint64_t visibility_only_attempted_observation_count = 0;
+    std::uint64_t visibility_only_candidate_observation_count = 0;
+    std::uint64_t visibility_only_rejected_foreground_count = 0;
+    std::uint64_t visibility_only_rejected_missing_foreground_count = 0;
+    std::uint64_t visibility_only_rejected_visibility_count = 0;
+    std::uint64_t visibility_only_rejected_view_angle_count = 0;
     int reliably_colored_vertex_count = 0;
     int best_view_fallback_vertex_count = 0;
+    int visibility_only_fallback_vertex_count = 0;
     std::vector<std::exception_ptr> colorization_errors(
         static_cast<std::size_t>(statistics.effectiveWorkerCount));
     std::atomic_bool colorization_failed{false};
@@ -502,7 +548,13 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     reduction(+:candidate_observation_count,rejected_projection_count,rejected_mask_count) \
     reduction(+:rejected_depth_count,rejected_visibility_count,rejected_view_angle_count) \
     reduction(+:rejected_color_outlier_count,reliably_colored_vertex_count) \
-    reduction(+:best_view_fallback_vertex_count)
+    reduction(+:visibility_only_attempted_observation_count) \
+    reduction(+:visibility_only_candidate_observation_count) \
+    reduction(+:visibility_only_rejected_foreground_count) \
+    reduction(+:visibility_only_rejected_missing_foreground_count) \
+    reduction(+:visibility_only_rejected_visibility_count) \
+    reduction(+:visibility_only_rejected_view_angle_count) \
+    reduction(+:best_view_fallback_vertex_count,visibility_only_fallback_vertex_count)
 #endif
     for (std::int64_t vertex_offset = 0;
          vertex_offset < static_cast<std::int64_t>(mesh->vertices.size());
@@ -518,6 +570,12 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
             MeshVertex &vertex = mesh->vertices[vertex_index];
             std::vector<ColorCandidate> candidates;
             candidates.reserve(static_cast<std::size_t>(prepared_views.size()));
+            std::vector<ColorCandidate> visibility_only_candidates;
+            if (options.allowVisibilityOnlyFallback)
+            {
+                visibility_only_candidates.reserve(
+                    static_cast<std::size_t>(prepared_views.size()));
+            }
             ColorCandidate best_fallback;
             bool has_best_fallback = false;
             const double world[3] = {vertex.x, vertex.y, vertex.z};
@@ -560,10 +618,73 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     ++rejected_projection_count;
                     continue;
                 }
-                if (view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-                    view.depthValidMask.at<std::uint8_t>(row, column) == 0 ||
-                    !isBilinearMaskSampleValid(
+                if (!isBilinearMaskSampleValid(
                         view.colorForegroundMask, color_pixel[0], color_pixel[1]))
+                {
+                    if (options.allowVisibilityOnlyFallback)
+                    {
+                        ++visibility_only_rejected_foreground_count;
+                    }
+                    ++rejected_mask_count;
+                    continue;
+                }
+                const float nearest_depth =
+                    visibility_depths[static_cast<std::size_t>(view_index)]
+                        .at<float>(row, column);
+                const bool mesh_visible = !std::isfinite(nearest_depth) ||
+                    vertex_depth <= nearest_depth +
+                        options.visibilityToleranceVoxels * voxel_size;
+                const std::array<double, 3> center = view.camera.cameraCenter();
+                float dx = static_cast<float>(center[0]) - vertex.x;
+                float dy = static_cast<float>(center[1]) - vertex.y;
+                float dz = static_cast<float>(center[2]) - vertex.z;
+                const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+                float view_cosine = 0.0f;
+                if (length > 1.0e-8f)
+                {
+                    dx /= length;
+                    dy /= length;
+                    dz /= length;
+                    view_cosine = std::fabs(
+                        vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
+                }
+                const cv::Vec3f sampled_color = bilinearColor(
+                    view.colorBgr, color_pixel[0], color_pixel[1])
+                    * gains[static_cast<std::size_t>(view_index)];
+                if (options.allowVisibilityOnlyFallback)
+                {
+                    ++visibility_only_attempted_observation_count;
+                    if (view.colorForegroundMask.empty())
+                    {
+                        ++visibility_only_rejected_missing_foreground_count;
+                    }
+                    else if (!mesh_visible)
+                    {
+                        ++visibility_only_rejected_visibility_count;
+                    }
+                    else if (view_cosine <
+                             options.visibilityOnlyMinimumViewCosine)
+                    {
+                        ++visibility_only_rejected_view_angle_count;
+                    }
+                    else
+                    {
+                        ColorCandidate candidate;
+                        candidate.blue = std::clamp(
+                            sampled_color[0], 0.0f, 255.0f);
+                        candidate.green = std::clamp(
+                            sampled_color[1], 0.0f, 255.0f);
+                        candidate.red = std::clamp(
+                            sampled_color[2], 0.0f, 255.0f);
+                        candidate.weight =
+                            std::max(0.01f, view.qualityWeight) *
+                            std::pow(view_cosine, 4.0f);
+                        visibility_only_candidates.push_back(candidate);
+                        ++visibility_only_candidate_observation_count;
+                    }
+                }
+                if (view.supportMask.at<std::uint8_t>(row, column) == 0 ||
+                    view.depthValidMask.at<std::uint8_t>(row, column) == 0)
                 {
                     ++rejected_mask_count;
                     continue;
@@ -586,13 +707,10 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     0.008f * std::fabs(static_cast<float>(vertex_depth)));
                 if (depth_residual <= fallback_tolerance)
                 {
-                    const cv::Vec3f fallback_color = bilinearColor(
-                        view.colorBgr, color_pixel[0], color_pixel[1])
-                        * gains[static_cast<std::size_t>(view_index)];
                     ColorCandidate fallback;
-                    fallback.blue = std::clamp(fallback_color[0], 0.0f, 255.0f);
-                    fallback.green = std::clamp(fallback_color[1], 0.0f, 255.0f);
-                    fallback.red = std::clamp(fallback_color[2], 0.0f, 255.0f);
+                    fallback.blue = std::clamp(sampled_color[0], 0.0f, 255.0f);
+                    fallback.green = std::clamp(sampled_color[1], 0.0f, 255.0f);
+                    fallback.red = std::clamp(sampled_color[2], 0.0f, 255.0f);
                     fallback.weight = confidence * std::max(0.0f, view.qualityWeight) /
                         (1.0f + depth_residual / std::max(fallback_tolerance, 1.0e-8f));
                     if (!has_best_fallback || fallback.weight > best_fallback.weight)
@@ -606,40 +724,27 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     ++rejected_depth_count;
                     continue;
                 }
-                const float nearest_depth = visibility_depths[static_cast<std::size_t>(view_index)]
-                                                .at<float>(row, column);
-                if (std::isfinite(nearest_depth) &&
-                    vertex_depth > nearest_depth + options.visibilityToleranceVoxels * voxel_size)
+                if (!mesh_visible)
                 {
                     ++rejected_visibility_count;
                     continue;
                 }
-                const std::array<double, 3> center = view.camera.cameraCenter();
-                float dx = static_cast<float>(center[0]) - vertex.x;
-                float dy = static_cast<float>(center[1]) - vertex.y;
-                float dz = static_cast<float>(center[2]) - vertex.z;
-                const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
                 if (length <= 1.0e-8f)
                 {
                     ++rejected_view_angle_count;
                     continue;
                 }
-                dx /= length; dy /= length; dz /= length;
-                const float view_cosine = std::fabs(vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
                 if (view_cosine < options.minimumViewCosine)
                 {
                     ++rejected_view_angle_count;
                     continue;
                 }
-                const cv::Vec3f color = bilinearColor(
-                    view.colorBgr, color_pixel[0], color_pixel[1])
-                    * gains[static_cast<std::size_t>(view_index)];
                 const float residual_score = 1.0f /
                     std::pow(1.0f + depth_residual / std::max(depth_tolerance, 1.0e-8f), 2.0f);
                 ColorCandidate candidate;
-                candidate.blue = std::clamp(color[0], 0.0f, 255.0f);
-                candidate.green = std::clamp(color[1], 0.0f, 255.0f);
-                candidate.red = std::clamp(color[2], 0.0f, 255.0f);
+                candidate.blue = std::clamp(sampled_color[0], 0.0f, 255.0f);
+                candidate.green = std::clamp(sampled_color[1], 0.0f, 255.0f);
+                candidate.red = std::clamp(sampled_color[2], 0.0f, 255.0f);
                 candidate.weight = confidence * std::max(0.0f, view.qualityWeight)
                     * std::pow(view_cosine, 4.0f) * residual_score;
                 candidates.push_back(candidate);
@@ -660,6 +765,35 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     colored[vertex_index] = 1;
                     reliable_color_by_vertex[vertex_index] = {vertex.r, vertex.g, vertex.b};
                     ++best_view_fallback_vertex_count;
+                }
+                else
+                {
+                    visibility_only_candidates = rejectColorOutliers(
+                        visibility_only_candidates,
+                        &rejected_color_outlier_count);
+                    if (static_cast<int>(visibility_only_candidates.size()) >=
+                        std::max(1, options.minimumVisibilityOnlyViews))
+                    {
+                        const auto best = std::max_element(
+                            visibility_only_candidates.cbegin(),
+                            visibility_only_candidates.cend(),
+                            [](const ColorCandidate &left,
+                               const ColorCandidate &right)
+                            {
+                                return left.weight < right.weight;
+                            });
+                        vertex.r = static_cast<std::uint8_t>(std::clamp(
+                            std::lround(best->red), 0l, 255l));
+                        vertex.g = static_cast<std::uint8_t>(std::clamp(
+                            std::lround(best->green), 0l, 255l));
+                        vertex.b = static_cast<std::uint8_t>(std::clamp(
+                            std::lround(best->blue), 0l, 255l));
+                        colored[vertex_index] = 1;
+                        reliable_color_by_vertex[vertex_index] = {
+                            vertex.r, vertex.g, vertex.b};
+                        ++reliably_colored_vertex_count;
+                        ++visibility_only_fallback_vertex_count;
+                    }
                 }
                 continue;
             }
@@ -730,8 +864,22 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     statistics.rejectedVisibilityCount = rejected_visibility_count;
     statistics.rejectedViewAngleCount = rejected_view_angle_count;
     statistics.rejectedColorOutlierCount = rejected_color_outlier_count;
+    statistics.visibilityOnlyAttemptedObservationCount =
+        visibility_only_attempted_observation_count;
+    statistics.visibilityOnlyCandidateObservationCount =
+        visibility_only_candidate_observation_count;
+    statistics.visibilityOnlyRejectedForegroundCount =
+        visibility_only_rejected_foreground_count;
+    statistics.visibilityOnlyRejectedMissingForegroundCount =
+        visibility_only_rejected_missing_foreground_count;
+    statistics.visibilityOnlyRejectedVisibilityCount =
+        visibility_only_rejected_visibility_count;
+    statistics.visibilityOnlyRejectedViewAngleCount =
+        visibility_only_rejected_view_angle_count;
     statistics.reliablyColoredVertexCount = reliably_colored_vertex_count;
     statistics.bestViewFallbackVertexCount = best_view_fallback_vertex_count;
+    statistics.visibilityOnlyFallbackVertexCount =
+        visibility_only_fallback_vertex_count;
 
     std::vector<std::array<std::uint8_t, 3>> reliable_colors;
     reliable_colors.reserve(mesh->vertices.size());

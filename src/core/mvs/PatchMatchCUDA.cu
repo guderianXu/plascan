@@ -887,6 +887,63 @@ __device__ inline uint32_t alignedPatchMatchHash(uint32_t value)
     return value ^ (value >> 16);
 }
 
+__device__ bool referenceGradient(const float *image,
+                                  const std::uint8_t *mask,
+                                  int width,
+                                  int height,
+                                  int x,
+                                  int y,
+                                  float &gradientX,
+                                  float &gradientY)
+{
+    if (x <= 0 || y <= 0 || x + 1 >= width || y + 1 >= height)
+    {
+        return false;
+    }
+    if (mask != nullptr
+        && (mask[y * width + x - 1] == 0
+            || mask[y * width + x + 1] == 0
+            || mask[(y - 1) * width + x] == 0
+            || mask[(y + 1) * width + x] == 0))
+    {
+        return false;
+    }
+    gradientX = 0.5f * (image[y * width + x + 1]
+        - image[y * width + x - 1]);
+    gradientY = 0.5f * (image[(y + 1) * width + x]
+        - image[(y - 1) * width + x]);
+    return true;
+}
+
+__device__ bool sourceGradient(const float *image,
+                               const std::uint8_t *mask,
+                               int width,
+                               int height,
+                               float x,
+                               float y,
+                               float &gradientX,
+                               float &gradientY)
+{
+    if (!bilinearMaskValid(mask, width, height, x - 1.0f, y)
+        || !bilinearMaskValid(mask, width, height, x + 1.0f, y)
+        || !bilinearMaskValid(mask, width, height, x, y - 1.0f)
+        || !bilinearMaskValid(mask, width, height, x, y + 1.0f))
+    {
+        return false;
+    }
+    const float left = bilinear(image, width, height, x - 1.0f, y);
+    const float right = bilinear(image, width, height, x + 1.0f, y);
+    const float top = bilinear(image, width, height, x, y - 1.0f);
+    const float bottom = bilinear(image, width, height, x, y + 1.0f);
+    if (left < 0.0f || right < 0.0f || top < 0.0f || bottom < 0.0f)
+    {
+        return false;
+    }
+    gradientX = 0.5f * (right - left);
+    gradientY = 0.5f * (bottom - top);
+    return true;
+}
+
 __device__ inline float alignedPatchMatchRandom(uint32_t &state)
 {
     state = alignedPatchMatchHash(state + 0x9e3779b9u);
@@ -1090,9 +1147,22 @@ __device__ float computeHomographyNCC(
     float H[9];
     composeHomography(v_r, u_r, depth, normal, srcData, H);
 
-    PatchNccAccumulator accumulator;
+    PatchRobustPhotometricAccumulator accumulator;
     const bool maskAware = refMask != nullptr || srcMask != nullptr;
     const int r = patchHalf;
+    const float centerZ = H[6] * u_r + H[7] * v_r + H[8];
+    const float centerU = fabsf(centerZ) > 1.0e-6f
+        ? (H[0] * u_r + H[1] * v_r + H[2]) / centerZ
+        : -1.0f;
+    const float centerV = fabsf(centerZ) > 1.0e-6f
+        ? (H[3] * u_r + H[4] * v_r + H[5]) / centerZ
+        : -1.0f;
+    const bool centerValid = centerU >= 0.0f && centerV >= 0.0f
+        && bilinearMaskValid(srcMask, srcW, srcH, centerU, centerV);
+    const float referenceCenter = refImg[v_r * refW + u_r];
+    const float sourceCenter = centerValid
+        ? bilinear(srcImg, srcW, srcH, centerU, centerV)
+        : -1.0f;
 
     for (int dv = -r; dv <= r; ++dv) 
     {
@@ -1116,7 +1186,9 @@ __device__ float computeHomographyNCC(
             float ws_z = H[6]*pu + H[7]*pv + H[8];
             if (fabsf(ws_z) < 1e-6f)
             {
-                accumulator.addCandidate(false);
+                accumulator.addIntensityCandidate(false);
+                accumulator.addGradientCandidate(false);
+                accumulator.addCensusCandidate(false);
                 continue;
             }
             float u_s = ws_c / ws_z;
@@ -1125,11 +1197,45 @@ __device__ float computeHomographyNCC(
             float valSrc = bilinear(srcImg, srcW, srcH, u_s, v_s);
             if (valSrc < 0 || !bilinearMaskValid(srcMask, srcW, srcH, u_s, v_s))
             {
-                accumulator.addCandidate(false);
+                accumulator.addIntensityCandidate(false);
+                accumulator.addGradientCandidate(false);
+                accumulator.addCensusCandidate(false);
                 continue;
             }
 
-            accumulator.addCandidate(true, valRef, valSrc);
+            accumulator.addIntensityCandidate(true, valRef, valSrc);
+            float referenceGradientX = 0.0f;
+            float referenceGradientY = 0.0f;
+            float sourceGradientX = 0.0f;
+            float sourceGradientY = 0.0f;
+            const bool gradientValid = referenceGradient(
+                refImg,
+                refMask,
+                refW,
+                refH,
+                pu,
+                pv,
+                referenceGradientX,
+                referenceGradientY)
+                && sourceGradient(
+                    srcImg,
+                    srcMask,
+                    srcW,
+                    srcH,
+                    u_s,
+                    v_s,
+                    sourceGradientX,
+                    sourceGradientY);
+            accumulator.addGradientCandidate(
+                gradientValid,
+                referenceGradientX,
+                referenceGradientY,
+                sourceGradientX,
+                sourceGradientY);
+            accumulator.addCensusCandidate(
+                centerValid && sourceCenter >= 0.0f,
+                valRef - referenceCenter,
+                valSrc - sourceCenter);
         }
     }
 
@@ -1932,7 +2038,7 @@ __global__ void kernelApplyPhotometricUniqueness(
 
 /// 置信度阈值过滤
 __global__ void kernelFinalizeDepth(
-    float *depthMap, const float *confMap, int W, int H, float confThresh)
+    float *depthMap, float *confMap, int W, int H, float confThresh)
 {
     int u = blockIdx.x * blockDim.x + threadIdx.x;
     int v = blockIdx.y * blockDim.y + threadIdx.y;

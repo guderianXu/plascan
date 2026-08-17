@@ -48,6 +48,9 @@ live under `src/core/mvs/tests/`.
   uniqueness probes as CPU/CUDA. Multi-view consistency reuses each reference
   unprojection across its ordered source batch, while residual recovery skips source reprojection when the measured
   missing-support region is already below its configured threshold. Revision-26 artifacts are regenerated.
+- Revision 38 uses an exposure-robust intensity/gradient/Census photometric cost on CPU, CUDA, and OpenCL.
+  It adds a stricter statistical audit tier for fifth/sixth orbital source views, geometry-calibrated confidence,
+  boundary-aware postprocessing, and an optional learned-depth candidate gate. Revision-37 depth is regenerated.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -69,6 +72,9 @@ live under `src/core/mvs/tests/`.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
   backfill only the remaining slots. The manifest records the requested count, shortfall, and verified,
   backfill, or sequence tier for every selected source.
+- A failed production pair may fill source slots five and six only through `strict_pair_audit_backfill`: at least
+  24 inliers, 32 matches, 40 shared tracks, 0.30 coverage, a 90% Wilson lower bound of 0.65, and at most 55 degrees.
+  This tier is separately recorded and never replaces the verified-pair majority.
 - `.pimatch` stores the geometry model, inlier flags, residuals, and per-pair counts produced by the matching
   workflow. MVS reads those persisted statistics directly instead of reopening feature files or rerunning
   USAC/MAGSAC. `mvs_pair_audit_cli` exports the stored evidence and `mvs_depth_reprocess_cli` replays it without
@@ -95,7 +101,17 @@ live under `src/core/mvs/tests/`.
   `ref_image` and overlays depth on that photo. Feature points and residual diagnostics are temporarily hidden
   while depth inspection is active, then restored from the user's existing preferences.
 - Local outlier filtering and connected-component speckle filtering remove isolated red-depth spikes while
-  preserving large smooth regions.
+  preserving large smooth regions. A depth discontinuity with neighbours on its own layer is retained, and
+  low-confidence silhouette pixels receive a relaxed threshold only when independent cross-view geometry agrees.
+- `scripts/validation/compare_depth_to_reference_mesh.py` projects a registered high-precision mesh into every
+  camera, reports per-pixel relative depth error, confidence reliability bins, ECE, Pearson/Spearman correlation,
+  and can save compressed pixel arrays for offline threshold calibration.
+- Frame admission uses conservative internal confidence. After geometry filtering, PatchMatch-derived confidence
+  is monotonically calibrated for persisted artifacts and fusion weights; already probabilistic learned candidates
+  keep their model confidence unchanged.
+- Optional learned MVS candidates use `learned_depth_<frame>.bin` and `_conf.bin` artifacts. They are default-off
+  and are merged only after independent camera-geometry support, inverse-depth spread, and depth-difference gates;
+  learned values never contribute to the evidence used to accept themselves.
 - Dominant-layer selection records refined, switched, transferred, ambiguous, and unresolved pixel counts in
   `dominant_depth_layer_selection`. Later hole repair preserves this selected-layer mask, so a measured
   cross-view transfer is not accidentally reclassified as unconstrained spatial interpolation.
@@ -150,7 +166,8 @@ live under `src/core/mvs/tests/`.
 - A heterogeneous batch keeps the stable `auto` token in its workspace hash and records `CUDA:N` or `OpenCL:N` for
   each frame. GUI project metadata reports the combined batch as `hybrid`; Auto may reuse either a compatible
   uniform batch or a compatible hybrid batch, while an explicit backend may reuse only the same uniform family.
-- The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
+- The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source robust
+  intensity/gradient/Census cost,
   mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Discrete OpenCL GPUs have
   one command-queue/kernel lane; unified-memory GPUs have two bounded lanes. With the default two-stage host
   pipeline, a second worker prepares the next frame and can submit it to the second integrated-GPU lane while the

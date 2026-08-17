@@ -24,6 +24,9 @@ struct DepthConfidenceComponents
     float uniqueness = 0.0f;
     float geometry = 0.0f;
     float texture = 0.0f;
+    /// Confidence derived from an independent sparse/reference geometry
+    /// residual. Negative means that no absolute geometry evidence exists.
+    float absoluteGeometry = -1.0f;
 };
 
 struct DepthFilterSettings
@@ -86,6 +89,7 @@ struct DepthFrameQualityDecision
     DepthFrameAcceptance acceptance = DepthFrameAcceptance::Rejected;
     DepthFilterSettings filterSettings;
     float calibratedConfidence = 0.0f;
+    DepthConfidenceComponents confidenceComponents;
     SparseDepthResidualSummary sparseDepthResidual;
     std::vector<std::string> reasons;
 };
@@ -99,6 +103,7 @@ enum class DepthConsistencyEvidence
 };
 
 float calibrateDepthConfidence(const DepthConfidenceComponents &components);
+float geometryErrorConfidence(const SparseDepthResidualSummary &residual);
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews);
 

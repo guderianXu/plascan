@@ -5952,6 +5952,82 @@ TEST(MeshColorizerTest, UsesScaledColorCameraForFullResolutionPhotographs)
     }
 }
 
+TEST(MeshColorizerTest, ColorsVisibleSparseCompletionFromMultipleContentMasks)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[0].x = -0.1f; mesh.vertices[0].y = -0.1f; mesh.vertices[0].z = 2.0f;
+    mesh.vertices[1].x = 0.1f; mesh.vertices[1].y = -0.1f; mesh.vertices[1].z = 2.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 0.1f; mesh.vertices[2].z = 2.0f;
+    for (auto &vertex : mesh.vertices)
+    {
+        vertex.nz = 1.0f;
+    }
+    xjw::mesh::Triangle face;
+    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    mesh.faces.push_back(face);
+
+    auto make_view = []()
+    {
+        xjw::mesh::MeshColorView view;
+        view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
+        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
+                                                   0.0, 1.0, 0.0,
+                                                   0.0, 0.0, 1.0},
+                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.colorBgr = cv::Mat(
+            64, 64, CV_8UC3, cv::Scalar(20, 90, 210));
+        view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.0f));
+        view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.0f));
+        view.depthValidMask = cv::Mat::zeros(64, 64, CV_8UC1);
+        view.supportMask = cv::Mat::zeros(64, 64, CV_8UC1);
+        cv::rectangle(view.supportMask,
+                      cv::Rect(12, 12, 40, 40),
+                      cv::Scalar(255),
+                      cv::FILLED);
+        return view;
+    };
+
+    xjw::mesh::MeshColorOptions options;
+    options.maximumVoxelSize = 0.01f;
+    options.propagationPasses = 0;
+    options.speckleCleanupPasses = 0;
+    options.allowVisibilityOnlyFallback = true;
+    options.minimumVisibilityOnlyViews = 2;
+    const QVector<xjw::mesh::MeshColorView> views{make_view(), make_view()};
+    double projected_pixel[2]{};
+    double projected_depth = 0.0;
+    const double projected_world[3] = {
+        mesh.vertices[0].x, mesh.vertices[0].y, mesh.vertices[0].z};
+    ASSERT_TRUE(views[0].camera.projectWorldPointWithDepth(
+        projected_world, projected_pixel, projected_depth));
+    EXPECT_NEAR(projected_pixel[0], 28.0, 1.0e-6);
+    EXPECT_NEAR(projected_pixel[1], 28.0, 1.0e-6);
+    const auto statistics = xjw::mesh::MeshColorizer::colorize(
+        &mesh, views, options);
+
+    EXPECT_TRUE(statistics.visibilityOnlyFallbackEnabled);
+    EXPECT_EQ(statistics.colorForegroundViewCount, 2);
+    EXPECT_EQ(statistics.rejectedProjectionCount, 0u);
+    EXPECT_EQ(statistics.rejectedMaskCount, 6u);
+    EXPECT_EQ(statistics.visibilityOnlyAttemptedObservationCount, 6u);
+    EXPECT_EQ(statistics.visibilityOnlyRejectedForegroundCount, 0u);
+    EXPECT_EQ(statistics.visibilityOnlyRejectedMissingForegroundCount, 0u);
+    EXPECT_EQ(statistics.visibilityOnlyRejectedVisibilityCount, 0u);
+    EXPECT_EQ(statistics.visibilityOnlyRejectedViewAngleCount, 0u);
+    EXPECT_EQ(statistics.visibilityOnlyCandidateObservationCount, 6u);
+    EXPECT_EQ(statistics.visibilityOnlyFallbackVertexCount, 3);
+    EXPECT_EQ(statistics.reliablyColoredVertexCount, 3);
+    EXPECT_EQ(statistics.propagatedVertexCount, 0);
+    EXPECT_EQ(statistics.fallbackVertexCount, 0);
+    for (const auto &vertex : mesh.vertices)
+    {
+        EXPECT_EQ(vertex.r, 210);
+        EXPECT_EQ(vertex.g, 90);
+        EXPECT_EQ(vertex.b, 20);
+    }
+}
+
 namespace
 {
 

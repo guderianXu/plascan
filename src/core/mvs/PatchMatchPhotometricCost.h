@@ -101,7 +101,143 @@ struct PatchNccAccumulator
         }
         return ((covariance / denominator) + 1.0f) * 0.5f;
     }
+
+    PLASCAN_MVS_HOST_DEVICE bool hasSupport(
+        bool mask_aware,
+        float minimum_support_ratio =
+            kDefaultMinimumMaskedPatchSupportRatio) const
+    {
+        int required_count = 4;
+        if (mask_aware && candidateCount > 0)
+        {
+            const float bounded_ratio = minimum_support_ratio < 0.0f
+                ? 0.0f
+                : (minimum_support_ratio > 1.0f ? 1.0f : minimum_support_ratio);
+            const int ratio_count = static_cast<int>(
+                static_cast<float>(candidateCount) * bounded_ratio + 0.999999f);
+            required_count = ratio_count > required_count ? ratio_count : required_count;
+        }
+        return validCount >= required_count;
+    }
 };
+
+/// Exposure-robust patch evidence shared by CPU and CUDA PatchMatch.
+/// Intensity NCC handles affine exposure changes, gradient NCC preserves
+/// edges under low-frequency illumination changes, and ternary Census keeps
+/// monotonic local ordering when highlights or response curves differ.
+struct PatchRobustPhotometricAccumulator
+{
+    PatchNccAccumulator intensity;
+    PatchNccAccumulator gradient;
+    int censusCandidateCount = 0;
+    int censusValidCount = 0;
+    int censusAgreementCount = 0;
+
+    PLASCAN_MVS_HOST_DEVICE void addIntensityCandidate(
+        bool valid,
+        float reference_value = 0.0f,
+        float source_value = 0.0f)
+    {
+        intensity.addCandidate(valid, reference_value, source_value);
+    }
+
+    PLASCAN_MVS_HOST_DEVICE void addGradientCandidate(
+        bool valid,
+        float reference_x = 0.0f,
+        float reference_y = 0.0f,
+        float source_x = 0.0f,
+        float source_y = 0.0f)
+    {
+        gradient.addCandidate(valid, reference_x, source_x);
+        gradient.addCandidate(valid, reference_y, source_y);
+    }
+
+    PLASCAN_MVS_HOST_DEVICE void addCensusCandidate(
+        bool valid,
+        float reference_delta = 0.0f,
+        float source_delta = 0.0f,
+        float contrast_threshold = 0.01f)
+    {
+        ++censusCandidateCount;
+        if (!valid)
+        {
+            return;
+        }
+        ++censusValidCount;
+        const int reference_rank = reference_delta > contrast_threshold
+            ? 1
+            : (reference_delta < -contrast_threshold ? -1 : 0);
+        const int source_rank = source_delta > contrast_threshold
+            ? 1
+            : (source_delta < -contrast_threshold ? -1 : 0);
+        if (reference_rank == source_rank)
+        {
+            ++censusAgreementCount;
+        }
+    }
+
+    PLASCAN_MVS_HOST_DEVICE float score(
+        bool mask_aware,
+        float minimum_support_ratio =
+            kDefaultMinimumMaskedPatchSupportRatio) const
+    {
+        if (!intensity.hasSupport(mask_aware, minimum_support_ratio))
+        {
+            return 0.0f;
+        }
+
+        float weighted_score = 0.50f * intensity.score(
+            mask_aware, minimum_support_ratio);
+        float weight_sum = 0.50f;
+        if (gradient.hasSupport(mask_aware, minimum_support_ratio))
+        {
+            weighted_score += 0.30f * gradient.score(
+                mask_aware, minimum_support_ratio);
+            weight_sum += 0.30f;
+        }
+
+        int census_required = 4;
+        if (mask_aware && censusCandidateCount > 0)
+        {
+            const int ratio_count = static_cast<int>(
+                static_cast<float>(censusCandidateCount)
+                    * minimum_support_ratio
+                + 0.999999f);
+            census_required = ratio_count > census_required
+                ? ratio_count
+                : census_required;
+        }
+        if (censusValidCount >= census_required)
+        {
+            weighted_score += 0.20f
+                * static_cast<float>(censusAgreementCount)
+                / static_cast<float>(censusValidCount);
+            weight_sum += 0.20f;
+        }
+        return weight_sum > 0.0f ? weighted_score / weight_sum : 0.0f;
+    }
+};
+
+/// Map the conservative composite score onto a probability-like confidence
+/// scale. Gradient and Census evidence lower the raw score even for correct
+/// depths, so reusing NCC's identity mapping made the new cost systematically
+/// under-confident. This monotonic calibration preserves its ranking.
+PLASCAN_MVS_HOST_DEVICE inline float calibrateRobustPhotometricConfidence(
+    float score)
+{
+    const float bounded_score = score < 0.0f
+        ? 0.0f
+        : (score > 1.0f ? 1.0f : score);
+    if (!(bounded_score > 0.0f))
+    {
+        return 0.0f;
+    }
+#if defined(__CUDA_ARCH__)
+    return powf(bounded_score, 0.20f);
+#else
+    return std::pow(bounded_score, 0.20f);
+#endif
+}
 
 PLASCAN_MVS_HOST_DEVICE inline int requiredPhotometricSupport(int source_count)
 {

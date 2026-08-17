@@ -122,6 +122,11 @@ struct FusionConfig
     float geometrySupportedMinimumAdaptiveSupportWeight = 0.50f; ///< 连续几何支持权重下限
     float geometrySupportedMinimumAdaptiveEffectiveViews = 2.0f; ///< 连续证据有效来源数下限
     float geometrySupportedMaximumAdaptiveConflictRatio = 0.45f; ///< 连续证据冲突比例上限
+    bool  enableBoundaryAwareRetention = true; ///< 轮廓/遮挡边界用较温和但仍受几何门控的置信过滤
+    int   boundaryProtectionRadiusPixels = 2; ///< 深度有效域边界保护半径
+    float boundaryMinimumConfidence = 0.25f; ///< 边界候选最低原始置信度
+    int   boundaryMinimumObservationCount = 2; ///< 边界至少由参考帧加一个来源支持
+    float boundaryMaximumInverseDepthSpread = 0.012f; ///< 边界允许的逆深度相对离散度
     bool  doSigmaFusion      = true;   ///< 是否做 sigma 加权深度融合
     float sigmaMultiplier    = 2.0f;   ///< sigma 乘数放宽→少剔除内点
     bool  doInpaint          = true;   ///< 对小洞做 inpaint（填补）
@@ -157,6 +162,7 @@ struct DepthPostProcessStats
     int validAfterConfidenceFilter = 0;   ///< 置信度过滤后有效深度像素数
     int lowConfidenceCandidateCount = 0;  ///< 低于阈值、进入置信度判定的像素数
     int geometrySupportedLowConfidenceRetained = 0; ///< 因强多视几何证据而保留的低置信实测像素数
+    int boundaryGeometryRetained = 0; ///< 轮廓/遮挡边界因几何支持而保留的像素数
     int confidenceRemoved = 0;            ///< 置信度过滤移除像素数
     int localDepthOutlierRemoved = 0;     ///< 局部深度离群过滤移除像素数
     int smallComponentRemoved = 0;        ///< 小连通域 speckle 过滤移除像素数
@@ -300,6 +306,13 @@ struct DepthGenConfig
     float twoSourceGrowthInverseDepthSpread = 0.01f;
     float twoSourceGrowthNormalAngleDegrees = 15.0f;
     int twoSourceGrowthMaximumComponentArea = 64;
+    bool enableLearnedMvsCandidates = false; ///< 可选学习型 MVS 仅提供候选，不能绕过几何门控
+    std::string learnedMvsCandidateDirectory; ///< learned_depth_<frame>.bin 与对应 _conf.bin
+    float learnedMvsMinimumConfidence = 0.50f;
+    int learnedMvsMinimumGeometryObservations = 3;
+    float learnedMvsMaximumInverseDepthSpread = 0.015f;
+    float learnedMvsMaximumRelativeDepthDifference = 0.03f;
+    float learnedMvsReplacementConfidenceMargin = 0.10f;
 };
 
 // =============================================================================

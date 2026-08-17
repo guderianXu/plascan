@@ -272,7 +272,7 @@ core/
 │   ├── StreamingDepthFusionService.h/cpp # 融合窗口、帧缓存、共识配置和分批聚合编排
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash、source plan 与几何来源位序
-│   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
+│   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源及严格失败像对复核
 │   ├── MvsImagePreprocessor.h/cpp # 原图与 valid mask 共用去畸变映射，并生成正深度、零畸变工作相机
 │   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
 │   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
@@ -285,8 +285,9 @@ core/
 │   ├── DepthGapTargetedRecovery.h/cpp # 以邻近实测深度为先验的缺口定向二源 PatchMatch 与合并门控
 │   ├── DepthResidualReestimation.h/cpp # 一致性后冻结多视深度层引导的残余空洞局部实测恢复
 │   ├── DepthCrossViewHoleRepair.h/cpp # 一致性过滤后以三源逆深度簇保守补回环拍对象缺面
-│   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/锚定插值来源编码与统计
-│   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
+│   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/学习候选门控来源编码与统计
+│   ├── LearnedDepthCandidateGate.h/cpp # 学习型候选深度的置信度、稀疏几何及多视一致性最终门控
+│   ├── DepthFrameQualityGate.h/cpp # 深度帧质量门控及置信度与绝对几何残差联合标定
 │   ├── DepthFrameQualificationPolicy.h # GUI/模型/点云共享的主融合帧资格与环拍覆盖数量契约
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── DepthMemoryPolicy.h/cpp # 图像/深度/可见图/保存队列/后端 staging 饱和估算与 eager/bounded 决策
@@ -295,11 +296,12 @@ core/
 │   ├── DepthPoseRefinementStage.h/cpp # 默认关闭的跨视深度候选采样、安全门与派生相机输出
 │   ├── PatchMatchEstimator.cpp  # PatchMatch 公共校验、后端选择和回退
 │   ├── PatchMatchHostUtils.h/cpp # 三后端共享的 double 局部相对位姿与无效值感知、尺度稳定深度滤波
-│   ├── PatchMatchCPU.cpp        # 可独立构建的 CPU PatchMatch 实现
-│   ├── PatchMatchCUDA.cu/h     # 按设备隔离工作区与图像缓存的 CUDA 实现
+│   ├── PatchMatchPhotometricCost.h # 曝光鲁棒强度 NCC、梯度 NCC 与 Census 组合代价
+│   ├── PatchMatchCPU.cpp        # 可独立构建的 CPU 组合代价 PatchMatch 实现
+│   ├── PatchMatchCUDA.cu/h     # 按设备隔离工作区与图像缓存的 CUDA 组合代价实现
 │   ├── PatchMatchNoCUDA.cpp    # 无 CUDA 构建的 GPU 接口存根
 │   ├── PatchMatchOpenCL.cpp     # 跨厂商 OpenCL GPU 深度假设搜索、设备枚举与运行时缓存
-│   ├── PatchMatchOpenCLKernels.h # OpenCL C 1.2 多源 NCC/深度细化 kernel
+│   ├── PatchMatchOpenCLKernels.h # OpenCL C 1.2 多源组合光度代价/深度细化 kernel
 │   ├── PatchMatchNoOpenCL.cpp   # 无 OpenCL 构建的稳定接口存根
 │   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker 与优先级帧调度
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约

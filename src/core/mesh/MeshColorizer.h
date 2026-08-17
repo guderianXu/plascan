@@ -43,6 +43,9 @@ struct MeshColorOptions
     float speckleMaximumNeighborDeviation = 28.0f;
     bool compensateExposure = false;
     bool coherentFacePrimaryViews = false;
+    bool allowVisibilityOnlyFallback = false;
+    int minimumVisibilityOnlyViews = 2;
+    float visibilityOnlyMinimumViewCosine = 0.35f;
     int workerCount = 0;
 };
 
@@ -55,13 +58,22 @@ struct MeshColorStatistics
     std::uint64_t rejectedVisibilityCount = 0;
     std::uint64_t rejectedViewAngleCount = 0;
     std::uint64_t rejectedColorOutlierCount = 0;
+    std::uint64_t visibilityOnlyAttemptedObservationCount = 0;
+    std::uint64_t visibilityOnlyCandidateObservationCount = 0;
+    std::uint64_t visibilityOnlyRejectedForegroundCount = 0;
+    std::uint64_t visibilityOnlyRejectedMissingForegroundCount = 0;
+    std::uint64_t visibilityOnlyRejectedVisibilityCount = 0;
+    std::uint64_t visibilityOnlyRejectedViewAngleCount = 0;
     int reliablyColoredVertexCount = 0;
     int bestViewFallbackVertexCount = 0;
+    int visibilityOnlyFallbackVertexCount = 0;
     int propagatedVertexCount = 0;
     int fallbackVertexCount = 0;
     int cleanedSpeckleVertexCount = 0;
     int coherentPrimaryViewFaceCount = 0;
     int coherentPrimaryViewVertexCount = 0;
+    int colorForegroundViewCount = 0;
+    bool visibilityOnlyFallbackEnabled = false;
     int effectiveWorkerCount = 1;
     std::int64_t elapsedMs = 0;
 };

@@ -531,15 +531,7 @@ MeshColorView textureViewFromFrame(const DepthTsdfFrame &frame)
 
 MeshColorView vertexColorViewFromFrame(const DepthTsdfFrame &frame)
 {
-    MeshColorView view;
-    view.camera = frame.camera;
-    view.colorBgr = frame.colorBgr;
-    view.depth = frame.depth;
-    view.confidence = frame.confidence;
-    view.depthValidMask = frame.depthValidMask;
-    view.supportMask = frame.supportMask;
-    view.qualityWeight = frame.frameQualityWeight;
-    return view;
+    return textureViewFromFrame(frame);
 }
 
 void addFinalMeshColorStatistics(const MeshColorStatistics &statistics,
@@ -565,10 +557,40 @@ void addFinalMeshColorStatistics(const MeshColorStatistics &statistics,
         static_cast<qint64>(statistics.rejectedViewAngleCount);
     (*payload)[QStringLiteral("color_rejected_outlier_count")] =
         static_cast<qint64>(statistics.rejectedColorOutlierCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_attempted_observation_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyAttemptedObservationCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_candidate_observation_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyCandidateObservationCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_rejected_foreground_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyRejectedForegroundCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_rejected_missing_foreground_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyRejectedMissingForegroundCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_rejected_visibility_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyRejectedVisibilityCount);
+    (*payload)[QStringLiteral(
+        "visibility_only_color_rejected_view_angle_count")] =
+        static_cast<qint64>(
+            statistics.visibilityOnlyRejectedViewAngleCount);
     (*payload)[QStringLiteral("reliably_colored_vertex_count")] =
         statistics.reliablyColoredVertexCount;
     (*payload)[QStringLiteral("best_view_fallback_color_vertex_count")] =
         statistics.bestViewFallbackVertexCount;
+    (*payload)[QStringLiteral("visibility_only_color_vertex_count")] =
+        statistics.visibilityOnlyFallbackVertexCount;
+    (*payload)[QStringLiteral("color_foreground_view_count")] =
+        statistics.colorForegroundViewCount;
+    (*payload)[QStringLiteral("visibility_only_color_fallback_enabled")] =
+        statistics.visibilityOnlyFallbackEnabled;
     (*payload)[QStringLiteral("propagated_color_vertex_count")] =
         statistics.propagatedVertexCount;
     (*payload)[QStringLiteral("fallback_color_vertex_count")] =
@@ -7229,6 +7251,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             color_options.compensateExposure = options.compensateColorExposure;
             color_options.coherentFacePrimaryViews =
                 options.coherentFacePrimaryViewColors;
+            color_options.allowVisibilityOnlyFallback =
+                output_algorithm == QStringLiteral(
+                    "orbital_sparse_scaffold_screened_poisson");
             color_options.workerCount = options.workerCount;
             const MeshColorStatistics final_color_statistics =
                 MeshColorizer::colorize(

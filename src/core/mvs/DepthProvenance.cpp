@@ -54,7 +54,8 @@ void updateDepthProvenance(
     const cv::Mat &targetedPatchMatchMask,
     const cv::Mat &crossViewMeasuredMask,
     const cv::Mat &anchoredInterpolationMask,
-    const cv::Mat &residualPatchMatchMask)
+    const cv::Mat &residualPatchMatchMask,
+    const cv::Mat &learnedGeometryGatedMask)
 {
     if (depth.empty() || depth.type() != CV_32FC1)
     {
@@ -95,6 +96,10 @@ void updateDepthProvenance(
         provenance,
         residualPatchMatchMask,
         DepthProvenance::ResidualPatchMatch);
+    assignMasked(
+        provenance,
+        learnedGeometryGatedMask,
+        DepthProvenance::LearnedGeometryGated);
     provenance.setTo(cv::Scalar(0), depth <= 0.0f);
 }
 
@@ -127,11 +132,15 @@ DepthProvenanceSummary summarizeDepthProvenance(
     summary.residualPatchMatchPixelCount = cv::countNonZero(
         valid & (provenance == static_cast<std::uint8_t>(
             DepthProvenance::ResidualPatchMatch)));
+    summary.learnedGeometryGatedPixelCount = cv::countNonZero(
+        valid & (provenance == static_cast<std::uint8_t>(
+            DepthProvenance::LearnedGeometryGated)));
     const int classified = summary.nativePatchMatchPixelCount +
         summary.targetedPatchMatchPixelCount +
         summary.crossViewMeasuredPixelCount +
         summary.anchoredInterpolationPixelCount +
-        summary.residualPatchMatchPixelCount;
+        summary.residualPatchMatchPixelCount +
+        summary.learnedGeometryGatedPixelCount;
     summary.unclassifiedValidPixelCount =
         std::max(0, summary.validPixelCount - classified);
     return summary;
@@ -153,9 +162,11 @@ QJsonObject depthProvenanceSummaryToJson(
          summary.anchoredInterpolationPixelCount},
         {QStringLiteral("residual_patchmatch_pixel_count"),
          summary.residualPatchMatchPixelCount},
+        {QStringLiteral("learned_geometry_gated_pixel_count"),
+         summary.learnedGeometryGatedPixelCount},
         {QStringLiteral("unclassified_valid_pixel_count"),
          summary.unclassifiedValidPixelCount},
-        {QStringLiteral("schema_version"), 2}};
+        {QStringLiteral("schema_version"), 3}};
 }
 
 bool isInterpolatedDepthProvenance(std::uint8_t value)

@@ -525,6 +525,7 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     {
         entry.tier = MvsSourceTier::TrackGeometryBackfill;
         result.selected.push_back(entry);
+        selectedViews.insert(entry.viewIndex);
     }
     result.rejected.insert(
         result.rejected.end(),
@@ -552,13 +553,14 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
         {
             entry.tier = MvsSourceTier::TrackGeometryBackfill;
             result.selected.push_back(entry);
+            selectedViews.insert(entry.viewIndex);
         }
         result.rejected.insert(
             result.rejected.end(),
             std::make_move_iterator(failed_backfill.rejected.begin()),
             std::make_move_iterator(failed_backfill.rejected.end()));
     }
-    else
+    else if (!options.allowStrictFailedPairBackfill)
     {
         for (const MvsSourceCandidate &candidate : failed_backfill_candidates)
         {
@@ -566,6 +568,56 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
                 {makeEntry(candidate, options),
                  MvsSourceRejectReason::LowQuality});
         }
+    }
+
+    if (options.allowStrictFailedPairBackfill
+        && static_cast<int>(result.selected.size()) < result.requestedSourceCount)
+    {
+        std::vector<MvsSourceCandidate> strict_candidates;
+        strict_candidates.reserve(failed_backfill_candidates.size());
+        for (const MvsSourceCandidate &candidate : failed_backfill_candidates)
+        {
+            if (selectedViews.find(candidate.viewIndex) == selectedViews.end())
+            {
+                strict_candidates.push_back(candidate);
+            }
+        }
+
+        MvsSourcePlannerOptions strict_options = backfillOptions;
+        strict_options.allowFailedPairBackfill = true;
+        strict_options.failedPairBackfillMinimumInliers =
+            options.strictFailedPairBackfillMinimumInliers;
+        strict_options.failedPairBackfillMinimumMatches =
+            options.strictFailedPairBackfillMinimumMatches;
+        strict_options.failedPairBackfillMinimumSharedTracks =
+            options.strictFailedPairBackfillMinimumSharedTracks;
+        strict_options.failedPairBackfillMinimumCoverage =
+            options.strictFailedPairBackfillMinimumCoverage;
+        strict_options.failedPairBackfillMinimumWilsonLowerBound =
+            options.strictFailedPairBackfillMinimumWilsonLowerBound;
+        strict_options.failedPairBackfillMaximumAngleDeg =
+            options.strictFailedPairBackfillMaximumAngleDeg;
+        strict_options.maxTriangulationAngleDeg = std::min(
+            backfillOptions.maxTriangulationAngleDeg,
+            options.strictFailedPairBackfillMaximumAngleDeg);
+        strict_options.maxSources = result.requestedSourceCount -
+            static_cast<int>(result.selected.size());
+        MvsSourcePlan strict_backfill = planMvsSourceViewsImpl(
+            strict_candidates,
+            strict_options,
+            true);
+        for (MvsSourcePlanEntry &entry : strict_backfill.selected)
+        {
+            entry.tier = MvsSourceTier::StrictPairAuditBackfill;
+            entry.verificationReason += entry.verificationReason.empty()
+                ? "strict_pair_audit_backfill"
+                : ";strict_pair_audit_backfill";
+            result.selected.push_back(entry);
+        }
+        result.rejected.insert(
+            result.rejected.end(),
+            std::make_move_iterator(strict_backfill.rejected.begin()),
+            std::make_move_iterator(strict_backfill.rejected.end()));
     }
     result.usedSequenceFallback = false;
     result.sourceViewShortfall = std::max(
@@ -774,6 +826,10 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     if (entry.tier == MvsSourceTier::TrackGeometryBackfill)
     {
         sourceTier = QStringLiteral("track_geometry_backfill");
+    }
+    else if (entry.tier == MvsSourceTier::StrictPairAuditBackfill)
+    {
+        sourceTier = QStringLiteral("strict_pair_audit_backfill");
     }
     else if (entry.tier == MvsSourceTier::SequenceFallback)
     {

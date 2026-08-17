@@ -902,8 +902,11 @@ TEST(GuiAlgorithmAlignmentContractTest,
         "if (result.ok && !tsdf.boundaryAttributionDebugMesh.empty())");
 
     expectContainsAll(final_output_block, {
+        "vertexColorViewFromFrame",
         "MeshColorizer::colorize",
         "output_mesh, final_color_views, color_options",
+        "color_options.allowVisibilityOnlyFallback",
+        "orbital_sparse_scaffold_screened_poisson",
         "addFinalMeshColorStatistics",
         "saveMeshAndOptionalTexture(*output_mesh",
     });

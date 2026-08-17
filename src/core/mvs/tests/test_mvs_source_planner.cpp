@@ -531,6 +531,77 @@ TEST(MvsSourcePlanner, ExplicitFourSourceCapAllowsQualifiedFailedPairForMajority
     EXPECT_EQ(plan.sourceViewShortfall, 0);
 }
 
+TEST(MvsSourcePlanner, StrictPairAuditMayFillFifthAndSixthSources)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 14;
+    options.maxSources = 6;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 65.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+    options.allowStrictFailedPairBackfill = true;
+
+    std::vector<MvsSourceCandidate> candidates;
+    for (int view_index : {2, 3, 5, 6})
+    {
+        MvsSourceCandidate verified =
+            candidate(view_index, 120, 95, 20.0f, 0.8f, 0.5f, true);
+        verified.verifiedPairGeometry = true;
+        candidates.push_back(verified);
+    }
+    for (int view_index : {1, 7})
+    {
+        MvsSourceCandidate audited =
+            candidate(view_index, 90, 58, 35.0f, 0.7f, 0.7f);
+        audited.verificationStatus = MvsSourceVerificationStatus::Failed;
+        audited.pairTotalMatches = 72;
+        audited.pairCoverageScore = 0.42f;
+        audited.verificationReason = "production_threshold_not_met";
+        candidates.push_back(audited);
+    }
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    ASSERT_EQ(plan.selected.size(), 6u);
+    EXPECT_EQ(plan.selected[4].tier, MvsSourceTier::StrictPairAuditBackfill);
+    EXPECT_EQ(plan.selected[5].tier, MvsSourceTier::StrictPairAuditBackfill);
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
+}
+
+TEST(MvsSourcePlanner, StrictPairAuditStillRejectsWeakFailedPair)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 5;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+    options.allowStrictFailedPairBackfill = true;
+
+    std::vector<MvsSourceCandidate> candidates;
+    for (int view_index : {2, 3, 5, 6})
+    {
+        MvsSourceCandidate verified =
+            candidate(view_index, 120, 95, 20.0f, 0.8f, 0.5f, true);
+        verified.verifiedPairGeometry = true;
+        candidates.push_back(verified);
+    }
+    MvsSourceCandidate weak = candidate(7, 50, 22, 30.0f, 0.7f, 0.7f);
+    weak.verificationStatus = MvsSourceVerificationStatus::Failed;
+    weak.pairTotalMatches = 50;
+    weak.pairCoverageScore = 0.25f;
+    candidates.push_back(weak);
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    EXPECT_EQ(plan.selected.size(), 4u);
+    EXPECT_EQ(plan.sourceViewShortfall, 1);
+}
+
 TEST(MvsSourcePlanner, MissingStatisticsMayStillFillRequestedFourthSource)
 {
     MvsSourcePlannerOptions options;

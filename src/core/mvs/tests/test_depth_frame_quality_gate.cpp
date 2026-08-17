@@ -177,6 +177,27 @@ TEST(DepthFrameQualityGateTest,
 }
 
 TEST(DepthFrameQualityGateTest,
+     AbsoluteGeometryConfidenceIsMonotonicWithMeasuredError)
+{
+    xjw::mvs::SparseDepthResidualSummary accurate;
+    accurate.available = true;
+    accurate.projectedSampleCount = 80;
+    accurate.validSampleCount = 64;
+    accurate.medianAbsoluteLogError = 0.003f;
+    auto inaccurate = accurate;
+    inaccurate.medianAbsoluteLogError = 0.020f;
+
+    EXPECT_GT(xjw::mvs::geometryErrorConfidence(accurate),
+              xjw::mvs::geometryErrorConfidence(inaccurate));
+    auto accurate_input = reliableOrbitalInput();
+    accurate_input.sparseDepthResidual = accurate;
+    auto inaccurate_input = reliableOrbitalInput();
+    inaccurate_input.sparseDepthResidual = inaccurate;
+    EXPECT_GT(xjw::mvs::evaluateDepthFrame(accurate_input).calibratedConfidence,
+              xjw::mvs::evaluateDepthFrame(inaccurate_input).calibratedConfidence);
+}
+
+TEST(DepthFrameQualityGateTest,
      MakesIntermediateSparseAbsoluteDepthResidualValidationOnly)
 {
     auto input = reliableOrbitalInput();

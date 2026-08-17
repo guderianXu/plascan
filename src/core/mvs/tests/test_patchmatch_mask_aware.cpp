@@ -19,6 +19,9 @@ namespace
 TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenceTile)
 {
     const std::string prefix = xjw::mvs::detail::kPatchMatchOpenClSourcePrefix;
+    const std::string photometric =
+        std::string(xjw::mvs::detail::kPatchMatchOpenClSourcePhotometric)
+        + xjw::mvs::detail::kPatchMatchOpenClSourceGradientCensus;
     const std::string main = xjw::mvs::detail::kPatchMatchOpenClSourceMain;
     const std::string propagation =
         xjw::mvs::detail::kPatchMatchOpenClSourcePropagation;
@@ -30,13 +33,13 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
     EXPECT_EQ(build_options, "-cl-mad-enable");
     EXPECT_EQ(build_options.find("fast-relaxed-math"), std::string::npos);
     EXPECT_EQ(prefix.find("native_rsqrt"), std::string::npos);
-    EXPECT_NE(prefix.find("sqrt(variance_product)"), std::string::npos);
-    EXPECT_NE(prefix.find("reference-mask exclusions"), std::string::npos);
-    EXPECT_NE(prefix.find("int step = clamp(patch_step, 1, 3);"),
+    EXPECT_NE(photometric.find("sqrt(variance_product)"), std::string::npos);
+    EXPECT_NE(photometric.find("reference-mask exclusions"), std::string::npos);
+    EXPECT_NE(photometric.find("int step = clamp(patch_step, 1, 3);"),
               std::string::npos);
-    EXPECT_NE(prefix.find("float plane_distance = depth"), std::string::npos);
+    EXPECT_NE(photometric.find("float plane_distance = depth"), std::string::npos);
     EXPECT_NE(prefix.find("compose_plane_homography"), std::string::npos);
-    EXPECT_NE(prefix.find("projected_x += projected_x_step"), std::string::npos);
+    EXPECT_NE(photometric.find("projected_x += projected_x_step"), std::string::npos);
     EXPECT_EQ(prefix.find("local_depth_sample_count"), std::string::npos);
     EXPECT_NE(prefix.find("propagated_plane_depth"), std::string::npos);
     EXPECT_EQ(main.find("float scores[MAX_SOURCES]"), std::string::npos);

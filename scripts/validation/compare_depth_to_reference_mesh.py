@@ -34,6 +34,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
     )
+    parser.add_argument(
+        "--pixel-output-dir",
+        type=Path,
+        help=(
+            "Optional directory for compressed per-pixel depth, reference, "
+            "confidence, and relative-error arrays."
+        ),
+    )
+    parser.add_argument("--confidence-bins", type=int, default=10)
+    parser.add_argument(
+        "--max-calibration-samples-per-frame",
+        type=int,
+        default=100_000,
+    )
     return parser.parse_args()
 
 
@@ -73,6 +87,102 @@ def percentile_summary(values: np.ndarray) -> dict[str, float]:
         "p90": float(np.percentile(values, 90.0)),
         "p95": float(np.percentile(values, 95.0)),
         "mean": float(np.mean(values)),
+    }
+
+
+def error_rate_summary(relative_error: np.ndarray) -> dict[str, float]:
+    if relative_error.size == 0:
+        return {}
+    return {
+        "rmse": float(np.sqrt(np.mean(np.square(relative_error)))),
+        "within_0_5_percent": float(np.mean(relative_error <= 0.005)),
+        "within_1_percent": float(np.mean(relative_error <= 0.01)),
+        "within_2_percent": float(np.mean(relative_error <= 0.02)),
+        "within_5_percent": float(np.mean(relative_error <= 0.05)),
+    }
+
+
+def confidence_calibration(
+    confidence: np.ndarray,
+    relative_error: np.ndarray,
+    bin_count: int,
+) -> dict:
+    valid = (
+        np.isfinite(confidence)
+        & np.isfinite(relative_error)
+        & (confidence >= 0.0)
+    )
+    confidence = np.clip(confidence[valid], 0.0, 1.0)
+    relative_error = relative_error[valid]
+    if confidence.size == 0:
+        return {"available": False, "bins": []}
+
+    edges = np.linspace(0.0, 1.0, max(2, bin_count) + 1)
+    assignments = np.minimum(
+        np.searchsorted(edges, confidence, side="right") - 1,
+        edges.size - 2,
+    )
+    bins: list[dict] = []
+    ece = 0.0
+    for index in range(edges.size - 1):
+        selected = assignments == index
+        count = int(np.count_nonzero(selected))
+        if count == 0:
+            continue
+        selected_confidence = confidence[selected]
+        selected_error = relative_error[selected]
+        accuracy = float(np.mean(selected_error <= 0.01))
+        mean_confidence = float(np.mean(selected_confidence))
+        ece += count / confidence.size * abs(mean_confidence - accuracy)
+        bins.append(
+            {
+                "lower": float(edges[index]),
+                "upper": float(edges[index + 1]),
+                "pixel_count": count,
+                "mean_confidence": mean_confidence,
+                "accuracy_within_1_percent": accuracy,
+                "relative_absolute_depth_residual": percentile_summary(
+                    selected_error
+                ),
+            }
+        )
+    correlation = float("nan")
+    rank_correlation = float("nan")
+    if confidence.size > 1 and np.std(confidence) > 0.0:
+        quality = -np.log1p(relative_error)
+        if np.std(quality) > 0.0:
+            correlation = float(np.corrcoef(confidence, quality)[0, 1])
+            confidence_order = np.argsort(confidence, kind="mergesort")
+            quality_order = np.argsort(quality, kind="mergesort")
+
+            def average_ranks(values: np.ndarray, order: np.ndarray) -> np.ndarray:
+                sorted_values = values[order]
+                starts = np.flatnonzero(
+                    np.r_[True, sorted_values[1:] != sorted_values[:-1]]
+                )
+                ends = np.r_[starts[1:], sorted_values.size]
+                sorted_ranks = np.repeat(
+                    (starts + ends - 1).astype(np.float64) * 0.5,
+                    ends - starts,
+                )
+                ranks = np.empty(values.size, dtype=np.float64)
+                ranks[order] = sorted_ranks
+                return ranks
+
+            confidence_ranks = average_ranks(confidence, confidence_order)
+            quality_ranks = average_ranks(quality, quality_order)
+            if np.std(confidence_ranks) > 0.0 and np.std(quality_ranks) > 0.0:
+                rank_correlation = float(
+                    np.corrcoef(confidence_ranks, quality_ranks)[0, 1]
+                )
+    return {
+        "available": True,
+        "pixel_count": int(confidence.size),
+        "accuracy_relative_error_threshold": 0.01,
+        "expected_calibration_error_1_percent": float(ece),
+        "confidence_vs_negative_log_error_correlation": correlation,
+        "confidence_vs_error_spearman_correlation": rank_correlation,
+        "bins": bins,
     }
 
 
@@ -141,6 +251,15 @@ def main() -> int:
     points = np.asarray(points, dtype=np.float64)
 
     frame_results: list[dict] = []
+    calibration_confidence: list[np.ndarray] = []
+    calibration_error: list[np.ndarray] = []
+    pixel_output_dir = (
+        args.pixel_output_dir.resolve()
+        if args.pixel_output_dir is not None
+        else None
+    )
+    if pixel_output_dir is not None:
+        pixel_output_dir.mkdir(parents=True, exist_ok=True)
     for frame in frames:
         width = int(frame["grid_width"])
         height = int(frame["grid_height"])
@@ -178,6 +297,55 @@ def main() -> int:
         signed = depth[compared].astype(np.float64) - reference_depth[compared]
         absolute = np.abs(signed)
         normalized = absolute / np.maximum(reference_depth[compared], 1.0e-12)
+        confidence_path = Path(frame.get("raw_confidence_path", ""))
+        confidence = None
+        frame_calibration = {"available": False, "bins": []}
+        if confidence_path.is_file():
+            confidence = read_float_grid(confidence_path, width, height)
+            compared_confidence = confidence[compared].astype(np.float64)
+            frame_calibration = confidence_calibration(
+                compared_confidence,
+                normalized,
+                args.confidence_bins,
+            )
+            maximum_samples = max(1, args.max_calibration_samples_per_frame)
+            if normalized.size > maximum_samples:
+                sample_indices = np.linspace(
+                    0,
+                    normalized.size - 1,
+                    maximum_samples,
+                    dtype=np.int64,
+                )
+                compared_confidence = compared_confidence[sample_indices]
+                sampled_error = normalized[sample_indices]
+            else:
+                sampled_error = normalized
+            calibration_confidence.append(compared_confidence)
+            calibration_error.append(sampled_error)
+
+        pixel_artifact = ""
+        if pixel_output_dir is not None:
+            pixel_path = pixel_output_dir / (
+                f"depth_reference_error_{int(frame['ref_index']):04d}.npz"
+            )
+            np.savez_compressed(
+                pixel_path,
+                measured_depth=depth.astype(np.float32),
+                reference_depth=reference_depth.astype(np.float32),
+                confidence=(
+                    confidence.astype(np.float32)
+                    if confidence is not None
+                    else np.empty((0, 0), dtype=np.float32)
+                ),
+                compared_mask=compared.astype(np.uint8),
+                relative_absolute_error=np.where(
+                    compared,
+                    np.abs(depth - reference_depth)
+                    / np.maximum(reference_depth, 1.0e-12),
+                    np.nan,
+                ).astype(np.float32),
+            )
+            pixel_artifact = str(pixel_path)
         reference_count = int(np.count_nonzero(reference_valid))
         compared_count = int(np.count_nonzero(compared))
         frame_results.append(
@@ -200,6 +368,9 @@ def main() -> int:
                 "relative_absolute_depth_residual": percentile_summary(
                     normalized
                 ),
+                "relative_error_rates": error_rate_summary(normalized),
+                "confidence_calibration": frame_calibration,
+                "pixel_artifact": pixel_artifact,
             }
         )
 
@@ -226,6 +397,15 @@ def main() -> int:
             ),
             "relative_absolute_depth_p90_across_frames": percentile_summary(
                 np.asarray(relative_p90)
+            ),
+            "confidence_calibration": confidence_calibration(
+                np.concatenate(calibration_confidence)
+                if calibration_confidence
+                else np.empty(0, dtype=np.float64),
+                np.concatenate(calibration_error)
+                if calibration_error
+                else np.empty(0, dtype=np.float64),
+                args.confidence_bins,
             ),
         },
         "frames": frame_results,

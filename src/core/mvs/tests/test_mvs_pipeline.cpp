@@ -2210,7 +2210,7 @@ TEST(DepthFrameQualityGateTest, CalibratesConfidenceAndCapsFilterViews)
     components.geometry = 0.70f;
     components.texture = 0.60f;
 
-    EXPECT_NEAR(xjw::mvs::calibrateDepthConfidence(components), 0.2268f, 1.0e-5f);
+    EXPECT_NEAR(xjw::mvs::calibrateDepthConfidence(components), 0.755f, 2.0e-3f);
 
     const xjw::mvs::DepthFilterSettings settings =
         xjw::mvs::depthFilterSettings(xjw::mvs::DepthFilterMode::Aggressive, 2);
@@ -2593,6 +2593,52 @@ TEST(MvsPipelineTest, FusionDepthPostprocessRetainsOnlyGeometrySupportedLowConfi
     EXPECT_FLOAT_EQ(confidence.at<float>(1, 1), 0.50f);
     EXPECT_FLOAT_EQ(depth.at<float>(2, 2), 0.0f);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
+}
+
+TEST(MvsPipelineTest, FusionDepthPostprocessProtectsGeometrySupportedSilhouette)
+{
+    cv::Mat depth(9, 9, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(9, 9, CV_32F, cv::Scalar(0.0f));
+    depth(cv::Rect(2, 2, 5, 5)).setTo(10.0f);
+    confidence(cv::Rect(2, 2, 5, 5)).setTo(0.30f);
+
+    xjw::mvs::DepthPostProcessEvidence evidence;
+    evidence.geometrySupportCount = cv::Mat(9, 9, CV_16UC1, cv::Scalar(2));
+    evidence.inverseDepthRelativeSpread = cv::Mat(9, 9, CV_32FC1, cv::Scalar(0.005f));
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.60f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableGeometrySupportedLowConfidenceRetention = true;
+    config.geometrySupportedMinimumObservationCount = 3;
+    config.enableBoundaryAwareRetention = true;
+    config.boundaryProtectionRadiusPixels = 0;
+    config.boundaryMinimumConfidence = 0.25f;
+    config.boundaryMinimumObservationCount = 2;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = false;
+
+    const xjw::mvs::DepthPostProcessStats stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            depth, confidence, config, 0, 4, nullptr, &evidence);
+
+    EXPECT_EQ(stats.boundaryGeometryRetained, 16);
+    EXPECT_FLOAT_EQ(depth.at<float>(2, 4), 10.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 0.0f);
+}
+
+TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSupportedThinDepthLayer)
+{
+    cv::Mat depth(7, 7, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
+    depth(cv::Rect(3, 3, 2, 2)).setTo(20.0f);
+
+    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(
+        depth, confidence, 3, 0.25f, 0.50f, 0);
+
+    EXPECT_EQ(removed, 0);
+    EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 20.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 20.0f);
 }
 
 TEST(MvsPipelineTest, DepthFrameReleasePreservesSourceSelectionDiagnostics)

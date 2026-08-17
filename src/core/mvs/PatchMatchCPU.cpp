@@ -245,6 +245,59 @@ inline bool cpuBilinearMaskValid(const cv::Mat &mask, float u, float v)
            mask.at<std::uint8_t>(row + 1, column + 1) != 0;
 }
 
+bool cpuReferenceGradient(const cv::Mat &image,
+                          const cv::Mat &mask,
+                          int x,
+                          int y,
+                          float *gradientX,
+                          float *gradientY)
+{
+    if (!gradientX || !gradientY || x <= 0 || y <= 0
+        || x + 1 >= image.cols || y + 1 >= image.rows)
+    {
+        return false;
+    }
+    if (!mask.empty()
+        && (mask.at<std::uint8_t>(y, x - 1) == 0
+            || mask.at<std::uint8_t>(y, x + 1) == 0
+            || mask.at<std::uint8_t>(y - 1, x) == 0
+            || mask.at<std::uint8_t>(y + 1, x) == 0))
+    {
+        return false;
+    }
+    *gradientX = 0.5f * (image.at<float>(y, x + 1) - image.at<float>(y, x - 1));
+    *gradientY = 0.5f * (image.at<float>(y + 1, x) - image.at<float>(y - 1, x));
+    return true;
+}
+
+bool cpuSourceGradient(const cv::Mat &image,
+                       const cv::Mat &mask,
+                       float x,
+                       float y,
+                       float *gradientX,
+                       float *gradientY)
+{
+    if (!gradientX || !gradientY
+        || !cpuBilinearMaskValid(mask, x - 1.0f, y)
+        || !cpuBilinearMaskValid(mask, x + 1.0f, y)
+        || !cpuBilinearMaskValid(mask, x, y - 1.0f)
+        || !cpuBilinearMaskValid(mask, x, y + 1.0f))
+    {
+        return false;
+    }
+    const float left = cpuBilinear(image, x - 1.0f, y);
+    const float right = cpuBilinear(image, x + 1.0f, y);
+    const float top = cpuBilinear(image, x, y - 1.0f);
+    const float bottom = cpuBilinear(image, x, y + 1.0f);
+    if (left < 0.0f || right < 0.0f || top < 0.0f || bottom < 0.0f)
+    {
+        return false;
+    }
+    *gradientX = 0.5f * (right - left);
+    *gradientY = 0.5f * (bottom - top);
+    return true;
+}
+
 void cpuComposeHomography(int row,
                           int col,
                           float depth,
@@ -305,8 +358,24 @@ float cpuComputeHomographyNcc(int refCol,
     float H[9];
     cpuComposeHomography(refRow, refCol, depth, normal, srcData, invK, H);
 
-    PatchNccAccumulator accumulator;
+    PatchRobustPhotometricAccumulator accumulator;
     const bool mask_aware = !refMask.empty() || !srcMask.empty();
+    const float center_z = H[6] * static_cast<float>(refCol)
+        + H[7] * static_cast<float>(refRow) + H[8];
+    const float center_u = std::fabs(center_z) > 1.0e-6f
+        ? (H[0] * static_cast<float>(refCol)
+           + H[1] * static_cast<float>(refRow) + H[2]) / center_z
+        : -1.0f;
+    const float center_v = std::fabs(center_z) > 1.0e-6f
+        ? (H[3] * static_cast<float>(refCol)
+           + H[4] * static_cast<float>(refRow) + H[5]) / center_z
+        : -1.0f;
+    const bool center_valid = center_u >= 0.0f && center_v >= 0.0f
+        && cpuBilinearMaskValid(srcMask, center_u, center_v);
+    const float reference_center = refImage.at<float>(refRow, refCol);
+    const float source_center = center_valid
+        ? cpuBilinear(srcImage, center_u, center_v)
+        : -1.0f;
 
     for (int dv = -patchHalf; dv <= patchHalf; ++dv)
     {
@@ -333,7 +402,9 @@ float cpuComputeHomographyNcc(int refCol,
             const float wsZ = H[6] * static_cast<float>(pu) + H[7] * static_cast<float>(pv) + H[8];
             if (std::fabs(wsZ) < 1e-6f)
             {
-                accumulator.addCandidate(false);
+                accumulator.addIntensityCandidate(false);
+                accumulator.addGradientCandidate(false);
+                accumulator.addCensusCandidate(false);
                 continue;
             }
 
@@ -342,11 +413,41 @@ float cpuComputeHomographyNcc(int refCol,
             const float srcValue = cpuBilinear(srcImage, srcU, srcV);
             if (srcValue < 0.f || !cpuBilinearMaskValid(srcMask, srcU, srcV))
             {
-                accumulator.addCandidate(false);
+                accumulator.addIntensityCandidate(false);
+                accumulator.addGradientCandidate(false);
+                accumulator.addCensusCandidate(false);
                 continue;
             }
 
-            accumulator.addCandidate(true, refValue, srcValue);
+            accumulator.addIntensityCandidate(true, refValue, srcValue);
+            float reference_gradient_x = 0.0f;
+            float reference_gradient_y = 0.0f;
+            float source_gradient_x = 0.0f;
+            float source_gradient_y = 0.0f;
+            const bool gradient_valid = cpuReferenceGradient(
+                refImage,
+                refMask,
+                pu,
+                pv,
+                &reference_gradient_x,
+                &reference_gradient_y)
+                && cpuSourceGradient(
+                    srcImage,
+                    srcMask,
+                    srcU,
+                    srcV,
+                    &source_gradient_x,
+                    &source_gradient_y);
+            accumulator.addGradientCandidate(
+                gradient_valid,
+                reference_gradient_x,
+                reference_gradient_y,
+                source_gradient_x,
+                source_gradient_y);
+            accumulator.addCensusCandidate(
+                center_valid && source_center >= 0.0f,
+                refValue - reference_center,
+                srcValue - source_center);
         }
     }
 
@@ -908,7 +1009,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
     for (int row = 0; row < H; ++row)
     {
         float *depthPtr = depthS.ptr<float>(row);
-        const float *confPtr = confS.ptr<float>(row);
+        float *confPtr = confS.ptr<float>(row);
         for (int col = 0; col < W; ++col)
         {
             if (confPtr[col] < config.confidenceThresh)

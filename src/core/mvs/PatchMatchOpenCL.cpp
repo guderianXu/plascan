@@ -665,21 +665,20 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    std::array<const char *, 4> sources = {
-        detail::kPatchMatchOpenClSourcePrefix,
-        detail::kPatchMatchOpenClSourceMain,
-        detail::kPatchMatchOpenClSourcePropagation,
-        detail::kPatchMatchOpenClSourceFinalize};
-    const std::array<std::size_t, 4> source_lengths = {
-        std::strlen(sources[0]),
-        std::strlen(sources[1]),
-        std::strlen(sources[2]),
-        std::strlen(sources[3])};
+    const std::string combined_source =
+        std::string(detail::kPatchMatchOpenClSourcePrefix)
+        + detail::kPatchMatchOpenClSourcePhotometric
+        + detail::kPatchMatchOpenClSourceGradientCensus
+        + detail::kPatchMatchOpenClSourceMain
+        + detail::kPatchMatchOpenClSourcePropagation
+        + detail::kPatchMatchOpenClSourceFinalize;
+    const char *source_data = combined_source.c_str();
+    const std::size_t source_length = combined_source.size();
     runtime->program = clCreateProgramWithSource(
         runtime->context,
-        static_cast<cl_uint>(sources.size()),
-        sources.data(),
-        source_lengths.data(),
+        1,
+        &source_data,
+        &source_length,
         &error);
     if (error != CL_SUCCESS || !runtime->program)
     {

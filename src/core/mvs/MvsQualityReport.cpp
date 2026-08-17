@@ -375,6 +375,21 @@ QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &dec
     object.insert(QStringLiteral("acceptance"),
                   QString::fromLatin1(depthFrameAcceptanceId(decision.acceptance)));
     object.insert(QStringLiteral("calibrated_confidence"), decision.calibratedConfidence);
+    QJsonObject confidence_components;
+    confidence_components.insert(
+        QStringLiteral("photometric"), decision.confidenceComponents.photometric);
+    confidence_components.insert(
+        QStringLiteral("source_support"), decision.confidenceComponents.support);
+    confidence_components.insert(
+        QStringLiteral("uniqueness"), decision.confidenceComponents.uniqueness);
+    confidence_components.insert(
+        QStringLiteral("multiview_geometry"), decision.confidenceComponents.geometry);
+    confidence_components.insert(
+        QStringLiteral("surface_coherence"), decision.confidenceComponents.texture);
+    confidence_components.insert(
+        QStringLiteral("absolute_geometry"),
+        decision.confidenceComponents.absoluteGeometry);
+    object.insert(QStringLiteral("confidence_components"), confidence_components);
     object.insert(QStringLiteral("min_component_area"),
                   decision.filterSettings.minComponentArea);
     object.insert(QStringLiteral("local_depth_outlier_rel_threshold"),

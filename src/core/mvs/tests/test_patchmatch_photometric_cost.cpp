@@ -91,4 +91,52 @@ TEST(PatchMatchPhotometricCostTest, RejectsPatchBelowConfiguredValidSampleRatio)
     EXPECT_FLOAT_EQ(accumulator.score(true, 0.35f), 0.0f);
 }
 
+TEST(PatchMatchPhotometricCostTest, CompositeCostSurvivesAffineExposureChange)
+{
+    xjw::mvs::PatchRobustPhotometricAccumulator accumulator;
+    for (int index = 0; index < 9; ++index)
+    {
+        const float reference = 0.05f * static_cast<float>(index);
+        const float source = 0.20f + 1.6f * reference;
+        accumulator.addIntensityCandidate(true, reference, source);
+        accumulator.addGradientCandidate(true, 0.05f, 0.02f, 0.08f, 0.032f);
+        accumulator.addCensusCandidate(
+            true, reference - 0.20f, source - 0.52f);
+    }
+
+    EXPECT_GT(accumulator.score(false), 0.98f);
+}
+
+TEST(PatchMatchPhotometricCostTest, CensusRejectsReversedLocalOrdering)
+{
+    xjw::mvs::PatchRobustPhotometricAccumulator matching;
+    xjw::mvs::PatchRobustPhotometricAccumulator reversed;
+    for (int index = 0; index < 9; ++index)
+    {
+        const float reference = 0.1f * static_cast<float>(index);
+        const float source = reference;
+        matching.addIntensityCandidate(true, reference, source);
+        reversed.addIntensityCandidate(true, reference, source);
+        matching.addCensusCandidate(true, reference - 0.4f, source - 0.4f);
+        reversed.addCensusCandidate(true, reference - 0.4f, 0.4f - source);
+    }
+
+    EXPECT_GT(matching.score(false), reversed.score(false));
+}
+
+TEST(PatchMatchPhotometricCostTest, CompositeConfidenceCalibrationIsMonotonic)
+{
+    EXPECT_FLOAT_EQ(
+        xjw::mvs::calibrateRobustPhotometricConfidence(0.0f), 0.0f);
+    EXPECT_NEAR(
+        xjw::mvs::calibrateRobustPhotometricConfidence(0.5f),
+        0.8705506f,
+        1.0e-6f);
+    EXPECT_LT(
+        xjw::mvs::calibrateRobustPhotometricConfidence(0.5f),
+        xjw::mvs::calibrateRobustPhotometricConfidence(0.8f));
+    EXPECT_FLOAT_EQ(
+        xjw::mvs::calibrateRobustPhotometricConfidence(2.0f), 1.0f);
+}
+
 } // namespace

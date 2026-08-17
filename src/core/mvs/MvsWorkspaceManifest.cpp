@@ -377,6 +377,9 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(
         QStringLiteral("residual_reestimation_diagnostics"),
         residualReestimationDiagnostics);
+    object.insert(
+        QStringLiteral("learned_candidate_diagnostics"),
+        learnedCandidateDiagnostics);
     object.insert(QStringLiteral("depth_provenance_summary"),
                   depthProvenanceSummary);
     object.insert(
@@ -496,6 +499,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("targeted_gap_recovery_diagnostics")).toObject();
     record.residualReestimationDiagnostics = object.value(
         QStringLiteral("residual_reestimation_diagnostics")).toObject();
+    record.learnedCandidateDiagnostics = object.value(
+        QStringLiteral("learned_candidate_diagnostics")).toObject();
     record.depthProvenanceSummary = object.value(
         QStringLiteral("depth_provenance_summary")).toObject();
     record.geometryEvidenceDiagnostics = object.value(
@@ -1056,6 +1061,16 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                   config.fusion.geometrySupportedMinimumAdaptiveEffectiveViews);
     fusion.insert(QStringLiteral("geometry_supported_maximum_adaptive_conflict_ratio"),
                   config.fusion.geometrySupportedMaximumAdaptiveConflictRatio);
+    fusion.insert(QStringLiteral("boundary_aware_retention"),
+                  config.fusion.enableBoundaryAwareRetention);
+    fusion.insert(QStringLiteral("boundary_protection_radius_pixels"),
+                  config.fusion.boundaryProtectionRadiusPixels);
+    fusion.insert(QStringLiteral("boundary_minimum_confidence"),
+                  config.fusion.boundaryMinimumConfidence);
+    fusion.insert(QStringLiteral("boundary_minimum_observation_count"),
+                  config.fusion.boundaryMinimumObservationCount);
+    fusion.insert(QStringLiteral("boundary_maximum_inverse_depth_spread"),
+                  config.fusion.boundaryMaximumInverseDepthSpread);
     fusion.insert(QStringLiteral("sigma_fusion"), config.fusion.doSigmaFusion);
     fusion.insert(QStringLiteral("sigma_multiplier"), config.fusion.sigmaMultiplier);
     fusion.insert(QStringLiteral("inpaint"), config.fusion.doInpaint);
@@ -1204,6 +1219,20 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                 config.twoSourceGrowthNormalAngleDegrees);
     root.insert(QStringLiteral("two_source_growth_maximum_component_area"),
                 config.twoSourceGrowthMaximumComponentArea);
+    root.insert(QStringLiteral("learned_mvs_candidates"),
+                config.enableLearnedMvsCandidates);
+    root.insert(QStringLiteral("learned_mvs_candidate_directory"),
+                QString::fromStdString(config.learnedMvsCandidateDirectory));
+    root.insert(QStringLiteral("learned_mvs_minimum_confidence"),
+                config.learnedMvsMinimumConfidence);
+    root.insert(QStringLiteral("learned_mvs_minimum_geometry_observations"),
+                config.learnedMvsMinimumGeometryObservations);
+    root.insert(QStringLiteral("learned_mvs_maximum_inverse_depth_spread"),
+                config.learnedMvsMaximumInverseDepthSpread);
+    root.insert(QStringLiteral("learned_mvs_maximum_relative_depth_difference"),
+                config.learnedMvsMaximumRelativeDepthDifference);
+    root.insert(QStringLiteral("learned_mvs_replacement_confidence_margin"),
+                config.learnedMvsReplacementConfidenceMargin);
     root.insert(QStringLiteral("save_intermediate_pyramid_levels"),
                 config.saveIntermediatePyramidLevels);
     root.insert(QStringLiteral("patch_match"), patch);

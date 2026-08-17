@@ -25,6 +25,7 @@
 #include "MvsSourcePlanner.h"
 #include "MvsVisibilityGraphBuilder.h"
 #include "MvsViewSelection.h"
+#include "PatchMatchPhotometricCost.h"
 #include "Logger.h"
 #include "io/PathIO.h"
 #include "string_utils/StringTransform.h"
@@ -77,6 +78,40 @@ using common::string_utils::asciiLowerCopy;
 
 namespace
 {
+
+void calibrateFinalDepthConfidenceMap(
+    cv::Mat &confidence_map,
+    const cv::Mat *depth_provenance = nullptr)
+{
+    if (confidence_map.empty() || confidence_map.type() != CV_32FC1)
+    {
+        return;
+    }
+
+#if defined(HAS_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (int row = 0; row < confidence_map.rows; ++row)
+    {
+        float *confidence_row = confidence_map.ptr<float>(row);
+        const std::uint8_t *provenance_row = depth_provenance
+                && depth_provenance->type() == CV_8UC1
+                && depth_provenance->size() == confidence_map.size()
+            ? depth_provenance->ptr<std::uint8_t>(row)
+            : nullptr;
+        for (int column = 0; column < confidence_map.cols; ++column)
+        {
+            if (provenance_row
+                && provenance_row[column] == static_cast<std::uint8_t>(
+                    DepthProvenance::LearnedGeometryGated))
+            {
+                continue;
+            }
+            confidence_row[column] = calibrateRobustPhotometricConfidence(
+                confidence_row[column]);
+        }
+    }
+}
 
 QJsonArray doubleArrayToJson(const double *values, int count)
 {
@@ -468,6 +503,8 @@ QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
                   stats.lowConfidenceCandidateCount);
     object.insert(QStringLiteral("geometry_supported_low_confidence_retained"),
                   stats.geometrySupportedLowConfidenceRetained);
+    object.insert(QStringLiteral("boundary_geometry_retained"),
+                  stats.boundaryGeometryRetained);
     object.insert(QStringLiteral("confidence_removed"), stats.confidenceRemoved);
     object.insert(QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved);
     object.insert(QStringLiteral("small_component_removed"), stats.smallComponentRemoved);
@@ -584,6 +621,10 @@ SourceQualitySummary summarizeSourceQuality(const QJsonArray &sourcePlan,
             ++summary.verifiedSourceViewCount;
         }
         else if (sourceTier == QStringLiteral("track_geometry_backfill"))
+        {
+            ++summary.backfillSourceViewCount;
+        }
+        else if (sourceTier == QStringLiteral("strict_pair_audit_backfill"))
         {
             ++summary.backfillSourceViewCount;
         }
@@ -3364,6 +3405,13 @@ void DepthMapGenerator::prepareFrameCaches()
             plannerOptions.failedPairBackfillMinimumCoverage = 0.1875f;
             plannerOptions.failedPairBackfillMinimumWilsonLowerBound = 0.50f;
             plannerOptions.failedPairBackfillMaximumAngleDeg = 65.0f;
+            plannerOptions.allowStrictFailedPairBackfill = true;
+            plannerOptions.strictFailedPairBackfillMinimumInliers = 24;
+            plannerOptions.strictFailedPairBackfillMinimumMatches = 32;
+            plannerOptions.strictFailedPairBackfillMinimumSharedTracks = 40;
+            plannerOptions.strictFailedPairBackfillMinimumCoverage = 0.30f;
+            plannerOptions.strictFailedPairBackfillMinimumWilsonLowerBound = 0.65f;
+            plannerOptions.strictFailedPairBackfillMaximumAngleDeg = 55.0f;
         }
 
         const MvsSourcePlan sourcePlan = requireVerifiedSourcePairsForReference
@@ -4622,7 +4670,48 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
             const float relDiff = std::fabs(depth - medianDepth) / std::max(medianDepth, 1e-6f);
             if (relDiff > relDepthThreshold)
             {
-                maskRow[x] = 255;
+                // A real occlusion edge or thin silhouette has neighbours on
+                // its own depth layer even when the local median belongs to
+                // the other layer. An isolated spike does not. Preserve the
+                // former and remove only unsupported one-pixel hypotheses.
+                int same_layer_neighbors = 0;
+                for (int delta_y = -1; delta_y <= 1; ++delta_y)
+                {
+                    const int neighbor_y = y + delta_y;
+                    if (neighbor_y < 0 || neighbor_y >= depthMap.rows)
+                    {
+                        continue;
+                    }
+                    const float *neighbor_row = depthMap.ptr<float>(neighbor_y);
+                    for (int delta_x = -1; delta_x <= 1; ++delta_x)
+                    {
+                        if (delta_x == 0 && delta_y == 0)
+                        {
+                            continue;
+                        }
+                        const int neighbor_x = x + delta_x;
+                        if (neighbor_x < 0 || neighbor_x >= depthMap.cols)
+                        {
+                            continue;
+                        }
+                        const float neighbor_depth = neighbor_row[neighbor_x];
+                        if (neighbor_depth <= 0.0f)
+                        {
+                            continue;
+                        }
+                        const float neighbor_difference = std::fabs(
+                            neighbor_depth - depth)
+                            / std::max(depth, 1.0e-6f);
+                        if (neighbor_difference <= relDepthThreshold)
+                        {
+                            ++same_layer_neighbors;
+                        }
+                    }
+                }
+                if (same_layer_neighbors < 2)
+                {
+                    maskRow[x] = 255;
+                }
             }
         }
     }
@@ -4839,6 +4928,30 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         if (confThresh > 0.0f)
         {
             cv::Mat beforeConfidence = depthMap.clone();
+            cv::Mat protectedBoundary;
+            if (config.enableBoundaryAwareRetention)
+            {
+                const cv::Mat valid_before = beforeConfidence > 0.0f;
+                cv::Mat eroded;
+                cv::erode(valid_before,
+                          eroded,
+                          cv::getStructuringElement(cv::MORPH_ELLIPSE,
+                                                    cv::Size(3, 3)));
+                cv::subtract(valid_before, eroded, protectedBoundary);
+                const int radius = std::clamp(
+                    config.boundaryProtectionRadiusPixels, 0, 8);
+                if (radius > 0)
+                {
+                    cv::dilate(
+                        protectedBoundary,
+                        protectedBoundary,
+                        cv::getStructuringElement(
+                            cv::MORPH_ELLIPSE,
+                            cv::Size(2 * radius + 1, 2 * radius + 1)));
+                    cv::bitwise_and(
+                        protectedBoundary, valid_before, protectedBoundary);
+                }
+            }
             const bool hasGeometryEvidence = evidence &&
                 evidence->geometrySupportCount.type() == CV_16UC1 &&
                 evidence->geometrySupportCount.size() == depthMap.size() &&
@@ -4853,8 +4966,9 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                 evidence->adaptiveConflictRatio.size() == depthMap.size();
             int lowConfidenceCandidateCount = 0;
             int geometrySupportedRetainedCount = 0;
+            int boundaryGeometryRetainedCount = 0;
 #if defined(HAS_OPENMP)
-#pragma omp parallel for schedule(static) reduction(+:lowConfidenceCandidateCount, geometrySupportedRetainedCount)
+#pragma omp parallel for schedule(static) reduction(+:lowConfidenceCandidateCount, geometrySupportedRetainedCount, boundaryGeometryRetainedCount)
 #endif
             for (int v = 0; v < depthMap.rows; ++v)
             {
@@ -4870,6 +4984,8 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                     ? evidence->adaptiveEffectiveViewCount.ptr<float>(v) : nullptr;
                 const float *adaptiveConflictRow = hasAdaptiveGeometryEvidence
                     ? evidence->adaptiveConflictRatio.ptr<float>(v) : nullptr;
+                const std::uint8_t *boundaryRow = !protectedBoundary.empty()
+                    ? protectedBoundary.ptr<std::uint8_t>(v) : nullptr;
                 for (int u = 0; u < depthMap.cols; ++u)
                 {
                     if (depthRow[u] > 0.0f && confRow[u] < confThresh)
@@ -4898,9 +5014,27 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                                 adaptiveConflictRow[u] <=
                                     config.geometrySupportedMaximumAdaptiveConflictRatio;
                         }
+                        const bool retainForBoundary = !retainForGeometry
+                            && boundaryRow && boundaryRow[u] != 0
+                            && config.enableBoundaryAwareRetention
+                            && confRow[u] >= config.boundaryMinimumConfidence
+                            && hasGeometryEvidence
+                            && geometrySupportRow[u] >=
+                                config.boundaryMinimumObservationCount
+                            && std::isfinite(inverseDepthSpreadRow[u])
+                            && inverseDepthSpreadRow[u] >= 0.0f
+                            && inverseDepthSpreadRow[u] <=
+                                config.boundaryMaximumInverseDepthSpread
+                            && (!hasAdaptiveGeometryEvidence
+                                || (std::isfinite(adaptiveConflictRow[u])
+                                    && adaptiveConflictRow[u] <= 0.60f));
                         if (retainForGeometry)
                         {
                             ++geometrySupportedRetainedCount;
+                        }
+                        else if (retainForBoundary)
+                        {
+                            ++boundaryGeometryRetainedCount;
                         }
                         else
                         {
@@ -4913,16 +5047,18 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             stats.lowConfidenceCandidateCount = lowConfidenceCandidateCount;
             stats.geometrySupportedLowConfidenceRetained =
                 geometrySupportedRetainedCount;
+            stats.boundaryGeometryRetained = boundaryGeometryRetainedCount;
 
             int validAfterConfidence = cv::countNonZero(depthMap > 0.0f);
             LOG_DEBUG("[MVS][帧 %d][后处理] 置信度过滤 %d->%d threshold=%.4f "
-                      "candidates=%d geometry_retained=%d",
+                      "candidates=%d geometry_retained=%d boundary_retained=%d",
                       refIdx,
                       stats.validBeforePostprocess,
                       validAfterConfidence,
                       confThresh,
                       lowConfidenceCandidateCount,
-                      geometrySupportedRetainedCount);
+                      geometrySupportedRetainedCount,
+                      boundaryGeometryRetainedCount);
 
             if (!adaptiveConfidenceRaised &&
                 validAfterConfidence < stats.validBeforePostprocess / 20)
@@ -6676,6 +6812,155 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     }
 }
 
+void DepthMapGenerator::applyLearnedDepthCandidatesAfterConsistency()
+{
+    if (!_config.enableLearnedMvsCandidates)
+    {
+        return;
+    }
+    const QDir candidate_directory(
+        QString::fromStdString(_config.learnedMvsCandidateDirectory));
+    if (_config.learnedMvsCandidateDirectory.empty()
+        || !candidate_directory.exists())
+    {
+        LOG_WARN(QStringLiteral(
+                     "[MVS][学习候选] 候选目录不存在，已跳过：%1")
+                     .arg(candidate_directory.absolutePath()));
+        return;
+    }
+
+    LearnedDepthCandidateGateOptions options;
+    options.minimumCandidateConfidence = std::clamp(
+        _config.learnedMvsMinimumConfidence, 0.0f, 1.0f);
+    options.minimumGeometryObservationCount = std::max(
+        2, _config.learnedMvsMinimumGeometryObservations);
+    options.maximumInverseDepthRelativeSpread = std::max(
+        0.0f, _config.learnedMvsMaximumInverseDepthSpread);
+    options.maximumRelativeDepthDifference = std::max(
+        0.0f, _config.learnedMvsMaximumRelativeDepthDifference);
+    options.replacementConfidenceMargin = std::max(
+        0.0f, _config.learnedMvsReplacementConfidenceMargin);
+
+    for (int frame_index = 0;
+         frame_index < static_cast<int>(_depthFrames.size());
+         ++frame_index)
+    {
+        DepthFrameResult &frame = _depthFrames[frame_index];
+        QJsonObject diagnostics;
+        diagnostics.insert(QStringLiteral("enabled"), true);
+        const QString depth_path = candidate_directory.filePath(
+            QStringLiteral("learned_depth_%1.bin").arg(frame_index));
+        const QString confidence_path = candidate_directory.filePath(
+            QStringLiteral("learned_depth_%1_conf.bin").arg(frame_index));
+        diagnostics.insert(QStringLiteral("depth_path"), depth_path);
+        diagnostics.insert(QStringLiteral("confidence_path"), confidence_path);
+        if (!frame.success || !frame.depthMap || frame.depthMap->empty()
+            || !frame.geometrySupportCount || !frame.inverseDepthMean
+            || !frame.inverseDepthRelativeSpread)
+        {
+            diagnostics.insert(
+                QStringLiteral("status"),
+                QStringLiteral("missing_independent_geometry_evidence"));
+            frame.learnedCandidateDiagnostics = diagnostics;
+            continue;
+        }
+        if (!QFileInfo::exists(depth_path) || !QFileInfo::exists(confidence_path))
+        {
+            diagnostics.insert(
+                QStringLiteral("status"),
+                QStringLiteral("candidate_artifact_missing"));
+            frame.learnedCandidateDiagnostics = diagnostics;
+            continue;
+        }
+
+        cv::Mat candidate_depth;
+        cv::Mat candidate_confidence;
+        const xjw::common::OperationResult depth_result =
+            xjw::core::project::loadDepthMatStorage(
+                depth_path, &candidate_depth);
+        const xjw::common::OperationResult confidence_result =
+            xjw::core::project::loadDepthMatStorage(
+                confidence_path, &candidate_confidence);
+        if (!depth_result.ok || !confidence_result.ok)
+        {
+            diagnostics.insert(QStringLiteral("status"),
+                               QStringLiteral("candidate_load_failed"));
+            diagnostics.insert(
+                QStringLiteral("error"),
+                !depth_result.ok
+                    ? depth_result.errorMessage
+                    : confidence_result.errorMessage);
+            frame.learnedCandidateDiagnostics = diagnostics;
+            continue;
+        }
+        if (!frame.confidence || frame.confidence->empty())
+        {
+            frame.confidence = QSharedPointer<cv::Mat>::create(
+                frame.depthMap->size(), CV_32FC1, cv::Scalar(0.0f));
+        }
+        cv::Mat accepted_mask;
+        const LearnedDepthCandidateGateStats stats = gateLearnedDepthCandidate(
+            *frame.depthMap,
+            *frame.confidence,
+            candidate_depth,
+            candidate_confidence,
+            *frame.geometrySupportCount,
+            *frame.inverseDepthMean,
+            *frame.inverseDepthRelativeSpread,
+            &accepted_mask,
+            options);
+        diagnostics.insert(QStringLiteral("status"),
+                           stats.validInputs
+                               ? QStringLiteral("geometry_gated")
+                               : QStringLiteral("invalid_candidate_shape_or_type"));
+        diagnostics.insert(QStringLiteral("candidate_pixel_count"),
+                           stats.candidatePixelCount);
+        diagnostics.insert(QStringLiteral("geometry_supported_pixel_count"),
+                           stats.geometrySupportedPixelCount);
+        diagnostics.insert(QStringLiteral("accepted_pixel_count"),
+                           stats.acceptedPixelCount);
+        diagnostics.insert(QStringLiteral("filled_pixel_count"),
+                           stats.filledPixelCount);
+        diagnostics.insert(QStringLiteral("replaced_pixel_count"),
+                           stats.replacedPixelCount);
+        diagnostics.insert(QStringLiteral("rejected_confidence_count"),
+                           stats.rejectedConfidenceCount);
+        diagnostics.insert(QStringLiteral("rejected_geometry_count"),
+                           stats.rejectedGeometryCount);
+        diagnostics.insert(QStringLiteral("rejected_depth_difference_count"),
+                           stats.rejectedDepthDifferenceCount);
+        frame.learnedCandidateDiagnostics = diagnostics;
+        if (stats.acceptedPixelCount <= 0)
+        {
+            continue;
+        }
+        frame.learnedCandidateAcceptedMask = QSharedPointer<cv::Mat>::create(
+            std::move(accepted_mask));
+        if (!frame.depthProvenance || frame.depthProvenance->empty())
+        {
+            frame.depthProvenance = QSharedPointer<cv::Mat>::create(
+                initializeDepthProvenance(*frame.depthMap));
+        }
+        updateDepthProvenance(
+            *frame.depthProvenance,
+            *frame.depthMap,
+            cv::Mat(),
+            cv::Mat(),
+            cv::Mat(),
+            cv::Mat(),
+            *frame.learnedCandidateAcceptedMask);
+        LOG_INFO(QStringLiteral(
+                     "[MVS][帧 %1][学习候选] candidate=%2 geometry=%3 "
+                     "accepted=%4 fill=%5 replace=%6")
+                     .arg(frame_index)
+                     .arg(stats.candidatePixelCount)
+                     .arg(stats.geometrySupportedPixelCount)
+                     .arg(stats.acceptedPixelCount)
+                     .arg(stats.filledPixelCount)
+                     .arg(stats.replacedPixelCount));
+    }
+}
+
 void DepthMapGenerator::recoverResidualDepthAfterConsistency()
 {
     const int view_count = static_cast<int>(_views.size());
@@ -8029,6 +8314,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                                                 consistency_keep_rate,
                                                 adaptive_summary,
                                                 discrete_summary);
+        calibrateFinalDepthConfidenceMap(
+            filtered_confidence,
+            _depthFrames[frame_index].depthProvenance.data());
         finalizeDepthMissingReasonMap(
             *_depthFrames[frame_index].missingReasonMap,
             filtered_depth,
@@ -9544,6 +9832,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.targetedGapRecoveryDiagnostics;
         artifact[QStringLiteral("residual_reestimation_diagnostics")] =
             result.residualReestimationDiagnostics;
+        artifact[QStringLiteral("learned_candidate_diagnostics")] =
+            result.learnedCandidateDiagnostics;
         artifact[QStringLiteral("depth_provenance_summary")] =
             depthProvenanceSummaryJson;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
@@ -9635,6 +9925,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.targetedGapRecoveryDiagnostics;
         record.residualReestimationDiagnostics =
             result.residualReestimationDiagnostics;
+        record.learnedCandidateDiagnostics =
+            result.learnedCandidateDiagnostics;
         record.depthProvenanceSummary = depthProvenanceSummaryJson;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
@@ -11425,6 +11717,11 @@ void DepthMapGenerator::runInBackgroundImpl()
                     consistency_keep_rate,
                     adaptive_summary,
                     discrete_summary);
+                if (res.confidence)
+                {
+                    calibrateFinalDepthConfidenceMap(
+                        *res.confidence, res.depthProvenance.data());
+                }
                 if (res.missingReasonMap && res.supportRegionMask)
                 {
                     finalizeDepthMissingReasonMap(
@@ -11442,6 +11739,14 @@ void DepthMapGenerator::runInBackgroundImpl()
                 emitFinishedOnce(false);
                 return;
             }
+        }
+
+        if (_config.enableLearnedMvsCandidates)
+        {
+            emit progressChanged(
+                QStringLiteral("学习型 MVS 候选正在接受多视几何门控..."),
+                static_cast<float>(NV + 1) / (NV + 3));
+            applyLearnedDepthCandidatesAfterConsistency();
         }
 
         if (_config.enablePostConsistencyResidualReestimation &&

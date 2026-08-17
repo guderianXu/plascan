@@ -25,7 +25,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 37;
+inline constexpr int kMvsDepthAlgorithmRevision = 38;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -43,6 +43,7 @@ inline constexpr int kMvsGeometryFusionSupportRevision = 34;
 inline constexpr int kMvsDiscreteGeometryCoreRatioRevision = 35;
 inline constexpr int kMvsSparseAbsoluteDepthResidualRevision = 36;
 inline constexpr int kMvsGeometrySourceOrdinalRevision = 37;
+inline constexpr int kMvsRobustPhotometricAndLearnedCandidateRevision = 38;
 
 struct MvsDepthFrameRecord
 {
@@ -70,6 +71,7 @@ struct MvsDepthFrameRecord
     QJsonObject crossViewRepairDiagnostics;
     QJsonObject targetedGapRecoveryDiagnostics;
     QJsonObject residualReestimationDiagnostics;
+    QJsonObject learnedCandidateDiagnostics;
     QJsonObject depthProvenanceSummary;
     QJsonObject geometryEvidenceDiagnostics;
     QJsonObject poseRefinementDiagnostics;
