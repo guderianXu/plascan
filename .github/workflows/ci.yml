@@ -65,13 +65,17 @@ jobs:
             libglu1-mesa-dev \
             libltdl-dev \
             libtool \
+            libx11-dev \
             libx11-xcb-dev \
             libxcb-cursor-dev \
             libxcb-xinerama0-dev \
+            libxext-dev \
+            libxft-dev \
             libxi-dev \
             libxinerama-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
+            libxrandr-dev \
             libxrender-dev \
             libxtst-dev \
             mesa-vulkan-drivers \
