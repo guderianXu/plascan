@@ -126,6 +126,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE}"
+          # Build third-party ports without the poison prefix. Some upstream
+          # packages (notably GDAL) change their own configuration whenever a
+          # CONDA_PREFIX variable exists, independently of PlaScan.
+          env -u CONDA_PREFIX "${VCPKG_ROOT}/vcpkg" install \
+            --triplet=x64-linux-dynamic \
+            --x-install-root="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
+            --overlay-ports="${GITHUB_WORKSPACE}/cmake/vcpkg-overlays"
           cmake -S . -B build-headless -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
