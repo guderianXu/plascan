@@ -1401,8 +1401,6 @@ TEST(MvsHeterogeneousSchedulingContractTest,
 
     expectContainsAll(generator, {
         "const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||",
-        "configuredBackend == PatchMatchBackend::OpenCl &&",
-        "isNvidiaOpenClVendor(device.vendor)",
         "selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity)",
         "shouldSkipUnstableOpenClCudaAlias",
         "const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto",
@@ -1413,6 +1411,7 @@ TEST(MvsHeterogeneousSchedulingContractTest,
     expectNotContainsAll(generator, {
         "(automaticAcceleration && !cudaAvailable)",
         "Auto resolves to one backend before this pool is built",
+        "显式 OpenCL 模式已忽略 NVIDIA",
     });
     EXPECT_GE(countOccurrences(
                   generator,
@@ -1450,6 +1449,7 @@ TEST(MvsHeterogeneousSchedulingContractTest,
         "configureOpenClDevicePolicy",
         "PLAMATRIX_OPENCL_DEVICE_INDEX",
         "isNvidiaOpenClVendor(device.vendor)",
+        "preferred == devices.cend() ? devices.cbegin() : preferred",
     });
 }
 

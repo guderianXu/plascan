@@ -15,11 +15,18 @@ const int ChunkIdRole = Qt::UserRole + 5;
 const int ChunkDirectoryRole = Qt::UserRole + 6;
 const int WorkspaceRootRole = Qt::UserRole + 7;
 
+QString formattedCount(qint64 count)
+{
+    QLocale locale;
+    locale.setNumberOptions(locale.numberOptions() & ~QLocale::OmitGroupSeparator);
+    return locale.toString(count);
+}
+
 QString workspaceSummaryLabel(int chunkCount, int imageCount)
 {
     return QStringLiteral("工作区 (%1个块, %2个图像)")
-        .arg(QLocale().toString(chunkCount),
-             QLocale().toString(imageCount));
+        .arg(formattedCount(chunkCount),
+             formattedCount(imageCount));
 }
 
 QString chunkSummaryLabel(const QString &name,
@@ -30,12 +37,12 @@ QString chunkSummaryLabel(const QString &name,
     if (imageCount >= 0)
     {
         summary.append(QStringLiteral("%1个图像")
-                           .arg(QLocale().toString(imageCount)));
+                           .arg(formattedCount(imageCount)));
     }
     if (tiePointCount >= 0)
     {
         summary.append(QStringLiteral("%1个连接点")
-                           .arg(QLocale().toString(tiePointCount)));
+                           .arg(formattedCount(tiePointCount)));
     }
     return summary.isEmpty()
         ? name

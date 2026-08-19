@@ -1534,7 +1534,7 @@ TEST(GpuDeviceLeaseTest, ConservativelySkipsUnstableNvidiaOpenClCudaAlias)
         "NVIDIA Corporation", "name:nvidiageforcertx5080:0", false));
 }
 
-TEST(GpuDeviceLeaseTest, IdentifiesNvidiaOpenClVendorsForExplicitModeFiltering)
+TEST(GpuDeviceLeaseTest, IdentifiesNvidiaOpenClVendorsForAutoModeDeduplication)
 {
     EXPECT_TRUE(isNvidiaOpenClVendor("NVIDIA Corporation"));
     EXPECT_TRUE(isNvidiaOpenClVendor("  nViDiA  "));

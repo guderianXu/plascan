@@ -388,7 +388,8 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
     const QJsonObject &record,
     const QString &resourcePath) const
 {
-    const QLocale locale;
+    QLocale locale;
+    locale.setNumberOptions(locale.numberOptions() & ~QLocale::OmitGroupSeparator);
     const QJsonObject reconstruction = record.value(
         QStringLiteral("reconstruction_parameters")).toObject();
     const QJsonObject depthSnapshot = record.value(

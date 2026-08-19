@@ -9,7 +9,8 @@
 #include <string_view>
 #include <unordered_map>
 
-#if __has_include(<QString>)
+#if !defined(PLASCAN_LOGGER_DISABLE_QT) && __has_include(<QString>)
+#define PLASCAN_LOGGER_HAS_QT 1
 #include <QString>
 #include <QByteArray>
 #endif
@@ -71,7 +72,7 @@ public:
     void unregisterSink(int sinkId);
 
     void setLogDirectory(const std::string &dir);
-#if __has_include(<QString>)
+#if defined(PLASCAN_LOGGER_HAS_QT)
     void setLogDirectory(const QString &dir)
     {
         setLogDirectory(qStringToUtf8(dir));
@@ -104,7 +105,7 @@ public:
     void warnf(const char *fmt, ...);
     void errorf(const char *fmt, ...);
 
-#if __has_include(<QString>)
+#if defined(PLASCAN_LOGGER_HAS_QT)
     void debug(const QString &msg) { debug(qStringToUtf8(msg)); }
     void info(const QString &msg) { info(qStringToUtf8(msg)); }
     void warn(const QString &msg) { warn(qStringToUtf8(msg)); }
@@ -124,7 +125,7 @@ private:
     static std::string currentTimestamp();
     static const char *levelName(Level level);
     static std::string formatString(const char *fmt, std::va_list args);
-#if __has_include(<QString>)
+#if defined(PLASCAN_LOGGER_HAS_QT)
     static std::string qStringToUtf8(const QString &msg)
     {
         const QByteArray bytes = msg.toUtf8();
@@ -169,7 +170,7 @@ inline void info(const std::string &msg) { Logger::instance()->info(msg); }
 inline void warn(const std::string &msg) { Logger::instance()->warn(msg); }
 inline void error(const std::string &msg) { Logger::instance()->error(msg); }
 
-#if __has_include(<QString>)
+#if defined(PLASCAN_LOGGER_HAS_QT)
 inline void debug(const QString &msg) { Logger::instance()->debug(msg); }
 inline void info(const QString &msg) { Logger::instance()->info(msg); }
 inline void warn(const QString &msg) { Logger::instance()->warn(msg); }

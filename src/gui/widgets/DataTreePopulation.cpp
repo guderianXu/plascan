@@ -337,7 +337,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (totalSparsePoints >= 0)
         {
             tiePointLabel = QStringLiteral("连接点 (%1个点)")
-                                .arg(QLocale().toString(totalSparsePoints));
+                                .arg(formattedCount(totalSparsePoints));
         }
         appendTopLevelResource(tiePointLabel,
                                WorkspaceSection::TiePoints,
@@ -352,7 +352,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         {
             qualityProfile = latestDepthRecord.value(QStringLiteral("qualityProfile")).toString();
         }
-        QStringList summaryParts{QLocale().toString(depthFrameKeys.size())};
+        QStringList summaryParts{formattedCount(depthFrameKeys.size())};
         const QString qualityLabel = depthQualityLabel(qualityProfile);
         const QString filterLabel = depthFilterLabel(
             latestDepthRecord.value(QStringLiteral("filter_mode")).toString());

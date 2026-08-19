@@ -15,10 +15,7 @@
       "cacheVariables": {
         "BUILD_TESTS": "ON",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "PLASCAN_BUNDLE_RUNTIME": "ON",
-        "PLASCAN_ENABLE_CONDA": "OFF",
-        "PLASCAN_ENABLE_VCPKG": "ON",
-        "PLASCAN_CONDA_PREFIX": ""
+        "PLASCAN_BUNDLE_RUNTIME": "ON"
       }
     },
     {
@@ -53,6 +50,28 @@
         "PLASCAN_BUNDLE_RUNTIME": "OFF",
         "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic",
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays"
+      }
+    },
+    {
+      "name": "linux-vcpkg-cuda-opencl-release",
+      "displayName": "Linux vcpkg CUDA 13.1 + OpenCL Release",
+      "description": "Builds the local Ubuntu CUDA 13.1 developer configuration with native CUDA, NVIDIA OpenCL, and Ceres CUDA",
+      "inherits": "linux-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release",
+      "environment": {
+        "CUDACXX": "/usr/local/cuda-13.1/bin/nvcc",
+        "CUDAHOSTCXX": "/usr/bin/g++-13"
+      },
+      "cacheVariables": {
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda-13.1/bin/nvcc",
+        "CMAKE_CUDA_HOST_COMPILER": "/usr/bin/g++-13",
+        "CUDAToolkit_ROOT": "/usr/local/cuda-13.1",
+        "PLASCAN_CUDA_ARCHITECTURES": "89",
+        "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_OPENCL": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed",
+        "VCPKG_MANIFEST_FEATURES": "ceres-cuda"
       }
     },
     {
@@ -157,6 +176,11 @@
       "jobs": 0
     },
     {
+      "name": "linux-vcpkg-cuda-opencl-release",
+      "configurePreset": "linux-vcpkg-cuda-opencl-release",
+      "jobs": 0
+    },
+    {
       "name": "linux-vcpkg-package-release",
       "configurePreset": "linux-vcpkg-package-release",
       "jobs": 0
@@ -241,6 +265,13 @@
     {
       "name": "linux-vcpkg-release",
       "configurePreset": "linux-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-cuda-opencl-release",
+      "configurePreset": "linux-vcpkg-cuda-opencl-release",
       "output": {
         "outputOnFailure": true
       }

@@ -10,6 +10,7 @@
 #include "PatchMatchCUDA.h"
 #include "PatchMatchHostUtils.h"
 #include "PatchMatchPhotometricCost.h"
+#define PLASCAN_LOGGER_DISABLE_QT
 #include "Logger.h"
 #include <opencv2/imgproc.hpp>
 #include <cuda_runtime.h>

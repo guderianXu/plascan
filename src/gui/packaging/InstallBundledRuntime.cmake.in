@@ -33,7 +33,7 @@ if(NOT EXISTS "${_app_bin}")
 endif()
 if(NOT _bundle_prefixes)
     message(FATAL_ERROR
-        "[bundle] no vcpkg/conda runtime prefix was detected; refusing to create an incomplete package")
+        "[bundle] no vcpkg runtime prefix was detected; refusing to create an incomplete package")
 endif()
 
 file(MAKE_DIRECTORY "${_physical_lib_dir}")
@@ -116,7 +116,7 @@ foreach(_dependency IN LISTS _resolved_dependencies)
 endforeach()
 
 # CMake reports a conflict when the same SONAME exists in both an approved
-# vcpkg/Conda prefix and a system directory. The packaged RUNPATH intentionally
+# vcpkg prefix and a system directory. The packaged RUNPATH intentionally
 # prefers /opt/plascan/lib, so select the single approved candidate. Multiple
 # approved candidates remain an error because their ABI cannot be disambiguated.
 foreach(_filename IN LISTS _conflicting_dependencies_FILENAMES)

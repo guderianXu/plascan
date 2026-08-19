@@ -62,9 +62,6 @@ function(add_plascan_cli name)
             BUILD_RPATH_USE_ORIGIN TRUE
             INSTALL_RPATH_USE_LINK_PATH TRUE
         )
-        if(PLASCAN_EXTRA_NVRTC_RPATHS)
-            set_property(TARGET ${name} APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
-        endif()
     endif()
 endfunction()
 

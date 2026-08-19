@@ -21,6 +21,7 @@ extern const int ChunkIdRole;
 extern const int ChunkDirectoryRole;
 extern const int WorkspaceRootRole;
 
+QString formattedCount(qint64 count);
 QString workspaceSummaryLabel(int chunkCount, int imageCount);
 QString chunkSummaryLabel(const QString &name, int imageCount, int tiePointCount);
 QString workspaceSectionName(WorkspaceSection section);

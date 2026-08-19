@@ -1271,11 +1271,15 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 ## 六、构建系统
 
-- **根**: `CMakeLists.txt` — `PLASCAN_CONDA_PREFIX` 变量 (可覆盖), CUDA 自动查找
+- **根**: `CMakeLists.txt` — 强制使用 vcpkg manifest toolchain，CUDA 按标准工具链自动查找
 - **依赖**: `cmake/PlascanPackages.cmake` (统一 find_package)
 - **Core**: 每个子模块独立 `CMakeLists.txt`, 通过 `plascan_core_add_optional_module()` 注册
-- **NVRTC**: RPATH 自动配置 conda/pip CUDA 库路径
-- **CUDA**: 全局 `enable_language(CUDA)`, 自动查找 conda nvcc
+- **NVRTC**: 由显式配置的 CUDA Toolkit/TensorRT SDK 提供，不拼接环境管理器私有路径
+- **CUDA**: 检测到标准 CUDA 编译器后全局 `enable_language(CUDA)`；可通过 `PLASCAN_ENABLE_CUDA=OFF` 关闭
+- **Linux CUDA/OpenCL 开发构建**: `linux-vcpkg-cuda-opencl-release` 使用独立 vcpkg installed tree，
+  同时启用原生 CUDA、OpenCL 和 `ceres-cuda`；本机 CUDA 13.1 基线固定 GCC 13 host compiler 与 `sm_89`，
+  并通过项目 `cuda`/`ceres` vcpkg overlays 显式传递 CUDA compiler，避免混用系统旧版 `nvcc`；
+  TensorRT 保持外部可选 SDK，不由 vcpkg 提供
 - **测试**: `-DBUILD_TESTS=ON` → CTest；按改动范围优先跑相关测试，再决定是否跑全量
 ## GUI 模块边界（2026-08）
 

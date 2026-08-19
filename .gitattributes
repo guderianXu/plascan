@@ -1,0 +1,1 @@
+cmake/vcpkg-overlays/ceres/*.patch whitespace=-blank-at-eol,-blank-at-eof

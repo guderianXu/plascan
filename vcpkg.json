@@ -71,7 +71,15 @@
     },
     "qtshadertools",
     "tiff",
-    "vulkan"
+    "vulkan",
+    {
+      "name": "vulkan-loader",
+      "default-features": false,
+      "features": [
+        "xcb"
+      ],
+      "platform": "linux"
+    }
   ],
   "default-features": [
     "ceres-suitesparse"

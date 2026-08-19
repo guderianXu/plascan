@@ -430,12 +430,6 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
   endif()
 
   set(PLASCAN_LINUX_RUNTIME_PREFIXES "")
-  foreach(_runtime_prefix IN ITEMS "${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
-    if(_runtime_prefix AND EXISTS "${_runtime_prefix}")
-      get_filename_component(_runtime_prefix "${_runtime_prefix}" REALPATH)
-      list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES "${_runtime_prefix}")
-    endif()
-  endforeach()
   if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
     set(_vcpkg_runtime_prefix
       "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")

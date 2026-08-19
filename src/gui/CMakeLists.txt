@@ -223,9 +223,5 @@ plascan_deploy_qt_tls_runtime(plascan_gui)
 plascan_deploy_tensorrt_runtime(plascan_gui)
 plascan_deploy_vcpkg_runtime(plascan_gui)
 
-if(PLASCAN_EXTRA_NVRTC_RPATHS)
-  set_property(TARGET plascan_gui APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
-endif()
-
   include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiInstall.cmake)
 endif()

@@ -724,15 +724,13 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
     {
         const QString identity = QString::fromStdString(
             device.physicalDeviceIdentity);
-        const bool ignored_nvidia =
+        const bool nvidia_opencl =
             xjw::mvs::isNvidiaOpenClVendor(device.vendor);
         const bool duplicates_cuda = !identity.isEmpty() &&
             cuda_identities.contains(identity);
-        if (!ignored_nvidia)
-        {
-            ++eligible_opencl_devices;
-        }
-        if (!ignored_nvidia && !duplicates_cuda)
+        const bool auto_deduplicated_nvidia = _cudaAvailable && nvidia_opencl;
+        ++eligible_opencl_devices;
+        if (!duplicates_cuda && !auto_deduplicated_nvidia)
         {
             ++independent_opencl_devices;
         }
@@ -747,13 +745,9 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
         {
             detail += QStringLiteral(" · %1 GiB").arg(memory_gib, 0, 'f', 1);
         }
-        if (ignored_nvidia)
+        if (duplicates_cuda || auto_deduplicated_nvidia)
         {
-            detail += QStringLiteral("（NVIDIA，显式 OpenCL 模式自动忽略）");
-        }
-        else if (duplicates_cuda)
-        {
-            detail += QStringLiteral("（与 CUDA 为同一物理设备，混合模式会去重）");
+            detail += QStringLiteral("（可用于显式 OpenCL；混合模式与 CUDA 去重）");
         }
         opencl_lines.append(detail);
     }
@@ -779,16 +773,11 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
     _openClDeviceStatusLabel->setPalette(opencl_palette);
     _openClDeviceStatusLabel->setText(
         _openClAvailable
-            ? QStringLiteral("可用，%1 个非 NVIDIA 设备（共检测到 %2 个）\n%3")
+            ? QStringLiteral("可用，共 %1 个设备\n%2")
                   .arg(eligible_opencl_devices)
-                  .arg(opencl_lines.size())
                   .arg(opencl_lines.join(QLatin1Char('\n')))
-            : (opencl_lines.isEmpty()
-                   ? QStringLiteral(
-                         "不可用：未检测到同时支持运行和在线编译的 OpenCL GPU")
-                   : QStringLiteral(
-                         "不可用：仅检测到 NVIDIA OpenCL 设备，已按策略忽略\n%1")
-                         .arg(opencl_lines.join(QLatin1Char('\n')))));
+            : QStringLiteral(
+                  "不可用：未检测到同时支持运行和在线编译的 OpenCL GPU"));
 
     auto set_mode_enabled = [this](const char *mode, bool enabled)
     {

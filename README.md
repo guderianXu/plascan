@@ -11,7 +11,8 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
-- Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP、GTest 和 TensorRT（GPU 匹配与 AI 蒙版）。
+- vcpkg；Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP 和 GTest 等 C++ 依赖由 manifest 安装。
+- TensorRT 可选；用于 GPU 匹配与 AI 蒙版，并与 CUDA Toolkit 一样作为外部 SDK 提供。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
 - OpenCL 1.2 SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
 - Python 3.10+ 可选；用于模型导出、数据准备和脚本化验证。
@@ -26,28 +27,31 @@ git submodule update --init --recursive
 cd plascan
 ```
 
-系统已经安装好依赖时，可直接配置本机构建目录：
+设置 vcpkg 根目录后，使用仓库 preset 配置和构建：
 
 ```bash
-cmake -S . -B build -DBUILD_TESTS=ON
-cmake --build build -j$(nproc)
-python scripts/env/run_tests.py --test-dir build --output-on-failure
+export VCPKG_ROOT=/path/to/vcpkg
+cmake --preset linux-vcpkg-release
+cmake --build --preset linux-vcpkg-release
+python scripts/env/run_tests.py --preset linux-vcpkg-release --output-on-failure
 ```
 
-GUI 需要 Qt 6.7 或更高版本（使用 `QRhiWidget`）。Ubuntu 24.04 等只提供较旧 Qt 的环境仍可构建核心库、
-CLI 和非 GUI 测试：
+GUI 需要 Qt 6.7 或更高版本（使用 `QRhiWidget`），对应版本由 vcpkg 锁定。只构建核心库、CLI 和非 GUI
+测试时，仍需保留 vcpkg toolchain，并显式关闭 GUI：
 
 ```bash
-cmake -S . -B build -DBUILD_TESTS=ON -DPLASCAN_BUILD_GUI=OFF
-cmake --build build -j$(nproc)
-python scripts/env/run_tests.py --test-dir build --output-on-failure
+cmake --preset linux-vcpkg-release -DPLASCAN_BUILD_GUI=OFF -DPLASCAN_BUILD_GUI_TESTS=OFF
+cmake --build --preset linux-vcpkg-release
+python scripts/env/run_tests.py --preset linux-vcpkg-release --output-on-failure
 ```
 
 项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
 
 ### vcpkg / CPack 跨平台构建
 
-推荐新环境优先使用 `vcpkg.json` 和 `CMakePresets.json`。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；CUDA 与 TensorRT 通过外部安装路径提供。
+PlaScan 的 C++ 构建统一使用 `vcpkg.json` 和 `CMakePresets.json`，配置时必须启用 vcpkg manifest
+toolchain。CMake 不读取 Conda 环境作为 C++ 依赖来源；CUDA 与 TensorRT 是可选的外部 SDK，通过其
+标准 CMake 路径显式提供。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖。
 
 Linux:
 
@@ -58,6 +62,29 @@ cmake --build --preset linux-vcpkg-release
 python scripts/env/run_tests.py --preset linux-vcpkg-release
 cpack --preset linux-vcpkg-release
 ```
+
+本机 Ubuntu 的 CUDA 13.1 + NVIDIA OpenCL 开发构建使用独立 preset，不与 CPU/OpenCL 或正式 CUDA 13.1
+打包目录混用。该 preset 使用 `/usr/local/cuda-13.1/bin/nvcc`、GCC 13 host compiler 和 RTX 40 系列的 `sm_89`，同时
+启用 PlaScan/PlaMatrix/PlaPoint 的 CUDA 与 OpenCL 后端，以及 Ceres CUDA dense solver；TensorRT 不属于
+vcpkg，当前开发 preset 默认关闭：
+
+```bash
+sudo apt install gcc-13 g++-13 cuda-compiler-13-1 cuda-libraries-dev-13-1 cuda-opencl-13-1 clinfo
+export VCPKG_ROOT="$PWD/build/vcpkg"
+cmake --preset linux-vcpkg-cuda-opencl-release
+cmake --build --preset linux-vcpkg-cuda-opencl-release
+QT_QPA_PLATFORM=offscreen python scripts/env/run_tests.py \
+  --preset linux-vcpkg-cuda-opencl-release --output-on-failure
+```
+
+首次配置会在 `build/linux-vcpkg-cuda-opencl-release/vcpkg_installed` 安装带 `ceres-cuda` 的独立 manifest
+依赖树。其它 CUDA Toolkit 路径、host compiler 或 GPU 架构应在命令行覆盖
+`CMAKE_CUDA_COMPILER`、`CMAKE_CUDA_HOST_COMPILER` 和 `PLASCAN_CUDA_ARCHITECTURES`；不要修改或复用
+CPU 构建的 vcpkg installed tree。可先用 `clinfo -l` 确认 OpenCL ICD 能枚举目标设备。
+仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`，`ceres` overlay 则把探测到的
+CUDA 编译器和 host compiler 显式传给 Ceres，防止系统仍保留 `/usr/bin/nvcc` 时误用旧 Toolkit。
+Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI 能为 XCB 窗口创建 surface；
+显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
 
 Linux 正式交付建议使用 Ubuntu 24.04 x86_64 基线的一键 DEB 工作流。首次配置会由 vcpkg 构建带
 XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、`gfortran`、Ninja、`pkg-config` 和 `patchelf`。

@@ -48,45 +48,61 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            autoconf-archive \
+            automake \
+            bison \
             build-essential \
             cmake \
             ccache \
-            ninja-build \
+            flex \
+            gfortran \
+            git \
+            gperf \
             g++ \
-            python3 \
-            pkg-config \
             libgl1-mesa-dev \
+            libgles2-mesa-dev \
+            libglu1-mesa-dev \
+            libtool \
+            libx11-xcb-dev \
+            libxcb-cursor-dev \
+            libxcb-xinerama0-dev \
+            libxi-dev \
+            libxinerama-dev \
             libxkbcommon-dev \
-            libxkbcommon-x11-0 \
-            libxcb-cursor0 \
-            libvulkan-dev \
+            libxkbcommon-x11-dev \
+            libxrender-dev \
+            libxtst-dev \
             mesa-vulkan-drivers \
+            nasm \
+            ninja-build \
+            pkg-config \
+            python3 \
+            python3-venv \
+            unzip \
             vulkan-tools \
             xvfb \
             xauth \
-            libopencv-dev \
-            libapriltag-dev \
-            libgdal-dev \
-            libtiff-dev \
-            libzip-dev \
-            zipcmp \
-            zipmerge \
-            ziptool \
-            libgtest-dev \
-            libgmock-dev \
-            libopenmesh-dev \
-            ocl-icd-opencl-dev \
-            libomp-dev
+            '^libxcb.*-dev'
 
-      - name: Install Qt 6.8.3
-        uses: jurplel/install-qt-action@v4
+      - name: Configure pinned vcpkg
+        run: |
+          vcpkg_root="${RUNNER_TEMP}/plascan-vcpkg"
+          git init "${vcpkg_root}"
+          git -C "${vcpkg_root}" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "${vcpkg_root}" fetch --depth 1 origin 3c5d90a305ff00ca841f085a74a7ce74ee777dee
+          git -C "${vcpkg_root}" checkout --detach FETCH_HEAD
+          "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=${RUNNER_TEMP}/vcpkg-binary-cache" >> "${GITHUB_ENV}"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
         with:
-          version: '6.8.3'
-          host: 'linux'
-          target: 'desktop'
-          arch: 'linux_gcc_64'
-          modules: 'qtshadertools'
-          cache: true
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-3c5d90a305ff00ca841f085a74a7ce74ee777dee-${{ hashFiles('vcpkg.json', 'cmake/vcpkg-overlays/**') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-3c5d90a305ff00ca841f085a74a7ce74ee777dee-
 
       - name: Install Python test dependencies
         run: python3 -m pip install --disable-pip-version-check numpy scipy
@@ -104,18 +120,21 @@ jobs:
           ccache --zero-stats
           ccache --show-config
 
-      - name: Verify headless and conda-off isolation
+      - name: Verify headless vcpkg isolation
         env:
           CONDA_PREFIX: ${{ runner.temp }}/plascan-poison-conda
         run: |
           set -o pipefail
+          mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE}"
           cmake -S . -B build-headless -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic \
+            -DVCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
+            -DVCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/cmake/vcpkg-overlays" \
             -DBUILD_TESTS=ON \
             -DPLASCAN_BUILD_GUI=OFF \
             -DPLASCAN_BUILD_GUI_TESTS=OFF \
-            -DPLASCAN_ENABLE_CONDA=OFF \
-            -DPLASCAN_ENABLE_VCPKG=OFF \
             -DPLASCAN_ENABLE_CUDA=OFF \
             -DPLASCAN_ENABLE_TENSORRT=OFF 2>&1 | tee headless-configure.log
           if grep -F "${CONDA_PREFIX}" headless-configure.log; then
@@ -136,16 +155,17 @@ jobs:
               key = key_and_type.split(":", 1)[0]
               cache[key] = value
 
-          effective_conda = cache.get("PLASCAN_EFFECTIVE_CONDA_PREFIX")
-          if effective_conda is None:
-              raise SystemExit("PLASCAN_EFFECTIVE_CONDA_PREFIX is missing from CMakeCache.txt")
-          if effective_conda:
-              raise SystemExit(
-                  "Disabled conda prefix leaked into CMakeCache.txt: " + effective_conda
-              )
           poison_prefix = os.environ["CONDA_PREFIX"].replace("\\", "/")
           if poison_prefix in cache_text.replace("\\", "/"):
               raise SystemExit("Poison conda prefix appears in CMakeCache.txt")
+          for removed_option in (
+              "PLASCAN_ENABLE_CONDA",
+              "PLASCAN_CONDA_PREFIX",
+              "PLASCAN_EFFECTIVE_CONDA_PREFIX",
+              "PLASCAN_ENABLE_VCPKG",
+          ):
+              if removed_option in cache:
+                  raise SystemExit("Removed CMake option remains: " + removed_option)
 
           for component in ("Qt6Test_DIR", "Qt6Widgets_DIR", "Qt6ShaderTools_DIR", "Qt6GuiPrivate_DIR"):
               value = cache.get(component, "")
@@ -162,8 +182,12 @@ jobs:
           if ! cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
-            -DPLASCAN_ENABLE_CONDA=OFF \
-            -DPLASCAN_ENABLE_VCPKG=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic \
+            -DVCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
+            -DVCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/cmake/vcpkg-overlays" \
+            -DPLASCAN_ENABLE_CUDA=OFF \
+            -DPLASCAN_ENABLE_TENSORRT=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache 2>&1 | tee configure.log; then
             tail_msg="$(tail -n 80 configure.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
             echo "::error title=CMake configure failed::$tail_msg"
@@ -230,9 +254,13 @@ jobs:
             flex \
             gfortran \
             git \
+            gperf \
             libgl1-mesa-dev \
+            libgles2-mesa-dev \
+            libglu1-mesa-dev \
             libtool \
             libx11-dev \
+            libx11-xcb-dev \
             libxcb-cursor-dev \
             libxcb-xinerama0-dev \
             libxext-dev \
@@ -243,6 +271,7 @@ jobs:
             libxkbcommon-x11-dev \
             libxrandr-dev \
             libxrender-dev \
+            libxtst-dev \
             nasm \
             ninja-build \
             patchelf \
@@ -250,7 +279,8 @@ jobs:
             python3 \
             tar \
             unzip \
-            zip
+            zip \
+            '^libxcb.*-dev'
 
       - name: Configure pinned vcpkg
         run: |

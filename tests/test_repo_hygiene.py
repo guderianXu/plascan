@@ -54,7 +54,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CONDA_PREFIX: ${{ runner.temp }}/plascan-poison-conda", text)
         self.assertIn('grep -F "${CONDA_PREFIX}" headless-configure.log', text)
         self.assertIn('Path("build-headless/CMakeCache.txt")', text)
-        self.assertIn('cache.get("PLASCAN_EFFECTIVE_CONDA_PREFIX")', text)
+        self.assertIn('"PLASCAN_EFFECTIVE_CONDA_PREFIX",', text)
+        self.assertIn("Removed CMake option remains:", text)
         for forbidden_qt_cache_entry in [
             "Qt6Test_DIR",
             "Qt6Widgets_DIR",
@@ -63,12 +64,16 @@ class RepoHygieneTest(unittest.TestCase):
         ]:
             self.assertIn(forbidden_qt_cache_entry, text)
         self.assertNotIn("runs-on: windows-2025", text)
-        self.assertIn("uses: jurplel/install-qt-action@v4", text)
-        self.assertIn("version: '6.8.3'", text)
-        self.assertIn("modules: 'qtshadertools'", text)
+        self.assertNotIn("jurplel/install-qt-action", text)
+        self.assertIn("Configure pinned vcpkg", text)
+        self.assertIn("3c5d90a305ff00ca841f085a74a7ce74ee777dee", text)
+        self.assertIn("VCPKG_TARGET_TRIPLET=x64-linux-dynamic", text)
+        self.assertIn('VCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/cmake/vcpkg-overlays"', text)
         self.assertNotIn("qt6-base-dev", text)
-        self.assertIn("libapriltag-dev", text)
-        self.assertIn("libopenmesh-dev", text)
+        self.assertNotIn("libapriltag-dev", text)
+        self.assertNotIn("libopenmesh-dev", text)
+        self.assertIn("gperf", text)
+        self.assertIn("'^libxcb.*-dev'", text)
         self.assertIn("python3 -m pip install --disable-pip-version-check numpy scipy", text)
         self.assertIn("--timeout 120", text)
         self.assertIn("uses: actions/cache@v4", text)
@@ -93,6 +98,13 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("set(VCPKG_BUILD_TYPE release)", triplet_text)
 
         manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
+        linux_vulkan_loader = next(
+            dependency
+            for dependency in manifest["dependencies"]
+            if isinstance(dependency, dict) and dependency.get("name") == "vulkan-loader"
+        )
+        self.assertEqual("linux", linux_vulkan_loader["platform"])
+        self.assertEqual(["xcb"], linux_vulkan_loader["features"])
         self.assertIn("ceres-suitesparse", manifest["default-features"])
         self.assertIn("ceres-suitesparse", manifest["features"])
         production_ceres_features = manifest["features"]["ceres-suitesparse"]["dependencies"][0][
@@ -106,6 +118,47 @@ class RepoHygieneTest(unittest.TestCase):
         )
         self.assertFalse(ceres_dependency["default-features"])
         self.assertNotIn("features", ceres_dependency)
+
+        presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+        linux_cuda_opencl = next(
+            preset
+            for preset in presets["configurePresets"]
+            if preset["name"] == "linux-vcpkg-cuda-opencl-release"
+        )
+        self.assertEqual(
+            "/usr/local/cuda-13.1/bin/nvcc",
+            linux_cuda_opencl["environment"]["CUDACXX"],
+        )
+        self.assertEqual("/usr/bin/g++-13", linux_cuda_opencl["environment"]["CUDAHOSTCXX"])
+        cuda_cache = linux_cuda_opencl["cacheVariables"]
+        self.assertEqual("/usr/local/cuda-13.1", cuda_cache["CUDAToolkit_ROOT"])
+        self.assertEqual("89", cuda_cache["PLASCAN_CUDA_ARCHITECTURES"])
+        self.assertEqual("ON", cuda_cache["PLASCAN_ENABLE_CUDA"])
+        self.assertEqual("ON", cuda_cache["PLASCAN_ENABLE_OPENCL"])
+        self.assertEqual("OFF", cuda_cache["PLASCAN_ENABLE_TENSORRT"])
+        self.assertEqual("ceres-cuda", cuda_cache["VCPKG_MANIFEST_FEATURES"])
+        self.assertEqual(
+            "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed",
+            cuda_cache["VCPKG_INSTALLED_DIR"],
+        )
+
+        cuda_overlay = ROOT / "cmake" / "vcpkg-overlays" / "cuda"
+        self.assertTrue(cuda_overlay.is_dir())
+        cuda_find = (cuda_overlay / "vcpkg_find_cuda.cmake").read_text(encoding="utf-8")
+        self.assertIn("ENV{CUDACXX}", cuda_find)
+        self.assertIn("Using CUDA compiler from CUDACXX", cuda_find)
+        self.assertIn("CUDACXX points to a missing CUDA compiler", cuda_find)
+        self.assertIn("OUT_CUDA_COMPILER", cuda_find)
+        cuda_manifest = json.loads((cuda_overlay / "vcpkg.json").read_text(encoding="utf-8"))
+        self.assertEqual(14, cuda_manifest["port-version"])
+
+        ceres_overlay = ROOT / "cmake" / "vcpkg-overlays" / "ceres"
+        self.assertTrue(ceres_overlay.is_dir())
+        ceres_portfile = (ceres_overlay / "portfile.cmake").read_text(encoding="utf-8")
+        self.assertIn("OUT_CUDA_COMPILER cuda_compiler", ceres_portfile)
+        self.assertIn("-DCMAKE_CUDA_COMPILER=${cuda_compiler}", ceres_portfile)
+        self.assertIn("-DCMAKE_CUDA_HOST_COMPILER=$ENV{CUDAHOSTCXX}", ceres_portfile)
+        self.assertNotIn("-DCMAKE_CUDA_COMPILER=${NVCC}", ceres_portfile)
 
     def test_release_packages_are_gated_by_platform_tests(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
@@ -266,15 +319,17 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("FORCE", text)
         self.assertNotIn("find_package(Torch", text)
 
-    def test_cmake_preserves_command_line_cuda_flags_on_windows(self):
+    def test_cmake_requires_vcpkg_without_conda_dependency_discovery(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         dependency_paths = (ROOT / "cmake" / "PlascanDependencyPaths.cmake").read_text(encoding="utf-8")
 
-        self.assertNotIn('set(CMAKE_CUDA_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")', root_cmake)
-        self.assertIn('${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1', root_cmake)
-        self.assertIn('string(REPLACE "-B/usr/bin"', root_cmake)
-        self.assertIn("WIN32 OR APPLE OR NOT conda_prefix", dependency_paths)
-        self.assertIn("if(WIN32 OR NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)", dependency_paths)
+        self.assertNotIn("CONDA", root_cmake.upper())
+        self.assertNotIn("CONDA", dependency_paths.upper())
+        self.assertNotIn("PLASCAN_ENABLE_VCPKG", root_cmake)
+        self.assertIn("requires the vcpkg toolchain", dependency_paths)
+        self.assertIn("VCPKG_MANIFEST_MODE", dependency_paths)
+        self.assertIn("VCPKG_TARGET_TRIPLET", dependency_paths)
+        self.assertIn("vcpkg(manifest,${VCPKG_TARGET_TRIPLET})", dependency_paths)
 
     def test_plapoint_cuda_warning_sentinels_use_device_safe_values(self):
         knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")

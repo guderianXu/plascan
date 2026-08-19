@@ -42,9 +42,9 @@ std::string fallbackGpuPhysicalIdentity(const std::string &vendor,
 /// one runtime cannot expose a PCI identity.
 std::string normalizedGpuDeviceName(const std::string &name);
 
-/// Returns true when an OpenCL vendor string identifies NVIDIA. PlaScan keeps
-/// NVIDIA devices on the CUDA path and excludes their duplicate OpenCL API
-/// when the user explicitly requests OpenCL-only processing.
+/// Returns true when an OpenCL vendor string identifies NVIDIA. Auto mode uses
+/// this to avoid admitting an unstable duplicate of an active CUDA device;
+/// explicit OpenCL-only processing remains allowed.
 bool isNvidiaOpenClVendor(const std::string &openClVendor);
 
 /// Returns true when an OpenCL interface cannot expose a PCI identity but is

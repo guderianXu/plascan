@@ -35,8 +35,10 @@
   超预算项目使用带租约的有界缓存，避免按视图数全量预载。
 - 项目共享影像导入、归档发布和 GC 使用项目级同步与跨进程 lease；孤儿文件经过两个已提交代次的
   tombstone 后才删除，可信临时恢复快照中的引用也会阻止回收。
-- CMake 统一有效 Conda 前缀，GUI/GUI 测试关闭时不再查找或链接对应依赖；工作流脚本支持 Windows
-  `.exe` 解析，Python 测试注册完整性、Windows/Linux CPU 构建测试和 headless 配置进入 CI 门禁。
+- C++ 构建统一为 vcpkg manifest toolchain，不再读取 Conda 前缀、注入 Conda CUDA/NVRTC 路径或保留
+  Conda/vcpkg 切换选项；Linux CI、headless 门禁和发布构建使用同一固定 vcpkg baseline。
+- 工作流脚本支持 Windows `.exe` 解析，Python 测试注册完整性、Windows/Linux CPU 构建测试和
+  headless 配置进入 CI 门禁。
 
 ### 修复
 

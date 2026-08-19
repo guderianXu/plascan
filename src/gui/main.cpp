@@ -134,23 +134,34 @@ bool bindPythonRuntime()
 
 void configureOpenClDevicePolicy()
 {
+    constexpr auto kDeviceIndexVariable = "PLAMATRIX_OPENCL_DEVICE_INDEX";
+    if (qEnvironmentVariableIsSet(kDeviceIndexVariable))
+    {
+        LOG_INFO("PlaScan OpenCL policy preserves explicit %s=%s",
+                 kDeviceIndexVariable,
+                 qgetenv(kDeviceIndexVariable).constData());
+        return;
+    }
+
     const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
         xjw::mvs::PatchMatchDepthEstimator::openClDevices();
-    const auto selected = std::find_if(
+    if (devices.empty())
+    {
+        qputenv(kDeviceIndexVariable,
+                QByteArray::number(std::numeric_limits<int>::max()));
+        LOG_WARN("PlaScan OpenCL policy found no usable GPU device");
+        return;
+    }
+
+    const auto preferred = std::find_if(
         devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
         {
             return !xjw::mvs::isNvidiaOpenClVendor(device.vendor);
         });
-    if (selected == devices.cend())
-    {
-        qputenv("PLAMATRIX_OPENCL_DEVICE_INDEX",
-                QByteArray::number(std::numeric_limits<int>::max()));
-        LOG_WARN("PlaScan OpenCL policy found no non-NVIDIA GPU; NVIDIA OpenCL devices are ignored");
-        return;
-    }
+    const auto selected = preferred == devices.cend() ? devices.cbegin() : preferred;
 
-    qputenv("PLAMATRIX_OPENCL_DEVICE_INDEX", QByteArray::number(selected->index));
-    LOG_INFO("PlaScan OpenCL policy selected non-NVIDIA device: index=%d vendor=%s device=%s",
+    qputenv(kDeviceIndexVariable, QByteArray::number(selected->index));
+    LOG_INFO("PlaScan OpenCL policy selected device: index=%d vendor=%s device=%s",
              selected->index,
              selected->vendor.c_str(),
              selected->name.c_str());
