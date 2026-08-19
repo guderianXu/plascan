@@ -23,13 +23,17 @@ AerialTriangulationWorkflow
 | 后端 | 三维点 | 相机位姿 | 共享焦距 | 控制约束 | Auto 用途 |
 |------|--------|----------|----------|----------|-----------|
 | Legacy CPU/OpenMP | 支持 | 支持 | 支持 | 支持 | 小型固定焦距问题和明确回退 |
+| PlaMatrix CPU/CUDA/OpenCL | 支持 | 支持 | 完整 Brown 分组共享内参 | GCP/LiDAR/比例尺/姿态/激光测距 | 暂不进入 Auto，用于 Ceres 对照验证 |
 | Ceres CPU | 支持 | 支持 | 联合优化 | 支持 | 共享焦距或中大型 CPU 问题 |
 | Ceres CUDA | 支持 | 支持 | 联合优化 | 支持 | 达到相机/观测阈值且 Ceres CUDA 可用 |
 | Native CUDA | 支持 | 不支持 | 不支持 | 不支持 | 当前不用于需要相机更新的正式空三 |
 
 Native CUDA 当前是固定相机的三维点块优化器。它尚未实现相机 Schur 补、PCG 和回代，
 因此不能称为联合 BA；显式请求不支持的配置会返回 `UnsupportedConfiguration`，
-Auto 也不会在 `refineCameraPose=true` 时选择它。
+Auto 也不会在 `refineCameraPose=true` 时选择它。三个 PlaMatrix 后端共用解析 Brown-Conrady 相机、点和
+九参数共享内参雅可比，以及 GCP、LiDAR 平面/测距、比例尺、位姿先验和相机平面约束；只切换
+CPU/CUDA/OpenCL Schur-PCG。CUDA/OpenCL 在设备端装配 Schur CSR 数值并显式报告该路径，设备不可用时
+返回 `BackendUnavailable`，不会冒充 GPU 执行。
 
 ## 性能策略
 
@@ -45,8 +49,11 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 - CUDA 选择依据是完整 setup + solve 墙钟时间和质量门控，不只比较线性求解器内部耗时。
   16 张影像的 dino 回归包含 7856 个 BA 观测，Ceres CPU 完成正式 BA 只需约 70 ms，
   因而不会强制迁移到 GPU。
-- `ba_backend_benchmark` 用于比较 Legacy、Ceres CPU、Ceres CUDA 和 Native CUDA；
+- `ba_backend_benchmark` 用于比较 Legacy、PlaMatrix CPU/CUDA/OpenCL、Ceres CPU/CUDA 和 Native CUDA；
   `aerial_geometry_benchmark` 负责测量空三外围几何阶段，避免把低收益 kernel 接入默认流程。
+- PlaMatrix CPU/CUDA/OpenCL 的同数据数值与耗时对比见
+  `docs/benchmarks/2026-08-19-plamatrix-ba-backend-parity.md`。当前设备后端用于正确性验证，
+  尚不因 GPU 可用而自动选中。
 - Native CUDA 的公开参数只描述当前真实的固定相机点块能力：
   `nativeCudaMaxPointStepNorm` 限制单次三维点更新；结果报告优化前后代价、接受步和
   拒绝试探次数，不再输出并未执行的 PCG 指标。
@@ -59,6 +66,8 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 - `solutionUsable`：求解器结果是否允许调用方使用。
 - 请求/实际后端、回退标记与原因。
 - 相机、轨迹、观测规模，RMS，setup/solve/postprocess/total 耗时。
+- PlaMatrix 初始/最终鲁棒代价、LM 接受/拒绝步、初始 gross gate、线性后端/设备、PCG 迭代、
+  Schur pattern 构建/复用次数、数值装配位置及耗时。
 
 取消、数值失败或不可用结果不会修改调用方传入的相机和三维点。Auto 先运行一个满足能力和规模条件的
 候选后端，只有状态不可用或 RMS、有效轨迹等质量门控失败时才运行回退后端。SfM 协调层另行记录
@@ -66,6 +75,8 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 
 ## 联合共享内参与自适应模型
 
+PlaMatrix 与 Ceres 都使用每个标定组一个九参数内参块：`log(fx)`、`log(fy/fx)`、主点偏移、
+`k1/k2/k3/p1/p2`，并使用同一参数掩码、参考标定、边界、弱先验和分阶段释放策略。
 Ceres 使用一个共享绝对焦距参数块，并以 `log(focalPx)` 参数化和设置上下界。相机可以有不同初始焦距，
 但同一相机组在求解后得到同一个焦距。焦距、相机位姿和三维点处于同一个 Ceres Problem，
 不使用外层交替更新模拟联合自标定。`cameraCalibrationGroupIds` 可为不同镜头/焦段建立独立参数，
@@ -97,9 +108,10 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 - 单目 SfM 的全局 7 自由度规范由 `SfmBundleAdjustCoordinator` 和
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
 - `fixedTrackIndices` 使轨迹的三维点参数块保持常量，但不删除其对相机的重投影残差；
-  Ceres 和 Legacy 后端语义一致，Native CUDA 显式拒绝或回退该配置。
+  Ceres、PlaMatrix 和 Legacy 后端语义一致，Native CUDA 显式拒绝或回退该配置。
 - Legacy 的法方程线性化与 LM trial step 使用同一个 Huber robust cost。
-- Legacy、Ceres 和 Native CUDA 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
+- PlaMatrix 的 Huber 代价、观测权重和活动轨迹 gross gate 与 Ceres 使用相同定义。
+- Legacy、PlaMatrix、Ceres 和 Native CUDA 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
 - 后端选择和求解规划只统计有限像点、正权重且形成双相机轨迹的有效观测；零权重、负权重和
   非有限权重不会再被不同后端解释成不同残差贡献。
 - Auto 质量门控除重投影 RMS 和有效 track 比例外，还检查 LiDAR、控制点和比例尺 RMS 不得恶化。
@@ -111,14 +123,14 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 
 ## 验证
 
-模块测试位于 `tests/`，重点覆盖后端能力和选择、取消/失败保护、共享焦距、质量门控、
-投影模型以及 Native CUDA 的固定相机能力。SfM 规范和局部/全局 BA 协调测试位于
+模块测试位于 `tests/`，重点覆盖后端能力和选择、取消/失败保护、完整 Brown 内参、全部物方约束、质量门控、
+PlaMatrix CPU/CUDA/OpenCL 与 Ceres 同数据对照、解析 Jacobian 以及 Native CUDA 的固定相机能力。SfM 规范和局部/全局 BA 协调测试位于
 `src/core/sfm/test/`。
 
 ## PlaMatrix 与 PlaPoint 边界
 
-- BA 的 3x3/6x6 小型法方程和有限样本中位数直接复用 PlaMatrix；相关能力放在
-  `plamatrix/ops/small_matrix.h` 与 `plamatrix/ops/statistics.h`，避免 PlaScan
-  维护第二套数值实现。
+- BA 的 3x3/6x6 小型法方程、有限样本中位数，以及通用 Huber、块法方程、Schur-PCG 和 LM 状态
+  直接复用 PlaMatrix；摄影测量投影、活动轨迹、gauge、约束和结果质量仍留在 PlaScan，避免数值库
+  反向依赖业务模型。
 - BA 输入是带观测索引的 track，而不是需要邻域查询的点云容器，因此不强行依赖 PlaPoint。
   LiDAR 最近邻、法线和空间关联仍由 `core/lidar`/PlaPoint 在构建 BA 约束前完成。

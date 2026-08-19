@@ -15,6 +15,7 @@
 
 #include "BundleAdjustCeres.h"
 #include "BundleAdjustNativeCuda.h"
+#include "BundleAdjustPlaMatrix.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
 #include "log/Logger.h"
@@ -1649,6 +1650,12 @@ const char *BundleAdjust::backendName(BABackend backend)
         return "auto";
     case BABackend::LegacyCpu:
         return "legacy_cpu";
+    case BABackend::PlaMatrixCpu:
+        return "plamatrix_cpu";
+    case BABackend::PlaMatrixCuda:
+        return "plamatrix_cuda";
+    case BABackend::PlaMatrixOpenCl:
+        return "plamatrix_opencl";
     case BABackend::CeresCpu:
         return "ceres_cpu";
     case BABackend::CeresCuda:
@@ -1691,6 +1698,10 @@ BABackendCapabilities BundleAdjust::backendCapabilities(BABackend backend)
         return {true, true, true, true, true, true, true, true};
     case BABackend::LegacyCpu:
         return {true, true, true, false, false, false, true, false};
+    case BABackend::PlaMatrixCpu:
+    case BABackend::PlaMatrixCuda:
+    case BABackend::PlaMatrixOpenCl:
+        return {true, true, true, true, true, true, true, true};
     case BABackend::CeresCpu:
     case BABackend::CeresCuda:
         return {true, true, true, true, true, true, true, true};
@@ -1709,6 +1720,14 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
         return true;
     case BABackend::LegacyCpu:
         return true;
+    case BABackend::PlaMatrixCpu:
+        return true;
+    case BABackend::PlaMatrixCuda:
+    case BABackend::PlaMatrixOpenCl:
+    {
+        std::string message;
+        return detail::isPlaMatrixBackendAvailable(backend, 0, &message);
+    }
     case BABackend::CeresCpu:
         return detail::isCeresBackendCompiled();
     case BABackend::CeresCuda:
@@ -2078,6 +2097,68 @@ BAResult BundleAdjust::optimizePoints(const std::vector<FramePinholeCamera> &cam
         result.usedBackend = BABackend::LegacyCpu;
         result.usedGpu = false;
         updateDerivedResultStats(result);
+        return result;
+    }
+
+    const bool isPlaMatrixBackend =
+        options.backend == BABackend::PlaMatrixCpu ||
+        options.backend == BABackend::PlaMatrixCuda ||
+        options.backend == BABackend::PlaMatrixOpenCl;
+    if (isPlaMatrixBackend)
+    {
+        const BABackend requestedBackend = options.backend;
+        std::string unavailableMessage;
+        if (!detail::isPlaMatrixBackendAvailable(
+                requestedBackend, options.plaMatrixDevice, &unavailableMessage))
+        {
+            if (options.allowBackendFallback && detail::isCeresBackendCompiled())
+            {
+                BAOptions ceresOptions = options;
+                ceresOptions.backend = BABackend::CeresCpu;
+                BAResult fallback = optimizePoints(cameras, tracks, ceresOptions);
+                fallback.requestedBackend = requestedBackend;
+                fallback.backendFallback = true;
+                fallback.backendMessage = unavailableMessage +
+                    "，已回退到 ceres_cpu；" + fallback.backendMessage;
+                return fallback;
+            }
+
+            BAResult result;
+            result.requestedBackend = requestedBackend;
+            result.usedBackend = requestedBackend;
+            result.solveStatus = BASolveStatus::BackendUnavailable;
+            result.solutionUsable = false;
+            result.backendMessage = unavailableMessage;
+            result.totalTracks = static_cast<int>(tracks.size());
+            result.observationCount = summarizeProblem(cameras, tracks).observationCount;
+            result.refinedCameras = cameras;
+            result.points.resize(tracks.size());
+            updateDerivedResultStats(result);
+            return result;
+        }
+
+        BAResult result = detail::optimizePointsWithPlaMatrix(cameras, tracks, options);
+        result.requestedBackend = requestedBackend;
+        updateDerivedResultStats(result);
+        if (!result.solutionUsable &&
+            result.solveStatus != BASolveStatus::Cancelled &&
+            options.allowBackendFallback &&
+            detail::isCeresBackendCompiled())
+        {
+            BAOptions ceresOptions = options;
+            ceresOptions.backend = BABackend::CeresCpu;
+            BAResult fallback = optimizePoints(cameras, tracks, ceresOptions);
+            fallback.requestedBackend = requestedBackend;
+            fallback.backendFallback = true;
+            fallback.setupSeconds += result.setupSeconds;
+            fallback.solveSeconds += result.solveSeconds;
+            fallback.postprocessSeconds += result.postprocessSeconds;
+            fallback.totalSeconds += result.totalSeconds;
+            fallback.backendMessage = result.backendMessage +
+                                      "，已回退到 ceres_cpu；" +
+                                      fallback.backendMessage;
+            return fallback;
+        }
         return result;
     }
 

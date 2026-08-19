@@ -21,6 +21,14 @@ add_library(bundle_adjust STATIC
     BundleAdjustNativeCuda.cpp
     BundleAdjustNativeCudaMath.cpp
     BundleAdjustNativeCudaWorkset.cpp
+    BundleAdjustPlaMatrix.cpp
+    BundleAdjustPlaMatrixProblem.cpp
+    BundleAdjustPlaMatrixModel.cpp
+    BundleAdjustPlaMatrixConstraints.cpp
+    BundleAdjustPlaMatrixAssembly.cpp
+    BundleAdjustPlaMatrixAssemblySurvey.cpp
+    BundleAdjustPlaMatrixProjection.cpp
+    BundleAdjustPlaMatrixRuntime.cpp
     ${BA_NATIVE_CUDA_SOURCES}
 )
 

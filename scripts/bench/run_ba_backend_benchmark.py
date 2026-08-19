@@ -33,6 +33,19 @@ DEFAULT_FIELDS = [
     "quality_rejected",
     "backend_reason",
     "quality_message",
+    "plamatrix_initial_cost",
+    "plamatrix_final_cost",
+    "plamatrix_accepted_steps",
+    "plamatrix_rejected_steps",
+    "plamatrix_rejected_initial_tracks",
+    "plamatrix_linear_solver",
+    "plamatrix_device",
+    "plamatrix_linear_iterations",
+    "plamatrix_schur_pattern_builds",
+    "plamatrix_schur_pattern_reuses",
+    "plamatrix_schur_assembly_on_device",
+    "plamatrix_schur_assembly_seconds",
+    "plamatrix_linear_solve_seconds",
     "native_pcg_iterations",
     "native_linear_residual",
     "native_active_observations",
@@ -159,14 +172,20 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--cases", default="medium", help="逗号分隔: small,medium,large")
-    parser.add_argument("--backends", default="legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto")
+    parser.add_argument(
+        "--backends",
+        default=(
+            "legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,"
+            "ceres_cpu,ceres_cuda,native_cuda,auto"
+        ),
+    )
     parser.add_argument("--repeat", default=3, type=int)
     parser.add_argument("--iterations", default=8, type=int)
     parser.add_argument("--threads", default=32, type=int)
     parser.add_argument(
         "--refine-pose",
         action="store_true",
-        help="同时优化相机位姿。benchmark 会固定 0 号相机以消除 gauge 漂移。",
+        help="同时优化相机位姿。benchmark 会通过公共 BA 校验补足 gauge 锚定。",
     )
     args = parser.parse_args()
 

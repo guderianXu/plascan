@@ -58,6 +58,18 @@ xjw::BABackend parseBaBackendName(const QString &raw)
     {
         return xjw::BABackend::LegacyCpu;
     }
+    if (value == QLatin1String("plamatrix_cpu"))
+    {
+        return xjw::BABackend::PlaMatrixCpu;
+    }
+    if (value == QLatin1String("plamatrix_cuda"))
+    {
+        return xjw::BABackend::PlaMatrixCuda;
+    }
+    if (value == QLatin1String("plamatrix_opencl"))
+    {
+        return xjw::BABackend::PlaMatrixOpenCl;
+    }
     if (value == QLatin1String("ceres_cpu"))
     {
         return xjw::BABackend::CeresCpu;
@@ -71,7 +83,9 @@ xjw::BABackend parseBaBackendName(const QString &raw)
         return xjw::BABackend::NativeCuda;
     }
 
-    fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / legacy_cpu / ceres_cpu / ceres_cuda / native_cuda")
+    fatalQt(QStringLiteral(
+                "未知 BA 后端: %1，可选 auto / legacy_cpu / plamatrix_cpu / "
+                "plamatrix_cuda / plamatrix_opencl / ceres_cpu / ceres_cuda / native_cuda")
                 .arg(raw));
     return xjw::BABackend::LegacyCpu;
 }
@@ -554,6 +568,7 @@ int main(int argc, char *argv[])
     int maxCameraIterations = 10;
     int chunkSize = 20000;
     int baCudaDevice = 0;
+    int baPlaMatrixDevice = 0;
     int baMinCudaCameras = 50;
     int baMinCudaObservations = 500000;
     int baNativeCudaDevice = 0;
@@ -617,8 +632,12 @@ int main(int argc, char *argv[])
     app.add_option("--step-tolerance", stepTolerance, "收敛步长阈值");
     app.add_option("--ba-backend",
                    baBackendRaw,
-                   "BA 求解后端: auto / legacy_cpu / ceres_cpu / ceres_cuda / native_cuda");
+                   "BA 求解后端: auto / legacy_cpu / plamatrix_cpu / plamatrix_cuda / "
+                   "plamatrix_opencl / ceres_cpu / ceres_cuda / native_cuda");
     app.add_option("--ba-cuda-device", baCudaDevice, "Ceres CUDA BA 使用的 GPU 设备 ID");
+    app.add_option("--ba-plamatrix-device",
+                   baPlaMatrixDevice,
+                   "PlaMatrix CUDA/OpenCL Schur PCG 使用的设备索引");
     app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "低于该相机数时 Ceres CUDA BA 回退到 CPU");
     app.add_option("--ba-min-cuda-observations",
                    baMinCudaObservations,
@@ -948,6 +967,7 @@ int main(int argc, char *argv[])
     baOptions.numThreads = threads;
     baOptions.backend = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
     baOptions.ceresCudaDevice = std::max(0, baCudaDevice);
+    baOptions.plaMatrixDevice = std::max(0, baPlaMatrixDevice);
     baOptions.minCeresCudaCameras = std::max(1, baMinCudaCameras);
     baOptions.minCeresCudaObservations = std::max(1, baMinCudaObservations);
     baOptions.nativeCudaDevice = std::max(0, baNativeCudaDevice);

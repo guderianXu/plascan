@@ -529,6 +529,28 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_native_cuda_device_select_seconds")] = baResult.nativeCudaDeviceSelectSeconds;
     saveObj[QStringLiteral("ba_native_cuda_staging_seconds")] = baResult.nativeCudaStagingSeconds;
     saveObj[QStringLiteral("ba_native_cuda_release_seconds")] = baResult.nativeCudaReleaseSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_initial_cost")] = baResult.plaMatrixInitialCost;
+    saveObj[QStringLiteral("ba_plamatrix_final_cost")] = baResult.plaMatrixFinalCost;
+    saveObj[QStringLiteral("ba_plamatrix_accepted_steps")] = baResult.plaMatrixAcceptedSteps;
+    saveObj[QStringLiteral("ba_plamatrix_rejected_steps")] = baResult.plaMatrixRejectedSteps;
+    saveObj[QStringLiteral("ba_plamatrix_rejected_initial_tracks")] =
+        baResult.plaMatrixRejectedInitialTracks;
+    saveObj[QStringLiteral("ba_plamatrix_linear_solver")] =
+        QString::fromStdString(baResult.plaMatrixLinearSolverName);
+    saveObj[QStringLiteral("ba_plamatrix_device_name")] =
+        QString::fromStdString(baResult.plaMatrixDeviceName);
+    saveObj[QStringLiteral("ba_plamatrix_linear_iterations")] =
+        baResult.plaMatrixLinearIterations;
+    saveObj[QStringLiteral("ba_plamatrix_schur_pattern_builds")] =
+        baResult.plaMatrixSchurPatternBuilds;
+    saveObj[QStringLiteral("ba_plamatrix_schur_pattern_reuses")] =
+        baResult.plaMatrixSchurPatternReuses;
+    saveObj[QStringLiteral("ba_plamatrix_schur_assembly_on_device")] =
+        baResult.plaMatrixSchurAssemblyOnDevice;
+    saveObj[QStringLiteral("ba_plamatrix_schur_assembly_seconds")] =
+        baResult.plaMatrixSchurAssemblySeconds;
+    saveObj[QStringLiteral("ba_plamatrix_linear_solve_seconds")] =
+        baResult.plaMatrixLinearSolveSeconds;
 
     // BA 选项回存（便于复现）
     {
@@ -536,6 +558,7 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("ba_backend")] =
             QString::fromLatin1(xjw::BundleAdjust::backendName(baOptions.backend));
         optObj[QStringLiteral("ba_cuda_device")] = baOptions.ceresCudaDevice;
+        optObj[QStringLiteral("ba_plamatrix_device")] = baOptions.plaMatrixDevice;
         optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minCeresCudaCameras;
         optObj[QStringLiteral("ba_min_cuda_observations")] = baOptions.minCeresCudaObservations;
         optObj[QStringLiteral("ba_native_cuda_device")] = baOptions.nativeCudaDevice;

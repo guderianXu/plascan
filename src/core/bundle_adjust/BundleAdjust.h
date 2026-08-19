@@ -6,6 +6,7 @@
 //
 // 算法概述：
 //   - Legacy CPU：采用点、相机交替优化，高斯牛顿/LM 与有限差分雅可比
+//   - PlaMatrix CPU/CUDA/OpenCL：相机位姿、三维点、完整 Brown 内参和物方约束联合 Schur/LM 优化
 //   - Ceres CPU/CUDA：联合优化三维点、相机位姿及可选标定组共享内参
 //   - Native CUDA：显式固定相机的三维点块优化，不冒充完整联合 BA
 //   - 所有后端统一执行正深度、离群点、约束质量和结果可写回检查
@@ -29,13 +30,16 @@ namespace xjw
  *
  * LegacyCpu 为项目原有的手写 CPU/OpenMP 求解器；CeresCpu/CeresCuda 使用
  * Ceres 构建联合非线性最小二乘问题，其中 CeresCuda 仅在 Ceres 本身
- * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解；NativeCuda 当前
- * 只负责固定相机的三维点块优化。
+ * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解；PlaMatrixCpu/Cuda/OpenCl
+ * 共用固定内参联合 BA，只切换约化 Schur PCG；NativeCuda 当前只负责固定相机的三维点块优化。
  */
 enum class BABackend
 {
     Auto,
     LegacyCpu,
+    PlaMatrixCpu,
+    PlaMatrixCuda,
+    PlaMatrixOpenCl,
     CeresCpu,
     CeresCuda,
     NativeCuda,
@@ -425,6 +429,8 @@ struct BAOptions
     // ── Ceres/GPU 后端 ─────────────────────────────────────────────────────
     /// Ceres CUDA 求解使用的 GPU 设备 ID。当前仅在 Ceres 编译了 CUDA 支持时生效。
     int ceresCudaDevice = 0;
+    /// PlaMatrix CUDA/OpenCL Schur PCG 使用的稳定设备索引。
+    int plaMatrixDevice = 0;
     /// 自研 CUDA BA 使用的 GPU 设备 ID。
     int nativeCudaDevice = 0;
     /// native_cuda 每个点块 LM step 允许的最大三维位移范数。
@@ -589,6 +595,19 @@ struct BAResult
     double nativeCudaDeviceSelectSeconds = 0.0;        ///< native_cuda cudaSetDevice 耗时
     double nativeCudaStagingSeconds = 0.0;             ///< native_cuda CPU 侧设备输入打包耗时
     double nativeCudaReleaseSeconds = 0.0;             ///< native_cuda 设备缓冲释放耗时
+    double plaMatrixInitialCost = 0.0;                  ///< PlaMatrix 初始鲁棒目标函数值
+    double plaMatrixFinalCost = 0.0;                    ///< PlaMatrix 最终鲁棒目标函数值
+    int plaMatrixAcceptedSteps = 0;                     ///< PlaMatrix 接受的 LM trial step 数
+    int plaMatrixRejectedSteps = 0;                     ///< PlaMatrix 拒绝的 LM trial step 数
+    int plaMatrixRejectedInitialTracks = 0;             ///< PlaMatrix 初始 gross gate 拒绝的 track 数
+    std::string plaMatrixLinearSolverName = "none";     ///< CPU/CUDA/OpenCL Schur PCG 名称
+    std::string plaMatrixDeviceName;                     ///< 实际执行 Schur PCG 的加速设备名
+    int plaMatrixLinearIterations = 0;                   ///< 所有 LM trial 累计 PCG 迭代数
+    int plaMatrixSchurPatternBuilds = 0;                 ///< 加速后端 Schur CSR pattern 构建次数
+    int plaMatrixSchurPatternReuses = 0;                 ///< 加速后端 Schur CSR pattern 复用次数
+    bool plaMatrixSchurAssemblyOnDevice = false;         ///< Schur CSR 数值是否由 CUDA/OpenCL 设备装配
+    double plaMatrixSchurAssemblySeconds = 0.0;          ///< 加速后端累计 CSR Schur 组装耗时
+    double plaMatrixLinearSolveSeconds = 0.0;            ///< 所有 LM trial 累计线性求解耗时
 
     int totalTracks = 0;        ///< 输入轨迹总数
     int optimizedTracks = 0;    ///< 成功优化的轨迹数

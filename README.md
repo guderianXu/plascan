@@ -428,11 +428,11 @@ PlaPoint 在这些公共设施之上只保留点云领域 kernel。第一阶段�
 SOR/Radius、Voxel、Normals 和 HeightGrid 的输入输出驻留主机，并仍包含主机建索引、排序、属性聚合或
 协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU 取决于点数、属性和驱动，
 需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，Auto 会记录原因并回退
-CPU，显式 OpenCL 则明确报错。“只用 OpenCL”会自动忽略 NVIDIA 的 OpenCL 接口，仅调度 AMD、Intel 等
-非 NVIDIA OpenCL 设备；如果没有这类设备，则直接报告设备不可用，不会回退 CUDA。
+CPU，显式 OpenCL 则明确报错。显式 OpenCL 允许使用 NVIDIA 的 OpenCL 接口；Auto/混合调度仍会把
+同一块 NVIDIA 物理 GPU 的 CUDA 与 OpenCL 接口去重，避免重复占用。
 PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量一次上传，稀疏乘法、预条件、
 向量更新和分层归约在 GPU 执行，仅回读每轮收敛标量和最终解。Poisson 求解后端与点云预处理独立，
-自动按 CUDA → OpenCL → CPU 选择；显式 OpenCL 会严格使用选中的非 NVIDIA OpenCL 设备，设备或求解
+自动按 CUDA → OpenCL → CPU 选择；显式 OpenCL 会严格使用选中的 OpenCL 设备，设备或求解
 失败时明确报错。
 这层基础设施尚不代表 PlaMatrix 已提供通用 OpenCL GEMM 或 SVD。
 多块 OpenCL GPU 并存时，可用 `PLAMATRIX_OPENCL_DEVICE_INDEX` 指定 PlaMatrix 枚举出的稳定设备索引；
@@ -447,14 +447,27 @@ PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量�
 point-only BA 和小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU；需要相机位姿优化且问题规模足够大时，
 Auto 会尝试 Ceres CUDA dense Schur；固定相机的显式 point-only CUDA 请求才使用 PlaScan 自研
 `native_cuda` 点块后端。
+联合相机/三维点问题还可显式传 `--ba-backend plamatrix_cpu`、`plamatrix_cuda` 或
+`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM；三者只切换约化系统的
+CPU 块 Jacobi-PCG、CUDA 块 Jacobi-PCG 或 OpenCL 块 Jacobi-PCG。设备路径会记录实际设备名且不隐式回退 CPU，
+并在邻接签名一致时复用 Schur CSR pattern，但每轮重新计算全部数值和阻尼。CUDA/OpenCL 的 CSR
+拓扑仍由主机校验和缓存，Schur 数值乘加由设备 kernel 完成，并通过结果字段显式证明执行位置。
+这些路径目前作为 Ceres 对照验证阶段，不参与 Auto 默认选择；
+已支持分组共享焦距、完整 Brown 内参以及 GCP/LiDAR/比例尺/位姿/激光测距约束。
 `ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、`ba_used_gpu`、
 `ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时、native CUDA 活动工作集统计、
-质量门控和回退原因。Auto 后端会优先保证 RMS 和有效 track 比例；CUDA 候选若比 legacy 明显变差，
+PlaMatrix 初始/最终代价、LM 接受/拒绝步数、线性求解器、设备名、PCG 迭代、Schur 数值装配位置与耗时、
+质量门控和回退原因。Auto 后端会优先保证 RMS 和有效
+track 比例；CUDA 候选若比 legacy 明显变差，
 会自动回退而不是强行使用 GPU。显式请求大规模 point-only Ceres 时也会按安全阈值回退，
 避免 dense QR 大矩阵不稳定。
 需要复现旧路径时可传
 `--ba-backend legacy_cpu`；需要强制 Ceres CPU 或 CUDA 时分别传 `--ba-backend ceres_cpu` /
-`--ba-backend ceres_cuda`；需要强制自研 CUDA 路径时传 `--ba-backend native_cuda`。
+`--ba-backend ceres_cuda`；固定内参联合 BA 可传 `--ba-backend plamatrix_cpu`、
+`--ba-backend plamatrix_cuda` 或 `--ba-backend plamatrix_opencl`；需要强制自研
+CUDA 点块路径时传 `--ba-backend native_cuda`。
+`--ba-plamatrix-device` 指定 PlaMatrix CUDA/OpenCL 设备索引；OpenCL 进程级选择仍由
+`PLAMATRIX_OPENCL_DEVICE_INDEX` 初始化，二者不一致时明确报错。
 可用 `--ba-native-cuda-device` 和 `--ba-native-cuda-max-point-step` 调整显式
 native CUDA point-only 求解的设备与点块步长；`--ba-min-cuda-cameras` 和
 `--ba-min-cuda-observations` 用于 Ceres CUDA 自动选择阈值。
@@ -473,7 +486,7 @@ python scripts/bench/run_ba_backend_benchmark.py \
   --out build/ba_benchmarks/ba_backend_benchmark.csv \
   --summary-json build/ba_benchmarks/ba_backend_benchmark.json \
   --cases small,medium,large \
-  --backends legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto \
+  --backends legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,ceres_cpu,ceres_cuda,native_cuda,auto \
   --repeat 3 \
   --iterations 8 \
   --threads 32
@@ -492,7 +505,8 @@ build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
 
 默认按生产阈值选择 Dense/Sparse/Iterative Schur。基准调优时可用
 `--max-dense-schur-cameras` 和 `--max-sparse-schur-cameras` 强制跨过规划阈值；输出同时保留
-`seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器和 RMS。
+`seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器、PlaMatrix
+LM/代价统计和 RMS。
 
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
 `--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；

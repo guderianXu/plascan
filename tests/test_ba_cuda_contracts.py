@@ -106,6 +106,28 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("native_kernel_seconds", source)
         self.assertIn("native_staging_seconds", source)
 
+    def test_plamatrix_backend_is_exposed_with_comparison_metrics(self):
+        header = self.read_text("src/core/bundle_adjust/BundleAdjust.h")
+        benchmark = self.read_text(
+            "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp"
+        )
+        service = self.read_text("src/gui/project/services/BundleAdjustService.cpp")
+
+        self.assertIn("PlaMatrixCpu", header)
+        self.assertIn("PlaMatrixCuda", header)
+        self.assertIn("PlaMatrixOpenCl", header)
+        self.assertIn("plamatrix_cpu", benchmark)
+        self.assertIn("plamatrix_cuda", benchmark)
+        self.assertIn("plamatrix_opencl", benchmark)
+        self.assertIn("plamatrix_initial_cost", benchmark)
+        self.assertIn("plamatrix_final_cost", benchmark)
+        self.assertIn("plamatrix_linear_solver", benchmark)
+        self.assertIn("plamatrix_device", benchmark)
+        self.assertIn("ba_plamatrix_initial_cost", service)
+        self.assertIn("ba_plamatrix_final_cost", service)
+        self.assertIn("ba_plamatrix_linear_solver", service)
+        self.assertIn("ba_plamatrix_device_name", service)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,18 @@ bool parseBackend(const std::string &name, xjw::BABackend *backend)
     {
         *backend = xjw::BABackend::LegacyCpu;
     }
+    else if (name == "plamatrix_cpu")
+    {
+        *backend = xjw::BABackend::PlaMatrixCpu;
+    }
+    else if (name == "plamatrix_cuda")
+    {
+        *backend = xjw::BABackend::PlaMatrixCuda;
+    }
+    else if (name == "plamatrix_opencl")
+    {
+        *backend = xjw::BABackend::PlaMatrixOpenCl;
+    }
     else if (name == "ceres_cpu")
     {
         *backend = xjw::BABackend::CeresCpu;
@@ -297,6 +309,26 @@ void runCase(const std::string &name,
                   << ",rms_after=" << result.meanRmsAfter
                   << ",quality_rejected=" << (result.qualityGateRejected ? "true" : "false")
                   << ",quality_message=" << sanitizeField(result.qualityGateMessage)
+                  << ",plamatrix_initial_cost=" << result.plaMatrixInitialCost
+                  << ",plamatrix_final_cost=" << result.plaMatrixFinalCost
+                  << ",plamatrix_accepted_steps=" << result.plaMatrixAcceptedSteps
+                  << ",plamatrix_rejected_steps=" << result.plaMatrixRejectedSteps
+                  << ",plamatrix_rejected_initial_tracks="
+                  << result.plaMatrixRejectedInitialTracks
+                  << ",plamatrix_linear_solver="
+                  << sanitizeField(result.plaMatrixLinearSolverName)
+                  << ",plamatrix_device=" << sanitizeField(result.plaMatrixDeviceName)
+                  << ",plamatrix_linear_iterations=" << result.plaMatrixLinearIterations
+                  << ",plamatrix_schur_pattern_builds="
+                  << result.plaMatrixSchurPatternBuilds
+                  << ",plamatrix_schur_pattern_reuses="
+                  << result.plaMatrixSchurPatternReuses
+                  << ",plamatrix_schur_assembly_on_device="
+                  << (result.plaMatrixSchurAssemblyOnDevice ? 1 : 0)
+                  << ",plamatrix_schur_assembly_seconds="
+                  << result.plaMatrixSchurAssemblySeconds
+                  << ",plamatrix_linear_solve_seconds="
+                  << result.plaMatrixLinearSolveSeconds
                   << ",native_initial_cost=" << result.nativeCudaInitialCost
                   << ",native_final_cost=" << result.nativeCudaFinalCost
                   << ",native_active_observations=" << result.nativeCudaActiveObservations
@@ -484,7 +516,10 @@ int main(int argc, char **argv)
         settings.iterations = argc > 4 ? std::max(1, std::atoi(argv[4])) : 8;
         settings.threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
         settings.refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
-        const std::string backends = argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto";
+        const std::string backends = argc > 7
+            ? argv[7]
+            : "legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,"
+              "ceres_cpu,ceres_cuda,native_cuda,auto";
         settings.maxDenseSchurCameras = argc > 8
             ? std::max(0, std::atoi(argv[8]))
             : settings.maxDenseSchurCameras;

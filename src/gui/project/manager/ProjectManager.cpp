@@ -2316,6 +2316,18 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     {
         opts.baOpt.backend = xjw::BABackend::LegacyCpu;
     }
+    else if (baBackendName == QLatin1String("plamatrix_cpu"))
+    {
+        opts.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
+    }
+    else if (baBackendName == QLatin1String("plamatrix_cuda"))
+    {
+        opts.baOpt.backend = xjw::BABackend::PlaMatrixCuda;
+    }
+    else if (baBackendName == QLatin1String("plamatrix_opencl"))
+    {
+        opts.baOpt.backend = xjw::BABackend::PlaMatrixOpenCl;
+    }
     else if (baBackendName == QLatin1String("ceres_cpu"))
     {
         opts.baOpt.backend = xjw::BABackend::CeresCpu;
@@ -2335,6 +2347,9 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.baOpt.ceresCudaDevice = qMax(
         0,
         extraSettings.value(QStringLiteral("ba_cuda_device")).toInt(0));
+    opts.baOpt.plaMatrixDevice = qMax(
+        0,
+        extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
     opts.baOpt.minCeresCudaCameras = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(opts.baOpt.minCeresCudaCameras));
