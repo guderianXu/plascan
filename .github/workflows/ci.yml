@@ -64,6 +64,7 @@ jobs:
             libgles2-mesa-dev \
             libglu1-mesa-dev \
             libltdl-dev \
+            libsm-dev \
             libtool \
             libx11-dev \
             libx11-xcb-dev \
@@ -271,6 +272,7 @@ jobs:
             libgles2-mesa-dev \
             libglu1-mesa-dev \
             libltdl-dev \
+            libsm-dev \
             libtool \
             libx11-dev \
             libx11-xcb-dev \
