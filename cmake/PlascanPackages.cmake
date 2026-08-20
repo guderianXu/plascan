@@ -136,6 +136,11 @@ endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
 # ── plamatrix (submodule) ──────────────────────────────────────────────────────
+# PlaScan uses PlaMatrix's self-contained CPU kernels so production builds do
+# not inherit a BLAS/LAPACK runtime. PlaMatrix still exposes its optional system
+# backend when it is built as a standalone project.
+set(PLAMATRIX_WITH_SYSTEM_LINALG OFF
+  CACHE BOOL "Use PlaMatrix native CPU linear algebra in PlaScan" FORCE)
 if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER AND NOT PLASCAN_APPLE_SILICON)
   set(PLAMATRIX_WITH_CUDA ON CACHE BOOL "Build PlaMatrix with CUDA acceleration" FORCE)
   set(PLAPOINT_WITH_CUDA ON CACHE BOOL "Build PlaPoint with CUDA acceleration" FORCE)

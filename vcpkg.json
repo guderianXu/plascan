@@ -17,10 +17,6 @@
     },
     "gtest",
     "libzip",
-    {
-      "name": "lapack",
-      "platform": "linux"
-    },
     "opencl",
     {
       "name": "opencv",

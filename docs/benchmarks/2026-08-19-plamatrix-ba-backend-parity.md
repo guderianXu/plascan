@@ -93,6 +93,22 @@ CUDA Schur 装配累计时间由约 `0.06898 s` 降到 `0.03004 s`，OpenCL 由�
 Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨队列零拷贝在 NVIDIA 595.84
 驱动触发异步事件线程崩溃，生产路径保留稳定主机 handoff；CUDA 已完全移除 Schur 数值 D2H/H2D 往返。
 
+## 2026-08-20 PlaMatrix 原生 CPU 线性代数复测
+
+生产构建关闭 PlaMatrix 的可选系统 BLAS/LAPACK 后端，并从 vcpkg manifest 与 Debian 运行时依赖中
+移除了 LAPACK/OpenBLAS。原生 GEMM 使用分块、SIMD 和 OpenMP；SVD/eigh 使用按标量精度与矩阵尺度
+收敛的 Jacobi；128 阶以上的稠密 Schur 使用 32 列分块的持久 OpenMP Cholesky。
+
+| 数据 | 原生 PlaMatrix CPU | 之前的 LAPACK CPU | 最终 RMS | 最终鲁棒代价 |
+|------|--------------------|-------------------|----------|--------------|
+| 12/240/1440 | 0.00879 s | 0.00780 s | 0.04124357756 | 2.584227907 |
+| 80/3000/24000 | 0.29709 s | 0.24380 s | 0.04404584261 | 48.32036955 |
+
+80/3000 的首个标量原生版本为 0.41593 s；分块 Cholesky 将累计稠密线性求解从 0.16063 s
+降到 0.04468 s。相对系统 LAPACK 的应用级差距约 22%，但数值结果不变，且 GUI 与 BA benchmark
+的动态依赖不再包含 CPU `libblas`、`liblapack`、`libopenblas` 或 `libgfortran`。CUDA 13.1 的
+`libcublas`/`libcublasLt` 属于 GPU 后端，继续保留。
+
 ## 生产替代门禁
 
 - 默认 `vcpkg.json` 不包含 Ceres，`PLASCAN_ENABLE_CERES_REFERENCE` 默认关闭。
@@ -103,8 +119,9 @@ Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨�
 
 ## 自动化验证
 
-- PlaMatrix CPU：273/273 通过；无 CUDA 构建中的 9 个 GPU 用例按设计跳过。
-- PlaMatrix CUDA 13.1/OpenCL：502/502 通过。
+- PlaMatrix 原生 CPU：278/278 通过；无 CUDA 构建中的 9 个 GPU 用例按设计跳过。
+- PlaMatrix 可选系统 BLAS/LAPACK：268/268 通过（该构建未启用 benchmark 注册测试）。
+- PlaMatrix CUDA 13.1/OpenCL + 原生 CPU：508/508 通过。
 - 最终无 Ceres 生产构建：2673 项发现，2672 个已执行测试零失败；其中外部模型/数据相关用例按既有条件跳过，
   另有一个既有 PatchMatch benchmark 被显式禁用。
 - BA 同数据测试会在设备存在时同时运行 PlaMatrix CPU/CUDA/OpenCL 和 Ceres，并检查后端身份、

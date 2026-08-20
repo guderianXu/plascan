@@ -105,12 +105,17 @@ class RepoHygieneTest(unittest.TestCase):
         )
         self.assertEqual("linux", linux_vulkan_loader["platform"])
         self.assertEqual(["xcb"], linux_vulkan_loader["features"])
-        linux_lapack = next(
-            dependency
+        production_dependency_names = {
+            dependency if isinstance(dependency, str) else dependency.get("name")
             for dependency in manifest["dependencies"]
-            if isinstance(dependency, dict) and dependency.get("name") == "lapack"
-        )
-        self.assertEqual("linux", linux_lapack["platform"])
+        }
+        self.assertNotIn("lapack", production_dependency_names)
+        self.assertNotIn("openblas", production_dependency_names)
+        self.assertIn("PLAMATRIX_WITH_SYSTEM_LINALG OFF", packages_text)
+        root_cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertNotIn("libblas3", root_cmake_text)
+        self.assertNotIn("liblapack3", root_cmake_text)
+        self.assertNotIn("libgfortran5", root_cmake_text)
         self.assertEqual([], manifest["default-features"])
         self.assertNotIn("ceres", manifest["dependencies"])
         self.assertIn("ceres-suitesparse", manifest["features"])

@@ -11,7 +11,7 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
-- vcpkg；Qt6、OpenCV 4、GDAL、BLAS/LAPACK、libtiff、libzip、OpenMP 和 GTest 等 C++ 依赖由 manifest 安装。
+- vcpkg；Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP 和 GTest 等 C++ 依赖由 manifest 安装。CPU 稠密线性代数由 PlaMatrix 原生实现，不依赖 BLAS/LAPACK。
 - TensorRT 可选；用于 GPU 匹配与 AI 蒙版，并与 CUDA Toolkit 一样作为外部 SDK 提供。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
 - OpenCL 1.2 SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
@@ -51,7 +51,7 @@ python scripts/env/run_tests.py --preset linux-vcpkg-release --output-on-failure
 
 PlaScan 的 C++ 构建统一使用 `vcpkg.json` 和 `CMakePresets.json`，配置时必须启用 vcpkg manifest
 toolchain。CMake 不读取 Conda 环境作为 C++ 依赖来源；CUDA 与 TensorRT 是可选的外部 SDK，通过其
-标准 CMake 路径显式提供。vcpkg 负责 Qt6、OpenCV 4、GDAL、Linux BLAS/LAPACK、libtiff、libzip、GTest 等通用依赖。
+标准 CMake 路径显式提供。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；PlaMatrix 提供自包含的 CPU 稠密线性代数。
 
 Linux:
 
@@ -205,7 +205,7 @@ cmake --workflow --preset windows-package-release
 `-INNOSETUP.sha256`；发布和安装时必须让 `.exe` 与全部 `.bin` 位于同一目录。每个 `.exe/.bin`
 资产都会在打包时强制校验为小于 2 GiB，适合分别上传到同一个 GitHub Release。
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、TensorRT Builder、NVRTC 和 nvFatbin 等动态加载运行时。要让内置 U2Net、BiRefNet、LightGlue 和 LoMa-R ONNX 安装后直接使用 GPU，发布构建必须启用 CUDA/TensorRT，并携带 `nvinfer`、`nvonnxparser`、plugin 和对应架构的 builder resource；OpenCV 始终保持 CPU-only，安装包不得携带 cuDNN 或开发机生成的 `.engine`。
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`；PlaMatrix CPU 稠密线性代数不再带入 LAPACK/OpenBLAS DLL。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、TensorRT Builder、NVRTC 和 nvFatbin 等动态加载运行时。要让内置 U2Net、BiRefNet、LightGlue 和 LoMa-R ONNX 安装后直接使用 GPU，发布构建必须启用 CUDA/TensorRT，并携带 `nvinfer`、`nvonnxparser`、plugin 和对应架构的 builder resource；OpenCV 始终保持 CPU-only，安装包不得携带 cuDNN 或开发机生成的 `.engine`。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
@@ -446,7 +446,7 @@ point-only BA 使用 legacy/OpenMP；联合相机、共享内参或物方软约�
 Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix OpenCL；固定相机的显式 point-only CUDA 请求才使用 PlaScan 自研
 `native_cuda` 点块后端。
 联合相机/三维点问题还可显式传 `--ba-backend plamatrix_cpu`、`plamatrix_cuda` 或
-`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM。CPU 会按规模自动选择 LAPACK
+`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM。CPU 会按规模自动选择 PlaMatrix 原生
 稠密 Cholesky 或矩阵自由块 Jacobi-PCG；CUDA/OpenCL 使用 CSR 块 Jacobi-PCG。法方程和目标代价只遍历一次，
 LM 拒绝步复用当前线性化，track/Jacobian 采用确定性分片并行装配。设备路径会记录实际设备名且不隐式回退 CPU，
 并复用 Schur CSR pattern、设备缓冲和固定拓扑；CUDA 的 Schur 数值由装配 kernel 直接交给 PCG，不再经过
