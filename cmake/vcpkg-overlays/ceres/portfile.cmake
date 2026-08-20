@@ -22,9 +22,7 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
     FEATURES
         "cuda"              USE_CUDA
         "eigensparse"       EIGENSPARSE
-        "lapack"            LAPACK
         "schur"             SCHUR_SPECIALIZATIONS
-        "suitesparse"       SUITESPARSE
 )
 
 if(VCPKG_TARGET_IS_IOS OR VCPKG_TARGET_IS_UWP)
@@ -61,15 +59,14 @@ vcpkg_cmake_configure(
         -DBUILD_BENCHMARKS=OFF
         -DBUILD_EXAMPLES=OFF
         -DBUILD_TESTING=OFF
+        -DLAPACK=OFF
         -DPROVIDE_UNINSTALL_TARGET=OFF
         -DMSVC_USE_STATIC_CRT=${MSVC_USE_STATIC_CRT_VALUE}
         -DVCPKG_LOCK_FIND_PACKAGE_CUDAToolkit=ON
         -DVCPKG_LOCK_FIND_PACKAGE_gflags=OFF  # No direct use except examples+tests
-        -DVCPKG_LOCK_FIND_PACKAGE_LAPACK=ON
     MAYBE_UNUSED_VARIABLES
         MSVC_USE_STATIC_CRT
         VCPKG_LOCK_FIND_PACKAGE_CUDAToolkit
-        VCPKG_LOCK_FIND_PACKAGE_LAPACK
 )
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()

@@ -56,7 +56,6 @@ jobs:
             cmake \
             ccache \
             flex \
-            gfortran \
             git \
             gperf \
             g++ \
@@ -265,7 +264,6 @@ jobs:
             cmake \
             curl \
             flex \
-            gfortran \
             git \
             gperf \
             libgl1-mesa-dev \

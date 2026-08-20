@@ -553,10 +553,24 @@ BaServiceResult BundleAdjustService::run(
         baResult.plaMatrixSchurAssemblyOnDevice;
     saveObj[QStringLiteral("ba_plamatrix_mixed_precision_used")] =
         baResult.plaMatrixMixedPrecisionUsed;
+    saveObj[QStringLiteral("ba_plamatrix_small_block_inverse_seconds")] =
+        baResult.plaMatrixSmallBlockInverseSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_schur_accumulation_seconds")] =
+        baResult.plaMatrixSchurAccumulationSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_csr_conversion_seconds")] =
+        baResult.plaMatrixCsrConversionSeconds;
     saveObj[QStringLiteral("ba_plamatrix_schur_assembly_seconds")] =
         baResult.plaMatrixSchurAssemblySeconds;
+    saveObj[QStringLiteral("ba_plamatrix_cholesky_factorization_seconds")] =
+        baResult.plaMatrixCholeskyFactorizationSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_triangular_solve_seconds")] =
+        baResult.plaMatrixTriangularSolveSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_residual_check_seconds")] =
+        baResult.plaMatrixResidualCheckSeconds;
     saveObj[QStringLiteral("ba_plamatrix_linear_solve_seconds")] =
         baResult.plaMatrixLinearSolveSeconds;
+    saveObj[QStringLiteral("ba_plamatrix_back_substitution_seconds")] =
+        baResult.plaMatrixBackSubstitutionSeconds;
 
     // BA 选项回存（便于复现）
     {

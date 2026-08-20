@@ -91,15 +91,14 @@
         }
       ]
     },
-    "ceres-suitesparse": {
-      "description": "Enable the optional CPU Ceres reference backend for BA parity tests.",
+    "ceres-reference": {
+      "description": "Enable the optional CPU Ceres EigenSparse reference backend for BA parity tests.",
       "dependencies": [
         {
           "name": "ceres",
           "default-features": false,
           "features": [
-            "lapack",
-            "suitesparse"
+            "eigensparse"
           ]
         }
       ]

@@ -95,9 +95,11 @@ Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨�
 
 ## 2026-08-20 PlaMatrix 原生 CPU 线性代数复测
 
-生产构建关闭 PlaMatrix 的可选系统 BLAS/LAPACK 后端，并从 vcpkg manifest 与 Debian 运行时依赖中
-移除了 LAPACK/OpenBLAS。原生 GEMM 使用分块、SIMD 和 OpenMP；SVD/eigh 使用按标量精度与矩阵尺度
-收敛的 Jacobi；128 阶以上的稠密 Schur 使用 32 列分块的持久 OpenMP Cholesky。
+生产构建最初关闭 PlaMatrix 的系统 BLAS/LAPACK 后端，并从 vcpkg manifest 与 Debian 运行时依赖中
+移除了 LAPACK/OpenBLAS；P0-P7 验证完成后该可选后端及其 Fortran 包装也从 PlaMatrix 源码中删除。
+原生 GEMM 使用分块、SIMD 和 OpenMP；该阶段 SVD/eigh 仍使用按标量精度与
+矩阵尺度收敛的 Jacobi，128 阶以上稠密 Schur 使用 32 列分块的持久 OpenMP Cholesky。后续 P0-P7
+复测已改为 packed GEMM、large one-sided Jacobi SVD、Householder+QL eigh 和自动 32/48/64 列 Cholesky。
 
 | 数据 | 原生 PlaMatrix CPU | 之前的 LAPACK CPU | 最终 RMS | 最终鲁棒代价 |
 |------|--------------------|-------------------|----------|--------------|
@@ -109,6 +111,27 @@ Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨�
 的动态依赖不再包含 CPU `libblas`、`liblapack`、`libopenblas` 或 `libgfortran`。CUDA 13.1 的
 `libcublas`/`libcublasLt` 属于 GPU 后端，继续保留。
 
+## 2026-08-20 P0-P7 原生内核优化
+
+随后完成的 P0-P7 优化包括：细分阶段计时、Schur workspace/固定小块内核、直接下三角稠密装配、
+POTRF/TRSM/SYRK 分块 Cholesky、AVX2/FMA 运行时分派、3×3 eig/SVD、B-panel packed GEMM，以及
+大尺寸 SVD/eigh/QR 重构。复测命令：
+
+```bash
+OMP_NUM_THREADS=16 build/linux-vcpkg-cuda-opencl-release/bin/ba_backend_benchmark \
+    80 3000 8 8 16 1 plamatrix_cpu
+```
+
+结果保持最终 RMS `0.04404584261`、鲁棒代价 `48.32036955`，墙钟降至 `0.14615129 s`。
+累计 Schur 装配为 `0.053806207 s`，其中数值累加 `0.030408266 s`、CSR 转换 `0 s`、
+3×3 小块求逆 `0.000539852 s`；Cholesky 分解 `0.034124716 s`、三角求解 `0.002391043 s`、
+残差检查 `0.003648408 s`、eliminated 回代 `0.003121857 s`。相对本轮修改前反复测得的
+约 `0.27-0.30 s` 稠密墙钟和 `0.17-0.19 s` Schur 装配，分别约快 1.9-2.1 倍和 3.2-3.5 倍。
+
+八线程原生 GEMM 在 N=256/512/1024/2048 时为 `0.279/1.755/22.174/213.063 ms`；修改前约为
+`0.66/4.89/31.0/246 ms`。N=1024/2048 与本机系统 BLAS 的差距缩小到约 1.17/1.27 倍，
+较小矩阵已接近或优于调用系统 BLAS 的该次测量。ISA 不满足 AVX2+FMA 时自动使用标量微内核。
+
 ## 生产替代门禁
 
 - 默认 `vcpkg.json` 不包含 Ceres，`PLASCAN_ENABLE_CERES_REFERENCE` 默认关闭。
@@ -119,10 +142,10 @@ Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨�
 
 ## 自动化验证
 
-- PlaMatrix 原生 CPU：278/278 通过；无 CUDA 构建中的 9 个 GPU 用例按设计跳过。
-- PlaMatrix 可选系统 BLAS/LAPACK：268/268 通过（该构建未启用 benchmark 注册测试）。
-- PlaMatrix CUDA 13.1/OpenCL + 原生 CPU：508/508 通过。
-- 最终无 Ceres 生产构建：2673 项发现，2672 个已执行测试零失败；其中外部模型/数据相关用例按既有条件跳过，
+- PlaMatrix 原生 CPU：285/285 通过；无 CUDA 构建中的 9 个 GPU 用例按设计跳过。
+- 删除前的系统 BLAS/LAPACK 对照构建曾通过 275/275；该后端现已移除，仅作为历史性能基线保留。
+- PlaMatrix CUDA 13.1/OpenCL + 原生 CPU：515/515 通过，CUDA/OpenCL 用例在 RTX 4060 上实际执行。
+- 最终无 Ceres 生产构建：3449 项发现，3448 个已执行测试零失败；其中外部模型/数据相关用例按既有条件跳过，
   另有一个既有 PatchMatch benchmark 被显式禁用。
 - BA 同数据测试会在设备存在时同时运行 PlaMatrix CPU/CUDA/OpenCL 和 Ceres，并检查后端身份、
   GPU 执行标志、设备名、设备 Schur 装配、迭代/耗时指标及相机、点、RMS、代价的一致性。

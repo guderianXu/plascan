@@ -86,11 +86,11 @@ Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI �
 显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
 
 Linux 正式交付建议使用 Ubuntu 24.04 x86_64 基线的一键 DEB 工作流。首次配置会由 vcpkg 构建带
-XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、`gfortran`、Ninja、`pkg-config` 和 `patchelf`。
+XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、Ninja、`pkg-config` 和 `patchelf`。
 打包前还需按下文准备对应变体的模型资产。日常修改代码后运行：
 
 ```bash
-sudo apt install build-essential gfortran ninja-build pkg-config patchelf
+sudo apt install build-essential ninja-build pkg-config patchelf
 ```
 
 然后运行增量打包检查：
@@ -215,7 +215,8 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 
 同一脚本默认 `-EnableCeresCudaBa:$false`，正式 SfM/光束法平差使用 PlaMatrix。只有做数值对照测试时
 才显式传 `-EnableCeresCudaBa:$true`；该模式会启用 `PLASCAN_ENABLE_CERES_REFERENCE`，并安装
-`ceres-cuda;ceres-suitesparse`，不会改变生产默认后端。
+`ceres-cuda;ceres-reference`，使用 EigenSparse 作为 CPU 对照求解器，不会带入 LAPACK/OpenBLAS，
+也不会改变生产默认后端。
 
 标准 Windows CUDA 构建由 TensorRT 加速 U2Net 和 BiRefNet ONNX；OpenCV 只为 U2Net 保留 CPU DNN
 回退，不安装 `opencv-dnn-cuda`，也不链接或分发 cuDNN。BiRefNet Dynamic 不提供 CPU 回退。

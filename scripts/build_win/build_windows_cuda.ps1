@@ -1089,10 +1089,9 @@ function Assert-CeresCudaFeatures
 
     $text = Get-Content -LiteralPath $abiInfo -Raw
     if ($text -notmatch "(?m)^features .*cuda" -or
-        $text -notmatch "(?m)^features .*lapack" -or
-        $text -notmatch "(?m)^features .*suitesparse")
+        $text -notmatch "(?m)^features .*eigensparse")
     {
-        throw "Ceres CUDA/LAPACK/SuiteSparse is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
+        throw "Ceres CUDA/EigenSparse is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
     }
 }
 
@@ -1468,7 +1467,7 @@ if (-not $BuildOnly)
     $manifestFeaturesValue = ""
     if ($EnableCeresCudaBa)
     {
-        $manifestFeaturesValue = "ceres-cuda;ceres-suitesparse"
+        $manifestFeaturesValue = "ceres-cuda;ceres-reference"
         $configureArgs += "-DPLASCAN_ENABLE_CERES_REFERENCE=ON"
     }
     else

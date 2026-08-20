@@ -111,21 +111,31 @@ class RepoHygieneTest(unittest.TestCase):
         }
         self.assertNotIn("lapack", production_dependency_names)
         self.assertNotIn("openblas", production_dependency_names)
-        self.assertIn("PLAMATRIX_WITH_SYSTEM_LINALG OFF", packages_text)
+        self.assertNotIn("PLAMATRIX_WITH_SYSTEM_LINALG", packages_text)
+        plamatrix_cmake_text = (
+            ROOT / "3rdparty" / "plamatrix" / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("PLAMATRIX_WITH_SYSTEM_LINALG", plamatrix_cmake_text)
+        self.assertNotIn("find_package(BLAS", plamatrix_cmake_text)
+        self.assertNotIn("find_package(LAPACK", plamatrix_cmake_text)
+        self.assertFalse(
+            (ROOT / "3rdparty" / "plamatrix" / "src" / "ops" / "fortran_linalg.h").exists()
+        )
         root_cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertNotIn("libblas3", root_cmake_text)
         self.assertNotIn("liblapack3", root_cmake_text)
         self.assertNotIn("libgfortran5", root_cmake_text)
         self.assertEqual([], manifest["default-features"])
         self.assertNotIn("ceres", manifest["dependencies"])
-        self.assertIn("ceres-suitesparse", manifest["features"])
-        reference_ceres_dependency = manifest["features"]["ceres-suitesparse"]["dependencies"][0]
+        self.assertIn("ceres-reference", manifest["features"])
+        self.assertNotIn("ceres-suitesparse", manifest["features"])
+        reference_ceres_dependency = manifest["features"]["ceres-reference"]["dependencies"][0]
         reference_ceres_features = reference_ceres_dependency[
             "features"
         ]
         self.assertEqual("ceres", reference_ceres_dependency["name"])
         self.assertFalse(reference_ceres_dependency["default-features"])
-        self.assertEqual(["lapack", "suitesparse"], reference_ceres_features)
+        self.assertEqual(["eigensparse"], reference_ceres_features)
 
         presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
         linux_cuda_opencl = next(
@@ -181,7 +191,7 @@ class RepoHygieneTest(unittest.TestCase):
             linux_package,
         )
         self.assertIn("cmake --workflow --preset linux-package-deb", linux_package)
-        self.assertRegex(linux_package, r"(?m)^            gfortran \\$")
+        self.assertNotIn("gfortran", linux_package)
         self.assertIn("models-v1.1.0", linux_package)
         self.assertIn("--pattern U2Net_v1.onnx", linux_package)
         self.assertIn("--pattern lightglue_sift_bucket4096.onnx", linux_package)
@@ -418,7 +428,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("-UVCPKG_MANIFEST_FEATURES", text)
         self.assertIn("-UVCPKG_OVERLAY_PORTS", text)
         self.assertIn("manifestFeaturesValue", text)
-        self.assertIn('$manifestFeaturesValue = "ceres-cuda;ceres-suitesparse"', text)
+        self.assertIn('$manifestFeaturesValue = "ceres-cuda;ceres-reference"', text)
         self.assertIn("[bool] $EnableCeresCudaBa = $false", text)
         self.assertIn("-DPLASCAN_ENABLE_CERES_REFERENCE=OFF", text)
         self.assertIn("Assert-OpenCvCpuOnlyFeatures", text)

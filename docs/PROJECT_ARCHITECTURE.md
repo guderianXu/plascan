@@ -554,6 +554,9 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 再按线程序确定性合并。设备路径复用经过完整邻接签名校验的 CSR 拓扑、装配缓冲和求解工作区；CUDA Schur
 装配输出通过设备内复制直接交给 PCG。OpenCL 因 NVIDIA 595.84 跨队列 buffer handoff 会触发驱动崩溃，
 当前保留数值主机 handoff，但固定拓扑和装配缓冲仍常驻复用。
+CPU 稠密路径直接按固定 slot 顺序装配 Schur 下三角，不再经过 CSR；常见 3×3/9×3 块使用固定尺寸内核，
+128 阶以上用自动 block size 的 POTRF/TRSM/SYRK 分块 Cholesky。报告分别记录小块求逆、Schur 累加、
+CSR 转换、Cholesky、三角求解、残差检查和点块回代，以便把装配与线性求解回归分开定位。
 三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按规模选择 PlaMatrix CPU/CUDA/OpenCL，
 GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有同数据 Ceres 对照回归。
 行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU / Native CUDA 静默忽略

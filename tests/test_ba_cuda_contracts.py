@@ -19,7 +19,7 @@ class BaCudaContractsTest(unittest.TestCase):
 
         self.assertIn("EnableCeresCudaBa", script)
         self.assertIn('[bool] $EnableCeresCudaBa = $false', script)
-        self.assertIn('"ceres-cuda;ceres-suitesparse"', script)
+        self.assertIn('"ceres-cuda;ceres-reference"', script)
         self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=ON", script)
         self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=OFF", script)
         self.assertIn("manifestFeaturesValue", script)
@@ -27,14 +27,16 @@ class BaCudaContractsTest(unittest.TestCase):
 
         manifest = json.loads(read_text("vcpkg.json"))
         self.assertEqual([], manifest["default-features"])
-        suitesparse_dependencies = manifest["features"]["ceres-suitesparse"][
+        reference_dependencies = manifest["features"]["ceres-reference"][
             "dependencies"
         ]
         self.assertTrue(
             any(
                 dependency.get("name") == "ceres"
-                and "suitesparse" in dependency.get("features", [])
-                for dependency in suitesparse_dependencies
+                and "eigensparse" in dependency.get("features", [])
+                and "lapack" not in dependency.get("features", [])
+                and "suitesparse" not in dependency.get("features", [])
+                for dependency in reference_dependencies
             )
         )
 

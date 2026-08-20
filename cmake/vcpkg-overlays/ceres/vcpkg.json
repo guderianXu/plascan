@@ -33,34 +33,8 @@
         "metis"
       ]
     },
-    "lapack": {
-      "description": "Use Lapack in Ceres",
-      "dependencies": [
-        "lapack"
-      ]
-    },
     "schur": {
       "description": "Enable fixed-size Schur specializations in Ceres"
-    },
-    "suitesparse": {
-      "description": "SuiteSparse support for Ceres",
-      "dependencies": [
-        {
-          "name": "ceres",
-          "features": [
-            "lapack"
-          ]
-        },
-        {
-          "name": "suitesparse-cholmod",
-          "default-features": false,
-          "features": [
-            "matrixops"
-          ]
-        },
-        "suitesparse-config",
-        "suitesparse-spqr"
-      ]
     }
   }
 }

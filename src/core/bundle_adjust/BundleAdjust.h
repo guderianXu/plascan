@@ -616,8 +616,15 @@ struct BAResult
     int plaMatrixSchurPatternReuses = 0;                 ///< 加速后端 Schur CSR pattern 复用次数
     bool plaMatrixSchurAssemblyOnDevice = false;         ///< Schur CSR 数值是否由 CUDA/OpenCL 设备装配
     bool plaMatrixMixedPrecisionUsed = false;            ///< 是否使用 FP32 初解和 FP64 校正
-    double plaMatrixSchurAssemblySeconds = 0.0;          ///< 加速后端累计 CSR Schur 组装耗时
+    double plaMatrixSmallBlockInverseSeconds = 0.0;      ///< 小型消元/预条件块求逆累计耗时
+    double plaMatrixSchurAccumulationSeconds = 0.0;      ///< Schur 数值累加累计耗时
+    double plaMatrixCsrConversionSeconds = 0.0;          ///< CSR 构建及稠密转换累计耗时
+    double plaMatrixSchurAssemblySeconds = 0.0;          ///< Schur 完整装配累计耗时
+    double plaMatrixCholeskyFactorizationSeconds = 0.0;  ///< 稠密 Cholesky 分解累计耗时
+    double plaMatrixTriangularSolveSeconds = 0.0;        ///< 稠密三角回代累计耗时
+    double plaMatrixResidualCheckSeconds = 0.0;          ///< 线性残差检查累计耗时
     double plaMatrixLinearSolveSeconds = 0.0;            ///< 所有 LM trial 累计线性求解耗时
+    double plaMatrixBackSubstitutionSeconds = 0.0;       ///< 消元变量回代累计耗时
 
     int totalTracks = 0;        ///< 输入轨迹总数
     int optimizedTracks = 0;    ///< 成功优化的轨迹数

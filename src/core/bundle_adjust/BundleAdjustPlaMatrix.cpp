@@ -202,8 +202,20 @@ BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& came
                         ++result.plaMatrixSchurPatternBuilds;
                     }
                 }
+                result.plaMatrixSmallBlockInverseSeconds +=
+                    solver_report.smallBlockInverseSeconds;
+                result.plaMatrixSchurAccumulationSeconds +=
+                    solver_report.schurAccumulationSeconds;
+                result.plaMatrixCsrConversionSeconds += solver_report.csrConversionSeconds;
                 result.plaMatrixSchurAssemblySeconds += solver_report.schurAssemblySeconds;
+                result.plaMatrixCholeskyFactorizationSeconds +=
+                    solver_report.choleskyFactorizationSeconds;
+                result.plaMatrixTriangularSolveSeconds +=
+                    solver_report.triangularSolveSeconds;
+                result.plaMatrixResidualCheckSeconds += solver_report.residualCheckSeconds;
                 result.plaMatrixLinearSolveSeconds += solver_report.linearSolveSeconds;
+                result.plaMatrixBackSubstitutionSeconds +=
+                    solver_report.backSubstitutionSeconds;
                 if (!solver_report.deviceName.empty())
                 {
                     result.plaMatrixDeviceName = solver_report.deviceName;

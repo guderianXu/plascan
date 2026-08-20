@@ -330,10 +330,24 @@ void runCase(const std::string &name,
                   << (result.plaMatrixSchurAssemblyOnDevice ? 1 : 0)
                   << ",plamatrix_mixed_precision_used="
                   << (result.plaMatrixMixedPrecisionUsed ? 1 : 0)
+                  << ",plamatrix_small_block_inverse_seconds="
+                  << result.plaMatrixSmallBlockInverseSeconds
+                  << ",plamatrix_schur_accumulation_seconds="
+                  << result.plaMatrixSchurAccumulationSeconds
+                  << ",plamatrix_csr_conversion_seconds="
+                  << result.plaMatrixCsrConversionSeconds
                   << ",plamatrix_schur_assembly_seconds="
                   << result.plaMatrixSchurAssemblySeconds
+                  << ",plamatrix_cholesky_factorization_seconds="
+                  << result.plaMatrixCholeskyFactorizationSeconds
+                  << ",plamatrix_triangular_solve_seconds="
+                  << result.plaMatrixTriangularSolveSeconds
+                  << ",plamatrix_residual_check_seconds="
+                  << result.plaMatrixResidualCheckSeconds
                   << ",plamatrix_linear_solve_seconds="
                   << result.plaMatrixLinearSolveSeconds
+                  << ",plamatrix_back_substitution_seconds="
+                  << result.plaMatrixBackSubstitutionSeconds
                   << ",native_initial_cost=" << result.nativeCudaInitialCost
                   << ",native_final_cost=" << result.nativeCudaFinalCost
                   << ",native_active_observations=" << result.nativeCudaActiveObservations
