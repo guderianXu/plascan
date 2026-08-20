@@ -1,6 +1,7 @@
 #include "MatchPhotosAlgorithmSelector.h"
 
 #include "ImageMatchingRegistry.h"
+#include "sift/AutoSiftAlgorithm.h"
 
 #include <algorithm>
 
@@ -34,14 +35,16 @@ QString profileId(MatchPhotosProfile profile)
 bool shouldPreferCuda(const MatchPhotosOptions &options)
 {
     if (options.device == ComputeDevice::Cpu ||
+        options.device == ComputeDevice::OpenCl ||
+        options.device == ComputeDevice::Metal ||
         (options.device == ComputeDevice::Auto &&
          options.profile == MatchPhotosProfile::CpuCompatible))
     {
         return false;
     }
 
-    // Auto 表示优先使用可用加速设备，而不是默认 CPU。运行阶段会在 CUDA 不可用时
-    // 自动回退；只有用户显式选择 CUDA 时才禁止静默回退。
+    // Auto 表示优先使用可用加速设备，而不是默认 CPU。运行阶段会解析实际后端；
+    // 用户显式选择任一设备时都不允许静默替换。
     return true;
 }
 
@@ -82,6 +85,11 @@ float resolveSiftDetectionThreshold(MatchPhotosProfile profile)
     return profile == MatchPhotosProfile::Fast ? 0.003f : 0.0005f;
 }
 
+float resolveSiftContrastThreshold(MatchPhotosProfile profile)
+{
+    return profile == MatchPhotosProfile::Fast ? 0.04f : 0.02f;
+}
+
 } // namespace
 
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosOptions &options)
@@ -90,7 +98,7 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.algorithmId = options.algorithmId.trimmed().toLower();
     if (plan.algorithmId.isEmpty())
     {
-        plan.algorithmId = QStringLiteral("sift_lightglue");
+        plan.algorithmId = QStringLiteral("auto_sift");
     }
     plan.strategyId = QStringLiteral("metashape_like_%1_%2")
                           .arg(profileId(options.profile), plan.algorithmId);
@@ -115,12 +123,16 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.displayName = descriptor->displayName;
     plan.algorithmVersion = descriptor->version;
     plan.requiresCuda = descriptor->requiresCuda;
+    plan.executionBackend = descriptor->requiresCuda
+        ? image_matching::SiftComputeBackend::Cuda
+        : image_matching::SiftComputeBackend::Automatic;
     plan.extractsFeaturesInMemory =
         descriptor->inputModel == image_matching::AlgorithmInputModel::ReusableFeatures;
     plan.requiresColorInput = descriptor->requiresColorInput;
-    if (plan.requiresCuda && options.device == ComputeDevice::Cpu)
+    if (plan.requiresCuda && options.device != ComputeDevice::Auto &&
+        options.device != ComputeDevice::Cuda)
     {
-        plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用 CPU 设备")
+        plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用当前计算设备")
                                    .arg(plan.displayName);
         return plan;
     }
@@ -133,6 +145,7 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.siftDetectionThreshold = resolveSiftDetectionThreshold(options.profile);
+    plan.siftContrastThreshold = resolveSiftContrastThreshold(options.profile);
     plan.reason = QStringLiteral("%1 在任务内存中提取并匹配特征；只持久化最终 "
                                  ".pimatch 观测，不写中间特征文件。")
                       .arg(plan.displayName);
@@ -142,41 +155,21 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::resolveExecutionBackend(
     const MatchPhotosOptions &options,
     MatchPhotosAlgorithmPlan plan,
-    bool cudaSiftAvailable)
+    image_matching::SiftComputeBackend resolvedBackend)
 {
-    if (!plan.valid || plan.algorithmId != QLatin1String("cuda_sift"))
+    if (!plan.valid ||
+        plan.algorithmId != QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
         return plan;
     }
 
-    if (options.device == ComputeDevice::Cpu)
-    {
-        plan.executionBackend = MatchPhotosExecutionBackend::Cpu;
-        plan.requiresCuda = false;
-        plan.preferCuda = false;
-        plan.backendReason = QStringLiteral("用户指定 OpenCV CPU SIFT 回退后端");
-        return plan;
-    }
-    if (cudaSiftAvailable)
-    {
-        plan.executionBackend = MatchPhotosExecutionBackend::Cuda;
-        plan.backendReason = QStringLiteral("CUDA SIFT 设备预检通过");
-        return plan;
-    }
-    if (options.device == ComputeDevice::Cuda)
-    {
-        plan.valid = false;
-        plan.validationError = QStringLiteral(
-            "已显式指定 CUDA，但 CUDA SIFT 设备不可用；如需 CPU 回退请选择自动或 CPU");
-        return plan;
-    }
-
-    plan.executionBackend = MatchPhotosExecutionBackend::Cpu;
+    plan.executionBackend = resolvedBackend;
     plan.requiresCuda = false;
-    plan.preferCuda = false;
-    plan.backendFallback = true;
-    plan.backendReason = QStringLiteral(
-        "CUDA SIFT 设备不可用，已自动回退 OpenCV CPU SIFT");
+    plan.preferCuda = resolvedBackend == image_matching::SiftComputeBackend::Cuda;
+    plan.backendFallback = options.device == ComputeDevice::Auto &&
+        resolvedBackend == image_matching::SiftComputeBackend::Cpu;
+    plan.backendReason = QStringLiteral("SIFT 计算后端：%1")
+                             .arg(image_matching::siftBackendDisplayName(resolvedBackend));
     return plan;
 }
 

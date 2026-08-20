@@ -1,28 +1,35 @@
 # image_matching 统一影像匹配模块
 
 `image_matching` 是 PlaScan 唯一的局部特征提取、学习型匹配、两视几何验证和匹配结果持久化模块。
-当前生产算法包括 **CUDA SIFT + TensorRT LightGlue** 与 **TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
+默认生产算法是无需外部模型的 **Auto SIFT**，可选算法包括 **CUDA SIFT + TensorRT LightGlue** 与
+**TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
 CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 TensorRT 数据布局。
 
 ## 模块边界
 
 - `ImageMatchingAlgorithm` 定义算法能力、版本、配置指纹、模型指纹、特征提取和像对匹配接口。
 - `ImageMatchingRegistry` 是算法注册入口。增加新算法时注册新的实现，不修改 SfM、项目格式或查看器。
-- `sift/` 负责 CUDA SIFT。提取结果只保存在一次 `MatchPhotosTask` 的有界内存缓存中。
+- `sift/` 是 SIFT 的唯一维护边界，包含 `auto_sift` 注册入口、CPU/CUDA/OpenCL/Metal 提取与匹配后端、
+  RootSIFT、尺度自适应、空间均匀化、匹配过滤和基础矩阵引导重匹配。提取结果只保存在一次
+  `MatchPhotosTask` 的有界内存缓存中。
 - `lightglue/` 负责本机 TensorRT engine 执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
 - `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
 - `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。
-- `tensorrt/` 提供 ONNX 本机构建、环境指纹缓存、engine 会话、CUDA 缓冲区和张量 ABI 校验。
+- 学习型匹配后端直接依赖 `src/core/inference/tensorrt/` 的 ONNX 本机构建、环境指纹缓存、engine 会话、
+  CUDA 缓冲区和张量 ABI，不在影像匹配模块保留转发接口。
 - `geometry/` 负责基础矩阵/单应模型验证和逐匹配像素残差。
 - `ImageMatchFile` 是 `.pimatch` 格式的唯一序列化入口。
 - `ImageMatchRepository` 负责对称写入、按缓存键查找和批量清理逐影像分片。
 
 ## 构建配置
 
-`PLASCAN_ENABLE_TENSORRT` 在检测到 CUDA 编译器时默认开启，此时构建并注册上述两个生产算法，且要求
+`auto_sift` 在所有构建中注册且不需要模型。自动模式按 CUDA、Metal、OpenCL、OpenCV CPU 选择后端；
+显式设备请求不做静默替换。Apple 构建直接编译 Metal 后端；启用 `PLASCAN_ENABLE_OPENCL` 且找到
+`OpenCL::OpenCL` 时编译 OpenCL C 1.2 后端；检测、方向、描述子和双向最近邻匹配均在设备端执行。
+`PLASCAN_ENABLE_TENSORRT` 在检测到 CUDA 编译器时默认开启，此时额外构建并注册两个学习型算法，且要求
 TensorRT 与 CUDA Toolkit 可用。没有 CUDA 编译器的 CPU-only 构建默认关闭该选项，只构建统一数据契约、
-`.pimatch` 读写、OpenCV SIFT 基础能力和两视几何验证，用于跨平台开发与测试；算法注册表不会伪造可运行的
-TensorRT 后端。该开关不改变产品运行语义，也不会将生产匹配静默降级成 CPU 算法。
+`.pimatch` 读写、完整 Auto SIFT CPU 能力和两视几何验证，用于跨平台生产运行与测试；算法注册表不会伪造
+可运行的 TensorRT 后端。四种 SIFT 计算后端共享 `auto_sift` 算法身份，不增加平台专用算法标识。
 
 ## 为什么不保存独立特征文件
 

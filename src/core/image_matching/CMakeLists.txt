@@ -26,17 +26,46 @@ add_library(image_matching STATIC
     MatchResult.h
     geometry/MatchGeometryVerifier.cpp
     geometry/MatchGeometryVerifier.h
-    cuda_sift/CudaSiftAlgorithm.cpp
-    cuda_sift/CudaSiftAlgorithm.h
-    cuda_sift/CudaSiftMatchFilter.cpp
-    cuda_sift/CudaSiftMatchFilter.h
+    sift/AutoSiftAlgorithm.cpp
+    sift/AutoSiftAlgorithm.h
+    sift/SiftComputeBackend.cpp
+    sift/SiftComputeBackend.h
+    sift/SiftBackendType.h
     sift/SiftFeatureExtractor.cpp
     sift/SiftFeatureExtractor.h
+    sift/SiftGuidedMatcher.cpp
+    sift/SiftGuidedMatcher.h
+    sift/SiftMatchFilter.cpp
+    sift/SiftMatchFilter.h
     lightglue/LightGlueFeatureBudget.h
     lightglue/LightGluePostprocessor.cpp
     lightglue/LightGluePostprocessor.h
-    tensorrt/TensorRtEngineBuilder.h
 )
+
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(image_matching PRIVATE
+        sift/SiftMetalBackend.mm
+        sift/SiftMetalKernels.h
+    )
+    target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_METAL_SIFT=1)
+    target_compile_options(image_matching PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    )
+    target_link_libraries(image_matching PRIVATE
+        "-framework Foundation"
+        "-framework Metal"
+    )
+endif()
+
+if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
+    target_sources(image_matching PRIVATE
+        sift/SiftOpenClBackend.cpp
+        sift/SiftOpenClKernels.h
+    )
+    target_compile_definitions(image_matching PRIVATE PLASCAN_HAS_OPENCL_SIFT=1)
+    target_link_libraries(image_matching PRIVATE OpenCL::OpenCL)
+endif()
 
 if(PLASCAN_ENABLE_TENSORRT)
     target_sources(image_matching PRIVATE
@@ -46,7 +75,6 @@ if(PLASCAN_ENABLE_TENSORRT)
         loma_r/LoMaRAlgorithm.h
         loma_r/LoMaRTensorRtBackend.cpp
         loma_r/LoMaRTensorRtBackend.h
-        tensorrt/TensorRtSession.h
         lightglue/TensorRtLightGlueMatcher.cpp
         lightglue/TensorRtLightGlueMatcher.h
     )
@@ -78,11 +106,9 @@ target_include_directories(image_matching PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/lightglue
     ${CMAKE_CURRENT_SOURCE_DIR}/geometry
-    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_sift
     ${CMAKE_CURRENT_SOURCE_DIR}/sift
     ${CMAKE_CURRENT_SOURCE_DIR}/sift_lightglue
     ${CMAKE_CURRENT_SOURCE_DIR}/loma_r
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensorrt
     ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/3rdparty/cudasift
@@ -97,6 +123,7 @@ target_link_libraries(image_matching PUBLIC
 )
 
 if(TARGET plascan_cudasift)
+    target_sources(image_matching PRIVATE sift/SiftCudaBackend.cpp)
     target_link_libraries(image_matching PUBLIC
         plascan_cudasift
         CUDA::cudart
@@ -140,13 +167,13 @@ if(BUILD_TESTS)
     )
     add_test(NAME MatchGeometryVerifierTest COMMAND test_match_geometry_verifier)
 
-    add_executable(test_cuda_sift_match_filter
-        tests/test_cuda_sift_match_filter.cpp
+    add_executable(test_auto_sift
+        tests/test_auto_sift.cpp
     )
-    target_link_libraries(test_cuda_sift_match_filter PRIVATE
+    target_link_libraries(test_auto_sift PRIVATE
         GTest::gtest
         GTest::gtest_main
         image_matching
     )
-    add_test(NAME CudaSiftMatchFilterTest COMMAND test_cuda_sift_match_filter)
+    add_test(NAME AutoSiftTest COMMAND test_auto_sift)
 endif()

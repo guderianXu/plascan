@@ -18,11 +18,11 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
     app.add_option("--chunk-id", chunkIdArg, "use the Chunk with this UUID");
     app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
-    app.add_option("--device", device, "SFM backend: auto, cpu, cuda")
-        ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
+    app.add_option("--device", device, "SFM backend: auto, cpu, cuda, opencl, metal")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
-                   "SFM image matching algorithm id: sift_lightglue, cuda_sift, or loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
+                   "SFM image matching algorithm id: auto_sift, sift_lightglue, or loma_r")
+        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
     app.add_option("--sfm-lightglue-engine", sfmLightGlueEnginePath,
                    "TensorRT LightGlue .engine; empty enables model-directory lookup");
     app.add_option("--sfm-loma-r-package", sfmLoMaRTensorRtPackagePath,

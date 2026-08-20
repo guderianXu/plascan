@@ -397,7 +397,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     // 新匹配链路只有组合算法标识，不再把“特征算法”和“匹配算法”拆成两个
     // 自由字符串。SIFT 描述子只驻留任务内存，预检也不再查找特征中间文件。
     const QString selectedAlgorithmId = algorithmId.trimmed().isEmpty()
-        ? QStringLiteral("sift_lightglue")
+        ? QStringLiteral("auto_sift")
         : algorithmId.trimmed().toLower();
 
     auto nameAliases = [](const QString &pathOrName) -> QStringList
@@ -1100,7 +1100,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     runSettings = sanitizeAerialTriangulationReferencePreselection(runSettings, images, projectMeta);
     const QString selectedAlgorithmId =
         runSettings.value(QStringLiteral("algorithm_id"))
-            .toString(QStringLiteral("sift_lightglue"))
+            .toString(QStringLiteral("auto_sift"))
             .trimmed()
             .toLower();
 
@@ -1274,7 +1274,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true);
     workflowOptions.matchingAlgorithmId =
         settings.value(QStringLiteral("algorithm_id"))
-            .toString(QStringLiteral("sift_lightglue"))
+            .toString(QStringLiteral("auto_sift"))
             .trimmed()
             .toLower();
     workflowOptions.lightGlueTensorRtEnginePath =

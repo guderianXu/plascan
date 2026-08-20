@@ -21,6 +21,7 @@ struct FeatureSet
     std::vector<float> scores; ///< 检测响应，用于显存预算下的稳定筛选。
     cv::Mat descriptors; ///< SIFT 为 [N,128]、CV_32F；只在内存中存在。
     std::string sourceAlgorithm = "sift"; ///< 运行时校验字段，不参与文件持久化。
+    std::string computeBackend = "cpu"; ///< 本次提取实际使用的计算后端，不参与持久化。
     int imageWidth = 0; ///< 坐标所属原始影像宽度。
     int imageHeight = 0; ///< 坐标所属原始影像高度。
 

@@ -86,7 +86,7 @@ private:
     struct MatchInfo {
         QString imagePath;       // 匹配影像的完整路径
         QString imageName;       // 匹配影像的文件名（用于显示）
-        QString algorithm;       // 注册算法标识，例如 sift_lightglue
+        QString algorithm;       // 注册算法标识，例如 auto_sift
         int totalPoints = 0;     // 原始匹配点数
         int validPoints = 0;     // 有效连接点或几何验证内点数
         int invalidPoints = 0;   // 未被几何验证或空三最终轨迹接受的匹配数

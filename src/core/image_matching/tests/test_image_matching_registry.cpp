@@ -1,6 +1,6 @@
 #include "ImageMatchingRegistry.h"
-#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "loma_r/LoMaRAlgorithm.h"
+#include "sift/AutoSiftAlgorithm.h"
 #include "sift_lightglue/SiftLightGlueAlgorithm.h"
 
 #include <gtest/gtest.h>
@@ -22,17 +22,17 @@ TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
                             [&](const auto &algorithm) { return algorithm.id == id; });
     };
     const auto sift = findAlgorithm(QString::fromLatin1(kSiftLightGlueAlgorithmId));
-    const auto cudaSift = findAlgorithm(QString::fromLatin1(kCudaSiftAlgorithmId));
+    const auto autoSift = findAlgorithm(QString::fromLatin1(kAutoSiftAlgorithmId));
     const auto loma = findAlgorithm(QString::fromLatin1(kLoMaRAlgorithmId));
     ASSERT_NE(sift, algorithms.cend());
-    ASSERT_NE(cudaSift, algorithms.cend());
+    ASSERT_NE(autoSift, algorithms.cend());
     ASSERT_NE(loma, algorithms.cend());
     EXPECT_EQ(sift->version, kSiftLightGlueAlgorithmVersion);
-    EXPECT_EQ(cudaSift->version, kCudaSiftAlgorithmVersion);
-    EXPECT_EQ(cudaSift->inputModel, AlgorithmInputModel::ReusableFeatures);
-    EXPECT_FALSE(cudaSift->requiresCuda);
-    EXPECT_TRUE(cudaSift->suppliesStableFeatureIds);
-    EXPECT_FALSE(cudaSift->requiresColorInput);
+    EXPECT_EQ(autoSift->version, kAutoSiftAlgorithmVersion);
+    EXPECT_EQ(autoSift->inputModel, AlgorithmInputModel::ReusableFeatures);
+    EXPECT_FALSE(autoSift->requiresCuda);
+    EXPECT_TRUE(autoSift->suppliesStableFeatureIds);
+    EXPECT_FALSE(autoSift->requiresColorInput);
     EXPECT_EQ(loma->version, kLoMaRAlgorithmVersion);
     EXPECT_EQ(loma->inputModel, AlgorithmInputModel::ReusableFeatures);
     EXPECT_TRUE(loma->requiresCuda);
@@ -54,14 +54,13 @@ TEST(ImageMatchingRegistryTest, ReportsTensorRtRequirementWhenCreatingUnavailabl
 }
 #endif
 
-TEST(ImageMatchingRegistryTest, CreatesCudaSiftForCpuFallbackWithoutExternalModel)
+TEST(ImageMatchingRegistryTest, CreatesAutoSiftForCpuFallbackWithoutExternalModel)
 {
     ImageMatchingRuntimeConfig config;
-    config.forceCpuSift = true;
-    config.allowCpuSiftFallback = true;
+    config.siftBackend = SiftComputeBackend::Cpu;
     QString error;
     const std::unique_ptr<IImageMatchingAlgorithm> algorithm =
-        ImageMatchingRegistry::create(QStringLiteral("cuda_sift"), config,
+        ImageMatchingRegistry::create(QStringLiteral("auto_sift"), config,
                                       &error);
     EXPECT_NE(algorithm, nullptr) << error.toStdString();
 }

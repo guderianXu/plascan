@@ -282,7 +282,7 @@ int main(int argc, char *argv[])
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
     std::string referenceModeArg = "source_code";
-    std::string algorithmIdArg = "sift_lightglue";
+    std::string algorithmIdArg = "auto_sift";
     std::string lightGlueEngineArg;
     std::string lomaRPackageArg;
     std::string maskApplyModeArg = "none";
@@ -320,11 +320,11 @@ int main(int argc, char *argv[])
     app.add_option("--match-dir", matchDirArg,
                    "逐影像匹配目录，默认使用 assets/image_matches");
     app.add_option("--quality", qualityArg, "精度: lowest, low, medium, high, highest");
-    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
+    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: sift_lightglue, cuda_sift, loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
+                   "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,
@@ -504,7 +504,7 @@ int main(int argc, char *argv[])
         options.initialImageId2 = static_cast<xjw::ImageId>(initialImageId2);
     }
     options.matchingAlgorithmId = xjw::cli::normalizedToken(
-        algorithmIdArg, QStringLiteral("sift_lightglue"));
+        algorithmIdArg, QStringLiteral("auto_sift"));
     options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));

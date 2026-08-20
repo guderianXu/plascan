@@ -7,6 +7,7 @@
 
 #include "FeatureSet.h"
 #include "MatchResult.h"
+#include "sift/SiftBackendType.h"
 
 #include <QByteArray>
 #include <QString>
@@ -52,15 +53,18 @@ struct ImageMatchingRuntimeConfig
     int maxMatcherKeypoints = 0;
     int featureKeypointCount = 0;
     int removeBorders = 16;
+    int maxImageDimension = 2048;
     float siftDetectionThreshold = 0.0005f;
+    float siftContrastThreshold = 0.02f;
     float grayscaleMin = 0.0f;
     float grayscaleMax = 1.0f;
     float matchThreshold = 0.15f;
     int modelInputWidth = 0;
     int modelInputHeight = 0;
     int descriptorDimension = 0;
-    bool allowCpuSiftFallback = false;
-    bool forceCpuSift = false;
+    SiftComputeBackend siftBackend = SiftComputeBackend::Automatic;
+    bool adaptiveSift = false;
+    bool rootSift = false;
     QByteArray configFingerprint;
     QByteArray modelFingerprint;
 };

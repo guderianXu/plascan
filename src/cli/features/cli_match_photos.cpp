@@ -88,6 +88,14 @@ ComputeDevice deviceFromToken(const QString &token)
     {
         return ComputeDevice::Cuda;
     }
+    if (normalized == QStringLiteral("opencl"))
+    {
+        return ComputeDevice::OpenCl;
+    }
+    if (normalized == QStringLiteral("metal"))
+    {
+        return ComputeDevice::Metal;
+    }
     return ComputeDevice::Auto;
 }
 
@@ -306,7 +314,7 @@ int main(int argc, char *argv[])
     std::string chunkNameArg;
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
-    std::string algorithmIdArg = "sift_lightglue";
+    std::string algorithmIdArg = "auto_sift";
     std::string lightGlueEngineArg;
     std::string lomaRPackageArg;
     int lomaRKeypointBudget = 0;
@@ -336,10 +344,10 @@ int main(int argc, char *argv[])
     app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
-    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
+    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: sift_lightglue, cuda_sift, loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
+                   "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "LightGlue .onnx（推荐）或兼容的本机 .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,
@@ -461,7 +469,7 @@ int main(int argc, char *argv[])
     options.pairPolicy.sequenceWindow = std::max(1, sequenceWindow);
     options.pairPolicy.maxPairs = std::max(0, maxPairs);
     options.algorithmId = xjw::cli::normalizedToken(
-        algorithmIdArg, QStringLiteral("sift_lightglue"));
+        algorithmIdArg, QStringLiteral("auto_sift"));
     options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));

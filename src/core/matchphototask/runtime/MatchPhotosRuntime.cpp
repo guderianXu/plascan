@@ -1,7 +1,7 @@
 #include "MatchPhotosRuntime.h"
 
 #include "MatchPhotosParallelism.h"
-#include "tensorrt/TensorRtEngineBuilder.h"
+#include "inference/tensorrt/TensorRtEngineBuilder.h"
 
 #include "model/ModelAssetCatalog.h"
 #include "model/ModelFileResolver.h"
@@ -201,17 +201,17 @@ bool validateDeclaredOnnxSha256(const QJsonObject &manifest,
     return true;
 }
 
-image_matching::TensorRtEngineBuildResult buildOnnxEngine(
+inference::TensorRtEngineBuildResult buildOnnxEngine(
     const QString &onnxPath,
     const QString &cacheDirectory,
     const QString &engineName,
     const QString &displayName,
-    image_matching::TensorRtBuildPrecision precision,
+    inference::TensorRtBuildPrecision precision,
     int cudaDevice,
     int fixedKeypointCount,
     const ModelPreparationProgressCallback &progressCallback)
 {
-    image_matching::TensorRtEngineBuildRequest request;
+    inference::TensorRtEngineBuildRequest request;
     request.onnxPath = onnxPath;
     request.cacheDirectory = cacheDirectory;
     request.engineName = engineName;
@@ -221,7 +221,7 @@ image_matching::TensorRtEngineBuildResult buildOnnxEngine(
     if (progressCallback)
     {
         request.progressCallback = [progressCallback, displayName](
-                                       const image_matching::TensorRtEngineBuildProgress &progress)
+                                       const inference::TensorRtEngineBuildProgress &progress)
         {
             progressCallback(
                 QStringLiteral("%1：%2").arg(displayName, progress.message),
@@ -229,7 +229,7 @@ image_matching::TensorRtEngineBuildResult buildOnnxEngine(
                 progress.maximum);
         };
     }
-    return image_matching::ensureTensorRtEngine(request);
+    return inference::ensureTensorRtEngine(request);
 }
 
 ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
@@ -354,8 +354,8 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
                     });
             };
             const auto precision = precisionText == QLatin1String("fp32")
-                ? image_matching::TensorRtBuildPrecision::Fp32
-                : image_matching::TensorRtBuildPrecision::Fp16;
+                ? inference::TensorRtBuildPrecision::Fp32
+                : inference::TensorRtBuildPrecision::Fp16;
             const int matcherCount = object.value(QStringLiteral("keypoint_count")).toInt();
             const int featureCount = object.value(QStringLiteral("feature_keypoint_count"))
                                          .toInt(matcherCount);
@@ -646,7 +646,7 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
                     common::model::lightGlueTensorRtPackage()),
                 info.completeBaseName() + QStringLiteral("_fp32.engine"),
                 QStringLiteral("LightGlue engine"),
-                image_matching::TensorRtBuildPrecision::Fp32,
+                inference::TensorRtBuildPrecision::Fp32,
                 options.cudaDevice,
                 0,
                 progressCallback);
@@ -712,7 +712,7 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
                 common::model::lightGlueTensorRtPackage()),
             info.completeBaseName() + QStringLiteral("_fp32.engine"),
             QStringLiteral("LightGlue engine"),
-            image_matching::TensorRtBuildPrecision::Fp32,
+            inference::TensorRtBuildPrecision::Fp32,
             options.cudaDevice,
             0,
             progressCallback);

@@ -130,17 +130,25 @@ core/
 │
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
-│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；sift_lightglue / cuda_sift / loma_r
+│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；auto_sift / sift_lightglue / loma_r
 │   ├── FeatureSet.h/cpp        # 任务内关键点与描述子，不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
 │   ├── ImageMatchIndexFile.h/cpp # 与 payload 签名绑定的轻量 `.pidx` 邻接索引及增量缓存
 │   ├── ImageMatchRepository.h/cpp # 对称写入、完整指纹键缓存和按影像查询
-│   ├── sift/                   # CUDA SIFT 提取与 OpenCV CPU 回退
+│   ├── sift/                   # Auto SIFT 唯一维护边界
+│   │   ├── AutoSiftAlgorithm.h/cpp # 注册入口与统一提取/匹配调度
+│   │   ├── SiftFeatureExtractor.h/cpp # 大小影像自适应、瓦片、筛选与 RootSIFT
+│   │   ├── SiftComputeBackend.h/cpp # 统一后端选择、可用性与设备端调用接口
+│   │   ├── SiftCudaBackend.cpp      # cudaSift 提取与匹配封装
+│   │   ├── SiftOpenClBackend.cpp    # OpenCL C 1.2 金字塔、特征与匹配运行时
+│   │   ├── SiftOpenClKernels.h      # OpenCL 高斯/DoG/方向/描述子/匹配内核
+│   │   ├── SiftMetalBackend.mm      # Apple Metal 命令编码、资源和结果读取
+│   │   ├── SiftMetalKernels.h       # Metal 高斯/DoG/方向/描述子/匹配内核
+│   │   └── SiftGuidedMatcher.h/cpp  # 基础矩阵约束的补充匹配
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
 │   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
 │   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
-│   ├── tensorrt/               # 面向旧匹配调用点的通用 inference TensorRT 兼容适配
 │   ├── geometry/               # USAC/MAGSAC 验证及逐匹配像素残差
 │   └── tests/                  # 格式往返、损坏校验、注册和几何测试
 │
@@ -156,7 +164,7 @@ core/
 │
 ├── matchphototask/             # Metashape-like 匹配照片编排层
 │   ├── algorithm/
-│   │   ├── MatchPhotosAlgorithmPlan.h/cpp # 算法计划：当前主线 SIFT + LightGlue
+│   │   ├── MatchPhotosAlgorithmPlan.h/cpp # 算法计划：默认 Auto SIFT，可选学习型匹配
 │   │   └── MatchPhotosAlgorithmSelector.h/cpp # 类 Metashape 预设到算法计划的映射
 │   ├── task/
 │   │   ├── MatchPhotosTask.h/cpp    # 统一任务入口，完成算法选择、候选对、匹配和轨迹阶段
@@ -174,11 +182,11 @@ core/
 │   │   ├── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
 │   │   └── MatchPhotosParallelism.h/cpp # CUDA 显存预算、LightGlue worker 和几何验证并发解析
 │   ├── stages/
-│   │   ├── FeatureStage.h/cpp       # SIFT CUDA/CPU 提取到任务内存，不生成特征文件
-│   │   ├── MatchingStage.h/cpp      # TensorRT LightGlue 匹配并提交逐影像 `.pimatch`
+│   │   ├── FeatureStage.h/cpp       # SIFT 自动设备提取到任务内存，不生成特征文件
+│   │   ├── MatchingStage.h/cpp      # Auto SIFT 或 TensorRT 匹配，生成任务内像对结果
 │   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryVerifier 并填入残差/标志
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
-│   │   └── GuidedMatchStage.h/cpp   # 引导重匹配阶段占位
+│   │   └── GuidedMatchStage.h/cpp   # 基础矩阵极线约束下的 SIFT 双向引导重匹配
 │   ├── tie_points/
 │   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
 │   └── tests/                       # matchphototask 模块级测试

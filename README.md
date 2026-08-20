@@ -607,14 +607,15 @@ Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
 ### 双影像匹配 (`feature_match_cli`)
 
 ```powershell
-# CUDA SIFT + TensorRT LightGlue；为 A、B 分别写一个 .pimatch 分片
+# 默认 Auto SIFT；无需下载模型，为 A、B 分别写一个 .pimatch 分片
 feature_match_cli -L A.tif -R B.tif `
   -o E:\project\assets\image_matches `
-  -m resources\models\lightglue_tensorrt\lightglue_sift_bucket4096.onnx `
-  -a sift_lightglue --max-keypoints 40000
+  -a auto_sift --max-keypoints 40000 --guided-image-matching
 ```
 
-SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。LightGlue 和 LoMa-R 都只使用 TensorRT；Release
+SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。Auto SIFT 按 CUDA、Metal、OpenCL、CPU 的顺序
+选择可用后端且不依赖模型；可用 `--device cpu|cuda|opencl|metal` 显式固定设备，设备不可用时明确失败。
+LightGlue 和 LoMa-R 都只使用 TensorRT；Release
 分发 ONNX，目标机器首次使用时由 C++ TensorRT Builder 生成并缓存本机 engine。最终分片保存关键点观测、
 相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。ONNX 导出、固定容量和
 精度策略见 [docs/models/README.md](docs/models/README.md#sift--lightglue-tensorrt)。
@@ -622,7 +623,7 @@ SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。LightGlue 和
 ### 密集重建流水线
 
 ```bash
-feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -m lightglue_sift_bucket4096.onnx
+feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -a auto_sift
 rectify_cli         -L A.tif -R B.tif --camL A.txt --camR B.txt -o rect
 dense_match_cli     -L rect_L.tif -R rect_R.tif -o disp.tif --cuda --algorithm mgm
 triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud.ply

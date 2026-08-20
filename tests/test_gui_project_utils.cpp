@@ -10930,7 +10930,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
         << "连接点准备阶段的特征提取、配对、匹配进度要映射到空三总进度条。";
 }
 
-TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedSiftLightGlueAlgorithm)
+TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedAutoSiftAlgorithm)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -10945,7 +10945,7 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedSiftLightGlueAlgorithm)
     const QString startBody = source.mid(startBegin, launchBegin - startBegin);
 
     EXPECT_TRUE(startBody.contains(QStringLiteral("runSettings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(startBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift_lightglue\"))")))
+    EXPECT_TRUE(startBody.contains(QStringLiteral(".toString(QStringLiteral(\"auto_sift\"))")))
         << "空三前置检查必须使用统一注册算法 ID，不能再组合特征/匹配算法字符串。";
 
     const int launchEnd = source.indexOf(
@@ -10955,7 +10955,7 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedSiftLightGlueAlgorithm)
     const QString launchBody = source.mid(launchBegin, launchEnd - launchBegin);
 
     EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift_lightglue\"))")))
+    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"auto_sift\"))")))
         << "正式 SfM 必须沿用同一个算法 ID 和 `.pimatch` 缓存契约。";
 }
 
@@ -11152,7 +11152,7 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedUnifiedMatchingAlgori
     EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.matchingAlgorithmId")));
     EXPECT_TRUE(launchBody.contains(
         QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("QStringLiteral(\"sift_lightglue\")")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("QStringLiteral(\"auto_sift\")")));
     EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.featureAlgorithm")));
     EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.matchAlgorithm")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("AerialTriangulationWorkflow::resolveConfig")));
@@ -12090,7 +12090,7 @@ TEST(DownstreamSparseInputGateTest, OneClickWorkflowStopsDenseWhenCurrentSfmQual
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("sparseResultBlockingReason(resultRecordExtra)")));
 }
 
-TEST(ImageMatchingArchitectureTest, RegistryExposesOnlyCudaSiftLightGlue)
+TEST(ImageMatchingArchitectureTest, RegistryExposesAutoSiftAndOptionalLightGlue)
 {
     const QString source = readProjectSourceFile(
         QStringLiteral("src/core/image_matching/ImageMatchingRegistry.cpp"));
@@ -12109,6 +12109,7 @@ TEST(ImageMatchingArchitectureTest, RegistryExposesOnlyCudaSiftLightGlue)
     EXPECT_FALSE(source.contains(QStringLiteral("disk"), Qt::CaseInsensitive));
     EXPECT_TRUE(cmake.contains(QStringLiteral("TensorRtLightGlueMatcher.cpp")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("SiftFeatureExtractor.cpp")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("AutoSiftAlgorithm.cpp")));
 }
 
 TEST(AerialTriangulationWorkflowTest, ConfirmsExistingDepthMapsWillBeInvalidatedBeforeStarting)

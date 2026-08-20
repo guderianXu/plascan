@@ -7,24 +7,24 @@
 
 #include "FeatureSet.h"
 #include "ImageMatchingAlgorithm.h"
+#include "SiftComputeBackend.h"
 
 namespace xjw::image_matching
 {
 
-class SiftFeatureExtractor
-{
-public:
-    static bool isCudaAvailable(int deviceIndex = 0);
+    class SiftFeatureExtractor
+    {
+    public:
+        static bool isBackendAvailable(SiftComputeBackend backend, int deviceIndex = 0);
+        static SiftComputeBackend resolveBackend(SiftComputeBackend requested, int deviceIndex = 0);
 
-    /**
-     * @brief 提取 SIFT 并恢复到原始影像坐标系。
-     *
-     * 默认必须使用 CUDA SIFT。只有 runtime.allowCpuSiftFallback=true 时，CUDA
-     * 不可用或执行失败才会使用 OpenCV SIFT；降级行为由调用方显式记录到报告。
-     */
-    static FeatureSet extract(const ImageFeatureInput &input,
-                              const ImageMatchingRuntimeConfig &runtime,
-                              bool *usedCuda = nullptr);
-};
+        /**
+         * @brief 提取 SIFT 并恢复到原始影像坐标系。
+         *
+         * auto_sift 按 CUDA、Metal、OpenCL、CPU 的顺序选择可用后端；
+         * 自适应尺度、阈值重试、网格均匀化和 RootSIFT 由 runtime 显式启用。
+         */
+        static FeatureSet extract(const ImageFeatureInput& input, const ImageMatchingRuntimeConfig& runtime);
+    };
 
 } // namespace xjw::image_matching

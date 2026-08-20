@@ -107,6 +107,14 @@ matchphotos::ComputeDevice computeDevice(const QString &device)
     {
         return matchphotos::ComputeDevice::Cuda;
     }
+    if (token == QStringLiteral("opencl"))
+    {
+        return matchphotos::ComputeDevice::OpenCl;
+    }
+    if (token == QStringLiteral("metal"))
+    {
+        return matchphotos::ComputeDevice::Metal;
+    }
     return matchphotos::ComputeDevice::Auto;
 }
 
@@ -334,7 +342,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     const QualityPreset quality = presetForQuality(options.quality);
     const QString algorithmId = normalizedToken(
         options.matchingAlgorithmId,
-        QStringLiteral("sift_lightglue"));
+        QStringLiteral("auto_sift"));
 
     // 第二阶段：所有缓存和正式结果都从工程根目录推导，避免 GUI/CLI 路径分叉。
     const QString projectRoot =

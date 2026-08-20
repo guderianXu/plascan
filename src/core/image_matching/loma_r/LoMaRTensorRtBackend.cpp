@@ -1,6 +1,6 @@
 #include "LoMaRTensorRtBackend.h"
 
-#include "tensorrt/TensorRtSession.h"
+#include "inference/tensorrt/TensorRtSession.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -240,11 +240,11 @@ private:
         }
     }
 
-    TensorRtSession &featureSession() const
+    inference::TensorRtSession &featureSession() const
     {
         if (!_feature)
         {
-            _feature = std::make_unique<TensorRtSession>(
+            _feature = std::make_unique<inference::TensorRtSession>(
                 _config.featureEnginePath.toStdString(), _config.cudaDevice);
             _feature->validateTensor(kImage, nvinfer1::TensorIOMode::kINPUT,
                                      nvinfer1::DataType::kFLOAT);
@@ -267,11 +267,11 @@ private:
         return *_feature;
     }
 
-    TensorRtSession &matcherSession()
+    inference::TensorRtSession &matcherSession()
     {
         if (!_matcher)
         {
-            _matcher = std::make_unique<TensorRtSession>(
+            _matcher = std::make_unique<inference::TensorRtSession>(
                 _config.matcherEnginePath.toStdString(), _config.cudaDevice);
             _matcher->validateTensor(kKeypoints0, nvinfer1::TensorIOMode::kINPUT,
                                      nvinfer1::DataType::kFLOAT);
@@ -391,8 +391,8 @@ private:
     }
 
     LoMaRTensorRtConfig _config;
-    mutable std::unique_ptr<TensorRtSession> _feature;
-    std::unique_ptr<TensorRtSession> _matcher;
+    mutable std::unique_ptr<inference::TensorRtSession> _feature;
+    std::unique_ptr<inference::TensorRtSession> _matcher;
 };
 
 LoMaRTensorRtBackend::LoMaRTensorRtBackend(LoMaRTensorRtConfig config)

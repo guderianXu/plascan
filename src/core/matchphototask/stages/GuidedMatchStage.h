@@ -6,17 +6,18 @@
 
 namespace xjw
 {
-namespace matchphotos
-{
+    namespace matchphotos
+    {
 
-// 可选的第二轮引导匹配阶段。
-// 在初始几何关系建立后，这里可以追加引导匹配对或修补弱轨迹。
-class GuidedMatchStage
-{
-public:
-    MatchPhotosStageReport run(const MatchPhotosContext &context,
-                               const MatchPhotosOptions &options) const;
-};
+        // 初始双视几何建立后的第二轮 SIFT 引导匹配，必须在轨迹构建和落盘之前运行。
+        class GuidedMatchStage
+        {
+        public:
+            MatchPhotosStageReport run(const MatchPhotosContext& context,
+                                       const MatchPhotosOptions& options,
+                                       const MatchPhotosAlgorithmPlan& algorithmPlan,
+                                       std::vector<MatchPhotosMatchRecord>* matchRecords) const;
+        };
 
-} // namespace matchphotos
+    } // namespace matchphotos
 } // namespace xjw

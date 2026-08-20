@@ -76,8 +76,8 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--right",
         "--output-dir",
         "--device",
+        "auto_sift",
         "sift_lightglue",
-        "cuda_sift",
         "MatchPhotosTask",
         ".pimatch",
     });
@@ -99,8 +99,8 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--right",
         "--output-dir",
         "--device",
+        "auto_sift",
         "sift_lightglue",
-        "cuda_sift",
     });
     expectNotContainsAll(combinedOutput(result), {"--sp1", "--sp2", " bf"});
 }

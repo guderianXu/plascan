@@ -21,7 +21,7 @@ struct ReconstructionCliOptions
     std::string chunkNameArg;
     std::string device = "auto";
     // 连接点算法使用统一注册 ID，不再让调用者任意拼接提取器和匹配器。
-    std::string sfmMatchingAlgorithmId = "sift_lightglue";
+    std::string sfmMatchingAlgorithmId = "auto_sift";
     std::string sfmLightGlueEnginePath;
     std::string sfmLoMaRTensorRtPackagePath;
     bool sfmGuidedRematching = false;

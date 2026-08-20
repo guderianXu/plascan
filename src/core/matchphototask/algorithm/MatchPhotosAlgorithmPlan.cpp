@@ -22,11 +22,9 @@ QString algorithmPlanSummary(const MatchPhotosAlgorithmPlan &plan)
     {
         summary += QStringLiteral("，优先 CUDA");
     }
-    if (plan.executionBackend == MatchPhotosExecutionBackend::Cpu)
+    if (plan.executionBackend != image_matching::SiftComputeBackend::Automatic)
     {
-        summary += plan.backendFallback
-            ? QStringLiteral("，已自动回退 CPU")
-            : QStringLiteral("，CPU 后端");
+        summary += QStringLiteral("，%1").arg(plan.backendReason);
     }
     if (plan.enableGuidedMatching)
     {

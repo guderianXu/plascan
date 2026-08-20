@@ -2,6 +2,7 @@
 
 #include "MatchPhotosAlgorithmPlan.h"
 #include "MatchPhotosOptions.h"
+#include "sift/SiftComputeBackend.h"
 
 namespace xjw
 {
@@ -17,7 +18,7 @@ public:
     static MatchPhotosAlgorithmPlan resolveExecutionBackend(
         const MatchPhotosOptions &options,
         MatchPhotosAlgorithmPlan plan,
-        bool cudaSiftAvailable);
+        image_matching::SiftComputeBackend resolvedBackend);
 };
 
 } // namespace matchphotos

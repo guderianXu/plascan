@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 新增统一 `auto_sift` 模块：集中维护 SIFT 的 CPU/CUDA/OpenCL/Metal 提取与匹配、RootSIFT、大小影像自适应尺度、
+  空间均匀化和基础矩阵引导重匹配，不再把用户算法身份绑定到 CUDA 后端名称。
 - U2Net 蒙版新增 TensorRT FP16/FP32 后端：发布包分发可移植 ONNX，首次使用时在用户本地应用数据目录
   构建并按模型、GPU 和 TensorRT 环境指纹缓存本机 engine；OpenCV DNN CPU 继续作为明确回退路径。
 - 新增推荐的 BiRefNet Dynamic 蒙版：部署契约固定为 `1×3×1024×1024`，使用保持宽高比的 letterbox
@@ -19,6 +21,10 @@
 
 ### 优化
 
+- 删除 `image_matching/tensorrt` 的旧 include 路径转发层；LoMa-R 与匹配任务直接依赖统一的
+  `core/inference/tensorrt` 实现，避免重复类型别名和间接命名空间。
+- 空中三角测量默认匹配算法切换为无需外部模型的 `auto_sift`；小分辨率影像使用 2 倍首层和阈值递降，
+  大分辨率影像使用全图粗尺度与原分辨率重叠瓦片；自动设备顺序为 CUDA、Metal、OpenCL、CPU。
 - 空三“已估位姿”明确调整为“已有 SfM 查漏”：候选对使用稀疏点共视、鲁棒场景包围体和相机视锥，
   不再依赖地球参考球面；内向环拍可自动保留闭环序列位姿恢复，旧 SfM 不可用时安全退回自动/序列候选。
 - 多视图纹理 v4 图集打包改为有界的自适应 MaxRects/shelf：中小规模 chart 可复用碎片空间，

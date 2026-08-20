@@ -9,10 +9,11 @@
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
 #include "concurrency/SafeWorkerGroup.h"
-#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "io/PathIO.h"
 #include "lightglue/LightGlueFeatureBudget.h"
 #include "loma_r/LoMaRAlgorithm.h"
+#include "sift/AutoSiftAlgorithm.h"
+#include "sift/SiftComputeBackend.h"
 #include "sift_lightglue/SiftLightGlueAlgorithm.h"
 
 #include <QCryptographicHash>
@@ -48,6 +49,11 @@ MatchPhotosStageReport makeMatchingReport(MatchPhotosStageStatus status,
     report.message = message;
     report.itemCount = itemCount;
     return report;
+}
+
+QString backendDisplayName(image_matching::SiftComputeBackend backend)
+{
+    return image_matching::siftBackendDisplayName(backend);
 }
 
 QByteArray sha256(const QByteArray &payload)
@@ -116,6 +122,13 @@ QByteArray rawConfigFingerprint(const MatchPhotosOptions &options,
     object[QStringLiteral("feature_remove_borders")] = plan.featureRemoveBorders;
     object[QStringLiteral("sift_detection_threshold")] =
         static_cast<double>(plan.siftDetectionThreshold);
+    object[QStringLiteral("sift_contrast_threshold")] =
+        static_cast<double>(plan.siftContrastThreshold);
+    object[QStringLiteral("adaptive_sift")] =
+        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
+    object[QStringLiteral("root_sift")] =
+        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
+    object[QStringLiteral("guided_matching")] = options.enableGuidedMatching;
     object[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     object[QStringLiteral("matcher_keypoint_budget")] = matcherKeypointBudget;
     object[QStringLiteral("match_threshold")] = static_cast<double>(effectiveMatchThreshold);
@@ -292,12 +305,10 @@ MatchPhotosMatchRecord makeRecord(
     record.settings[QStringLiteral("algorithm_id")] = record.algorithmId;
     record.settings[QStringLiteral("algorithm_version")] =
         static_cast<int>(record.algorithmVersion);
-    const bool siftMutual =
-        plan.algorithmId == QLatin1String(image_matching::kCudaSiftAlgorithmId);
-    record.settings[QStringLiteral("matching_backend")] = siftMutual
-        ? (plan.executionBackend == MatchPhotosExecutionBackend::Cuda
-               ? QStringLiteral("cuda_sift")
-               : QStringLiteral("opencv_cpu_sift_bf"))
+    const bool autoSift =
+        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
+    record.settings[QStringLiteral("matching_backend")] = autoSift
+        ? QString::fromLatin1(image_matching::siftBackendName(plan.executionBackend))
         : plan.algorithmId;
     record.settings[QStringLiteral("backend_fallback")] = plan.backendFallback;
     record.settings[QStringLiteral("match_reused")] = reused;
@@ -360,9 +371,7 @@ MatchPhotosStageReport MatchingStage::run(
     image_matching::ImageMatchingRuntimeConfig runtime;
     runtime.cudaDevice = options.cudaDevice;
     runtime.maxKeypoints = algorithmPlan.maxKeypoints;
-    runtime.forceCpuSift =
-        algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cpu;
-    runtime.allowCpuSiftFallback = runtime.forceCpuSift;
+    runtime.siftBackend = algorithmPlan.executionBackend;
     QString modelName;
     QByteArray engineFingerprint;
     int matcherBudget = 0;
@@ -432,22 +441,18 @@ MatchPhotosStageReport MatchingStage::run(
             lightGlueModelIdentityPath(plannedLightGlueEngine));
     }
     else if (algorithmPlan.algorithmId ==
-             QLatin1String(image_matching::kCudaSiftAlgorithmId))
+             QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
-        // CUDA SIFT 不受固定 TensorRT K 桶限制，0 表示匹配本次任务实际提取的
+        // SIFT 不受固定 TensorRT K 桶限制，0 表示匹配本次任务实际提取的
         // 全部特征。算法版本和内置实现身份仍进入缓存键，避免误用旧算法结果。
         matcherBudget = 0;
         runtime.maxMatcherKeypoints = 0;
         runtime.matchThreshold = effectiveThreshold;
-        const bool useCudaBackend =
-            algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda;
-        modelName = useCudaBackend
-            ? QStringLiteral("内置 cudaSift")
-            : QStringLiteral("OpenCV CPU SIFT + BFMatcher");
+        modelName = QStringLiteral("内置 Auto SIFT %1 后端")
+                        .arg(backendDisplayName(algorithmPlan.executionBackend));
         engineFingerprint = sha256(
-            useCudaBackend
-                ? QByteArrayLiteral("builtin:cuda_sift:v2")
-                : QByteArrayLiteral("builtin:opencv_cpu_sift_bf:v2"));
+            QByteArrayLiteral("builtin:auto_sift_root:v2:") +
+            QByteArray(image_matching::siftBackendName(algorithmPlan.executionBackend)));
     }
     else
     {
@@ -560,7 +565,7 @@ MatchPhotosStageReport MatchingStage::run(
     // 并发度按真正缺失的 pair 计算。warm-cache 仅缺一对时不能仍创建多个
     // TensorRT execution context；全命中则明确为 0，并在下面直接返回。
     int parallelismBudget = matcherBudget;
-    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kCudaSiftAlgorithmId))
+    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
         // 全量 CUDA SIFT 匹配的计算量随特征数平方增长。使用真正缓存的最大特征
         // 数估算并发，避免 guided/per-megapixel 模式下 plan.maxKeypoints=0 时
@@ -582,7 +587,7 @@ MatchPhotosStageReport MatchingStage::run(
     const LightGlueParallelismDecision parallelism = resolveLightGlueParallelism(
         options.cudaParallelPairs,
         static_cast<int>(work.size()),
-        algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda,
+        algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda,
         parallelismBudget,
         gpuMemory);
     const int workerCount = work.empty() ? 0 : std::max(1, parallelism.effectiveWorkers);
@@ -594,9 +599,7 @@ MatchPhotosStageReport MatchingStage::run(
             .arg(algorithmPlan.displayName)
             .arg(static_cast<int>(work.size()))
             .arg(reusedPairs)
-            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
-                     ? QStringLiteral("CUDA")
-                     : QStringLiteral("CPU"))
+            .arg(backendDisplayName(algorithmPlan.executionBackend))
             .arg(workerCount),
         reusedPairs,
         totalPairs);
@@ -624,8 +627,8 @@ MatchPhotosStageReport MatchingStage::run(
             reusedPairs);
     }
 
-    if (options.device == ComputeDevice::Cpu &&
-        algorithmPlan.algorithmId != QLatin1String(image_matching::kCudaSiftAlgorithmId))
+    if (options.device != ComputeDevice::Auto && options.device != ComputeDevice::Cuda &&
+        algorithmPlan.algorithmId != QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
                                   QStringLiteral("当前匹配算法 %1 仅支持 TensorRT/CUDA")
@@ -702,8 +705,8 @@ MatchPhotosStageReport MatchingStage::run(
             1,
             1);
     }
-    // SIFT 双向匹配使用内置 CUDA 内核或 OpenCV CPU 后端，
-    // 两者都不需要准备外部模型或 engine。
+    // SIFT 双向匹配使用已解析的 CUDA、Metal、OpenCL 或 OpenCV CPU 后端，
+    // 均不需要准备外部模型或 engine。
 
     std::atomic_int nextWork{0};
     std::atomic_int completed{reusedPairs};
@@ -874,9 +877,7 @@ MatchPhotosStageReport MatchingStage::run(
             .arg(totalMatches)
             .arg(reusedPairs)
             .arg(failedPairs.load())
-            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
-                     ? QStringLiteral("CUDA")
-                     : QStringLiteral("CPU"))
+            .arg(backendDisplayName(algorithmPlan.executionBackend))
             .arg(workerCount)
             .arg(modelName),
         matchedPairs);

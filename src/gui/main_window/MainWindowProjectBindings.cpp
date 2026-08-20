@@ -550,7 +550,7 @@ void MainWindow::setupProjectManager()
                 {
                     xjw::matchphotos::MatchPhotosOptions options;
                     options.profile = tiePointProfileFromAccuracy(dlg.accuracy());
-                    options.device = xjw::matchphotos::ComputeDevice::Cuda;
+                    options.device = xjw::matchphotos::ComputeDevice::Auto;
                     options.maxImageDim = maxImageDimFromAccuracy(dlg.accuracy());
                     options.useExplicitKeypointLimit = true;
                     options.maxKeypoints = dlg.useGuidedMatching() ? 0 : dlg.keypointLimit();

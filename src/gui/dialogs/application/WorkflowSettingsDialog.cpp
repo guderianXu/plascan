@@ -48,12 +48,12 @@ constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kRetiredReconstructionWorkflowId = "reconstruction";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
-constexpr auto kCudaSiftAlgorithmId = "cuda_sift";
+constexpr auto kAutoSiftAlgorithmId = "auto_sift";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
 constexpr auto kCudaComputeMode = "cuda";
 constexpr auto kOpenClComputeMode = "opencl";
 constexpr auto kHybridComputeMode = "hybrid";
-constexpr int kWorkflowSettingsVersion = 7;
+constexpr int kWorkflowSettingsVersion = 8;
 
 struct WorkflowEntry
 {
@@ -70,7 +70,7 @@ constexpr WorkflowEntry kWorkflowEntries[] = {
 QJsonObject defaultAerialSettings()
 {
     QJsonObject settings;
-    settings[QStringLiteral("algorithm_id")] = QString::fromLatin1(kSiftLightGlueAlgorithmId);
+    settings[QStringLiteral("algorithm_id")] = QString::fromLatin1(kAutoSiftAlgorithmId);
     settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
     settings[QStringLiteral("loma_r_tensorrt_package")] = QString();
     settings[QStringLiteral("loma_r_keypoint_budget")] = 0;
@@ -484,7 +484,7 @@ QJsonObject WorkflowSettingsDialog::collectSettings() const
     QJsonObject aerial = workflows.value(QString::fromLatin1(kAerialWorkflowId)).toObject();
     const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
     aerial[QStringLiteral("algorithm_id")] = algorithmId.isEmpty()
-        ? QString::fromLatin1(kSiftLightGlueAlgorithmId)
+        ? QString::fromLatin1(kAutoSiftAlgorithmId)
         : algorithmId;
     QString lightGluePath = _lightGlueEnginePath;
     QString loMaRPath = _lomaRPackagePath;
@@ -524,7 +524,7 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
     const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
     const bool modelBacked = algorithmId == QLatin1String(kSiftLightGlueAlgorithmId) ||
         algorithmId == QLatin1String(kLoMaRAlgorithmId);
-    const bool cudaSift = algorithmId == QLatin1String(kCudaSiftAlgorithmId);
+    const bool autoSift = algorithmId == QLatin1String(kAutoSiftAlgorithmId);
     _matchingResourceEdit->setEnabled(modelBacked);
     _matchingResourceBrowseButton->setEnabled(modelBacked);
     _downloadModelButton->setEnabled(modelBacked);
@@ -534,7 +534,7 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
     {
         refreshMatchingResourceStatus();
     }
-    else if (cudaSift)
+    else if (autoSift)
     {
         QPalette palette = _matchingResourceStatusLabel->palette();
         palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
@@ -616,7 +616,7 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
             ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)
             : QString();
     }
-    else if (algorithmId == QLatin1String(kCudaSiftAlgorithmId))
+    else if (algorithmId == QLatin1String(kAutoSiftAlgorithmId))
     {
         QPalette palette = _matchingResourceStatusLabel->palette();
         palette.setColor(QPalette::WindowText, QColor(35, 110, 70));

@@ -579,17 +579,41 @@ TEST(SfmSourceContractTest, BracketedSequencePnpUsesInitialPoseCorrespondenceGat
     });
 }
 
-TEST(SfmSourceContractTest, CudaSiftExtractionIsPartOfUnifiedImageMatchingModule)
+TEST(SfmSourceContractTest, AutoSiftExtractionIsPartOfUnifiedImageMatchingModule)
 {
     const QString extractor = readSourceFile(
         QStringLiteral("src/core/image_matching/sift/SiftFeatureExtractor.cpp"));
+    const QString backend = readSourceFile(
+        QStringLiteral("src/core/image_matching/sift/SiftComputeBackend.cpp"));
     const QString cmake = readSourceFile(
         QStringLiteral("src/core/image_matching/CMakeLists.txt"));
 
-    expectContainsAll(extractor, {"ExtractSift", "PLASCAN_HAS_CUDA_SIFT", "validMask"});
-    expectContainsAll(cmake, {"SiftFeatureExtractor.cpp", "plascan_cudasift"});
+    expectContainsAll(extractor, {"extractSiftOnGpu", "SiftComputeBackend", "validMask"});
+    expectContainsAll(backend, {"extractMetalSift", "extractOpenClSift", "extractCudaSift"});
+    expectContainsAll(cmake,
+                      {"SiftFeatureExtractor.cpp", "SiftCudaBackend.cpp", "SiftMetalBackend.mm",
+                       "SiftOpenClBackend.cpp", "plascan_cudasift"});
     EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_extractors")));
     EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_match")));
+}
+
+TEST(ImageMatchingSourceContractTest, TensorRtCallersUseInferenceModuleDirectly)
+{
+    const QString runtime = readSourceFile(
+        QStringLiteral("src/core/matchphototask/runtime/MatchPhotosRuntime.cpp"));
+    const QString loma = readSourceFile(
+        QStringLiteral("src/core/image_matching/loma_r/LoMaRTensorRtBackend.cpp"));
+    const QString cmake = readSourceFile(
+        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
+
+    expectContainsAll(runtime, {"inference/tensorrt/TensorRtEngineBuilder.h", "inference::ensureTensorRtEngine"});
+    expectContainsAll(loma, {"inference/tensorrt/TensorRtSession.h", "inference::TensorRtSession"});
+    EXPECT_FALSE(cmake.contains(QStringLiteral("tensorrt/TensorRtEngineBuilder.h")));
+    EXPECT_FALSE(cmake.contains(QStringLiteral("tensorrt/TensorRtSession.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/core/image_matching/tensorrt/TensorRtEngineBuilder.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/core/image_matching/tensorrt/TensorRtSession.h")));
 }
 
 TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
@@ -763,13 +787,17 @@ TEST(SfmPnpObservationContractTest, RegistrationUsesOneThreeDimensionalCandidate
     });
 }
 
-TEST(CudaSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
+TEST(AutoSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
 {
     const QString source = readSourceFile(
         QStringLiteral("src/core/image_matching/sift/SiftFeatureExtractor.cpp"));
 
-    EXPECT_TRUE(source.contains(QStringLiteral("0.1f")));
-    EXPECT_TRUE(source.contains(QStringLiteral("20.0f")));
+    expectContainsAll(source, {
+        "threshold *= 0.5f",
+        "std::clamp(contrastThreshold, 0.001, 0.20)",
+        "minimumSide < 800",
+        "constexpr double scale = 2.0",
+    });
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, MeshDecimationReachesReconstructionConfig)

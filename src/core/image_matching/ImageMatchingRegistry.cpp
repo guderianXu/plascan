@@ -15,7 +15,7 @@ namespace xjw::image_matching
 void registerSiftLightGlueAlgorithm();
 void registerLoMaRAlgorithm();
 #endif
-void registerCudaSiftAlgorithm();
+void registerAutoSiftAlgorithm();
 
 namespace
 {
@@ -95,7 +95,7 @@ void ensureBuiltInAlgorithms()
 #else
         registerUnavailableTensorRtAlgorithms();
 #endif
-        registerCudaSiftAlgorithm();
+        registerAutoSiftAlgorithm();
     });
 }
 

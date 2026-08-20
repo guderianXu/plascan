@@ -25,7 +25,9 @@ enum class ComputeDevice
 {
     Auto,
     Cpu,
-    Cuda
+    Cuda,
+    OpenCl,
+    Metal
 };
 
 enum class ReferencePreselectionGeometry
@@ -51,9 +53,9 @@ struct MatchPhotosOptions
     // 或在测试、批处理中强制使用确定性模式。
     PairSelectionPolicy pairPolicy = makePairSelectionPolicy(PairSelectionPreset::Auto);
 
-    // 组合算法通过统一注册表选择。当前注册 sift_lightglue、cuda_sift 和 loma_r；
+    // 组合算法通过统一注册表选择。当前注册 auto_sift、sift_lightglue 和 loma_r；
     // 新实现只需实现 IImageMatchingAlgorithm 并注册，不再增加特征/匹配双重 token。
-    QString algorithmId = QStringLiteral("sift_lightglue");
+    QString algorithmId = QStringLiteral("auto_sift");
     // 蒙版应用阶段：none=不使用，keypoints=提取后过滤关键点，tiepoints=匹配后过滤连接点。
     // 项目蒙版约定为 0 表示有效区域，非 0 表示排除区域。
     QString maskApplyMode = QStringLiteral("none");

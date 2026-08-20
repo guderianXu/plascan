@@ -135,7 +135,7 @@ owner/peer 身份和算法变体为准。
   "settings": {
     "storage_format": "pimatch",
     "format_version": 1,
-    "algorithm_id": "sift_lightglue",
+    "algorithm_id": "auto_sift",
     "algorithm_version": 1
   }
 }

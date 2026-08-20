@@ -38,7 +38,7 @@ QJsonObject modelSettings(const QJsonObject &settings)
 TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
 {
     const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 7);
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 8);
     EXPECT_EQ(settings.value(QStringLiteral("selected_workflow")).toString(),
               QStringLiteral("aerial_triangulation"));
 
@@ -51,7 +51,7 @@ TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
 
     const QJsonObject aerial = aerialSettings(settings);
     EXPECT_EQ(aerial.value(QStringLiteral("algorithm_id")).toString(),
-              QStringLiteral("sift_lightglue"));
+              QStringLiteral("auto_sift"));
     EXPECT_TRUE(aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
     EXPECT_TRUE(aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString().isEmpty());
     EXPECT_EQ(aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt(), 0);
@@ -80,7 +80,8 @@ TEST(WorkflowSettingsDialogTest, ExposesModelGenerationComputeModesAndDeviceDete
               QStringLiteral("aerial_triangulation"));
     EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("sift_lightglue")), 0);
-    EXPECT_GE(algorithmSelector->findData(QStringLiteral("cuda_sift")), 0);
+    EXPECT_GE(algorithmSelector->findData(QStringLiteral("auto_sift")), 0);
+    EXPECT_LT(algorithmSelector->findData(QStringLiteral("cuda_sift")), 0);
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("loma_r")), 0);
 
     workflowSelector->setCurrentIndex(
@@ -155,7 +156,7 @@ TEST(WorkflowSettingsDialogTest, NormalizesModelGenerationComputeMode)
               QStringLiteral("hybrid"));
 }
 
-TEST(WorkflowSettingsDialogTest, CudaSiftRequiresNoExternalModel)
+TEST(WorkflowSettingsDialogTest, AutoSiftRequiresNoExternalModel)
 {
     WorkflowSettingsDialog dialog;
     auto *algorithmSelector = dialog.findChild<QComboBox *>(
@@ -170,16 +171,16 @@ TEST(WorkflowSettingsDialogTest, CudaSiftRequiresNoExternalModel)
     ASSERT_NE(resourceEdit, nullptr);
     ASSERT_NE(downloadButton, nullptr);
 
-    const int cudaSiftIndex = algorithmSelector->findData(QStringLiteral("cuda_sift"));
-    ASSERT_GE(cudaSiftIndex, 0);
-    algorithmSelector->setCurrentIndex(cudaSiftIndex);
+    const int autoSiftIndex = algorithmSelector->findData(QStringLiteral("auto_sift"));
+    ASSERT_GE(autoSiftIndex, 0);
+    algorithmSelector->setCurrentIndex(autoSiftIndex);
 
     EXPECT_FALSE(resourceEdit->isEnabled());
     EXPECT_TRUE(downloadButton->isHidden());
     EXPECT_EQ(aerialSettings(dialog.collectSettings())
                   .value(QStringLiteral("algorithm_id"))
                   .toString(),
-              QStringLiteral("cuda_sift"));
+              QStringLiteral("auto_sift"));
     ASSERT_NE(resourceStatus, nullptr);
     EXPECT_TRUE(resourceStatus->text().contains(QStringLiteral("无需下载模型")));
     EXPECT_TRUE(resourceStatus->text().contains(QStringLiteral("回退")));
@@ -259,7 +260,7 @@ TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningF
 
     dialog.applySettings(legacy);
     const QJsonObject collected = dialog.collectSettings();
-    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 7);
+    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 8);
     EXPECT_EQ(
         aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
         QStringLiteral("D:/legacy/lightglue.engine"));

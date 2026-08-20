@@ -63,7 +63,7 @@ struct AerialTriangulationOptions
     ImageId initialImageId2 = kInvalidImageId; ///< 初始对第二幅影像 ID。
 
     // 算法、设备和缓存位置。
-    QString matchingAlgorithmId = QStringLiteral("sift_lightglue"); ///< 统一算法注册标识。
+    QString matchingAlgorithmId = QStringLiteral("auto_sift"); ///< 统一算法注册标识。
     QString lightGlueTensorRtEnginePath; ///< 可选本机 TensorRT engine；留空时自动查找。
     QString lomaRTensorRtPackagePath; ///< LoMa-R 双 engine JSON 清单；留空时自动查找。
     int lomaRKeypointBudget = 0; ///< 0=显存感知自动选择，或 1024/2048/3840。

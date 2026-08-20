@@ -11,8 +11,8 @@
 #include "SparseSceneOverlapAnalyzer.h"
 #include "TrackBuildStage.h"
 #include "VocabularyOverlapRetriever.h"
-#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "io/PathIO.h"
+#include "sift/AutoSiftAlgorithm.h"
 #include "sift/SiftFeatureExtractor.h"
 
 #include <QFileInfo>
@@ -250,6 +250,24 @@ bool buildVocabularyPreselection(const MatchPhotosContext &context,
             acceptedCount);
     }
     return true;
+}
+
+image_matching::SiftComputeBackend requestedSiftBackend(ComputeDevice device)
+{
+    switch (device)
+    {
+    case ComputeDevice::Auto:
+        return image_matching::SiftComputeBackend::Automatic;
+    case ComputeDevice::Cpu:
+        return image_matching::SiftComputeBackend::Cpu;
+    case ComputeDevice::Cuda:
+        return image_matching::SiftComputeBackend::Cuda;
+    case ComputeDevice::OpenCl:
+        return image_matching::SiftComputeBackend::OpenCl;
+    case ComputeDevice::Metal:
+        return image_matching::SiftComputeBackend::Metal;
+    }
+    return image_matching::SiftComputeBackend::Automatic;
 }
 
 MatchPhotosStageReport makeReferencePreselectionReport(MatchPhotosStageStatus status,
@@ -494,12 +512,21 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
     if (result.algorithmPlan.valid &&
         result.algorithmPlan.algorithmId ==
-            QLatin1String(image_matching::kCudaSiftAlgorithmId))
+            QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
-        result.algorithmPlan = MatchPhotosAlgorithmSelector::resolveExecutionBackend(
-            _options,
-            std::move(result.algorithmPlan),
-            image_matching::SiftFeatureExtractor::isCudaAvailable(_options.cudaDevice));
+        try
+        {
+            const image_matching::SiftComputeBackend backend =
+                image_matching::SiftFeatureExtractor::resolveBackend(
+                    requestedSiftBackend(_options.device), _options.cudaDevice);
+            result.algorithmPlan = MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+                _options, std::move(result.algorithmPlan), backend);
+        }
+        catch (const std::exception &error)
+        {
+            result.algorithmPlan.valid = false;
+            result.algorithmPlan.validationError = QString::fromUtf8(error.what());
+        }
     }
     const QString algorithmName = result.algorithmPlan.displayName.isEmpty()
         ? result.algorithmPlan.algorithmId
@@ -683,6 +710,18 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         clearTransientMatchPayloads(&result.matches);
         return result;
     }
+    const MatchPhotosStageReport guidedReport = guidedMatchStage.run(
+        runtimeContext, _options, result.algorithmPlan, &result.matches);
+    reportMatchPhotosProgress(runtimeContext,
+                              QStringLiteral("guided_match"),
+                              guidedReport.message,
+                              guidedReport.itemCount,
+                              std::max(1, guidedReport.itemCount));
+    if (appendStageAndStopOnFailure(&result, guidedReport))
+    {
+        clearTransientMatchPayloads(&result.matches);
+        return result;
+    }
     const MatchPhotosStageReport trackReport =
         trackBuildStage.run(runtimeContext, _options, &result.matches, &result);
     reportMatchPhotosProgress(runtimeContext,
@@ -696,8 +735,6 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         return result;
     }
-    result.stages.push_back(guidedMatchStage.run(runtimeContext, _options));
-
     result.success = true;
     return result;
 }

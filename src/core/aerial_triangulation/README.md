@@ -38,7 +38,7 @@
 
 ## GPU 与 CPU 执行边界
 
-- CUDA SIFT 使用单个 GPU 提取通道；CPU 以有界队列提前完成下一张影像的读取、灰度化和缩放，
+- Auto SIFT 使用单个 CUDA、Metal 或 OpenCL GPU 提取通道；CPU 以有界队列提前完成下一张影像的读取、灰度化和缩放，
   使影像解码与 GPU 提取重叠。队列深度默认自动解析，取消后不会继续准备新影像。
 - LightGlue TensorRT 按可用显存、固定 engine 桶容量和候选对数量自动解析并发数。每个 worker 独占
   `TensorRtLightGlueMatcher` 执行上下文，当前最多 4 路；检测到 CUDA OOM 时释放并发 worker，

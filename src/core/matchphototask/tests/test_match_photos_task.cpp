@@ -48,7 +48,7 @@ TEST(MatchPhotosTaskTest, PlanOnlyUsesUnifiedAlgorithmWithoutWritingIntermediate
     EXPECT_FALSE(QDir(context.matchDirectory).exists());
 }
 
-TEST(MatchPhotosTaskTest, CpuSelectionFailsBeforeReadingImages)
+TEST(MatchPhotosTaskTest, CpuSelectionUsesDefaultAutoSift)
 {
     xjw::matchphotos::MatchPhotosOptions options;
     options.device = xjw::matchphotos::ComputeDevice::Cpu;
@@ -59,12 +59,12 @@ TEST(MatchPhotosTaskTest, CpuSelectionFailsBeforeReadingImages)
 
     const auto result = xjw::matchphotos::MatchPhotosTask(options).run(context);
 
-    EXPECT_FALSE(result.success);
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("CUDA")));
+    EXPECT_TRUE(result.success) << qPrintable(result.errorMessage);
+    EXPECT_EQ(result.algorithmPlan.algorithmId, QStringLiteral("auto_sift"));
     ASSERT_FALSE(result.stages.empty());
     EXPECT_EQ(result.stages.front().stageId, QStringLiteral("algorithm_selection"));
     EXPECT_EQ(result.stages.front().status,
-              xjw::matchphotos::MatchPhotosStageStatus::Failed);
+              xjw::matchphotos::MatchPhotosStageStatus::Completed);
 }
 
 TEST(MatchPhotosGeometryGateTest, RequiresStrongSupportForSmallInlierSets)

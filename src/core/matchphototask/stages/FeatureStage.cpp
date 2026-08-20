@@ -6,8 +6,8 @@
 #include "FeaturePreparationQueue.h"
 #include "io/PathIO.h"
 #include "ImageMatchingRegistry.h"
-#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "loma_r/LoMaRAlgorithm.h"
+#include "sift/AutoSiftAlgorithm.h"
 
 #include <QElapsedTimer>
 
@@ -203,9 +203,13 @@ MatchPhotosStageReport FeatureStage::run(
                 resolveFeatureKeypointLimit(options, algorithmPlan, original.cols, original.rows);
 
             phaseTimer.restart();
-            prepared.inputImage = resizeImage(original,
-                                              algorithmPlan.maxImageDim,
-                                              &prepared.resizeScale);
+            const bool adaptiveSift = algorithmPlan.algorithmId ==
+                QLatin1String(image_matching::kAutoSiftAlgorithmId);
+            prepared.inputImage = adaptiveSift
+                ? original
+                : resizeImage(original,
+                              algorithmPlan.maxImageDim,
+                              &prepared.resizeScale);
             prepared.imageResizeMs = phaseTimer.elapsed();
 
             if (applyMask)
@@ -272,10 +276,16 @@ MatchPhotosStageReport FeatureStage::run(
         runtime.cudaDevice = options.cudaDevice;
         runtime.maxKeypoints = prepared.effectiveKeypointLimit;
         runtime.removeBorders = algorithmPlan.featureRemoveBorders;
+        runtime.maxImageDimension = algorithmPlan.maxImageDim;
         runtime.siftDetectionThreshold = algorithmPlan.siftDetectionThreshold;
-        runtime.forceCpuSift =
-            algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cpu;
-        runtime.allowCpuSiftFallback = runtime.forceCpuSift;
+        runtime.siftContrastThreshold = algorithmPlan.siftContrastThreshold;
+        const bool autoSift = algorithmPlan.algorithmId ==
+            QLatin1String(image_matching::kAutoSiftAlgorithmId);
+        runtime.siftBackend = autoSift
+            ? algorithmPlan.executionBackend
+            : image_matching::SiftComputeBackend::Cuda;
+        runtime.adaptiveSift = autoSift;
+        runtime.rootSift = autoSift;
         if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
         {
             runtime.tensorRtFeatureEnginePath = loma_package.featureEnginePath;
@@ -354,14 +364,8 @@ MatchPhotosStageReport FeatureStage::run(
                 prepared.effectiveKeypointLimit;
             settings[QStringLiteral("image_width")] = prepared.originalWidth;
             settings[QStringLiteral("image_height")] = prepared.originalHeight;
-            settings[QStringLiteral("feature_cuda_enabled")] =
-                algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda;
-            const bool siftMutual = algorithmPlan.algorithmId ==
-                QLatin1String(image_matching::kCudaSiftAlgorithmId);
-            settings[QStringLiteral("feature_backend")] = siftMutual
-                ? (algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
-                       ? QStringLiteral("cuda_sift")
-                       : QStringLiteral("opencv_cpu_sift"))
+            settings[QStringLiteral("feature_backend")] = autoSift
+                ? QString::fromStdString(features->computeBackend)
                 : algorithmPlan.algorithmId;
             settings[QStringLiteral("backend_fallback")] = algorithmPlan.backendFallback;
             settings[QStringLiteral("feature_prepare_ms")] =
@@ -396,9 +400,7 @@ MatchPhotosStageReport FeatureStage::run(
         QStringLiteral("%1 特征提取完成：%2 张，全部保存在任务内存中，%3")
             .arg(algorithmPlan.displayName)
             .arg(extractedCount)
-            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
-                     ? QStringLiteral("CUDA")
-                     : QStringLiteral("OpenCV CPU")),
+            .arg(algorithmPlan.backendReason),
         extractedCount);
 }
 

@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
     std::string rightImageArg;
     std::string outputDirectoryArg;
     std::string enginePathArg;
-    std::string algorithmIdArg = "sift_lightglue";
+    std::string algorithmIdArg = "auto_sift";
     std::string deviceArg = "auto";
     int maxKeypoints = 40000;
     int maxImageDim = 0;
@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
     float matchThreshold = 0.15f;
     double geometryThreshold = 1.5;
     int geometryMinInliers = 20;
+    bool guidedImageMatching = false;
 
     app.add_option("-L,--left", leftImageArg, "左影像路径")->required();
     app.add_option("-R,--right", rightImageArg, "右影像路径")->required();
@@ -46,21 +47,24 @@ int main(int argc, char *argv[])
                    "逐影像 .pimatch 输出目录")->required();
     app.add_option("-m,--model", enginePathArg,
                    "算法模型资源：LightGlue .onnx/本机 .engine 或 LoMa-R JSON 清单；"
-                   "CUDA SIFT 无需模型");
+                   "Auto SIFT 无需模型");
     app.add_option("-a,--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: sift_lightglue, cuda_sift, loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
+                   "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
     app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大关键点数");
     app.add_option("--max-image-dim", maxImageDim,
                    "提取输入最长边，0 表示保持原始分辨率");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
-    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda")
-        ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
+    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
     app.add_option("-t,--match-threshold", matchThreshold, "匹配置信度阈值");
     app.add_option("--geometry-threshold", geometryThreshold,
                    "几何验证像素残差阈值");
     app.add_option("--geometry-min-inliers", geometryMinInliers,
                    "几何验证最少内点数");
+    app.add_flag("--guided-image-matching",
+                 guidedImageMatching,
+                 "在初始基础矩阵约束下补充弱 SIFT 对应");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -98,6 +102,14 @@ int main(int argc, char *argv[])
     {
         options.device = xjw::matchphotos::ComputeDevice::Cuda;
     }
+    else if (deviceArg == "opencl")
+    {
+        options.device = xjw::matchphotos::ComputeDevice::OpenCl;
+    }
+    else if (deviceArg == "metal")
+    {
+        options.device = xjw::matchphotos::ComputeDevice::Metal;
+    }
     else
     {
         options.device = xjw::matchphotos::ComputeDevice::Auto;
@@ -119,6 +131,7 @@ int main(int argc, char *argv[])
     options.geometryReprojThreshold = std::max(0.1, geometryThreshold);
     options.geometryMinInliers = std::max(4, geometryMinInliers);
     options.enableGeometryVerification = true;
+    options.enableGuidedMatching = guidedImageMatching;
     options.enableTrackBuild = true;
     options.useGenericPreselection = false;
     options.useReferencePreselection = false;

@@ -130,7 +130,7 @@ VerificationInput makeVerificationInput(const image_matching::PairMatchData &pai
                                              1.0f - correspondence.confidence);
     }
     input.matches.numMatches = count;
-    input.matches.sourceAlgorithm = "sift_lightglue";
+    input.matches.sourceAlgorithm = pair.algorithmId.toStdString();
     return input;
 }
 
