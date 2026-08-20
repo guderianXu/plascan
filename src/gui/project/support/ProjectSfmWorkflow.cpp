@@ -1,6 +1,6 @@
 #include "ProjectSfmWorkflow.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectMetadataOperations.h"
 #include "model/AerialTriangulationResult.h"
 

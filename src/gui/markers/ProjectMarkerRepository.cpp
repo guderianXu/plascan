@@ -1,6 +1,6 @@
 #include "ProjectMarkerRepository.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "ProjectSurveyControl.h"
 
@@ -21,16 +21,6 @@ bool ProjectMarkerRepository::open(QString *error)
     {
         if (error) *error = QStringLiteral("没有打开的工程，无法加载标记点");
         return false;
-    }
-
-    if (_projectData->coreFilesMeta().contains(QStringLiteral("survey_control")))
-    {
-        const auto migration = xjw::gui::project::migrateLegacySurveyControl(_projectData);
-        if (!migration.imported)
-        {
-            if (error) *error = migration.errorMessage;
-            return false;
-        }
     }
 
     const control_points::MarkerSetIoResult result =

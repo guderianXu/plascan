@@ -74,7 +74,8 @@ gh release download models-v1.2.0 -R guderianXu/plascan `
 ```
 
 内置 U2Net 可由 OpenCV DNN CPU 加载，也可像 BiRefNet、LightGlue 与 LoMa-R 一样在 NVIDIA GPU 上使用
-TensorRT。BiRefNet 仅支持 TensorRT，不提供 OpenCV CPU 回退。TensorRT 路径要求 CUDA、ONNX Parser
+TensorRT。BiRefNet 同时支持 TensorRT CUDA 和 ONNX Runtime CPU，自动模式优先使用所选 CUDA 设备，
+不可用时回退 CPU。TensorRT 路径要求 CUDA、ONNX Parser
 和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑
 这些运行时，Linux 包则需捆绑或明确要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机
 生成的 `.engine`，也不再为了 U2Net 携带 cuDNN。
@@ -182,9 +183,10 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 - C++ 后处理对 raw logits 逐像素执行 sigmoid，不做逐图 min/max 归一化；随后裁掉 letterbox padding、
   恢复原图尺寸并按前景阈值生成 PlaScan 排除蒙版。
 
-该模型只支持 TensorRT GPU。运行时优先构建 FP16 engine，不支持 FP16 时尝试 FP32；TensorRT、CUDA 或
-受支持 NVIDIA GPU 不可用时明确失败，不会回退 OpenCV CPU。安装包和最终用户运行时不需要 Python、
-PyTorch、LibTorch 或 Hugging Face 依赖；它们只用于开发机导出和等价性验证。
+该模型支持 TensorRT GPU 和 ONNX Runtime CPU。自动模式优先构建 FP16 engine，不支持 FP16 时尝试
+FP32；所选 TensorRT/CUDA 设备不可用时回退 ONNX Runtime CPU。OpenCV 4.12 的 ONNX 导入器无法处理
+该图中的 `Ceil`/`GatherND` 节点，所以 BiRefNet 不再复用 U2Net 的 OpenCV CPU 后端。安装包和最终用户
+运行时不需要 Python、PyTorch、LibTorch 或 Hugging Face 依赖；它们只用于开发机导出和等价性验证。
 
 独立 Release `models-v1.2.0` **只包含以下两个资产**；U2Net、LightGlue 和 LoMa-R 仍从
 `models-v1.1.0` 获取：

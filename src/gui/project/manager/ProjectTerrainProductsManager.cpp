@@ -1,11 +1,11 @@
 #include "ProjectTerrainProductsManager.h"
 
 #include "ProjectManager.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "ProjectOpenGuard.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
@@ -31,9 +31,9 @@ using xjw::gui::project::makeDemResultRecord;
 using xjw::gui::project::makeOrthoResultRecord;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::resolveProjectOutputDir;
-using xjw::gui::project::runDemProducts;
-using xjw::gui::project::runOrthoProduct;
-using xjw::gui::project::TerrainPipelineResult;
+using xjw::core::project::runDemProducts;
+using xjw::core::project::runOrthoProduct;
+using xjw::core::project::TerrainPipelineResult;
 using xjw::gui::project::upsertMetaArrayRecordByPath;
 
 namespace
@@ -1239,7 +1239,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                       resolvedSettings,
                       projectMeta = runtimeMeta,
                       cancelFlag,
-                      progressCallback]() -> xjw::gui::project::TerrainPipelineResult
+                      progressCallback]() -> xjw::core::project::TerrainPipelineResult
     {
         return runOrthoProduct(sourceImages,
                                resolvedDem,
@@ -1260,7 +1260,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                           cancelFlag,
                           background_task_id](
                               ProjectTerrainProductsManager *manager,
-                              xjw::gui::project::TerrainPipelineResult orthoRun)
+                              xjw::core::project::TerrainPipelineResult orthoRun)
     {
         emit manager->backgroundTaskFinished(background_task_id);
         if (manager->_orthoCancelFlag == cancelFlag)

@@ -4,9 +4,12 @@
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
 #include "concurrency/SafeWorkerGroup.h"
+#include "ImageMatchTypes.h"
 
 #include <QCryptographicHash>
 #include <QElapsedTimer>
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -23,47 +26,159 @@
 namespace xjw::matchphotos
 {
 
+namespace
+{
+
+QString normalizedImagePath(const QString &path)
+{
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+double gridCoverage(const image_matching::PairMatchData &pair,
+                    bool firstImage,
+                    const MatchPhotosOptions &options)
+{
+    const int columns = std::clamp(options.geometryGridColumns, 1, 32);
+    const int rows = std::clamp(options.geometryGridRows, 1, 32);
+    const int width = static_cast<int>(firstImage ? pair.image0.width : pair.image1.width);
+    const int height = static_cast<int>(firstImage ? pair.image0.height : pair.image1.height);
+    if (width <= 0 || height <= 0)
+    {
+        return 0.0;
+    }
+    std::vector<bool> occupied(static_cast<std::size_t>(columns * rows), false);
+    for (const auto &correspondence : pair.correspondences)
+    {
+        if (!image_matching::hasFlag(correspondence.flags,
+                                     image_matching::MatchRecordFlag::GeometryInlier))
+        {
+            continue;
+        }
+        const auto &observation = firstImage ? correspondence.observation0
+                                             : correspondence.observation1;
+        const int column = std::clamp(
+            static_cast<int>(observation.x * columns / std::max(1, width)), 0, columns - 1);
+        const int row = std::clamp(
+            static_cast<int>(observation.y * rows / std::max(1, height)), 0, rows - 1);
+        occupied[static_cast<std::size_t>(row * columns + column)] = true;
+    }
+    return static_cast<double>(std::count(occupied.cbegin(), occupied.cend(), true)) /
+        static_cast<double>(occupied.size());
+}
+
+} // namespace
+
+bool areSequenceAdjacent(const MatchPhotosContext &context,
+                         const MatchPhotosOptions &options,
+                         const QString &image0Path,
+                         const QString &image1Path)
+{
+    int index0 = -1;
+    int index1 = -1;
+    const QString normalized0 = normalizedImagePath(image0Path);
+    const QString normalized1 = normalizedImagePath(image1Path);
+    for (int index = 0; index < context.pairInput.images.size(); ++index)
+    {
+        const QString normalized = normalizedImagePath(context.pairInput.images.at(index));
+        index0 = normalized == normalized0 ? index : index0;
+        index1 = normalized == normalized1 ? index : index1;
+    }
+    if (index0 < 0 || index1 < 0 || index0 == index1)
+    {
+        return false;
+    }
+    const int distance = std::abs(index0 - index1);
+    return distance == 1 ||
+        (options.pairPolicy.closeSequenceLoop &&
+         context.pairInput.images.size() > 2 &&
+         distance == context.pairInput.images.size() - 1);
+}
+
+GeometryQualityMetrics measureGeometryQuality(const image_matching::PairMatchData &pair,
+                                              const MatchPhotosOptions &options,
+                                              bool adjacentImages)
+{
+    GeometryQualityMetrics metrics;
+    metrics.rawMatchCount = static_cast<int>(pair.correspondences.size());
+    metrics.inlierCount = static_cast<int>(std::count_if(
+        pair.correspondences.cbegin(), pair.correspondences.cend(), [](const auto &correspondence)
+        {
+            return image_matching::hasFlag(correspondence.flags,
+                                            image_matching::MatchRecordFlag::GeometryInlier);
+        }));
+    metrics.inlierRatio = metrics.rawMatchCount > 0
+        ? static_cast<double>(metrics.inlierCount) / static_cast<double>(metrics.rawMatchCount)
+        : 0.0;
+    metrics.image0GridCoverage = gridCoverage(pair, true, options);
+    metrics.image1GridCoverage = gridCoverage(pair, false, options);
+    metrics.adjacentImages = adjacentImages;
+    return metrics;
+}
+
+GeometryQualityDecision evaluateGeometryQuality(const GeometryQualityMetrics &metrics,
+                                                const MatchPhotosOptions &options)
+{
+    GeometryQualityDecision decision;
+    if (metrics.rawMatchCount <= 0 || metrics.inlierCount < options.geometryMinInliers)
+    {
+        return decision;
+    }
+
+    const double minimumRatio = std::clamp(options.geometryMinInlierRatio, 0.01, 0.95);
+    const double minimumCoverage = std::clamp(options.geometryMinGridCoverage, 0.01, 1.0);
+    const double supportScale = static_cast<double>(std::max(12, options.geometryMinInliers));
+    const double support = 1.0 - std::exp(
+        -static_cast<double>(metrics.inlierCount - options.geometryMinInliers + 1) / supportScale);
+
+    // 支持度越少，对内点率和空间覆盖要求越高；相邻影像有强先验，但只给予
+    // 连续的小幅奖励，不能绕过最低内点数。这里不存在任何特定内点数断点。
+    decision.requiredInlierRatio = minimumRatio + (0.52 - minimumRatio) * (1.0 - support);
+    decision.requiredGridCoverage = minimumCoverage + (0.30 - minimumCoverage) * (1.0 - support);
+    if (metrics.adjacentImages)
+    {
+        decision.requiredInlierRatio = std::max(minimumRatio * 0.8,
+                                                decision.requiredInlierRatio - 0.06);
+        decision.requiredGridCoverage = std::max(minimumCoverage * 0.8,
+                                                 decision.requiredGridCoverage - 0.04);
+    }
+
+    const double coverage = std::min(metrics.image0GridCoverage, metrics.image1GridCoverage);
+    const double ratioScore = metrics.inlierRatio / std::max(1e-9, decision.requiredInlierRatio);
+    const double coverageScore = coverage / std::max(1e-9, decision.requiredGridCoverage);
+    const double countScore = std::min(
+        1.0, static_cast<double>(metrics.inlierCount) /
+                 static_cast<double>(std::max(1, options.geometryMinInliers * 2)));
+    decision.score = 0.45 * std::min(1.5, ratioScore) +
+        0.35 * std::min(1.5, coverageScore) + 0.20 * countScore;
+    decision.passed = metrics.inlierRatio >= minimumRatio * 0.8 &&
+        coverage >= minimumCoverage * 0.8 && decision.score >= 0.92;
+    return decision;
+}
+
 QByteArray geometryVerificationFingerprint(const MatchPhotosOptions &options)
 {
     // schema_version 必须在几何实现、内点标志或质量门语义变化时递增。
     // OpenCV 版本也参与键，避免库升级后继续信任不同 USAC 实现生成的内点集。
     QJsonObject object;
-    object[QStringLiteral("schema_version")] = 1;
+    object[QStringLiteral("schema_version")] = 2;
     object[QStringLiteral("enabled")] = options.enableGeometryVerification;
     object[QStringLiteral("model")] = QStringLiteral("fundamental");
     object[QStringLiteral("reprojection_threshold_pixels")] =
         options.geometryReprojThreshold;
     object[QStringLiteral("minimum_inliers")] = options.geometryMinInliers;
+    object[QStringLiteral("minimum_inlier_ratio")] = options.geometryMinInlierRatio;
+    object[QStringLiteral("minimum_grid_coverage")] = options.geometryMinGridCoverage;
+    object[QStringLiteral("grid_columns")] = options.geometryGridColumns;
+    object[QStringLiteral("grid_rows")] = options.geometryGridRows;
     object[QStringLiteral("maximum_iterations")] =
         std::max(100, options.geometryMaxIterations);
     object[QStringLiteral("confidence")] = 0.9999;
     object[QStringLiteral("random_seed")] = 0;
-    object[QStringLiteral("quality_gate_version")] = 1;
+    object[QStringLiteral("quality_gate_version")] = 2;
     object[QStringLiteral("opencv_version")] = QString::fromLatin1(CV_VERSION);
     return QCryptographicHash::hash(
         QJsonDocument(object).toJson(QJsonDocument::Compact),
         QCryptographicHash::Sha256);
-}
-
-bool passesGeometryQualityGate(int rawMatchCount,
-                               int inlierCount,
-                               int minimumInliers)
-{
-    if (inlierCount < minimumInliers)
-    {
-        return false;
-    }
-
-    // 内点少时，重复纹理可能产生一个局部自洽但错误的基础矩阵。达到 64 个内点
-    // 后模型约束通常足够稳定；更小的集合要求至少 70% 原始对应支持该模型。
-    constexpr int strongSupportInliers = 64;
-    constexpr double minimumWeakSupportRatio = 0.70;
-    if (inlierCount >= strongSupportInliers || rawMatchCount <= 0)
-    {
-        return true;
-    }
-    return static_cast<double>(inlierCount) / static_cast<double>(rawMatchCount) >=
-        minimumWeakSupportRatio;
 }
 
 namespace
@@ -135,6 +250,7 @@ VerificationInput makeVerificationInput(const image_matching::PairMatchData &pai
 }
 
 bool hasCompleteReusableGeometry(const MatchPhotosMatchRecord &record,
+                                 const MatchPhotosContext &context,
                                  const MatchPhotosOptions &options,
                                  const QByteArray &expectedFingerprint)
 {
@@ -163,15 +279,19 @@ bool hasCompleteReusableGeometry(const MatchPhotosMatchRecord &record,
                 correspondence.flags,
                 image_matching::MatchRecordFlag::GeometryInlier);
         }));
+    const bool adjacent = areSequenceAdjacent(
+        context, options, record.image0Path, record.image1Path);
+    const GeometryQualityMetrics metrics = measureGeometryQuality(pair, options, adjacent);
     const bool expectedPassed = pair.geometryModel != image_matching::GeometryModel::None &&
-        passesGeometryQualityGate(rawCount,
-                                  static_cast<int>(pair.geometryInlierCount),
-                                  options.geometryMinInliers);
+        evaluateGeometryQuality(metrics, options).passed;
     return flaggedInliers == static_cast<int>(pair.geometryInlierCount) &&
         pair.geometryPassed == expectedPassed;
 }
 
-void updateGeometryRecordMetadata(MatchPhotosMatchRecord *record, bool verified)
+void updateGeometryRecordMetadata(MatchPhotosMatchRecord *record,
+                                  bool verified,
+                                  const GeometryQualityMetrics *quality = nullptr,
+                                  const GeometryQualityDecision *decision = nullptr)
 {
     if (!record || !record->pairData)
     {
@@ -191,10 +311,27 @@ void updateGeometryRecordMetadata(MatchPhotosMatchRecord *record, bool verified)
     record->settings[QStringLiteral("geometry_inlier_ratio")] = rawCount > 0
         ? static_cast<double>(inlierCount) / static_cast<double>(rawCount)
         : 0.0;
+    if (quality)
+    {
+        record->settings[QStringLiteral("geometry_grid_coverage_image0")] =
+            quality->image0GridCoverage;
+        record->settings[QStringLiteral("geometry_grid_coverage_image1")] =
+            quality->image1GridCoverage;
+        record->settings[QStringLiteral("geometry_adjacent_images")] = quality->adjacentImages;
+    }
+    if (decision)
+    {
+        record->settings[QStringLiteral("geometry_quality_score")] = decision->score;
+        record->settings[QStringLiteral("geometry_required_inlier_ratio")] =
+            decision->requiredInlierRatio;
+        record->settings[QStringLiteral("geometry_required_grid_coverage")] =
+            decision->requiredGridCoverage;
+    }
 }
 
 void applyVerification(const image_matching::MatchGeometryResult &geometry,
-                       int minimumInliers,
+                       const MatchPhotosContext &context,
+                       const MatchPhotosOptions &options,
                        MatchPhotosMatchRecord *record)
 {
     if (!record || !record->pairData)
@@ -203,11 +340,8 @@ void applyVerification(const image_matching::MatchGeometryResult &geometry,
     }
     image_matching::PairMatchData &pair = *record->pairData;
     const int rawCount = static_cast<int>(pair.correspondences.size());
-    const bool passed = geometry.modelEstimated &&
-        passesGeometryQualityGate(rawCount, geometry.inlierCount, minimumInliers);
     pair.rawMatchCount = static_cast<std::uint32_t>(rawCount);
     pair.geometryInlierCount = static_cast<std::uint32_t>(geometry.inlierCount);
-    pair.geometryPassed = passed;
     pair.geometryModel = geometry.modelEstimated ? geometry.model
                                                  : image_matching::GeometryModel::None;
     pair.geometryMatrix = geometry.matrix;
@@ -223,8 +357,12 @@ void applyVerification(const image_matching::MatchGeometryResult &geometry,
             ? geometry.residualPixels[static_cast<std::size_t>(index)]
             : -1.0f;
     }
-
-    updateGeometryRecordMetadata(record, true);
+    const bool adjacent = areSequenceAdjacent(
+        context, options, record->image0Path, record->image1Path);
+    const GeometryQualityMetrics metrics = measureGeometryQuality(pair, options, adjacent);
+    const GeometryQualityDecision decision = evaluateGeometryQuality(metrics, options);
+    pair.geometryPassed = geometry.modelEstimated && decision.passed;
+    updateGeometryRecordMetadata(record, true, &metrics, &decision);
 }
 
 } // namespace
@@ -265,7 +403,11 @@ MatchPhotosStageReport GeometryVerifyStage::run(
                 correspondence.flags = withGeometryFlag(correspondence.flags, true);
                 correspondence.residualPixels = -1.0f;
             }
-            updateGeometryRecordMetadata(&record, false);
+            const bool adjacent = areSequenceAdjacent(
+                context, options, record.image0Path, record.image1Path);
+            const GeometryQualityMetrics metrics = measureGeometryQuality(pair, options, adjacent);
+            const GeometryQualityDecision decision = evaluateGeometryQuality(metrics, options);
+            updateGeometryRecordMetadata(&record, false, &metrics, &decision);
             ++accepted;
         }
         return makeGeometryReport(MatchPhotosStageStatus::Skipped,
@@ -294,13 +436,18 @@ MatchPhotosStageReport GeometryVerifyStage::run(
     {
         MatchPhotosMatchRecord &record =
             (*matchRecords)[static_cast<std::size_t>(index)];
-        if (!hasCompleteReusableGeometry(record, options, expectedFingerprint))
+        if (!hasCompleteReusableGeometry(record, context, options, expectedFingerprint))
         {
             workIndices.push_back(index);
             continue;
         }
         ++reusedPairs;
-        updateGeometryRecordMetadata(&record, true);
+        const bool adjacent = areSequenceAdjacent(
+            context, options, record.image0Path, record.image1Path);
+        const GeometryQualityMetrics metrics = measureGeometryQuality(
+            *record.pairData, options, adjacent);
+        const GeometryQualityDecision decision = evaluateGeometryQuality(metrics, options);
+        updateGeometryRecordMetadata(&record, true, &metrics, &decision);
         reusedPassedPairs += record.passedGeometry ? 1 : 0;
         reusedInliers += record.geometricInlierCount;
     }
@@ -348,7 +495,7 @@ MatchPhotosStageReport GeometryVerifyStage::run(
                     const image_matching::MatchGeometryResult geometry =
                         image_matching::MatchGeometryVerifier::verify(
                             input.matches, input.features0, input.features1, geometryOptions);
-                    applyVerification(geometry, options.geometryMinInliers, &record);
+                    applyVerification(geometry, context, options, &record);
                     if (record.passedGeometry)
                     {
                         ++passedPairs;

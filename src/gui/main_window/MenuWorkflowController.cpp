@@ -1295,10 +1295,22 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         settings.value(QStringLiteral("feature_prefetch_depth")).toInt(2), 1, 4);
     workflowOptions.matchThreshold = static_cast<float>(std::clamp(
         settings.value(QStringLiteral("match_threshold")).toDouble(0.15), 0.0, 1.0));
+    workflowOptions.siftMaximumRatio = static_cast<float>(std::clamp(
+        settings.value(QStringLiteral("sift_maximum_ratio")).toDouble(0.98), 0.0, 1.0));
+    workflowOptions.siftMinimumAdaptiveRatio = static_cast<float>(std::clamp(
+        settings.value(QStringLiteral("sift_minimum_adaptive_ratio")).toDouble(0.78),
+        0.0,
+        static_cast<double>(workflowOptions.siftMaximumRatio)));
+    workflowOptions.adaptiveSiftRatio =
+        settings.value(QStringLiteral("adaptive_sift_ratio")).toBool(true);
     workflowOptions.geometryReprojThreshold = std::max(
         0.1, settings.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble(1.5));
     workflowOptions.geometryMinInliers = std::max(
         8, settings.value(QStringLiteral("geometry_min_inliers")).toInt(20));
+    workflowOptions.geometryMinInlierRatio = std::clamp(
+        settings.value(QStringLiteral("geometry_min_inlier_ratio")).toDouble(0.18), 0.01, 0.95);
+    workflowOptions.geometryMinGridCoverage = std::clamp(
+        settings.value(QStringLiteral("geometry_min_grid_coverage")).toDouble(0.12), 0.01, 1.0);
     workflowOptions.geometryMaxIterations = std::max(
         100, settings.value(QStringLiteral("geometry_max_iterations")).toInt(10000));
     workflowOptions.tiePointGridColumns = std::clamp(

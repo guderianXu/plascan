@@ -109,8 +109,9 @@ cmake --workflow --preset linux-package-deb
 sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.1.7_amd64.deb
 ```
 
-通用包可在没有 CUDA 的 Ubuntu 24.04 x86_64 电脑直接启动并运行 U2Net CPU 掩模；BiRefNet Dynamic
-和当前生产影像匹配算法需要 TensorRT/CUDA，因此需要这些功能时使用 CUDA 变体：
+通用包可在没有 CUDA 的 Ubuntu 24.04 x86_64 电脑直接启动，并使用 OpenCV CPU 运行 U2Net、使用
+ONNX Runtime CPU 运行 BiRefNet Dynamic；当前生产深度学习影像匹配算法仍需要 TensorRT/CUDA，
+因此需要这些功能时使用 CUDA 变体：
 
 ```bash
 # 构建机需要 CUDA 13.1、TensorRT 10.15.1（CUDA 13.1 变体）及 ONNX parser 开发库
@@ -218,8 +219,9 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 `ceres-cuda;ceres-reference`，使用 EigenSparse 作为 CPU 对照求解器，不会带入 LAPACK/OpenBLAS，
 也不会改变生产默认后端。
 
-标准 Windows CUDA 构建由 TensorRT 加速 U2Net 和 BiRefNet ONNX；OpenCV 只为 U2Net 保留 CPU DNN
-回退，不安装 `opencv-dnn-cuda`，也不链接或分发 cuDNN。BiRefNet Dynamic 不提供 CPU 回退。
+标准 Windows CUDA 构建由 TensorRT 加速 U2Net 和 BiRefNet ONNX；U2Net 使用 OpenCV CPU 回退，
+BiRefNet 使用 ONNX Runtime CPU 回退，不安装 `opencv-dnn-cuda`，也不链接或分发 cuDNN。
+BiRefNet 自动模式优先使用所选 CUDA 设备。
 首次准备依赖时运行：
 
 ```powershell
@@ -649,7 +651,8 @@ OpenCV 不使用 CUDA/cuDNN。
 
 “生成蒙版 → AI: BiRefNet Dynamic（推荐）”使用固定 `1×3×1024×1024` RGB float32 模型：原图按宽高比
 letterbox 后执行 ImageNet 归一化，C++ 端对 `output_image` 原始前景 logits 做 sigmoid，再裁掉 padding 并恢复
-原尺寸。该路径仅支持 TensorRT GPU，没有 OpenCV/PyTorch CPU 回退；最终用户部署不需要 Python 或 PyTorch。
+原尺寸。自动模式优先 TensorRT GPU，不可用时回退 ONNX Runtime CPU；最终用户部署不需要 Python 或
+PyTorch。OpenCV 4.12 无法导入该模型，因此不再用于 BiRefNet CPU 推理。
 
 或通过导出脚本生成：
 
@@ -670,7 +673,7 @@ python scripts/models/export_birefnet_dynamic_onnx.py --help
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
 | CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
 | TensorRT LoMa-R | CUDA | CUDA | 不支持 |
-| BiRefNet Dynamic 蒙版 | TensorRT | TensorRT | 不支持 |
+| BiRefNet Dynamic 蒙版 | TensorRT / ONNX Runtime CPU | TensorRT / ONNX Runtime CPU | ONNX Runtime CPU |
 | U2Net 蒙版 | TensorRT/CPU | TensorRT/CPU | CPU |
 | 全部 CLI 工具 | ✅ | ✅ | ✅ |
 | Qt6 GUI | ✅ | ✅ | ✅ |

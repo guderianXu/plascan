@@ -53,16 +53,11 @@ const char *depthComputeBackendName(DepthComputeBackend backend)
 DepthComputeBackend resolveDepthComputeBackend(
     std::optional<DepthComputeBackend> requestedBackend,
     bool cudaAvailable,
-    bool openClAvailable,
-    bool automaticAccelerationEnabled)
+    bool openClAvailable)
 {
     if (requestedBackend.has_value())
     {
         return *requestedBackend;
-    }
-    if (!automaticAccelerationEnabled)
-    {
-        return DepthComputeBackend::Cpu;
     }
     if (cudaAvailable)
     {

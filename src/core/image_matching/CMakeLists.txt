@@ -175,5 +175,8 @@ if(BUILD_TESTS)
         GTest::gtest_main
         image_matching
     )
+    target_compile_definitions(test_auto_sift PRIVATE
+        TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+    )
     add_test(NAME AutoSiftTest COMMAND test_auto_sift)
 endif()

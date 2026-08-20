@@ -515,7 +515,6 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
     expectContainsAll(workflow, {
         "SparseCloudPreprocessor preprocessor(point_cloud_processing_device)",
         "denseSettings.processingDevice = point_cloud_processing_device",
-        R"(denseSettings.useCuda = mvs_backend == "auto" || mvs_backend == "cuda")",
         "input, leafSize, processingDevice, processingReport",
         "refineSettings.processingDevice = denseSettings.processingDevice",
         "meshRequest.reconstruction.preprocessingDevice = denseSettings.processingDevice",
@@ -528,7 +527,6 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         "patchmatch_backend_id",
     });
     expectNotContainsAll(workflow, {
-        "refineSettings.processingDevice = denseSettings.useCuda",
         R"(mvs_backend == "auto" ? device : mvs_backend)",
     });
     expectContainsAll(mvs, {
@@ -578,7 +576,6 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
         });
     EXPECT_EQ(snake_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::OpenCl);
     EXPECT_EQ(snake_case.processingDevice, plapoint::ProcessingDevice::CUDA);
-    EXPECT_FALSE(snake_case.useCuda);
 
     const auto camel_case = xjw::core::project::denseGenerationSettingsFromJson(
         QJsonObject{
@@ -587,7 +584,6 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
         });
     EXPECT_EQ(camel_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::Cuda);
     EXPECT_EQ(camel_case.processingDevice, plapoint::ProcessingDevice::OpenCL);
-    EXPECT_TRUE(camel_case.useCuda);
 
     const auto refine = xjw::core::project::denseRefineSettingsFromJson(
         QJsonObject{
@@ -595,9 +591,9 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
         });
     EXPECT_EQ(refine.processingDevice, plapoint::ProcessingDevice::CPU);
 
-    const auto legacy_cpu = xjw::core::project::denseGenerationSettingsFromJson(
+    const auto removed_cuda_flag = xjw::core::project::denseGenerationSettingsFromJson(
         QJsonObject{{QStringLiteral("cuda"), false}});
-    EXPECT_EQ(legacy_cpu.patchMatchBackend, xjw::mvs::PatchMatchBackend::Cpu);
+    EXPECT_EQ(removed_cuda_flag.patchMatchBackend, xjw::mvs::PatchMatchBackend::Auto);
 
     const auto explicit_auto = xjw::core::project::denseGenerationSettingsFromJson(
         QJsonObject{
@@ -605,12 +601,11 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
             {QStringLiteral("patchMatchBackend"), QStringLiteral("auto")},
         });
     EXPECT_EQ(explicit_auto.patchMatchBackend, xjw::mvs::PatchMatchBackend::Auto);
-    EXPECT_TRUE(explicit_auto.useCuda);
 
-    const xjw::mvs::DepthGenConfig cpu_config =
-        xjw::core::project::buildDepthGenConfig(legacy_cpu, 8);
-    EXPECT_EQ(cpu_config.gpuFrameWorkerCount, 0);
-    EXPECT_GT(cpu_config.cpuFrameWorkerCount, 0);
+    const xjw::mvs::DepthGenConfig auto_config =
+        xjw::core::project::buildDepthGenConfig(removed_cuda_flag, 8);
+    EXPECT_GT(auto_config.gpuFrameWorkerCount, 0);
+    EXPECT_GT(auto_config.cpuFrameWorkerCount, 0);
 }
 
 TEST(ReconstructPipelineCliGTest, DepthPyramidRegressionScriptCoversDinoAndUav9)

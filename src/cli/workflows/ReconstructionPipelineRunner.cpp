@@ -1210,7 +1210,6 @@ QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings 
         {QStringLiteral("min_consistent_views"), denseSettings.minConsistentViews},
         {QStringLiteral("depth_consistency"), denseSettings.depthConsistency},
         {QStringLiteral("max_reproj_error"), denseSettings.maxReprojError},
-        {QStringLiteral("use_cuda"), denseSettings.useCuda},
         {QStringLiteral("point_cloud_backend"),
          xjw::core::project::processingDeviceId(denseSettings.processingDevice)},
         {QStringLiteral("patchmatch_backend"),
@@ -1917,7 +1916,6 @@ xjw::cli::ReconstructionCliOptions options;
     QDir().mkpath(mvsDir);
     xjw::core::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
-    denseSettings.useCuda = mvs_backend == "auto" || mvs_backend == "cuda";
     denseSettings.patchMatchBackend = mvs_backend == "cpu"
         ? xjw::mvs::PatchMatchBackend::Cpu
         : mvs_backend == "cuda"

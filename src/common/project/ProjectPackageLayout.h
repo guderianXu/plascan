@@ -33,8 +33,6 @@ public:
         QString *errorMessage = nullptr);
     static bool isChunkDirectoryName(const QString &name);
 
-    // 兼容旧调用：返回首个数字 Chunk 目录，不再返回根级 workspace/。
-    static QString workspaceDirectory(const QString &projectPath);
     static QString resourcesDirectory(const QString &projectPath);
 
     static bool isDescriptor(const QString &projectPath,

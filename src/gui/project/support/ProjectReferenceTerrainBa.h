@@ -2,7 +2,7 @@
 
 #include "BundleAdjust.h"
 #include "BundleAdjustService.h"
-#include "ProjectReferenceDatasets.h"
+#include "ReferenceDatasetWorkflow.h"
 
 #include <QJsonObject>
 #include <QString>

@@ -291,8 +291,8 @@ plascan:///resources/reference/<resource_id>/control.csv
 
 `ProjectWorkspaceStore` 在 URI、当前 Chunk 数字目录和工程级共享目录之间转换。
 `plascan:///chunk/...` 始终相对于拥有该 `doc.json` 的当前 Chunk 数字目录。
-早期 4.0 开发版本写入的 `plascan:///workspace/...` 只在读取时兼容，并在下一次成功
-保存时重写为 `plascan:///chunk/...`，不会继续写入资源索引。Chunk `doc.json` 的 `resource_index`
+早期 4.0 开发版本写入的 `plascan:///workspace/...` 不再支持；当前版本只接受
+`plascan:///chunk/...`。Chunk `doc.json` 的 `resource_index`
 为每个文件记录稳定 ID、类型、项目相对路径、字节数和 SHA-256。打开工程时会校验索引；
 资源缺失或损坏会报告具体路径，不会静默回退到其他位置。
 

@@ -1,6 +1,6 @@
 #include "ProjectUiCommands.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectOpenGuard.h"
 
 #include <QDir>

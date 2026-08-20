@@ -21,8 +21,6 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
                                                         const QString &csvPath,
                                                         const QString &defaultRole);
 
-SurveyControlProjectImportResult migrateLegacySurveyControl(ProjectData *projectData);
-
 QJsonObject surveyControlDialogMetadata(ProjectData *projectData,
                                         QString *errorMessage = nullptr);
 

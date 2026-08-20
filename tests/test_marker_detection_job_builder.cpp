@@ -1,6 +1,6 @@
 #include "MarkerDetectionJobBuilder.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 
 #include <gtest/gtest.h>

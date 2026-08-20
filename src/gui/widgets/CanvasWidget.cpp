@@ -508,7 +508,7 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
     }
     
     QPointer<CanvasWidget> self(this);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [imagePathCopy, projectPath]() -> std::vector<cv::KeyPoint>
         {
@@ -520,8 +520,9 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
                           .arg(imagePathCopy));
             return keypoints;
         },
-        [self, imagePathCopy, match_modified, generation](CanvasWidget *widget,
-                                                           std::vector<cv::KeyPoint> kps) mutable
+        [self, imagePathCopy, match_modified, generation](
+            CanvasWidget *widget,
+            xjw::gui::tasks::TaskOutcome<std::vector<cv::KeyPoint>> outcome) mutable
         {
             if (!self || widget != self.data() || !self->shouldRenderFeatureDiagnostics())
             {
@@ -531,6 +532,13 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
             {
                 return;
             }
+            if (!outcome.succeeded())
+            {
+                LOG_ERROR("%s", qUtf8Printable(outcome.errorMessage));
+                emit self->featuresLoaded(imagePathCopy, 0);
+                return;
+            }
+            std::vector<cv::KeyPoint> kps = std::move(*outcome.value);
 
             const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
             if (!imagePathCopy.trimmed().isEmpty())
@@ -598,14 +606,16 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
     const QString imagePathCopy = imagePath;
     const int generation = ++_residualLoadGeneration;
     QPointer<CanvasWidget> self(this);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [projectPath, imagePathCopy]()
         {
             return xjw::gui::views::loadFeatureResidualsForImage(projectPath, imagePathCopy);
         },
-        [self, imagePathCopy, generation](CanvasWidget *widget,
-                                          QVector<xjw::gui::views::FeatureResidualVector> residuals)
+        [self, imagePathCopy, generation](
+            CanvasWidget *widget,
+            xjw::gui::tasks::TaskOutcome<
+                QVector<xjw::gui::views::FeatureResidualVector>> outcome)
         {
             if (!self || widget != self.data()
                 || !self->shouldRenderFeatureDiagnostics()
@@ -618,6 +628,14 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
             {
                 return;
             }
+            if (!outcome.succeeded())
+            {
+                LOG_ERROR("%s", qUtf8Printable(outcome.errorMessage));
+                emit self->featureResidualAvailabilityChanged(false);
+                return;
+            }
+            QVector<xjw::gui::views::FeatureResidualVector> residuals =
+                std::move(*outcome.value);
 
             self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
             self->_layerRenderer->clearFeatureResidualLayers();

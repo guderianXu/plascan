@@ -1384,15 +1384,6 @@ TEST(DepthComputeSchedulerTest, AutomaticBackendUsesStrictAcceleratorPriority)
               DepthComputeBackend::Cpu);
 }
 
-TEST(DepthComputeSchedulerTest, LegacyAutoAccelerationToggleForcesCpu)
-{
-    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, true, true, false),
-              DepthComputeBackend::Cpu);
-    EXPECT_EQ(resolveDepthComputeBackend(
-                  DepthComputeBackend::OpenCl, true, false, false),
-              DepthComputeBackend::OpenCl);
-}
-
 TEST(PatchMatchBackendSelectionTest, OpenClRequiresAvailableDeviceAndOnlineCompiler)
 {
     EXPECT_TRUE(isUsableOpenClPatchMatchDevice(true, true, true, true));
@@ -1428,33 +1419,26 @@ TEST(PatchMatchBackendSelectionTest, EnumeratedOpenClDevicesAreUsable)
     }
 }
 
-TEST(PatchMatchBackendSelectionTest, LegacyUseCudaFalseKeepsAutoEstimatorOnCpu)
+TEST(PatchMatchBackendSelectionTest, ExplicitBackendIsPreserved)
 {
     EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::Auto, false, true, true),
-              xjw::mvs::PatchMatchBackend::Cpu);
-}
-
-TEST(PatchMatchBackendSelectionTest, ExplicitBackendOverridesLegacyAutoToggle)
-{
-    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::Cuda, false, false, true),
+                  xjw::mvs::PatchMatchBackend::Cuda, false, true),
               xjw::mvs::PatchMatchBackend::Cuda);
     EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::OpenCl, false, true, false),
+                  xjw::mvs::PatchMatchBackend::OpenCl, true, false),
               xjw::mvs::PatchMatchBackend::OpenCl);
 }
 
-TEST(PatchMatchBackendSelectionTest, EnabledAutoUsesCudaThenOpenClThenCpu)
+TEST(PatchMatchBackendSelectionTest, AutoUsesCudaThenOpenClThenCpu)
 {
     EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::Auto, true, true, true),
+                  xjw::mvs::PatchMatchBackend::Auto, true, true),
               xjw::mvs::PatchMatchBackend::Cuda);
     EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::Auto, true, false, true),
+                  xjw::mvs::PatchMatchBackend::Auto, false, true),
               xjw::mvs::PatchMatchBackend::OpenCl);
     EXPECT_EQ(resolvePatchMatchEstimatorBackend(
-                  xjw::mvs::PatchMatchBackend::Auto, true, false, false),
+                  xjw::mvs::PatchMatchBackend::Auto, false, false),
               xjw::mvs::PatchMatchBackend::Cpu);
 }
 

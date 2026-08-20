@@ -37,6 +37,8 @@ int main(int argc, char *argv[])
     int maxImageDim = 0;
     int cudaDevice = 0;
     float matchThreshold = 0.15f;
+    float siftMaximumRatio = 0.98f;
+    bool noAdaptiveSiftRatio = false;
     double geometryThreshold = 1.5;
     int geometryMinInliers = 20;
     bool guidedImageMatching = false;
@@ -58,6 +60,9 @@ int main(int argc, char *argv[])
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal")
         ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
     app.add_option("-t,--match-threshold", matchThreshold, "匹配置信度阈值");
+    app.add_option("--sift-ratio", siftMaximumRatio, "SIFT 最近邻/次近邻距离比上限");
+    app.add_flag("--no-adaptive-sift-ratio", noAdaptiveSiftRatio,
+                 "禁用按当前像对分布自适应收紧 SIFT ratio");
     app.add_option("--geometry-threshold", geometryThreshold,
                    "几何验证像素残差阈值");
     app.add_option("--geometry-min-inliers", geometryMinInliers,
@@ -128,6 +133,8 @@ int main(int argc, char *argv[])
     options.maxImageDim = maxImageDim;
     options.cudaDevice = std::max(0, cudaDevice);
     options.matchThreshold = std::clamp(matchThreshold, 0.0f, 1.0f);
+    options.siftMaximumRatio = std::clamp(siftMaximumRatio, 0.0f, 1.0f);
+    options.adaptiveSiftRatio = !noAdaptiveSiftRatio;
     options.geometryReprojThreshold = std::max(0.1, geometryThreshold);
     options.geometryMinInliers = std::max(4, geometryMinInliers);
     options.enableGeometryVerification = true;

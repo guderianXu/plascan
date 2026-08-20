@@ -161,7 +161,6 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
 
     xjw::mvs::PatchMatchConfig config;
     config.backend = backend;
-    config.useCuda = backend == xjw::mvs::PatchMatchBackend::Cuda;
     config.cudaFallbackToCpu = false;
     config.openClFallbackToCpu = false;
     config.openClDeviceIndex = opencl_device_index;

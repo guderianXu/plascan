@@ -27,13 +27,11 @@ enum class DepthComputeBackend
 const char *depthComputeBackendName(DepthComputeBackend backend);
 
 /// Resolves one frame-compute backend. A missing requested backend means Auto:
-/// when automatic acceleration is enabled it uses CUDA -> OpenCL -> CPU, and
-/// otherwise it selects CPU. An explicit backend is never replaced here.
+/// it uses CUDA -> OpenCL -> CPU. An explicit backend is never replaced here.
 DepthComputeBackend resolveDepthComputeBackend(
     std::optional<DepthComputeBackend> requestedBackend,
     bool cudaAvailable,
-    bool openClAvailable,
-    bool automaticAccelerationEnabled = true);
+    bool openClAvailable);
 
 struct DepthComputeWorker
 {

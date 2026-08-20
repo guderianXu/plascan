@@ -184,8 +184,7 @@ QString orthoColorSourceToken(OrthoColorSource source)
 
 bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
                                       OrthoGenerationOptions *options,
-                                      QString *errorMsg,
-                                      double legacyResolution)
+                                      QString *errorMsg)
 {
     if (!options)
     {
@@ -198,11 +197,6 @@ bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
 
     QString sizing_mode =
         settings.value(QStringLiteral("sizing_mode")).toString().trimmed();
-    if (sizing_mode.isEmpty())
-    {
-        sizing_mode =
-            settings.value(QStringLiteral("resolution_mode")).toString().trimmed();
-    }
     if (sizing_mode.isEmpty())
     {
         sizing_mode = QStringLiteral("pixel_size");
@@ -233,14 +227,8 @@ bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
         return false;
     }
 
-    const double stored_legacy_resolution =
-        settings.value(QStringLiteral("resolution")).toDouble(legacyResolution);
-    parsed.pixelSizeX = settings.contains(QStringLiteral("pixel_size_x"))
-        ? settings.value(QStringLiteral("pixel_size_x")).toDouble()
-        : stored_legacy_resolution;
-    parsed.pixelSizeY = settings.contains(QStringLiteral("pixel_size_y"))
-        ? settings.value(QStringLiteral("pixel_size_y")).toDouble()
-        : stored_legacy_resolution;
+    parsed.pixelSizeX = settings.value(QStringLiteral("pixel_size_x")).toDouble();
+    parsed.pixelSizeY = settings.value(QStringLiteral("pixel_size_y")).toDouble();
     parsed.maximumDimension =
         settings.value(QStringLiteral("maximum_dimension")).toInt(parsed.maximumDimension);
     parsed.bounds.enabled = settings.value(QStringLiteral("bounds_enabled")).toBool(false);

@@ -1875,7 +1875,6 @@ PatchMatchConfig patchMatchConfigForRecordedWorker(
         : worker->backend == DepthComputeBackend::OpenCl
             ? PatchMatchBackend::OpenCl
             : PatchMatchBackend::Cpu;
-    config.useCuda = worker->backend == DepthComputeBackend::Cuda;
     config.cudaDeviceIndex = worker->backend == DepthComputeBackend::Cuda
         ? worker->deviceIndex
         : -1;
@@ -2023,7 +2022,6 @@ bool estimatePatchMatchWithAdaptiveCuda(
              lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
 
     PatchMatchConfig cpuConfig = config;
-    cpuConfig.useCuda = false;
     cpuConfig.backend = PatchMatchBackend::Cpu;
     cpuConfig.cudaFallbackToCpu = false;
     const bool cpuOk = PatchMatchDepthEstimator::estimate(refGray,
@@ -10276,7 +10274,7 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     const PatchMatchBackend configuredBackend = _config.patchMatch.backend;
     const bool automaticAcceleration =
-        configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda;
+        configuredBackend == PatchMatchBackend::Auto;
     const bool probeCuda = configuredBackend == PatchMatchBackend::Cuda ||
         automaticAcceleration;
     const int cudaDeviceCount = probeCuda
@@ -10412,8 +10410,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     const DepthComputeBackend effectiveBackend = resolveDepthComputeBackend(
         requestedBackend,
         cudaAvailable,
-        !selectedOpenClDevices.empty(),
-        _config.patchMatch.useCuda);
+        !selectedOpenClDevices.empty());
     const bool openClAvailable = !selectedOpenClDevices.empty();
     const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto &&
         automaticAcceleration && cudaAvailable && openClAvailable;
@@ -10447,19 +10444,13 @@ void DepthMapGenerator::runInBackgroundImpl()
             : effectiveBackend == DepthComputeBackend::OpenCl
                 ? PatchMatchBackend::OpenCl
                 : PatchMatchBackend::Cpu;
-    _config.patchMatch.useCuda = heterogeneousAuto ||
-        effectiveBackend == DepthComputeBackend::Cuda;
     _config.patchMatch.cudaFallbackToCpu = false;
     _config.patchMatch.openClFallbackToCpu = false;
 
     const QString effective_backend_name = QString::fromLatin1(
         depthComputeBackendName(effectiveBackend));
     QString backend_message;
-    if (configuredBackend == PatchMatchBackend::Auto && !automaticAcceleration)
-    {
-        backend_message = QStringLiteral("深度估计后端：兼容 useCuda=false，强制使用 CPU");
-    }
-    else if (configuredBackend == PatchMatchBackend::Auto)
+    if (configuredBackend == PatchMatchBackend::Auto)
     {
         backend_message = heterogeneousAuto
             ? QStringLiteral(
@@ -11107,7 +11098,6 @@ void DepthMapGenerator::runInBackgroundImpl()
         workerConfig.patchMatch.backend = worker.backend == DepthComputeBackend::Cuda     ? PatchMatchBackend::Cuda
                                           : worker.backend == DepthComputeBackend::OpenCl ? PatchMatchBackend::OpenCl
                                                                                           : PatchMatchBackend::Cpu;
-        workerConfig.patchMatch.useCuda = worker.backend == DepthComputeBackend::Cuda;
         workerConfig.patchMatch.cudaDeviceIndex = worker.backend == DepthComputeBackend::Cuda ? worker.deviceIndex : -1;
         workerConfig.patchMatch.openClDeviceIndex =
             worker.backend == DepthComputeBackend::OpenCl ? worker.deviceIndex : -1;

@@ -11,6 +11,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QJsonObject>
 #include <QLayout>
 #include <QSignalBlocker>
@@ -110,6 +111,12 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_tiepointLimitSpin->setValue(4000);
     _ui->m_excludeFixedTiePointsCheck->setChecked(true);
     _ui->m_guidedImageMatchingCheck->setChecked(false);
+    _ui->m_siftRatioSpin->setValue(0.98);
+    _ui->m_adaptiveSiftRatioCheck->setChecked(true);
+    _ui->m_siftRatioSpin->setToolTip(
+        QStringLiteral("SIFT 最近邻与次近邻距离比的宽松上限；值越小越严格。"));
+    _ui->m_adaptiveSiftRatioCheck->setToolTip(
+        QStringLiteral("候选充足时按双向互检 ratio 分布自动收紧；候选少时保留上限。"));
     _ui->m_adaptiveCameraModelCheck->setChecked(true);
     _ui->m_adaptiveCameraModelCheck->setToolTip(
         QStringLiteral("控制正式 BA 是否联合优化共享焦距。关闭后仍会在没有完整相机先验时执行焦距初始化搜索，"
@@ -126,6 +133,7 @@ void AerialTriangulationDialog::setupUi()
     xjw::gui::dialogs::configureWorkflowComboBox(_ui->m_referenceSourceCombo);
     xjw::gui::dialogs::configureWorkflowInputWidget(_ui->m_keypointLimitSpin);
     xjw::gui::dialogs::configureWorkflowInputWidget(_ui->m_tiepointLimitSpin);
+    xjw::gui::dialogs::configureWorkflowInputWidget(_ui->m_siftRatioSpin);
     xjw::gui::dialogs::configureWorkflowComboBox(_ui->m_maskApplyCombo);
     for (QCheckBox *check_box : {
              _ui->m_genericPreselectionCheck,
@@ -134,6 +142,7 @@ void AerialTriangulationDialog::setupUi()
              _ui->m_saveAfterEachStepCheck,
              _ui->m_excludeFixedTiePointsCheck,
              _ui->m_guidedImageMatchingCheck,
+             _ui->m_adaptiveSiftRatioCheck,
              _ui->m_adaptiveCameraModelCheck,
              _ui->m_reuseExistingMatchesCheck,
              _ui->m_lockInputCameraPosesCheck})
@@ -190,6 +199,7 @@ void AerialTriangulationDialog::setupUi()
     connectCheckBox(_ui->m_saveAfterEachStepCheck);
     connectCheckBox(_ui->m_excludeFixedTiePointsCheck);
     connectCheckBox(_ui->m_guidedImageMatchingCheck);
+    connectCheckBox(_ui->m_adaptiveSiftRatioCheck);
     connectCheckBox(_ui->m_adaptiveCameraModelCheck);
     connectCheckBox(_ui->m_reuseExistingMatchesCheck);
 
@@ -208,6 +218,8 @@ void AerialTriangulationDialog::setupUi()
             this, &AerialTriangulationDialog::emitSettingsChanged);
     connect(_ui->m_tiepointLimitSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &AerialTriangulationDialog::emitSettingsChanged);
+    connect(_ui->m_siftRatioSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &AerialTriangulationDialog::emitSettingsChanged);
 }
 
 void AerialTriangulationDialog::setAdvancedExpanded(bool expanded)
@@ -215,7 +227,7 @@ void AerialTriangulationDialog::setAdvancedExpanded(bool expanded)
     _ui->m_advancedToggle->setChecked(expanded);
     _ui->m_advancedToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
     _ui->m_advancedContent->setVisible(expanded);
-    setMinimumHeight(expanded ? 560 : 360);
+    setMinimumHeight(expanded ? 620 : 360);
     if (layout())
     {
         layout()->invalidate();
@@ -268,6 +280,8 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     const QSignalBlocker blockMask(_ui->m_maskApplyCombo);
     const QSignalBlocker blockExclude(_ui->m_excludeFixedTiePointsCheck);
     const QSignalBlocker blockGuided(_ui->m_guidedImageMatchingCheck);
+    const QSignalBlocker blockSiftRatio(_ui->m_siftRatioSpin);
+    const QSignalBlocker blockAdaptiveSiftRatio(_ui->m_adaptiveSiftRatioCheck);
     const QSignalBlocker blockAdaptive(_ui->m_adaptiveCameraModelCheck);
     const QSignalBlocker blockReuseMatches(_ui->m_reuseExistingMatchesCheck);
     const QSignalBlocker blockLockPoses(_ui->m_lockInputCameraPosesCheck);
@@ -292,6 +306,10 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
         settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true));
     _ui->m_guidedImageMatchingCheck->setChecked(
         settings.value(QStringLiteral("guided_image_matching")).toBool(false));
+    _ui->m_siftRatioSpin->setValue(
+        settings.value(QStringLiteral("sift_maximum_ratio")).toDouble(0.98));
+    _ui->m_adaptiveSiftRatioCheck->setChecked(
+        settings.value(QStringLiteral("adaptive_sift_ratio")).toBool(true));
     _ui->m_adaptiveCameraModelCheck->setChecked(
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true));
     _ui->m_reuseExistingMatchesCheck->setChecked(
@@ -329,6 +347,8 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
     settings[QStringLiteral("mask_apply_mode")] = comboDataOr(_ui->m_maskApplyCombo, QStringLiteral("keypoints"));
     settings[QStringLiteral("exclude_fixed_tie_points")] = _ui->m_excludeFixedTiePointsCheck->isChecked();
     settings[QStringLiteral("guided_image_matching")] = _ui->m_guidedImageMatchingCheck->isChecked();
+    settings[QStringLiteral("sift_maximum_ratio")] = _ui->m_siftRatioSpin->value();
+    settings[QStringLiteral("adaptive_sift_ratio")] = _ui->m_adaptiveSiftRatioCheck->isChecked();
     settings[QStringLiteral("adaptive_camera_model_fitting")] = _ui->m_adaptiveCameraModelCheck->isChecked();
     settings[QStringLiteral("reuse_existing_matches")] =
         _ui->m_reuseExistingMatchesCheck->isChecked();

@@ -1782,6 +1782,16 @@ TEST(GuiArchitectureContractTest, ProjectPersistenceAndWorkflowAlgorithmsLiveOut
         QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp")));
     EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/support/ProjectWorkflowUtils.cpp")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/data/ProjectData.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/data/ProjectFilesManager.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/services/ProjectResourceCleanupService.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/support/ProjectReferenceDatasets.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/support/ProjectWorkflowUtils.h")));
 
     const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
     EXPECT_FALSE(guiSources.contains(QStringLiteral("project/data/ProjectData.cpp")));

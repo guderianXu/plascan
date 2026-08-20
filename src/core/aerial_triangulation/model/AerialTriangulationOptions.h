@@ -74,8 +74,13 @@ struct AerialTriangulationOptions
     int cudaParallelPairs = 0; ///< 并行 GPU pair 请求值；0 由前端按显存决定。
     int featurePrefetchDepth = 2; ///< CUDA SIFT 前端并行预读影像数，范围由前端收敛。
     float matchThreshold = 0.15f; ///< LightGlue 最低匹配置信度。
+    float siftMaximumRatio = 0.98f; ///< SIFT ratio/歧义门限的用户上限。
+    float siftMinimumAdaptiveRatio = 0.78f; ///< 候选充足时自适应收紧的下限。
+    bool adaptiveSiftRatio = true;
     double geometryReprojThreshold = 1.5; ///< USAC 几何内点的像素残差门限。
     int geometryMinInliers = 20; ///< 一个像对通过几何质量门控所需的最少内点数。
+    double geometryMinInlierRatio = 0.18;
+    double geometryMinGridCoverage = 0.12;
     int geometryMaxIterations = 10000; ///< USAC 最大采样迭代次数。
     int tiePointGridColumns = 8; ///< 连接点空间均匀化网格列数。
     int tiePointGridRows = 8; ///< 连接点空间均匀化网格行数。

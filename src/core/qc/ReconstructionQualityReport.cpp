@@ -29,60 +29,18 @@ QJsonObject lastObject(const QJsonObject &root, const QString &arrayKey)
     return array.at(array.size() - 1).toObject();
 }
 
-QJsonObject normalizeProjectMeta(const QJsonObject &projectMeta)
-{
-    QJsonObject normalized = projectMeta.value(QStringLiteral("project_files")).toObject();
-    if (normalized.isEmpty())
-    {
-        normalized = projectMeta;
-    }
-
-    for (auto it = projectMeta.constBegin(); it != projectMeta.constEnd(); ++it)
-    {
-        if (it.key() == QLatin1String("project_files"))
-        {
-            continue;
-        }
-        normalized.insert(it.key(), it.value());
-    }
-    return normalized;
-}
-
 QJsonObject latestSparseArtifact(const QJsonObject &projectMeta)
 {
-    const QStringList keys = {
-        QStringLiteral("sparse_results"),
-        QStringLiteral("aerial_triangulation_results"),
-        QStringLiteral("at_results")
-    };
-
-    for (const QString &key : keys)
-    {
-        const QJsonObject record = lastObject(projectMeta, key);
-        if (!record.isEmpty())
-        {
-            return record;
-        }
-    }
-    return QJsonObject();
+    return lastObject(
+        projectMeta, QStringLiteral("aerial_triangulation_results"));
 }
 
 QJsonObject qualityFromSparseArtifactRecord(const QJsonObject &record)
 {
     const QJsonObject diagnostics = record.value(QStringLiteral("sfm_diagnostics")).toObject();
     QJsonObject quality = diagnostics.value(QStringLiteral("sparse_quality")).toObject();
-    if (quality.isEmpty())
-    {
-        quality = record.value(QStringLiteral("quality")).toObject();
-    }
-
-    if (quality.isEmpty())
-    {
-        quality = QJsonObject();
-    }
-
-    const int sparsePointCount = record.value(QStringLiteral("sparse_point_count")).toInt(
-        record.value(QStringLiteral("point_count")).toInt(-1));
+    const int sparsePointCount = record.value(
+        QStringLiteral("sparse_point_count")).toInt(-1);
     if (sparsePointCount >= 0 && !quality.contains(QStringLiteral("point_count")))
     {
         quality[QStringLiteral("point_count")] = sparsePointCount;
@@ -94,18 +52,13 @@ QJsonObject qualityFromSparseArtifactRecord(const QJsonObject &record)
         quality[QStringLiteral("registered_image_count")] = registeredImageCount;
     }
 
-    const int totalImageCount = record.value(QStringLiteral("total_image_count")).toInt(
-        record.value(QStringLiteral("input_image_count")).toInt(-1));
+    const int totalImageCount = record.value(
+        QStringLiteral("total_image_count")).toInt(-1);
     if (totalImageCount >= 0 && !quality.contains(QStringLiteral("total_image_count")))
     {
         quality[QStringLiteral("total_image_count")] = totalImageCount;
     }
 
-    if (record.contains(QStringLiteral("track_len_histogram")) &&
-        !quality.contains(QStringLiteral("track_len_histogram")))
-    {
-        quality[QStringLiteral("track_len_histogram")] = record.value(QStringLiteral("track_len_histogram"));
-    }
     if (record.contains(QStringLiteral("track_length_histogram")) &&
         !quality.contains(QStringLiteral("track_length_histogram")))
     {
@@ -199,17 +152,6 @@ std::optional<double> depthCoverage(const QJsonObject &record)
     {
         return value;
     }
-    if (const auto value = finiteRatio(
-            record.value(QStringLiteral("depth_quality")).toObject().value(
-                QStringLiteral("valid_coverage"))))
-    {
-        return value;
-    }
-    if (const auto value = finiteRatio(record.value(QStringLiteral("valid_ratio"))))
-    {
-        return value;
-    }
-
     const int width = record.value(QStringLiteral("grid_width")).toInt(0);
     const int height = record.value(QStringLiteral("grid_height")).toInt(0);
     const int valid = record.value(QStringLiteral("valid_pixel_count")).toInt(-1);
@@ -269,15 +211,13 @@ int completedDepthFrameCount(const QJsonObject &projectMeta)
 double demCoverage(const QJsonObject &projectMeta)
 {
     const QJsonObject demResult = lastObject(projectMeta, QStringLiteral("dem_results"));
-    return demResult.value(QStringLiteral("coverage_ratio")).toDouble(
-        demResult.value(QStringLiteral("valid_ratio")).toDouble(0.0));
+    return demResult.value(QStringLiteral("coverage_ratio")).toDouble(0.0);
 }
 
 int densePointCount(const QJsonObject &projectMeta)
 {
     const QJsonObject denseResult = lastObject(projectMeta, QStringLiteral("dense_cloud_results"));
-    return denseResult.value(QStringLiteral("point_count")).toInt(
-        denseResult.value(QStringLiteral("points")).toInt(0));
+    return denseResult.value(QStringLiteral("point_count")).toInt(0);
 }
 
 QString csvEscape(const QString &value)
@@ -341,7 +281,7 @@ bool writeTextAtomically(const QString &path, const QByteArray &data, QString *e
 
 QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject &projectMeta)
 {
-    const QJsonObject normalizedMeta = normalizeProjectMeta(projectMeta);
+    const QJsonObject &normalizedMeta = projectMeta;
     const QJsonObject sparseQuality = qualityFromLatestSparseResult(normalizedMeta);
     const QJsonObject baSummary = baSummaryFromLatestSparseResult(normalizedMeta);
     const int totalImages = sparseQuality.value(QStringLiteral("total_image_count")).toInt(imageCount(normalizedMeta));
@@ -357,11 +297,9 @@ QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject 
     report[QStringLiteral("sparse_point_count")] = sparseQuality.value(QStringLiteral("point_count")).toInt(0);
     report[QStringLiteral("dense_point_count")] = densePointCount(normalizedMeta);
     report[QStringLiteral("mean_reprojection_error_px")] =
-        sparseQuality.value(QStringLiteral("mean_reprojection_error_px")).toDouble(
-            sparseQuality.value(QStringLiteral("mean_reproj_px")).toDouble(0.0));
+        sparseQuality.value(QStringLiteral("mean_reprojection_error_px")).toDouble(0.0);
     report[QStringLiteral("track_length_histogram")] =
-        sparseQuality.value(QStringLiteral("track_length_histogram")).toObject(
-            sparseQuality.value(QStringLiteral("track_len_histogram")).toObject());
+        sparseQuality.value(QStringLiteral("track_length_histogram")).toObject();
     report[QStringLiteral("track_length")] = sparseQuality.value(QStringLiteral("track_length")).toObject();
     report[QStringLiteral("reprojection_error")] = sparseQuality.value(QStringLiteral("reprojection_error")).toObject();
     report[QStringLiteral("triangulation_angle")] = sparseQuality.value(QStringLiteral("triangulation_angle")).toObject();

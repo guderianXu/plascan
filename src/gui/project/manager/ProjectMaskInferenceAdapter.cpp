@@ -27,26 +27,16 @@ std::string nativeUtf8Path(const QString& path)
 
 QString aiBackendToken(const QJsonObject& settings)
 {
-    QString token = settings.value(QStringLiteral("ai_backend")).toString().trimmed();
-    if (token.isEmpty())
-    {
-        token = settings.value(QStringLiteral("u2net_backend")).toString().trimmed();
-    }
-    if (token.isEmpty())
-    {
-        token = settings.value(QStringLiteral("u2net_device"))
-                    .toString(QStringLiteral("auto"))
-                    .trimmed();
-    }
-    return token == QLatin1String("cuda") ? QStringLiteral("tensorrt") : token;
+    const QString token = settings.value(QStringLiteral("ai_backend"))
+                              .toString(QStringLiteral("auto"))
+                              .trimmed();
+    return token;
 }
 
 double aiThreshold(const QJsonObject& settings)
 {
-    const QJsonValue value = settings.value(QStringLiteral("ai_mask_threshold"));
-    const double threshold = value.isDouble()
-                                 ? value.toDouble()
-                                 : settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5);
+    const double threshold = settings.value(
+        QStringLiteral("ai_mask_threshold")).toDouble(0.5);
     return std::clamp(threshold, 0.01, 0.99);
 }
 
@@ -77,10 +67,10 @@ u2netConfig(const QJsonObject& settings,
     config.modelPath = nativeUtf8Path(status.modelPath);
     config.backend = xjw::mask::parseU2NetBackendType(aiBackendToken(settings).toStdString())
                          .value_or(xjw::mask::U2NetBackendType::Auto);
-    const QJsonValue genericFallback = settings.value(QStringLiteral("ai_allow_fallback"));
-    config.allowDeviceFallback = genericFallback.isBool()
-                                     ? genericFallback.toBool()
-                                     : settings.value(QStringLiteral("u2net_allow_fallback")).toBool(false);
+    config.allowDeviceFallback = settings.value(
+        QStringLiteral("ai_allow_fallback")).toBool(false);
+    config.cudaDevice = std::max(
+        0, settings.value(QStringLiteral("ai_cuda_device")).toInt(0));
     config.inputSize = xjw::mask::kU2NetModelInputSize;
     config.foregroundThreshold = static_cast<float>(aiThreshold(settings));
     config.morphologyRadius = 1;
@@ -115,7 +105,8 @@ biRefNetConfig(const QJsonObject& settings,
     {
         if (error)
         {
-            *error = QStringLiteral("BiRefNet Dynamic 只支持 TensorRT GPU，不能选择 OpenCV CPU。");
+            *error = QStringLiteral(
+                "BiRefNet Dynamic 推理后端无效，请选择自动、TensorRT GPU 或 ONNX Runtime CPU。");
         }
         return std::nullopt;
     }
@@ -123,6 +114,10 @@ biRefNetConfig(const QJsonObject& settings,
     xjw::mask::BiRefNetMaskGeneratorConfig config;
     config.modelPath = nativeUtf8Path(status.modelPath);
     config.backend = *backend;
+    config.allowDeviceFallback = settings.value(
+        QStringLiteral("ai_allow_fallback")).toBool(true);
+    config.cudaDevice = std::max(
+        0, settings.value(QStringLiteral("ai_cuda_device")).toInt(0));
     config.inputSize = xjw::mask::kBiRefNetDynamicInputSize;
     config.foregroundThreshold = static_cast<float>(aiThreshold(settings));
     config.morphologyRadius = 0;
@@ -223,6 +218,7 @@ ProjectMaskInferenceResult ProjectMaskInferenceAdapter::generate(const cv::Mat& 
     result.precision =
         QString::fromStdString(xjw::mask::biRefNetInferencePrecisionToken(generated.precision));
     result.environment = QString::fromStdString(generated.environmentSummary);
+    result.fallbackReason = QString::fromStdString(generated.fallbackReason);
     result.enginePath = QString::fromStdString(generated.enginePath);
     result.engineReused = generated.engineReused;
     return result;
@@ -249,6 +245,7 @@ ProjectMaskInferenceResult ProjectMaskInferenceAdapter::metadata() const
         result.precision =
             QString::fromStdString(xjw::mask::biRefNetInferencePrecisionToken(_biRefNet->precision()));
         result.environment = QString::fromStdString(_biRefNet->environmentSummary());
+        result.fallbackReason = QString::fromStdString(_biRefNet->fallbackReason());
         result.enginePath = QString::fromStdString(_biRefNet->enginePath());
         result.engineReused = _biRefNet->engineReused();
     }

@@ -120,24 +120,15 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
     QString sizingMode = settings.value(QStringLiteral("sizing_mode")).toString().trimmed();
     if (sizingMode.isEmpty())
     {
-        sizingMode = settings.value(QStringLiteral("resolution_mode")).toString().trimmed();
-    }
-    if (sizingMode.isEmpty())
-    {
         sizingMode = QStringLiteral("pixel_size");
     }
     _maximumDimensionRadio->setChecked(sizingMode == QStringLiteral("maximum_dimension"));
     _pixelSizeRadio->setChecked(!_maximumDimensionRadio->isChecked());
 
-    const double legacyResolution = settings.value(QStringLiteral("resolution")).toDouble(0.0);
     double pixelSizeX = positiveJsonValue(
-        settings, QStringLiteral("pixel_size_x"), QStringLiteral("resolution"));
+        settings, QStringLiteral("pixel_size_x"), QString());
     double pixelSizeY = positiveJsonValue(
-        settings, QStringLiteral("pixel_size_y"), QStringLiteral("resolution"));
-    if (!(pixelSizeX > 0.0))
-    {
-        pixelSizeX = legacyResolution;
-    }
+        settings, QStringLiteral("pixel_size_y"), QString());
     if (!(pixelSizeY > 0.0))
     {
         pixelSizeY = pixelSizeX;
@@ -419,12 +410,10 @@ QJsonObject MapProjectDialog::currentSettings() const
         ? QStringLiteral("maximum_dimension")
         : QStringLiteral("pixel_size");
     settings.insert(QStringLiteral("sizing_mode"), sizingMode);
-    settings.insert(QStringLiteral("resolution_mode"), sizingMode);
     settings.insert(QStringLiteral("pixel_size_x"), _pixelSizeXSpin->value());
     settings.insert(QStringLiteral("pixel_size_y"), _pixelSizeYSpin->value());
     settings.insert(QStringLiteral("pixel_size_auto"), !_pixelSizeUserEdited);
     settings.insert(QStringLiteral("maximum_dimension"), _maximumDimensionSpin->value());
-    settings.insert(QStringLiteral("resolution"), _pixelSizeXSpin->value());
 
     settings.insert(QStringLiteral("bounds_enabled"), _boundsEnabledCheck->isChecked());
     settings.insert(QStringLiteral("min_x"), _minXSpin->value());
@@ -502,10 +491,6 @@ bool MapProjectDialog::validateSettings(const QJsonObject &settings, QString *er
     }
 
     QString sizingMode = settings.value(QStringLiteral("sizing_mode")).toString();
-    if (sizingMode.isEmpty())
-    {
-        sizingMode = settings.value(QStringLiteral("resolution_mode")).toString();
-    }
     if (sizingMode == QStringLiteral("pixel_size")
         && (!(settings.value(QStringLiteral("pixel_size_x")).toDouble() > 0.0)
             || !(settings.value(QStringLiteral("pixel_size_y")).toDouble() > 0.0)))

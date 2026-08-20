@@ -15,7 +15,6 @@ struct MvsDepthFrameQualification
 {
     QString acceptance;
     bool fusionEligible = false;
-    bool reclassified = false;
     /// The frame qualified through its final hard multi-view core because the
     /// continuous adaptive residual was not calibrated for this capture.  TSDF
     /// must then consume the discrete support/spread maps, not the conflicting
@@ -102,7 +101,6 @@ struct MvsDepthFrameRecord
     QString rawAdaptiveGeometrySupportWeightPath;
     QString rawAdaptiveGeometryEffectiveViewCountPath;
     QString rawAdaptiveGeometryConflictRatioPath;
-    QString rawAdaptiveGeometryConflictWeightPath; ///< Legacy revision-13 absolute conflict mass.
     QString rawGeometrySourceMaskPath;
     QString rawInverseDepthMeanPath;
     QString rawInverseDepthSpreadPath;

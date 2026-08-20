@@ -29,20 +29,20 @@ SparsePointWorkflowSpec sparsePointWorkflowSpec(SparsePointWorkflowKind kind)
 }
 
 bool runSparsePointWorkflow(SparsePointWorkflowKind kind,
-                            const SparsePointContext &context,
+                            const xjw::core::project::SparsePointContext &context,
                             const QJsonObject &settings,
                             const QString &outputDir,
-                            SparsePointOperationResult *result,
+                            xjw::core::project::SparsePointOperationResult *result,
                             QString *errorMessage)
 {
     switch (kind)
     {
     case SparsePointWorkflowKind::OutlierRemoval:
-        return runSparsePointOutlierRemoval(context, settings, outputDir, result, errorMessage);
+        return xjw::core::project::runSparsePointOutlierRemoval(context, settings, outputDir, result, errorMessage);
     case SparsePointWorkflowKind::LocalOptim:
-        return runSparsePointLocalOptim(context, settings, outputDir, result, errorMessage);
+        return xjw::core::project::runSparsePointLocalOptim(context, settings, outputDir, result, errorMessage);
     case SparsePointWorkflowKind::Refine:
-        return runSparsePointRefine(context, settings, outputDir, result, errorMessage);
+        return xjw::core::project::runSparsePointRefine(context, settings, outputDir, result, errorMessage);
     }
     if (errorMessage)
     {
@@ -52,7 +52,7 @@ bool runSparsePointWorkflow(SparsePointWorkflowKind kind,
 }
 
 SparsePointWorkflowResult runSparsePointWorkflowResult(SparsePointWorkflowKind kind,
-                                                       const SparsePointContext &context,
+                                                       const xjw::core::project::SparsePointContext &context,
                                                        const QJsonObject &settings,
                                                        const QString &outputDir)
 {
@@ -69,7 +69,7 @@ SparsePointWorkflowResult runSparsePointWorkflowResult(SparsePointWorkflowKind k
 }
 
 QString buildSparsePointWorkflowSuccessMessage(const SparsePointWorkflowSpec &spec,
-                                               const SparsePointOperationResult &result)
+                                               const xjw::core::project::SparsePointOperationResult &result)
 {
     return QStringLiteral("%1。\n输入点数: %2\n输出点数: %3\n输出文件: %4")
         .arg(spec.successVerb)

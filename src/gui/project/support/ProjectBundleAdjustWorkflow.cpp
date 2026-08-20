@@ -1,6 +1,6 @@
 #include "ProjectBundleAdjustWorkflow.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 
 #include <QDir>
 #include <QStringList>

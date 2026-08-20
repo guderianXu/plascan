@@ -25,7 +25,6 @@ struct DepthFrameArtifact
     QString adaptiveGeometrySupportWeightPath;
     QString adaptiveGeometryEffectiveViewCountPath;
     QString adaptiveGeometryConflictRatioPath;
-    QString adaptiveGeometryConflictWeightPath; ///< Legacy revision-13 absolute conflict mass.
     QString inverseDepthMeanPath;
     QString inverseDepthSpreadPath;
     QString crossViewRepairedMaskPath;

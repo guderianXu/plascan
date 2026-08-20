@@ -44,8 +44,6 @@ TEST(ProjectPackageLayoutTest, UsesStableNumericChunkDirectories)
         ProjectPackageLayout::chunkArchivePath(projectPath, 3),
         QDir(ProjectPackageLayout::dataDirectory(projectPath))
             .filePath(QStringLiteral("3/chunk.zip")));
-    EXPECT_EQ(ProjectPackageLayout::workspaceDirectory(projectPath),
-              ProjectPackageLayout::chunkDirectory(projectPath, 1));
     EXPECT_TRUE(ProjectPackageLayout::isChunkDirectoryName(
         QStringLiteral("1")));
     EXPECT_TRUE(ProjectPackageLayout::isChunkDirectoryName(

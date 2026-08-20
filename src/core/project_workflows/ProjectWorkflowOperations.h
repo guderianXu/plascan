@@ -104,27 +104,3 @@ bool runSparsePointRefine(const SparsePointContext &context,
 QJsonArray summarizeAtResults(const QJsonObject &meta);
 
 } // namespace xjw::core::project
-
-// Transitional aliases keep existing GUI consumers source-compatible while the
-// workflow implementation lives behind a core target.
-namespace xjw::gui::project
-{
-using xjw::core::project::OperationResult;
-using xjw::core::project::SparsePointContext;
-using xjw::core::project::SparsePointContextResult;
-using xjw::core::project::SparsePointOperationResult;
-using xjw::core::project::TerrainPipelineResult;
-using xjw::core::project::findLatestAtResultIndex;
-using xjw::core::project::findLatestProductionAtResultIndex;
-using xjw::core::project::resolveSparsePointContext;
-using xjw::core::project::resolveSparsePointContextResult;
-using xjw::core::project::runDemProducts;
-using xjw::core::project::runOrthoProduct;
-using xjw::core::project::runSparsePointLocalOptim;
-using xjw::core::project::runSparsePointOutlierRemoval;
-using xjw::core::project::runSparsePointRefine;
-using xjw::core::project::sparseOperationDisplayName;
-using xjw::core::project::summarizeAtResults;
-using xjw::core::project::writeJsonObjectFile;
-using xjw::core::project::writeJsonObjectFileResult;
-} // namespace xjw::gui::project

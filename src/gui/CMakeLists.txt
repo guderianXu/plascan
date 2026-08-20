@@ -78,7 +78,6 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}/markers
   ${CMAKE_CURRENT_SOURCE_DIR}/panels
   ${CMAKE_CURRENT_SOURCE_DIR}/project
-  ${CMAKE_CURRENT_SOURCE_DIR}/project/data
   ${CMAKE_CURRENT_SOURCE_DIR}/project/manager
   ${CMAKE_CURRENT_SOURCE_DIR}/project/services
   ${CMAKE_CURRENT_SOURCE_DIR}/project/support
@@ -209,6 +208,10 @@ set_target_properties(plascan_gui PROPERTIES
 
 if(WIN32)
   set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+elseif(APPLE)
+  set_property(TARGET plascan_gui PROPERTY BUILD_RPATH "@loader_path")
+  set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH "@loader_path/../lib")
+  set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH_USE_LINK_PATH FALSE)
 else()
   set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH_USE_LINK_PATH FALSE)
 endif()
@@ -218,6 +221,7 @@ endif()
 plascan_deploy_qt_tls_runtime(plascan_gui)
 plascan_deploy_tensorrt_runtime(plascan_gui)
 plascan_deploy_vcpkg_runtime(plascan_gui)
+plascan_deploy_onnxruntime(plascan_gui)
 
   include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiInstall.cmake)
 endif()

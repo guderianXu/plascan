@@ -3,7 +3,6 @@
 #include <QCoreApplication>
 #include <QFuture>
 #include <QFutureWatcher>
-#include <QDebug>
 #include <QMetaObject>
 #include <QPointer>
 #include <QString>
@@ -158,46 +157,6 @@ QFuture<void> runGuardedWithOutcome(Owner *owner, Work &&work, Finished &&finish
     });
     watcher->setFuture(future);
     return future;
-}
-
-// 兼容旧回调签名。新代码应使用 runGuardedWithOutcome，以便将异常反馈到具体任务 UI。
-template <typename Owner, typename Work, typename Finished>
-QFuture<void> runGuarded(Owner *owner, Work &&work, Finished &&finished)
-{
-    using WorkFn = std::decay_t<Work>;
-    using FinishedFn = std::decay_t<Finished>;
-    using Result = std::invoke_result_t<WorkFn &>;
-    auto finishedPtr = std::make_shared<FinishedFn>(std::forward<Finished>(finished));
-
-    return runGuardedWithOutcome(
-        owner,
-        std::forward<Work>(work),
-        [finishedPtr](Owner *callbackOwner, TaskOutcome<Result> outcome) mutable
-        {
-            if (!outcome.succeeded())
-            {
-                callbackOwner->setProperty("lastAsyncTaskError", outcome.errorMessage);
-                qWarning().noquote() << QStringLiteral("后台任务失败: %1").arg(outcome.errorMessage);
-                if constexpr (std::is_void_v<Result>)
-                {
-                    (*finishedPtr)(callbackOwner);
-                }
-                else if constexpr (std::is_default_constructible_v<Result>)
-                {
-                    (*finishedPtr)(callbackOwner, Result{});
-                }
-                return;
-            }
-
-            if constexpr (std::is_void_v<Result>)
-            {
-                (*finishedPtr)(callbackOwner);
-            }
-            else
-            {
-                (*finishedPtr)(callbackOwner, std::move(*outcome.value));
-            }
-        });
 }
 
 } // namespace xjw::gui::tasks

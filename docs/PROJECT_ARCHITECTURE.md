@@ -245,14 +245,16 @@ core/
 │   │   ├── U2NetOpenCvCpuBackend.cpp # 永久 CPU-only 的 OpenCV DNN 回退实现
 │   │   └── U2NetImageProcessing.h/cpp # 两后端共享的预处理和掩膜后处理
 │   └── birefnet/               # BiRefNet Dynamic 推荐自动蒙版子模块
-│       ├── BiRefNetMaskGenerator.h/cpp # 固定 1024、TensorRT-only 契约、能力与结果元数据
+│       ├── BiRefNetMaskGenerator.h/cpp # 固定 1024、CUDA/CPU 自动选择、能力与结果元数据
+│       ├── BiRefNetOnnxRuntimeCpuBackend.cpp # 无 CUDA 时可完整执行发布模型的 ONNX Runtime CPU 推理
 │       ├── BiRefNetInferenceBackend.h # TensorRT 后端接口和实际设备/精度/engine 元数据
 │       ├── BiRefNetTensorRtBackend.cpp # FP16/FP32 本机 engine 首建、缓存复用与 GPU 推理
 │       └── BiRefNetImageProcessing.h/cpp # ImageNet+letterbox、raw logits sigmoid 与原尺寸恢复
 │
 │   AI 蒙版发布边界：安装包只携带可移植 ONNX（BiRefNet 另带 provenance）；TensorRT engine 在目标机
 │   首次使用时分别写入用户本地应用数据目录的 `models/{u2net,birefnet_dynamic}/engines/<fingerprint>`，
-│   不写回安装树也不进入安装包。OpenCV 不链接 CUDA/cuDNN，Windows 便携包不分发 cuDNN DLL。
+│   不写回安装树也不进入安装包。U2Net 的 OpenCV 不链接 CUDA/cuDNN；BiRefNet CPU 使用随程序部署的
+│   ONNX Runtime，Windows 便携包不分发 cuDNN DLL。
 │
 ├── sfm/                        # Structure-from-Motion
 │   ├── common/                 # SfM 公共类型和共享并查集
@@ -659,9 +661,6 @@ gui/
 │   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理及模型/影像/对比/观测网络模式通知
 │
 ├── project/                    # 项目管理层
-│   ├── data/
-│   │   ├── ProjectData.h        # common 项目会话模型的旧包含路径兼容头
-│   │   └── ProjectFilesManager.h # common 项目文档模型的旧包含路径兼容头
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器；含参考激光 JSON 导入、frame/坐标系确认和 BA 启动
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
@@ -677,14 +676,12 @@ gui/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
-│   │   ├── ProjectResourceCleanupService.h           # 旧包含路径兼容层；实现位于 core/project_workflows
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
-│       ├── ProjectReferenceDatasets.h               # 旧包含路径兼容层；参考数据业务已迁移到 core/project_workflows
-│       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名与旧批次逐帧相机核验
+│       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名
 │       ├── ProjectModelResultPolicy.h/cpp            # 模型 schema v2、默认版本迁移及完整产物登记策略
 │       ├── ProjectModelTaskLifecycle.h/cpp           # 模型任务身份、会话门控、取消与未发布 run 回收
 │       ├── ProjectRunArtifactValidator.h/cpp         # 发布前 run 诊断身份、路径归属和实体产物校验
@@ -697,11 +694,10 @@ gui/
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
 │       ├── ProjectSparseWorkflow.h/cpp              # 稀疏工作流
 │       ├── ProjectSurveyControl.h/cpp               # GCP/检查点/比例尺 CSV/Agisoft TXT 导入与 sidecar 摘要
-│       ├── ProjectWorkflowUtils.h                   # 旧包含路径兼容层；实现位于 core/project_workflows
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
 ├── tasks/                      # 异步任务执行器
-│   └── GuiTaskRunner.h         # GUI 后台任务生命周期守护：runGuarded/postGuarded
+│   └── GuiTaskRunner.h         # GUI 后台任务生命周期守护：runGuardedWithOutcome/postGuarded
 │
 ├── views/
 │   ├── LayerRenderer.h/cpp             # 图层渲染器
@@ -763,8 +759,8 @@ GNSS/IMU/POS 观测独立存入 `assets/camera_references/camera_reference_set.j
 `image_uuid` 绑定，并同时保留 raw 与 resolved 状态。未完成 CRS、姿态轴向和杆臂方向
 归一化的 raw 数据可以在“参考”面板查看，但不会静默标记为可用 BA 先验。控制点、检查点
 和标尺继续存入 `assets/control_points/marker_set.json`。
-`ProjectWorkspaceStore` 继续兼容 `plascan:///workspace/...` 逻辑 URI，但只在当前 Chunk
-数字目录内解析，不再使用根级 `workspace/`。旧版根级 `workspace/` 分体工程和旧版
+`ProjectWorkspaceStore` 只解析 `plascan:///chunk/...` 逻辑 URI，不再接受
+`plascan:///workspace/...`。旧版根级 `workspace/` 分体工程和旧版
 单体工程均明确拒绝加载，并保持旧文件不变。归档条目在组合物理路径前执行跨平台名称、
 大小写冲突和目标根目录边界校验。
 项目配置按应用设置、工作流配置、项目视图状态和运行时缓存四层管理，避免机器路径混入工程。
@@ -1310,8 +1306,8 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 ## GUI 模块边界（2026-08）
 
 - `src/common/project/ProjectSessionModel.*`、`ProjectDocumentModel.*` 和三类项目配置管理器负责
-  QtCore 项目会话、文档分域与持久化；`src/gui/project/data` 只保留必要的旧包含路径兼容头，GUI 配置层
-  直接使用 common 中的项目配置接口。资源清理模块安装的 path-only open preflight 会在
+  QtCore 项目会话、文档分域与持久化；GUI 直接使用 common 中的项目接口，不再保留
+  `src/gui/project/data` 旧包含路径。资源清理模块安装的 path-only open preflight 会在
   `ProjectData` 解析归档和校验资源索引前恢复事务区产物，避免缺失资源先阻断恢复入口。
 - `src/core/project_workflows` 负责 DEM/正射、稀疏点后处理、点云参数/输入准备、参考数据检查和
   生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。资源清理按

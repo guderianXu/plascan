@@ -48,6 +48,7 @@ private:
     QSpinBox *_morphologyRadiusSpin{};
     QSpinBox *_minComponentAreaSpin{};
     QComboBox *_u2netDeviceCombo{};
+    QSpinBox *_aiCudaDeviceSpin{};
     QCheckBox *_u2netAllowFallbackCheck{};
     QLabel *_u2netModelStatusLabel{};
     QPushButton *_u2netDownloadButton{};

@@ -262,6 +262,11 @@ QJsonObject optionsToJson(const MatchPhotosOptions &options)
     object[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
     object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
     object[QStringLiteral("guided_image_matching")] = options.enableGuidedMatching;
+    object[QStringLiteral("sift_maximum_ratio")] = options.siftMaximumRatio;
+    object[QStringLiteral("sift_minimum_adaptive_ratio")] = options.siftMinimumAdaptiveRatio;
+    object[QStringLiteral("adaptive_sift_ratio")] = options.adaptiveSiftRatio;
+    object[QStringLiteral("geometry_min_inlier_ratio")] = options.geometryMinInlierRatio;
+    object[QStringLiteral("geometry_min_grid_coverage")] = options.geometryMinGridCoverage;
     object[QStringLiteral("exclude_fixed_tie_points")] = options.excludeStationaryTiePoints;
     object[QStringLiteral("reuse_existing_matches")] = options.reuseExistingMatches;
     object[QStringLiteral("plan_only")] = options.planOnly;
@@ -337,6 +342,11 @@ int main(int argc, char *argv[])
     bool noReuseMatches = false;
     bool planOnly = false;
     bool force = false;
+    float siftMaximumRatio = 0.98f;
+    float siftMinimumAdaptiveRatio = 0.78f;
+    double geometryMinInlierRatio = 0.18;
+    double geometryMinGridCoverage = 0.12;
+    bool noAdaptiveSiftRatio = false;
 
     app.add_option("-i,--input", inputPath, "影像列表；每行支持 '<image>' 或 '<image> <camera.tsai>'")->required();
     app.add_option("-o,--output-dir", outputDirArg, "输出目录")->required();
@@ -364,6 +374,16 @@ int main(int argc, char *argv[])
     app.add_flag("--no-generic-preselection", noGenericPreselection, "禁用通用预选");
     app.add_flag("--reference-preselection", referencePreselection, "启用参考预选；需要完整相机文件");
     app.add_flag("--guided-image-matching", guidedImageMatching, "启用指导图像匹配");
+    app.add_option("--sift-ratio", siftMaximumRatio,
+                   "SIFT 最近邻/次近邻距离比上限（0-1）");
+    app.add_option("--sift-adaptive-ratio-min", siftMinimumAdaptiveRatio,
+                   "SIFT 自适应 ratio 收紧下限（0-1）");
+    app.add_flag("--no-adaptive-sift-ratio", noAdaptiveSiftRatio,
+                 "禁用按当前像对分布自适应收紧 SIFT ratio");
+    app.add_option("--geometry-min-inlier-ratio", geometryMinInlierRatio,
+                   "几何质量门最低内点率");
+    app.add_option("--geometry-min-grid-coverage", geometryMinGridCoverage,
+                   "几何质量门最低空间网格覆盖率");
     app.add_flag("--include-fixed-tie-points", includeFixedTiePoints, "连接点输出中包含固定/近静止连接点");
     app.add_flag("--exclude-fixed-tie-points", excludeFixedTiePoints, "排除固定/近静止连接点");
     app.add_option("--pair-mode", pairModeArg, "影像对模式: auto, exhaustive, sequence, manual-only");
@@ -489,6 +509,12 @@ int main(int argc, char *argv[])
         ? std::max(1, options.maxTiePointsPerImage / options.tiePointGridColumns)
         : 0;
     options.enableGuidedMatching = guidedImageMatching;
+    options.siftMaximumRatio = std::clamp(siftMaximumRatio, 0.0f, 1.0f);
+    options.siftMinimumAdaptiveRatio = std::clamp(
+        siftMinimumAdaptiveRatio, 0.0f, options.siftMaximumRatio);
+    options.adaptiveSiftRatio = !noAdaptiveSiftRatio;
+    options.geometryMinInlierRatio = std::clamp(geometryMinInlierRatio, 0.01, 0.95);
+    options.geometryMinGridCoverage = std::clamp(geometryMinGridCoverage, 0.01, 1.0);
     options.useExplicitKeypointLimit = keypointLimit > 0 || keypointLimitPerMpx > 0;
     options.useGenericPreselection = genericPreselection;
     options.useReferencePreselection = referencePreselection;

@@ -93,7 +93,7 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(
     double expectedDepth = 10.0)
 {
     xjw::mvs::PatchMatchConfig config;
-    config.useCuda = true;
+    config.backend = xjw::mvs::PatchMatchBackend::Cuda;
     config.cudaUseParallelSweep = useParallelSweep;
     config.downsampleFactor = 2;
     config.numIterations = iterations;
@@ -198,7 +198,6 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
                                    false).normalizedForPositiveDepth();
 
     xjw::mvs::PatchMatchConfig config;
-    config.useCuda = false;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
     config.downsampleFactor = 2;
     config.patchHalf = 2;
@@ -339,7 +338,6 @@ TEST(PatchMatchCpuRegressionTest,
         false).normalizedForPositiveDepth();
 
     xjw::mvs::PatchMatchConfig config;
-    config.useCuda = false;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
     config.downsampleFactor = 2;
     config.numIterations = 4;

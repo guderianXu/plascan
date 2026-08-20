@@ -6,7 +6,7 @@
 #include "project/services/MetashapeCameraReferenceImporter.h"
 #include "widgets/ReferenceMarkerModels.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "io/CameraReferenceSetStore.h"
 #include "io/MarkerSetJson.h"
 #include "project/ProjectIO.h"

@@ -132,7 +132,16 @@ QByteArray rawConfigFingerprint(const MatchPhotosOptions &options,
     object[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     object[QStringLiteral("matcher_keypoint_budget")] = matcherKeypointBudget;
     object[QStringLiteral("match_threshold")] = static_cast<double>(effectiveMatchThreshold);
+    object[QStringLiteral("sift_maximum_ratio")] = static_cast<double>(options.siftMaximumRatio);
+    object[QStringLiteral("sift_minimum_adaptive_ratio")] =
+        static_cast<double>(options.siftMinimumAdaptiveRatio);
+    object[QStringLiteral("adaptive_sift_ratio")] = options.adaptiveSiftRatio;
     object[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
+    object[QStringLiteral("mask_hard_exclusion_threshold")] =
+        static_cast<double>(options.maskHardExclusionThreshold);
+    object[QStringLiteral("mask_minimum_tiepoint_weight")] =
+        static_cast<double>(options.maskMinimumTiepointWeight);
+    object[QStringLiteral("mask_relaxation_radius")] = options.maskRelaxationRadius;
     object[QStringLiteral("engine_fingerprint")] = QString::fromLatin1(engineFingerprint.toHex());
     return sha256(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
@@ -226,14 +235,16 @@ std::shared_ptr<image_matching::PairMatchData> makePairData(
 
     const bool applyTiepointMask = shouldApplyMasksToTiepoints(options);
     const cv::Mat mask0 = applyTiepointMask
-        ? loadMaskForImage(context,
-                           pair.image0Path,
-                           cv::Size(features0.imageWidth, features0.imageHeight))
+        ? softenedExclusionMask(loadMaskForImage(context,
+                                                 pair.image0Path,
+                                                 cv::Size(features0.imageWidth, features0.imageHeight)),
+                                options)
         : cv::Mat();
     const cv::Mat mask1 = applyTiepointMask
-        ? loadMaskForImage(context,
-                           pair.image1Path,
-                           cv::Size(features1.imageWidth, features1.imageHeight))
+        ? softenedExclusionMask(loadMaskForImage(context,
+                                                 pair.image1Path,
+                                                 cv::Size(features1.imageWidth, features1.imageHeight)),
+                                options)
         : cv::Mat();
 
     data->correspondences.reserve(raw.cvMatches.size());
@@ -248,9 +259,11 @@ std::shared_ptr<image_matching::PairMatchData> makePairData(
             features0.keypoints[static_cast<std::size_t>(match.queryIdx)];
         const cv::KeyPoint &keypoint1 =
             features1.keypoints[static_cast<std::size_t>(match.trainIdx)];
-        if (applyTiepointMask &&
-            (!isPointAllowedByMask(mask0, keypoint0.pt) ||
-             !isPointAllowedByMask(mask1, keypoint1.pt)))
+        const float maskWeight = applyTiepointMask
+            ? std::min(maskPointWeight(mask0, keypoint0.pt, options),
+                       maskPointWeight(mask1, keypoint1.pt, options))
+            : 1.0f;
+        if (maskWeight <= 0.0f)
         {
             continue;
         }
@@ -258,7 +271,7 @@ std::shared_ptr<image_matching::PairMatchData> makePairData(
         image_matching::PairCorrespondence correspondence;
         correspondence.observation0 = observationFor(keypoint0, match.queryIdx);
         correspondence.observation1 = observationFor(keypoint1, match.trainIdx);
-        correspondence.confidence = matchConfidence(raw, match);
+        correspondence.confidence = matchConfidence(raw, match) * maskWeight;
         correspondence.flags = image_matching::MatchRecordFlag::MaskAccepted;
         data->correspondences.push_back(correspondence);
     }
@@ -372,6 +385,9 @@ MatchPhotosStageReport MatchingStage::run(
     runtime.cudaDevice = options.cudaDevice;
     runtime.maxKeypoints = algorithmPlan.maxKeypoints;
     runtime.siftBackend = algorithmPlan.executionBackend;
+    runtime.siftMaximumRatio = options.siftMaximumRatio;
+    runtime.siftMinimumAdaptiveRatio = options.siftMinimumAdaptiveRatio;
+    runtime.adaptiveSiftRatio = options.adaptiveSiftRatio;
     QString modelName;
     QByteArray engineFingerprint;
     int matcherBudget = 0;

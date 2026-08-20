@@ -16,17 +16,12 @@ namespace mvs
 {
 
 PatchMatchBackend resolvePatchMatchEstimatorBackend(PatchMatchBackend requestedBackend,
-                                                     bool useCuda,
                                                      bool cudaAvailable,
                                                      bool openClAvailable) noexcept
 {
     if (requestedBackend != PatchMatchBackend::Auto)
     {
         return requestedBackend;
-    }
-    if (!useCuda)
-    {
-        return PatchMatchBackend::Cpu;
     }
     if (cudaAvailable)
     {
@@ -104,13 +99,13 @@ bool PatchMatchDepthEstimator::estimate(
 
     bool cuda_available = false;
     bool opencl_available = false;
-    if (config.backend == PatchMatchBackend::Auto && config.useCuda)
+    if (config.backend == PatchMatchBackend::Auto)
     {
         cuda_available = isCudaAvailable();
         opencl_available = !cuda_available && isOpenClAvailable();
     }
     const PatchMatchBackend backend = resolvePatchMatchEstimatorBackend(
-        config.backend, config.useCuda, cuda_available, opencl_available);
+        config.backend, cuda_available, opencl_available);
 
     bool accelerator_ok = false;
     bool fallback_to_cpu = false;

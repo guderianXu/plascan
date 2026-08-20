@@ -12,7 +12,7 @@ namespace xjw::mask
 
 struct BiRefNetBackendMetadata
 {
-    BiRefNetBackendType backend = BiRefNetBackendType::TensorRt;
+    BiRefNetBackendType backend = BiRefNetBackendType::OnnxRuntimeCpu;
     BiRefNetInferencePrecision precision = BiRefNetInferencePrecision::Unknown;
     std::string deviceLabel;
     bool engineReused = false;
@@ -32,5 +32,7 @@ public:
 
 std::unique_ptr<BiRefNetInferenceBackend>
 createBiRefNetTensorRtBackend(const BiRefNetMaskGeneratorConfig& config);
+std::unique_ptr<BiRefNetInferenceBackend>
+createBiRefNetOnnxRuntimeCpuBackend(const BiRefNetMaskGeneratorConfig& config);
 
 } // namespace xjw::mask

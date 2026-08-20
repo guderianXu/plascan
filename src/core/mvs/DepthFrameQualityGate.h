@@ -63,10 +63,6 @@ struct DepthFrameQualityInput
     bool multiViewConsistencyAvailable = true;
     float multiViewConsistency = 0.0f;
     float depthAtSearchBoundaryRatio = 0.0f;
-    /// Legacy relative-error input retained for source compatibility.  New
-    /// callers must provide sparseDepthResidual so sample sufficiency is
-    /// explicit and auditable.
-    float sparseDepthMedianRelativeError = 0.0f;
     SparseDepthResidualSummary sparseDepthResidual;
     bool hasConstrainedSupportMask = false;
     float validWithinMaskRatio = -1.0f;

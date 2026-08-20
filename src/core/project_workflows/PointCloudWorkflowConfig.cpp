@@ -317,12 +317,6 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
         settings.contains(QStringLiteral("confidence"))
             ? settings.value(QStringLiteral("confidence")).toDouble()
             : settings.value(QStringLiteral("min_confidence")).toDouble(0.20));
-    parsed.useCuda = settings.value(QStringLiteral("cuda")).toBool(true);
-    const bool has_backend_key = settings.contains(QStringLiteral("patchMatchBackend")) ||
-        settings.contains(QStringLiteral("patch_match_backend")) ||
-        settings.contains(QStringLiteral("patchmatch_backend")) ||
-        settings.contains(QStringLiteral("mvsBackend")) ||
-        settings.contains(QStringLiteral("mvs_backend"));
     const QString patch_match_backend = settings.value(
         QStringLiteral("patchMatchBackend")).toString(
             settings.value(QStringLiteral("patch_match_backend")).toString(
@@ -342,15 +336,6 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     {
         parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::OpenCl;
     }
-    if (!has_backend_key && !parsed.useCuda)
-    {
-        // Legacy settings only exposed a CUDA checkbox. Preserve `cuda=false`
-        // by migrating it to an explicit CPU backend; an explicit Auto token
-        // always means CUDA -> OpenCL -> CPU.
-        parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
-    }
-    parsed.useCuda = parsed.patchMatchBackend == xjw::mvs::PatchMatchBackend::Auto ||
-        parsed.patchMatchBackend == xjw::mvs::PatchMatchBackend::Cuda;
     parsed.fusionMinConfidence = static_cast<float>(
         settings.value(QStringLiteral("minConfidence")).toDouble(parsed.patchMatchConfidence));
     parsed.fusionMaxImageDim = std::max(0,
@@ -469,8 +454,6 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.patchMatch.patchHalf = (settings.patchSize - 1) / 2;
     config.patchMatch.numSourceViews = config.numSourceViews;
     config.patchMatch.confidenceThresh = settings.patchMatchConfidence;
-    config.patchMatch.useCuda = settings.patchMatchBackend == xjw::mvs::PatchMatchBackend::Auto ||
-        settings.patchMatchBackend == xjw::mvs::PatchMatchBackend::Cuda;
     config.patchMatch.backend = settings.patchMatchBackend;
     config.pointCloudProcessingDevice = settings.processingDevice;
     config.patchMatch.downsampleFactor = std::max(1, static_cast<int>(std::round(1.0 / settings.resScale)));

@@ -4,8 +4,8 @@
 #include "project/ProjectChunkStore.h"
 #include "project/ProjectResourceStore.h"
 #include "project/ProjectWorkspaceStore.h"
-#include "ProjectData.h"
-#include "ProjectFilesManager.h"
+#include "project/ProjectSessionModel.h"
+#include "project/ProjectDocumentModel.h"
 #include "project/ProjectChunkIndex.h"
 #include "project/ProjectPackageLayout.h"
 #include "project/ProjectSharedImageStore.h"
@@ -133,10 +133,6 @@ QString chunkPhysicalPath(const QString &projectPath,
     {
         relativePath = relativePath.mid(6);
     }
-    else if (relativePath.startsWith(QStringLiteral("workspace/")))
-    {
-        relativePath = relativePath.mid(10);
-    }
     QString error;
     const QString root =
         ProjectChunkStore(projectPath).defaultChunkDirectory(&error);
@@ -195,20 +191,22 @@ QString resultPath(const QJsonObject &metadata,
 
 } // namespace
 
-TEST(ProjectFilesManagerTest, SeparatesAllWorkflowResultsFromCoreMetadata)
+TEST(ProjectFilesManagerTest, StoresCoreAndWorkflowResultsInSeparateDomains)
 {
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{
-        QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/image.png")}}
-    };
-    meta[QStringLiteral("project_name")] = QStringLiteral("demo");
+    QJsonObject core_input{
+        {QStringLiteral("images"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("path"), QStringLiteral("/tmp/image.png")}}}},
+        {QStringLiteral("project_name"), QStringLiteral("demo")}};
+    QJsonObject result_input;
     for (const QString &key : allResultKeys())
     {
-        meta[key] = singleRecord(key);
+        result_input[key] = singleRecord(key);
     }
 
     ProjectFilesManager manager;
-    manager.setData(meta);
+    manager.setCoreData(core_input);
+    manager.setResultsData(result_input);
 
     const QJsonObject core = manager.coreData();
     const QJsonObject results = manager.resultsData();
@@ -493,9 +491,9 @@ TEST(ProjectDataTest, NewProjectCreatesMetashapeStyleSplitLayout)
     EXPECT_TRUE(QFileInfo(
         ProjectPackageLayout::metadataArchivePath(projectPath)).isFile());
     EXPECT_TRUE(QFileInfo(
-        ProjectPackageLayout::workspaceDirectory(projectPath)).isDir());
+        ProjectPackageLayout::chunkDirectory(projectPath, 1)).isDir());
     const QString chunkRoot =
-        ProjectPackageLayout::workspaceDirectory(projectPath);
+        ProjectPackageLayout::chunkDirectory(projectPath, 1);
     for (const QString &optionalDirectory :
          {QStringLiteral("assets"),
           QStringLiteral("bundle_adjust"),
@@ -603,7 +601,7 @@ TEST(ProjectDataTest, FullSavePrunesOnlyEmptyLegacyWorkflowDirectories)
         projectPath, QStringLiteral("按需目录")));
 
     const QString chunkRoot =
-        ProjectPackageLayout::workspaceDirectory(projectPath);
+        ProjectPackageLayout::chunkDirectory(projectPath, 1);
     const QString bundleAdjustDir =
         QDir(chunkRoot).filePath(QStringLiteral("bundle_adjust"));
     const QString reconstructionModelDir =

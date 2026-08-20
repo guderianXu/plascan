@@ -184,6 +184,10 @@ QJsonObject tiePointOptionsToJson(const xjw::matchphotos::MatchPhotosOptions &op
     object[QStringLiteral("keypoint_limit_per_megapixel")] = options.keypointLimitPerMegapixel;
     object[QStringLiteral("max_tie_points_per_image")] = options.maxTiePointsPerImage;
     object[QStringLiteral("guided_image_matching")] = options.enableGuidedMatching;
+    object[QStringLiteral("sift_maximum_ratio")] = options.siftMaximumRatio;
+    object[QStringLiteral("adaptive_sift_ratio")] = options.adaptiveSiftRatio;
+    object[QStringLiteral("geometry_min_inlier_ratio")] = options.geometryMinInlierRatio;
+    object[QStringLiteral("geometry_min_grid_coverage")] = options.geometryMinGridCoverage;
     object[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
     object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
     object[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
@@ -292,6 +296,8 @@ int main(int argc, char *argv[])
     int initialImageId1 = -1;
     int initialImageId2 = -1;
     int threads = std::max(1u, std::thread::hardware_concurrency());
+    float siftMaximumRatio = 0.98f;
+    bool noAdaptiveSiftRatio = false;
     bool genericPreselection = true;
     bool noGenericPreselection = false;
     bool referencePreselection = false;
@@ -345,6 +351,9 @@ int main(int argc, char *argv[])
                  "删除当前匹配和连接点缓存，重新提取、匹配并整理连接点");
     app.add_flag("--save-after-each-step", saveAfterEachStep, "每个步骤完成后保存项目");
     app.add_flag("--guided-image-matching", guidedImageMatching, "启用指导图像匹配");
+    app.add_option("--sift-ratio", siftMaximumRatio, "SIFT 最近邻/次近邻距离比上限");
+    app.add_flag("--no-adaptive-sift-ratio", noAdaptiveSiftRatio,
+                 "禁用按当前像对分布自适应收紧 SIFT ratio");
     app.add_flag("--adaptive-camera-model-fitting", adaptiveCameraModelFitting, "启用自适应相机模型拟合");
     app.add_flag("--no-adaptive-camera-model-fitting", noAdaptiveCameraModelFitting, "禁用自适应相机模型拟合");
     app.add_flag("--include-fixed-tie-points", includeFixedTiePoints, "包含固定/近静止连接点");
@@ -496,6 +505,8 @@ int main(int argc, char *argv[])
     options.maskApplyMode = xjw::cli::normalizedToken(maskApplyModeArg, QStringLiteral("none"));
     options.excludeFixedTiePoints = excludeFixedTiePoints;
     options.guidedImageMatching = guidedImageMatching;
+    options.siftMaximumRatio = std::clamp(siftMaximumRatio, 0.0f, 1.0f);
+    options.adaptiveSiftRatio = !noAdaptiveSiftRatio;
     options.adaptiveCameraModelFitting = adaptiveCameraModelFitting;
     options.useInitialPairHint = hasInitialImage1;
     if (hasInitialImage1)

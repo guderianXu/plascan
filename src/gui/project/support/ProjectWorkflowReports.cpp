@@ -1,6 +1,6 @@
 #include "ProjectWorkflowReports.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "project/SparseResultQuality.h"
 #include "ReconstructionQualityReport.h"

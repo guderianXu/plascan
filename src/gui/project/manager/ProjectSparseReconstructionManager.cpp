@@ -1,12 +1,12 @@
 #include "ProjectSparseReconstructionManager.h"
 
 #include "ProjectManager.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSparseWorkflow.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "ProjectOpenGuard.h"
 #include "TriangulationService.h"
 #include "project/SparseResultQuality.h"
@@ -21,18 +21,18 @@
 #include <QPointer>
 
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
-using xjw::gui::project::findLatestAtResultIndex;
+using xjw::core::project::findLatestAtResultIndex;
 using xjw::gui::project::mergeSparseQualityIntoRecord;
 using xjw::gui::project::projectFilesMeta;
-using xjw::gui::project::resolveSparsePointContextResult;
+using xjw::core::project::resolveSparsePointContextResult;
 using xjw::gui::project::runSparsePointWorkflowResult;
-using xjw::gui::project::SparsePointContext;
-using xjw::gui::project::SparsePointOperationResult;
+using xjw::core::project::SparsePointContext;
+using xjw::core::project::SparsePointOperationResult;
 using xjw::gui::project::SparsePointWorkflowResult;
 using xjw::gui::project::SparsePointWorkflowKind;
 using xjw::gui::project::SparsePointWorkflowSpec;
 using xjw::gui::project::sparsePointWorkflowSpec;
-using xjw::gui::project::writeJsonObjectFile;
+using xjw::core::project::writeJsonObjectFile;
 
 ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(ProjectManager *owner,
                                                                        ProjectData *projectData,

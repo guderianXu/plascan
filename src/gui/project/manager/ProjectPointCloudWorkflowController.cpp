@@ -1,14 +1,14 @@
 #include "ProjectPointCloudWorkflowController.h"
 
 #include "ProjectManager.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "MvsSourcePairQualityLoader.h"
 #include "PointCloudInputPreparation.h"
 #include "PointCloudWorkflowConfig.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 #include "project/SparseResultQuality.h"
@@ -336,8 +336,6 @@ QJsonObject depthRecordFromArtifact(const QJsonObject &artifact,
     record[QStringLiteral("mvs_output_dir")] = context.outputDir;
     record[QStringLiteral("batch_frame_count")] = context.selectedImages.size();
     record[QStringLiteral("project_input_signature")] = context.projectInputSignature;
-    record[QStringLiteral("project_input_signature_version")] =
-        xjw::gui::project::kProjectDepthInputSignatureVersion;
     record[QStringLiteral("reconstruction_generation_id")] =
         context.reconstructionGenerationId;
     record[QStringLiteral("quality_profile")] = context.request.qualityProfile;
@@ -411,7 +409,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
 
     const QJsonObject metadata = _projectData->metadata();
-    const int at_index = xjw::gui::project::findLatestProductionAtResultIndex(metadata);
+    const int at_index = xjw::core::project::findLatestProductionAtResultIndex(metadata);
     const QJsonArray at_results =
         metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
     if (at_index < 0 || at_index >= at_results.size())

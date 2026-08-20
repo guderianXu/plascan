@@ -2,7 +2,7 @@
 
 #include "MarkerDetectionJobBuilder.h"
 #include "MarkerWorkspaceController.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 
 #include <QCloseEvent>
 #include <QComboBox>

@@ -2,14 +2,17 @@
 #include "sift/SiftFeatureExtractor.h"
 #include "sift/SiftGuidedMatcher.h"
 #include "sift/SiftMatchFilter.h"
+#include "MatchGeometryVerifier.h"
 
 #include <gtest/gtest.h>
 
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <filesystem>
 
 namespace xjw::image_matching
 {
@@ -52,7 +55,9 @@ namespace xjw::image_matching
             const std::vector<SiftNearestMatch> forward = {{1, 0.90f, 0.60f}, {0, 0.95f, 0.90f}, {2, 0.80f, 0.70f}};
             const std::vector<SiftNearestMatch> reverse = {{2, 0.90f, 0.60f}, {0, 0.85f, 0.50f}, {2, 0.90f, 0.75f}};
 
-            const MatchResult result = filterSiftMutualMatches(forward, reverse, 0.15f);
+            SiftMatchFilterOptions options;
+            options.confidenceThreshold = 0.15f;
+            const MatchResult result = filterSiftMutualMatches(forward, reverse, options);
 
             ASSERT_EQ(result.matches0.size(), 3U);
             EXPECT_EQ(result.matches0[0], 1);
@@ -68,9 +73,40 @@ namespace xjw::image_matching
             const std::vector<SiftNearestMatch> forward = {{0, nan, 0.1f}, {1, 0.90f, 0.995f}, {2, 0.10f, 0.1f}};
             const std::vector<SiftNearestMatch> reverse = {{0, 0.90f, 0.1f}, {1, 0.90f, 0.995f}, {2, 0.10f, 0.1f}};
 
-            const MatchResult result = filterSiftMutualMatches(forward, reverse, 0.15f);
+            SiftMatchFilterOptions options;
+            options.confidenceThreshold = 0.15f;
+            const MatchResult result = filterSiftMutualMatches(forward, reverse, options);
 
             EXPECT_TRUE(result.cvMatches.empty());
+        }
+
+        TEST(AutoSiftMatchFilterTest, AdaptiveRatioTightensDensePairsButKeepsSparsePairs)
+        {
+            std::vector<SiftNearestMatch> denseForward(100);
+            std::vector<SiftNearestMatch> denseReverse(100);
+            for (int index = 0; index < 100; ++index)
+            {
+                const float ratio = index < 80 ? 0.70f : 0.96f;
+                denseForward[static_cast<std::size_t>(index)] = {index, 0.9f, ratio};
+                denseReverse[static_cast<std::size_t>(index)] = {index, 0.9f, ratio};
+            }
+            SiftMatchFilterOptions options;
+            options.maximumRatio = 0.98f;
+            options.minimumAdaptiveRatio = 0.78f;
+            options.adaptiveRatio = true;
+            EXPECT_EQ(filterSiftMutualMatches(denseForward, denseReverse, options).numMatches, 80);
+
+            denseForward.resize(10);
+            denseReverse.resize(10);
+            for (auto& match : denseForward)
+            {
+                match.ambiguity = 0.96f;
+            }
+            for (auto& match : denseReverse)
+            {
+                match.ambiguity = 0.96f;
+            }
+            EXPECT_EQ(filterSiftMutualMatches(denseForward, denseReverse, options).numMatches, 10);
         }
 
         TEST(AutoSiftAlgorithmTest, CpuBackendMatchesNormalizedDescriptors)
@@ -309,6 +345,105 @@ namespace xjw::image_matching
 
             EXPECT_EQ(result.matches0.size(), 67U);
             EXPECT_EQ(result.numMatches, 53);
+        }
+
+        struct DinoBackendMetrics
+        {
+            int featureCount0 = 0;
+            int featureCount1 = 0;
+            int matchCount = 0;
+            int geometryInliers = 0;
+        };
+
+        std::filesystem::path dinoImagePath(const char* fileName)
+        {
+            return std::filesystem::path(TEST_DATA_DIR) /
+                "photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing" /
+                fileName;
+        }
+
+        DinoBackendMetrics runDinoBackend(SiftComputeBackend backend)
+        {
+            const cv::Mat image0 = cv::imread(dinoImagePath("dinoSR0001.png").string(), cv::IMREAD_GRAYSCALE);
+            const cv::Mat image1 = cv::imread(dinoImagePath("dinoSR0002.png").string(), cv::IMREAD_GRAYSCALE);
+            if (image0.empty() || image1.empty())
+            {
+                return {};
+            }
+
+            ImageMatchingRuntimeConfig config;
+            config.siftBackend = backend;
+            config.adaptiveSift = true;
+            config.rootSift = true;
+            config.adaptiveSiftRatio = true;
+            config.maxImageDimension = 1024;
+            config.maxKeypoints = 6000;
+            AutoSiftAlgorithm algorithm(config);
+            ImageFeatureInput input0;
+            input0.grayImage = image0;
+            input0.originalWidth = image0.cols;
+            input0.originalHeight = image0.rows;
+            ImageFeatureInput input1;
+            input1.grayImage = image1;
+            input1.originalWidth = image1.cols;
+            input1.originalHeight = image1.rows;
+            const FeatureSet features0 = algorithm.extract(input0);
+            const FeatureSet features1 = algorithm.extract(input1);
+            const MatchResult matches = algorithm.matchFeatures(features0, features1);
+
+            MatchGeometryOptions geometryOptions;
+            geometryOptions.model = GeometryModel::Fundamental;
+            geometryOptions.minimumInliers = 8;
+            geometryOptions.reprojectionThresholdPixels = 2.0;
+            const MatchGeometryResult geometry = MatchGeometryVerifier::verify(
+                matches, features0, features1, geometryOptions);
+            return {features0.size(), features1.size(), matches.numMatches, geometry.inlierCount};
+        }
+
+        void expectDinoBackendConsistentWithCpu(SiftComputeBackend backend)
+        {
+            if (!std::filesystem::is_regular_file(dinoImagePath("dinoSR0001.png")) ||
+                !std::filesystem::is_regular_file(dinoImagePath("dinoSR0002.png")))
+            {
+                GTEST_SKIP() << "Middlebury DinoSparseRing data is not downloaded";
+            }
+            if (backend != SiftComputeBackend::Cpu &&
+                !SiftFeatureExtractor::isBackendAvailable(backend, 0))
+            {
+                GTEST_SKIP() << siftBackendName(backend) << " SIFT backend is unavailable";
+            }
+            const DinoBackendMetrics cpu = runDinoBackend(SiftComputeBackend::Cpu);
+            const DinoBackendMetrics actual = backend == SiftComputeBackend::Cpu
+                ? cpu : runDinoBackend(backend);
+            ASSERT_GT(cpu.matchCount, 20);
+            ASSERT_GT(cpu.geometryInliers, 12);
+            ASSERT_GT(actual.matchCount, 20);
+            ASSERT_GT(actual.geometryInliers, 12);
+
+            const auto expectComparable = [](int value, int reference)
+            {
+                EXPECT_GE(value, std::max(1, reference / 3));
+                EXPECT_LE(value, reference * 3 + 8);
+            };
+            expectComparable(actual.featureCount0, cpu.featureCount0);
+            expectComparable(actual.featureCount1, cpu.featureCount1);
+            expectComparable(actual.matchCount, cpu.matchCount);
+            expectComparable(actual.geometryInliers, cpu.geometryInliers);
+        }
+
+        TEST(AutoSiftDinoRegressionTest, CpuProducesGeometricallyConsistentMatches)
+        {
+            expectDinoBackendConsistentWithCpu(SiftComputeBackend::Cpu);
+        }
+
+        TEST(AutoSiftDinoRegressionTest, MetalIsConsistentWithCpu)
+        {
+            expectDinoBackendConsistentWithCpu(SiftComputeBackend::Metal);
+        }
+
+        TEST(AutoSiftDinoRegressionTest, OpenClIsConsistentWithCpu)
+        {
+            expectDinoBackendConsistentWithCpu(SiftComputeBackend::OpenCl);
         }
 
     } // namespace

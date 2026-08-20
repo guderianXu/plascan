@@ -3,7 +3,7 @@
 #include "CameraReferenceCsvExporter.h"
 #include "MetashapeCameraReferenceImporter.h"
 #include "MetashapeCameraReferenceSetBuilder.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectCameraReferenceRepository.h"
 #include "model/CameraReferenceSet.h"
 

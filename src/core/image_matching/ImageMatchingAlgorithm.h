@@ -59,11 +59,14 @@ struct ImageMatchingRuntimeConfig
     float grayscaleMin = 0.0f;
     float grayscaleMax = 1.0f;
     float matchThreshold = 0.15f;
+    float siftMaximumRatio = 0.98f;
+    float siftMinimumAdaptiveRatio = 0.78f;
     int modelInputWidth = 0;
     int modelInputHeight = 0;
     int descriptorDimension = 0;
     SiftComputeBackend siftBackend = SiftComputeBackend::Automatic;
     bool adaptiveSift = false;
+    bool adaptiveSiftRatio = true;
     bool rootSift = false;
     QByteArray configFingerprint;
     QByteArray modelFingerprint;

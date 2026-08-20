@@ -94,9 +94,9 @@ live under `src/core/mvs/tests/`.
 
 - Depth post-processing keeps a preview, raw depth, raw confidence, and `valid mask` when raw artifacts are
   enabled.
-- `valid_coverage` is the canonical per-frame coverage field. Quality reporting also accepts
-  `depth_quality.valid_coverage`, legacy `valid_ratio`, or a value computed from valid pixels and grid size.
-  Missing coverage remains unavailable and is displayed as `—`, never as a measured zero.
+- `valid_coverage` is the canonical per-frame coverage field. Quality reporting can derive it from
+  valid-pixel count and grid size when those canonical measurements are present. Missing coverage remains
+  unavailable and is displayed as `—`, never as a measured zero.
 - Depth artifacts are not standalone workspace resources. The photo toolbar resolves the matching frame by
   `ref_image` and overlays depth on that photo. Feature points and residual diagnostics are temporarily hidden
   while depth inspection is active, then restored from the user's existing preferences.
@@ -282,9 +282,8 @@ fixtures and then invokes `model_quality_cli` when quality validation is enabled
 - The GUI `Create Point Cloud` workflow accepts only the latest production SfM/BA result. It reuses a stored
   depth batch only when every expected frame exists and its algorithm revision, input signature, and
   reconstruction generation match; otherwise it regenerates depth artifacts before bounded streaming fusion.
-  Input signature version 2 hashes stable image identities and camera geometry rather than archive-dependent
-  paths or result bookkeeping. Legacy batches whose old path-sensitive signature changes during project
-  archiving are accepted only after every stored depth camera is verified against the current project camera.
+  The input signature hashes stable image identities and camera geometry rather than archive-dependent paths
+  or result bookkeeping. A batch with a different signature or algorithm revision is rejected and regenerated.
 - `reconstruct_pipeline_cli --mvs-depth-only` is the safest validation mode for large aerial projects when the
   goal is to exercise depth scheduling, artifact persistence, cancellation, and manifest recovery without
   entering fusion, mesh, or terrain generation.

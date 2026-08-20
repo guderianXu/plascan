@@ -8,7 +8,6 @@ namespace xjw::gui::project
 {
 
 inline constexpr int kDenseFusionPipelineVersion = 2;
-inline constexpr int kProjectDepthInputSignatureVersion = 2;
 
 struct StoredDepthBatchCompatibility
 {

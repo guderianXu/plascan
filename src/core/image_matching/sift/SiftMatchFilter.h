@@ -19,15 +19,18 @@ namespace xjw::image_matching
         float ambiguity = 1.0f;
     };
 
-    /**
-     * @brief 保留双向一致且达到统一置信度门限的 SIFT 匹配。
-     *
-     * 初始匹配保留互为最近邻的候选，并以宽松歧义门限删除明显重复描述子；
-     * 后续再由 USAC 和引导重匹配处理摄影测量场景中的重复纹理。
-     */
+    struct SiftMatchFilterOptions
+    {
+        float confidenceThreshold = 0.15f;
+        float maximumRatio = 0.98f;
+        float minimumAdaptiveRatio = 0.78f;
+        bool adaptiveRatio = true;
+        int sparseCandidateCount = 64;
+    };
+
+    /// 保留双向一致的对应，并按当前像对的 ratio 分布自适应抑制歧义描述子。
     MatchResult filterSiftMutualMatches(const std::vector<SiftNearestMatch>& forward,
                                         const std::vector<SiftNearestMatch>& reverse,
-                                        float confidenceThreshold,
-                                        float maximumAmbiguity = 0.98f);
+                                        const SiftMatchFilterOptions& options = {});
 
 } // namespace xjw::image_matching

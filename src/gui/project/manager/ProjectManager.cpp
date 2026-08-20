@@ -7,7 +7,7 @@
 #include "ProjectTerrainProductsManager.h"
 #include "ProjectCameraSetupManager.h"
 #include "ProjectUiCommands.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectAssetImporter.h"
 #include "project/ProjectIO.h"
 #include "ProjectCameraIO.h"
@@ -18,7 +18,7 @@
 #include "ProjectBundleAdjustExecution.h"
 #include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraInitialization.h"
-#include "ProjectResourceCleanupService.h"
+#include "ProjectResourceCleanup.h"
 #include "ProjectTiePointResultService.h"
 
 #include "ProjectMetadataOperations.h"
@@ -27,9 +27,9 @@
 #include "ProjectSfmWorkflow.h"
 #include "ProjectSparseWorkflow.h"
 #include "ProjectResultRecords.h"
-#include "ProjectReferenceDatasets.h"
+#include "ReferenceDatasetWorkflow.h"
 #include "ProjectSurveyControl.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "ProjectWorkflowReports.h"
 #include "PointCloudWorkflowConfig.h"
 #include "camera/SurveyControlDialog.h"
@@ -96,22 +96,22 @@ using xjw::gui::project::projectFilesMeta;
 using xjw::gui::project::resolveInitTargets;
 using xjw::gui::project::resolveLatestDenseCloudPath;
 using xjw::gui::project::resolveProjectOutputDir;
-using xjw::gui::project::resolveSparsePointContext;
+using xjw::core::project::resolveSparsePointContext;
 using xjw::gui::project::requireOpenProject;
 using xjw::gui::project::runBundleAdjustExecution;
 using xjw::gui::project::runSparsePointWorkflow;
 using xjw::gui::project::replaceProjectRecordWithLatest;
-using xjw::gui::project::SparsePointContext;
-using xjw::gui::project::SparsePointOperationResult;
+using xjw::core::project::SparsePointContext;
+using xjw::core::project::SparsePointOperationResult;
 using xjw::gui::project::SparsePointWorkflowKind;
 using xjw::gui::project::SparsePointWorkflowSpec;
-using xjw::gui::project::sparseOperationDisplayName;
+using xjw::core::project::sparseOperationDisplayName;
 using xjw::gui::project::sparsePointWorkflowSpec;
-using xjw::gui::project::findLatestAtResultIndex;
+using xjw::core::project::findLatestAtResultIndex;
 using xjw::gui::project::upsertProjectRecordByPath;
 using xjw::gui::project::upsertMetaArrayRecordByPath;
 using xjw::gui::project::withPreparedCameras;
-using xjw::gui::project::writeJsonObjectFile;
+using xjw::core::project::writeJsonObjectFile;
 
 namespace
 {
@@ -491,7 +491,7 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     // 连接ProjectData信号
     if (_projectData)
     {
-        xjw::gui::project::ProjectResourceCleanupService::
+        xjw::core::project::ProjectResourceCleanupService::
             installAutomaticRecovery(_projectData);
         const auto advanceSessionGeneration = [this]()
         {
@@ -1219,7 +1219,7 @@ bool ProjectManager::registerReferenceDataset(const QString &path,
                                               const QString &role,
                                               QString *errorMsg)
 {
-    return xjw::gui::project::registerReferenceDataset(_projectData, path, type, role, errorMsg);
+    return xjw::core::project::registerReferenceDataset(_projectData, path, type, role, errorMsg);
 }
 
 void ProjectManager::openSurveyControlDialog()
@@ -1306,7 +1306,7 @@ void ProjectManager::runReferenceQualityCheck()
         return;
     }
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(_projectData);
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(_projectData);
     if (!result.saved)
     {
         showWarning(result.errorMessage.isEmpty()
@@ -1335,7 +1335,7 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
         return;
     }
 
-    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(_projectData);
+    const auto result = xjw::core::project::writeReferenceTerrainPriorPreflightReport(_projectData);
     if (!result.saved)
     {
         showWarning(result.errorMessage.isEmpty()
@@ -1790,7 +1790,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
     }
 
     const auto presentResult = [this, section](
-                                   const xjw::gui::project::ResourceCleanupResult &cleanupResult)
+                                   const xjw::core::project::ResourceCleanupResult &cleanupResult)
     {
         if (cleanupResult.unsupportedSection)
         {
@@ -1860,7 +1860,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
     }
 
     const auto prepared =
-        xjw::gui::project::ProjectResourceCleanupService::
+        xjw::core::project::ProjectResourceCleanupService::
             prepareGeneratedDataCleanup(_projectData, section, resourcePaths);
     if (!prepared.requiresExecution())
     {
@@ -1876,7 +1876,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
     const auto session = currentSessionContext();
     const QString taskId = QStringLiteral("resource_cleanup");
     auto shutdownResult = std::make_shared<
-        xjw::gui::project::ResourceCleanupResult>(
+        xjw::core::project::ResourceCleanupResult>(
             prepared.preparationResult());
     const QPointer<ProjectData> cleanupProjectData(_projectData);
     _resourceCleanupShutdownFinalize =
@@ -1887,7 +1887,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         {
             if (cleanupProjectData)
             {
-                xjw::gui::project::ProjectResourceCleanupService::
+                xjw::core::project::ProjectResourceCleanupService::
                     finalizePreparedCleanup(
                         cleanupProjectData.data(),
                         prepared,
@@ -1904,7 +1904,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         [prepared, shutdownResult]()
         {
             const auto result =
-                xjw::gui::project::ProjectResourceCleanupService::
+                xjw::core::project::ProjectResourceCleanupService::
                 executePreparedCleanup(prepared);
             *shutdownResult = result;
             return result;
@@ -1912,9 +1912,9 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         [prepared, presentResult, requestWidget, session, taskId](
             ProjectManager *self,
             xjw::gui::tasks::TaskOutcome<
-                xjw::gui::project::ResourceCleanupResult> outcome) mutable
+                xjw::core::project::ResourceCleanupResult> outcome) mutable
         {
-            xjw::gui::project::ResourceCleanupResult cleanupResult =
+            xjw::core::project::ResourceCleanupResult cleanupResult =
                 prepared.preparationResult();
             if (outcome.succeeded())
             {
@@ -1927,7 +1927,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
             }
 
             const bool finalized =
-                xjw::gui::project::ProjectResourceCleanupService::
+                xjw::core::project::ProjectResourceCleanupService::
                     finalizePreparedCleanup(
                         self->_projectData, prepared, cleanupResult);
             self->_resourceCleanupShutdownFinalize = {};

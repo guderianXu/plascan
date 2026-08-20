@@ -99,18 +99,23 @@ namespace xjw::image_matching
 
         const cv::Mat descriptors0 = normalizedSiftDescriptors(features0.descriptors);
         const cv::Mat descriptors1 = normalizedSiftDescriptors(features1.descriptors);
+        SiftMatchFilterOptions filterOptions;
+        filterOptions.confidenceThreshold = _config.matchThreshold;
+        filterOptions.maximumRatio = _config.siftMaximumRatio;
+        filterOptions.minimumAdaptiveRatio = _config.siftMinimumAdaptiveRatio;
+        filterOptions.adaptiveRatio = _config.adaptiveSiftRatio;
         const SiftComputeBackend backend = resolveSiftBackend(_config.siftBackend, _config.cudaDevice);
         if (backend == SiftComputeBackend::Cpu)
         {
             const std::vector<SiftNearestMatch> forward = cpuNearestMatches(descriptors0, descriptors1);
             const std::vector<SiftNearestMatch> reverse = cpuNearestMatches(descriptors1, descriptors0);
-            return filterSiftMutualMatches(forward, reverse, _config.matchThreshold);
+            return filterSiftMutualMatches(forward, reverse, filterOptions);
         }
         const std::vector<SiftNearestMatch> forward =
             matchSiftOnGpu(backend, descriptors0, descriptors1, _config.cudaDevice);
         const std::vector<SiftNearestMatch> reverse =
             matchSiftOnGpu(backend, descriptors1, descriptors0, _config.cudaDevice);
-        return filterSiftMutualMatches(forward, reverse, _config.matchThreshold);
+        return filterSiftMutualMatches(forward, reverse, filterOptions);
     }
 
     void registerAutoSiftAlgorithm()

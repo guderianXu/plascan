@@ -55,24 +55,6 @@ QJsonArray stringListToJsonArray(const QStringList &strings)
     return array;
 }
 
-bool hasOnlyLegacyFusionPostprocessReason(const QJsonArray &reasons)
-{
-    if (reasons.isEmpty())
-    {
-        return false;
-    }
-    for (const QJsonValue &value : reasons)
-    {
-        const QString reason = value.toString();
-        if (reason != QStringLiteral("destructive_fusion_postprocess_collapse")
-            && reason != QStringLiteral("fusion_postprocess_coverage_loss"))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool containsReason(const QJsonArray &reasons, const QString &expected)
 {
     return std::any_of(
@@ -82,184 +64,6 @@ bool containsReason(const QJsonArray &reasons, const QString &expected)
         });
 }
 
-bool hasOnlyRecoverableAdaptiveOrPostprocessReasons(const QJsonArray &reasons)
-{
-    if (reasons.isEmpty())
-    {
-        return false;
-    }
-    for (const QJsonValue &value : reasons)
-    {
-        const QString reason = value.toString();
-        if (reason != QStringLiteral("destructive_fusion_postprocess_collapse")
-            && reason != QStringLiteral("fusion_postprocess_coverage_loss")
-            && reason != QStringLiteral("insufficient_adaptive_effective_views")
-            && reason != QStringLiteral("excessive_adaptive_geometry_conflict")
-            && reason != QStringLiteral(
-                "adaptive_geometry_fallback_to_discrete_core"))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool hasFiniteRatio(const QJsonObject &object, const QString &name)
-{
-    const QJsonValue value = object.value(name);
-    return value.isDouble() && std::isfinite(value.toDouble());
-}
-
-bool hasReliableAdaptiveOrbitalEvidence(const QJsonObject &artifact)
-{
-    const int algorithm_revision = artifact.value(
-        QStringLiteral("algorithm_revision")).toInt(0);
-    if (algorithm_revision < kMvsAdaptiveGeometryConflictRatioRevision)
-    {
-        return true;
-    }
-
-    const QJsonObject diagnostics = artifact.value(
-        QStringLiteral("geometry_evidence_diagnostics")).toObject();
-    const QString effective_view_key = hasFiniteRatio(
-            diagnostics,
-            QStringLiteral("adaptive_observable_effective_view_count_mean"))
-        ? QStringLiteral("adaptive_observable_effective_view_count_mean")
-        : QStringLiteral("adaptive_effective_view_count_mean");
-    const QString conflict_key = hasFiniteRatio(
-            diagnostics,
-            QStringLiteral("adaptive_observable_conflict_ratio_mean"))
-        ? QStringLiteral("adaptive_observable_conflict_ratio_mean")
-        : QStringLiteral("adaptive_conflict_ratio_mean");
-    if (!hasFiniteRatio(diagnostics, effective_view_key) ||
-        !hasFiniteRatio(diagnostics, conflict_key))
-    {
-        return false;
-    }
-
-    constexpr double minimum_effective_view_count = 1.50;
-    constexpr double maximum_conflict_ratio = 0.60;
-    return diagnostics.value(effective_view_key).toDouble() >=
-            minimum_effective_view_count &&
-        diagnostics.value(conflict_key).toDouble() <= maximum_conflict_ratio;
-}
-
-bool populateStoredOrbitalQualityInput(const QJsonObject &artifact,
-                                       DepthFrameQualityInput *input)
-{
-    if (!input)
-    {
-        return false;
-    }
-    const QJsonObject depth_quality = artifact.value(
-        QStringLiteral("depth_quality")).toObject();
-    const QJsonObject depth_completeness = artifact.value(
-        QStringLiteral("depth_completeness")).toObject();
-    if (!hasFiniteRatio(artifact, QStringLiteral("valid_coverage"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("largest_component_ratio"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("mean_confidence"))
-        || !hasFiniteRatio(depth_quality, QStringLiteral("depth_at_search_boundary_ratio"))
-        || !hasFiniteRatio(depth_completeness,
-                           QStringLiteral("consistency_retention_ratio"))
-        || !hasFiniteRatio(depth_completeness,
-                           QStringLiteral("fusion_postprocess_retention_ratio")))
-    {
-        return false;
-    }
-
-    input->sceneProfile = MvsSceneProfile::OrbitalObject;
-    input->validCoverage = static_cast<float>(artifact.value(
-        QStringLiteral("valid_coverage")).toDouble());
-    input->largestComponentRatio = static_cast<float>(depth_quality.value(
-        QStringLiteral("largest_component_ratio")).toDouble());
-    input->meanConfidence = static_cast<float>(depth_quality.value(
-        QStringLiteral("mean_confidence")).toDouble());
-    input->multiViewConsistency = std::clamp(
-        static_cast<float>(depth_completeness.value(
-            QStringLiteral("consistency_retention_ratio")).toDouble()),
-        0.0f,
-        1.0f);
-    input->depthAtSearchBoundaryRatio = static_cast<float>(depth_quality.value(
-        QStringLiteral("depth_at_search_boundary_ratio")).toDouble());
-    input->fusionPostprocessRetentionRatio = static_cast<float>(
-        depth_completeness.value(
-            QStringLiteral("fusion_postprocess_retention_ratio")).toDouble());
-    return true;
-}
-
-double storedDiscreteGeometryCoreRatio(const QJsonObject &artifact)
-{
-    const QJsonObject diagnostics = artifact.value(
-        QStringLiteral("geometry_evidence_diagnostics")).toObject();
-    if (!diagnostics.value(QStringLiteral("valid_inputs")).toBool(false))
-    {
-        return -1.0;
-    }
-    if (hasFiniteRatio(
-            diagnostics, QStringLiteral("discrete_geometry_core_ratio")))
-    {
-        return std::clamp(
-            diagnostics.value(QStringLiteral(
-                "discrete_geometry_core_ratio")).toDouble(),
-            0.0,
-            1.0);
-    }
-    if (artifact.value(QStringLiteral("algorithm_revision")).toInt(0) >=
-        kMvsDiscreteGeometryCoreRatioRevision)
-    {
-        return -1.0;
-    }
-
-    // Revision 34 did not persist the joint ratio, but it did persist the
-    // complete support histogram and inverse-depth quantiles.  If P90 is under
-    // the spread limit, at least 90% of valid pixels satisfy the spread term.
-    // Inclusion-exclusion therefore gives a conservative lower bound for the
-    // joint support-and-spread core without reading tens of gigabytes on the
-    // GUI thread.
-    if (!hasFiniteRatio(diagnostics, QStringLiteral("valid_pixel_count"))
-        || !hasFiniteRatio(
-            diagnostics, QStringLiteral("inverse_depth_spread_p90")))
-    {
-        return -1.0;
-    }
-    const double valid_pixel_count = diagnostics.value(
-        QStringLiteral("valid_pixel_count")).toDouble();
-    const double spread_p90 = diagnostics.value(
-        QStringLiteral("inverse_depth_spread_p90")).toDouble();
-    const QJsonObject histogram = diagnostics.value(
-        QStringLiteral("geometry_support_histogram")).toObject();
-    if (valid_pixel_count <= 0.0
-        || spread_p90 > static_cast<double>(
-            kDiscreteGeometryCoreMaximumInverseDepthSpread)
-        || !hasFiniteRatio(histogram, QStringLiteral("support_3"))
-        || !hasFiniteRatio(histogram, QStringLiteral("support_4"))
-        || !hasFiniteRatio(histogram, QStringLiteral("support_5_plus")))
-    {
-        return -1.0;
-    }
-    const double three_view_count =
-        histogram.value(QStringLiteral("support_3")).toDouble()
-        + histogram.value(QStringLiteral("support_4")).toDouble()
-        + histogram.value(QStringLiteral("support_5_plus")).toDouble();
-    const double three_view_ratio = std::clamp(
-        three_view_count / valid_pixel_count, 0.0, 1.0);
-    return std::max(0.0, three_view_ratio - 0.10);
-}
-
-bool hasReliableStoredDiscreteOrbitalEvidence(const QJsonObject &artifact)
-{
-    DepthFrameQualityInput input;
-    if (!populateStoredOrbitalQualityInput(artifact, &input))
-    {
-        return false;
-    }
-    input.discreteGeometryCoreRatio = static_cast<float>(
-        storedDiscreteGeometryCoreRatio(artifact));
-    input.discreteGeometryCoreAvailable =
-        std::isfinite(input.discreteGeometryCoreRatio)
-        && input.discreteGeometryCoreRatio >= 0.0f;
-    return hasReliableOrbitalDiscreteGeometryCore(input);
-}
 }
 
 MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
@@ -269,12 +73,9 @@ MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
         QStringLiteral("quality_decision")).toObject();
     MvsDepthFrameQualification qualification;
     qualification.acceptance = artifact.value(
-        QStringLiteral("acceptance")).toString(
-            quality_decision.value(QStringLiteral("acceptance")).toString());
-    qualification.fusionEligible = artifact.contains(
-        QStringLiteral("fusion_eligible"))
-        ? artifact.value(QStringLiteral("fusion_eligible")).toBool()
-        : qualification.acceptance == QStringLiteral("accepted");
+        QStringLiteral("acceptance")).toString();
+    qualification.fusionEligible = artifact.value(
+        QStringLiteral("fusion_eligible")).toBool(false);
 
     const QJsonArray quality_reasons = quality_decision.value(
         QStringLiteral("reasons")).toArray();
@@ -282,43 +83,6 @@ MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
         quality_reasons,
         QStringLiteral("adaptive_geometry_fallback_to_discrete_core"));
 
-    if (qualification.fusionEligible
-        || artifact.value(QStringLiteral("status")).toString()
-            != QStringLiteral("completed")
-        || artifact.value(QStringLiteral("scene_profile")).toString()
-            != QStringLiteral("orbital_object"))
-    {
-        return qualification;
-    }
-
-    DepthFrameQualityInput input;
-    if (!populateStoredOrbitalQualityInput(artifact, &input))
-    {
-        return qualification;
-    }
-
-    const bool legacy_postprocess_migration =
-        hasOnlyLegacyFusionPostprocessReason(quality_reasons)
-        && hasReliableAdaptiveOrbitalEvidence(artifact)
-        && hasReliableOrbitalFusionCore(input);
-    const bool adaptive_failure = containsReason(
-            quality_reasons,
-            QStringLiteral("insufficient_adaptive_effective_views"))
-        || containsReason(
-            quality_reasons,
-            QStringLiteral("excessive_adaptive_geometry_conflict"));
-    const bool discrete_core_migration = adaptive_failure
-        && hasOnlyRecoverableAdaptiveOrPostprocessReasons(quality_reasons)
-        && hasReliableStoredDiscreteOrbitalEvidence(artifact);
-    if (!legacy_postprocess_migration && !discrete_core_migration)
-    {
-        return qualification;
-    }
-
-    qualification.acceptance = QStringLiteral("accepted");
-    qualification.fusionEligible = true;
-    qualification.reclassified = true;
-    qualification.useDiscreteGeometryFallback = discrete_core_migration;
     return qualification;
 }
 
@@ -426,8 +190,6 @@ QJsonObject MvsDepthFrameRecord::toJson() const
                   rawAdaptiveGeometryEffectiveViewCountPath);
     object.insert(QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
                   rawAdaptiveGeometryConflictRatioPath);
-    object.insert(QStringLiteral("raw_adaptive_geometry_conflict_weight_path"),
-                  rawAdaptiveGeometryConflictWeightPath);
     object.insert(QStringLiteral("raw_geometry_source_mask_path"), rawGeometrySourceMaskPath);
     object.insert(QStringLiteral("raw_inverse_depth_mean_path"), rawInverseDepthMeanPath);
     object.insert(QStringLiteral("raw_inverse_depth_spread_path"), rawInverseDepthSpreadPath);
@@ -526,13 +288,11 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("pyramid_degraded_reason")).toString();
     record.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
     record.filterMode = object.value(QStringLiteral("filter_mode")).toString();
-    record.acceptance = object.value(QStringLiteral("acceptance")).toString(
-        record.qualityDecision.value(QStringLiteral("acceptance")).toString());
+    record.acceptance = object.value(QStringLiteral("acceptance")).toString();
     record.fusionEligibilityKnown = object.contains(
         QStringLiteral("fusion_eligible"));
-    record.fusionEligible = record.fusionEligibilityKnown
-        ? object.value(QStringLiteral("fusion_eligible")).toBool()
-        : record.acceptance == QStringLiteral("accepted");
+    record.fusionEligible = object.value(
+        QStringLiteral("fusion_eligible")).toBool(false);
     record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
     record.cameraModel = object.value(QStringLiteral("camera_model")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
@@ -548,8 +308,6 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("raw_adaptive_geometry_effective_view_count_path")).toString();
     record.rawAdaptiveGeometryConflictRatioPath = object.value(
         QStringLiteral("raw_adaptive_geometry_conflict_ratio_path")).toString();
-    record.rawAdaptiveGeometryConflictWeightPath = object.value(
-        QStringLiteral("raw_adaptive_geometry_conflict_weight_path")).toString();
     record.rawGeometrySourceMaskPath = object.value(
         QStringLiteral("raw_geometry_source_mask_path")).toString();
     record.rawInverseDepthMeanPath = object.value(
@@ -579,16 +337,6 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.configHash = object.value(QStringLiteral("config_hash")).toString();
     record.algorithmRevision = object.value(
         QStringLiteral("algorithm_revision")).toInt(0);
-    if (record.pyramidLevels.isEmpty() && record.gridWidth > 0 && record.gridHeight > 0)
-    {
-        record.pyramidLevels.append(QJsonObject{
-            {QStringLiteral("level"), 1},
-            {QStringLiteral("downsample_factor"), 1},
-            {QStringLiteral("grid_width"), record.gridWidth},
-            {QStringLiteral("grid_height"), record.gridHeight},
-            {QStringLiteral("legacy_single_level"), true}
-        });
-    }
     return record;
 }
 
@@ -966,13 +714,9 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return true;
     }
 
-    const bool conflict_artifact_exists =
-        artifact_exists(record.rawAdaptiveGeometryConflictRatioPath) ||
-        (record.algorithmRevision < kMvsAdaptiveGeometryConflictRatioRevision &&
-         artifact_exists(record.rawAdaptiveGeometryConflictWeightPath));
     return artifact_exists(record.rawAdaptiveGeometrySupportWeightPath) &&
            artifact_exists(record.rawAdaptiveGeometryEffectiveViewCountPath) &&
-           conflict_artifact_exists;
+           artifact_exists(record.rawAdaptiveGeometryConflictRatioPath);
 }
 
 QJsonObject MvsWorkspaceManifest::toJson() const
@@ -1018,7 +762,6 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                  config.patchMatch.photometricUniquenessMinimumMargin);
     patch.insert(QStringLiteral("photometric_uniqueness_minimum_confidence_scale"),
                  config.patchMatch.photometricUniquenessMinimumConfidenceScale);
-    patch.insert(QStringLiteral("use_cuda"), config.patchMatch.useCuda);
     patch.insert(QStringLiteral("backend"), static_cast<int>(config.patchMatch.backend));
     patch.insert(QStringLiteral("downsample_factor"), config.patchMatch.downsampleFactor);
     patch.insert(QStringLiteral("median_blur"), config.patchMatch.doMedianBlur);

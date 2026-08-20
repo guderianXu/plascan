@@ -2,6 +2,7 @@ add_library(mask
     MaskGenerator.cpp
     birefnet/BiRefNetImageProcessing.cpp
     birefnet/BiRefNetMaskGenerator.cpp
+    birefnet/BiRefNetOnnxRuntimeCpuBackend.cpp
     birefnet/BiRefNetTensorRtBackend.cpp
     u2net/U2NetImageProcessing.cpp
     u2net/U2NetMaskGenerator.cpp
@@ -16,6 +17,7 @@ target_include_directories(mask PUBLIC
 
 target_link_libraries(mask PUBLIC
     plascan_inference
+    plascan_onnxruntime
     ${OpenCV_LIBS}
 )
 

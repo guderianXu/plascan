@@ -1,22 +1,22 @@
 #include "ProjectDepthBatchLineage.h"
 
 #include "ProjectCameraIO.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 
-#include <algorithm>
 #include <array>
-#include <cmath>
 
 namespace xjw::gui::project
 {
 
 namespace
 {
+
+constexpr int kCurrentProjectDepthInputSignatureVersion = 2;
 
 QString normalizedResourcePath(const QString &path)
 {
@@ -139,81 +139,11 @@ int imageIndexForResource(const QJsonArray &images, const QString &resource)
     return matchingIndex;
 }
 
-bool nearlyEqual(double lhs, double rhs)
-{
-    const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
-    return std::abs(lhs - rhs) <= 1.0e-9 * scale;
-}
-
-bool jsonArrayMatches(const QJsonArray &actual,
-                      const double *expected,
-                      int count,
-                      bool transposeThreeByThree = false)
-{
-    if (actual.size() != count)
-    {
-        return false;
-    }
-    for (int index = 0; index < count; ++index)
-    {
-        const int expectedIndex = transposeThreeByThree
-            ? (index % 3) * 3 + index / 3
-            : index;
-        if (!nearlyEqual(actual.at(index).toDouble(), expected[expectedIndex]))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool depthCameraMatchesProjectImage(
-    const xjw::core::project::StoredDepthFrameRecord &frame,
-    const QJsonObject &image)
-{
-    xjw::FramePinholeCamera camera;
-    if (frame.cameraModel.isEmpty() ||
-        !xjw::common::project::cameraFromJson(
-            image.value(QStringLiteral("camera")).toObject(), &camera) ||
-        !camera.isValid())
-    {
-        return false;
-    }
-
-    const auto distortion = camera.distortion();
-    const bool unverifiableProjectionTerms =
-        !nearlyEqual(distortion.radialK1, 0.0) ||
-        !nearlyEqual(distortion.radialK2, 0.0) ||
-        !nearlyEqual(distortion.radialK3, 0.0) ||
-        !nearlyEqual(distortion.tangentialP1, 0.0) ||
-        !nearlyEqual(distortion.tangentialP2, 0.0) ||
-        camera.uAxisSign() != 1 || camera.vAxisSign() != 1 ||
-        camera.depthAxisFlipped();
-    if (unverifiableProjectionTerms)
-    {
-        return false;
-    }
-
-    const auto center = camera.cameraCenter();
-    const auto rotation = camera.cameraToWorldRotation();
-    return jsonArrayMatches(
-               frame.cameraModel.value(QStringLiteral("camera_center")).toArray(),
-               center.data(), 3) &&
-        jsonArrayMatches(
-               frame.cameraModel.value(QStringLiteral("rotation_world_to_camera")).toArray(),
-               rotation.data(), 9, true) &&
-        nearlyEqual(frame.cameraModel.value(QStringLiteral("fx")).toDouble(), camera.focalX()) &&
-        nearlyEqual(frame.cameraModel.value(QStringLiteral("fy")).toDouble(), camera.focalY()) &&
-        nearlyEqual(frame.cameraModel.value(QStringLiteral("cx")).toDouble(), camera.principalX()) &&
-        nearlyEqual(frame.cameraModel.value(QStringLiteral("cy")).toDouble(), camera.principalY());
-}
-
 } // namespace
 
 QString canonicalProjectDepthInputSignature(
     const QJsonObject &projectMetadata,
-    int aerialTriangulationResultIndex,
-    int signatureVersion)
+    int aerialTriangulationResultIndex)
 {
     const QJsonArray images = projectMetadata.value(QStringLiteral("images")).toArray();
     const QJsonArray atResults =
@@ -226,7 +156,8 @@ QString canonicalProjectDepthInputSignature(
     int atIndex = aerialTriangulationResultIndex;
     if (atIndex < 0 || atIndex >= atResults.size())
     {
-        atIndex = findLatestProductionAtResultIndex(projectMetadata);
+        atIndex = xjw::core::project::findLatestProductionAtResultIndex(
+            projectMetadata);
     }
     if (atIndex < 0 && !atResults.isEmpty())
     {
@@ -273,34 +204,14 @@ QString canonicalProjectDepthInputSignature(
     lineage[QStringLiteral("run_id")] = atResult.value(QStringLiteral("run_id")).toString();
 
     QJsonObject signatureInput;
-    signatureInput[QStringLiteral("signature_version")] = signatureVersion;
+    signatureInput[QStringLiteral("signature_version")] =
+        kCurrentProjectDepthInputSignatureVersion;
     signatureInput[QStringLiteral("images")] = canonicalImages;
     signatureInput[QStringLiteral("lineage")] = lineage;
     const QByteArray payload =
         QJsonDocument(signatureInput).toJson(QJsonDocument::Compact);
     return QString::fromLatin1(
         QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
-}
-
-bool legacyDepthCamerasMatchCurrentProject(
-    const xjw::core::project::StoredDepthFramesResult &storedFrames,
-    const QJsonObject &projectMetadata)
-{
-    const QJsonArray images = projectMetadata.value(QStringLiteral("images")).toArray();
-    if (images.isEmpty())
-    {
-        return false;
-    }
-    for (const auto &frame : storedFrames.frames)
-    {
-        const int imageIndex = imageIndexForResource(images, frame.refImage);
-        if (imageIndex < 0 ||
-            !depthCameraMatchesProjectImage(frame, images.at(imageIndex).toObject()))
-        {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace xjw::gui::project

@@ -57,12 +57,12 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
 
     QJsonObject depth0;
     depth0[QStringLiteral("status")] = QStringLiteral("completed");
-    depth0[QStringLiteral("valid_ratio")] = 0.75;
+    depth0[QStringLiteral("valid_coverage")] = 0.75;
     depth0[QStringLiteral("ref_image")] = QStringLiteral("img_001.jpg");
 
     QJsonObject depth1;
     depth1[QStringLiteral("status")] = QStringLiteral("failed");
-    depth1[QStringLiteral("valid_ratio")] = 0.0;
+    depth1[QStringLiteral("valid_coverage")] = 0.0;
     depth1[QStringLiteral("ref_image")] = QStringLiteral("img_002.jpg");
 
     QJsonObject demResult;
@@ -76,7 +76,7 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
         makeImage(QStringLiteral("img_003.jpg"), true),
         makeImage(QStringLiteral("img_004.jpg"), false)
     };
-    meta[QStringLiteral("at_results")] = QJsonArray{atResult};
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{atResult};
     meta[QStringLiteral("depth_map_results")] = QJsonArray{depth0, depth1};
     meta[QStringLiteral("dem_results")] = QJsonArray{demResult};
     meta[QStringLiteral("dense_cloud_results")] = QJsonArray{
@@ -97,28 +97,21 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
     EXPECT_TRUE(report.value(QStringLiteral("ba_summary")).isObject());
 }
 
-TEST(ReconstructionQualityReport, ReadsCanonicalNestedLegacyAndComputedDepthCoverage)
+TEST(ReconstructionQualityReport, ReadsCanonicalAndComputedDepthCoverage)
 {
     const QJsonObject canonical{
         {QStringLiteral("status"), QStringLiteral("completed")},
         {QStringLiteral("valid_coverage"), 0.8}};
-    const QJsonObject nested{
-        {QStringLiteral("status"), QStringLiteral("completed")},
-        {QStringLiteral("depth_quality"),
-         QJsonObject{{QStringLiteral("valid_coverage"), 0.6}}}};
-    const QJsonObject legacy{
-        {QStringLiteral("status"), QStringLiteral("completed")},
-        {QStringLiteral("valid_ratio"), 0.4}};
     const QJsonObject computed{
         {QStringLiteral("status"), QStringLiteral("completed")},
         {QStringLiteral("valid_pixel_count"), 25},
         {QStringLiteral("grid_width"), 10},
         {QStringLiteral("grid_height"), 10}};
     const QJsonObject meta{
-        {QStringLiteral("depth_map_results"), QJsonArray{canonical, nested, legacy, computed}}};
+        {QStringLiteral("depth_map_results"), QJsonArray{canonical, computed}}};
 
     const QJsonObject report = ReconstructionQualityReport::buildFromProjectMeta(meta);
-    EXPECT_NEAR(report.value(QStringLiteral("mvs_valid_coverage")).toDouble(), 0.5125, 1e-9);
+    EXPECT_NEAR(report.value(QStringLiteral("mvs_valid_coverage")).toDouble(), 0.525, 1e-9);
 }
 
 TEST(ReconstructionQualityReport, LeavesCoverageUnavailableWhenNoFrameHasAMeasurement)

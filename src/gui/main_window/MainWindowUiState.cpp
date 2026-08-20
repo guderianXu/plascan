@@ -113,8 +113,7 @@ void MainWindow::selectPhoto(const QString &imagePath, bool openImage)
     }
     saveUiSetting(QJsonObject{
         {QStringLiteral("active_image_id"),
-         projectImageStateKey(imagePath)},
-        {QStringLiteral("active_image_path"), QString()}
+         projectImageStateKey(imagePath)}
     });
 }
 
@@ -147,10 +146,10 @@ QString MainWindow::projectImageStateKey(const QString &imagePath) const
         const QString imageId =
             image.value(QStringLiteral("image_uuid")).toString().trimmed();
         return imageId.isEmpty()
-            ? imagePath
+            ? QString()
             : QStringLiteral("image:%1").arg(imageId);
     }
-    return imagePath;
+    return {};
 }
 
 QString MainWindow::projectImagePathForStateKey(
@@ -161,12 +160,11 @@ QString MainWindow::projectImagePathForStateKey(
               .value(QStringLiteral("images"))
               .toArray()
         : QJsonArray{};
-    const QString imageId = stateKey.startsWith(QStringLiteral("image:"))
-        ? stateKey.mid(6)
-        : QString();
-    QString basenameMatch;
-    bool basenameUnique = true;
-    const QString legacyName = QFileInfo(stateKey).fileName();
+    if (!stateKey.startsWith(QStringLiteral("image:")))
+    {
+        return {};
+    }
+    const QString imageId = stateKey.mid(6);
     for (const QJsonValue &value : images)
     {
         const QJsonObject image = value.toObject();
@@ -178,25 +176,8 @@ QString MainWindow::projectImagePathForStateKey(
         {
             return path;
         }
-        if (imageId.isEmpty() && path == stateKey)
-        {
-            return path;
-        }
-        if (imageId.isEmpty()
-            && !legacyName.isEmpty()
-            && QFileInfo(path).fileName() == legacyName)
-        {
-            if (basenameMatch.isEmpty())
-            {
-                basenameMatch = path;
-            }
-            else
-            {
-                basenameUnique = false;
-            }
-        }
     }
-    return basenameUnique ? basenameMatch : QString();
+    return {};
 }
 
 void MainWindow::selectResource(const QString &section, const QString &resourcePath)

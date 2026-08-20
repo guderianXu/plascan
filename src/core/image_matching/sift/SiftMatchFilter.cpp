@@ -19,12 +19,61 @@ namespace xjw::image_matching
             return std::clamp(match.similarity, 0.0f, 1.0f);
         }
 
+        float effectiveRatioLimit(const std::vector<SiftNearestMatch>& forward,
+                                  const std::vector<SiftNearestMatch>& reverse,
+                                  const SiftMatchFilterOptions& options)
+        {
+            const float configuredMaximum = std::clamp(options.maximumRatio, 0.0f, 1.0f);
+            if (!options.adaptiveRatio)
+            {
+                return configuredMaximum;
+            }
+
+            std::vector<float> mutualRatios;
+            mutualRatios.reserve(forward.size());
+            const float confidenceThreshold = std::clamp(options.confidenceThreshold, 0.0f, 1.0f);
+            for (int index0 = 0; index0 < static_cast<int>(forward.size()); ++index0)
+            {
+                const SiftNearestMatch& candidate = forward[static_cast<std::size_t>(index0)];
+                const int index1 = candidate.index;
+                if (index1 < 0 || index1 >= static_cast<int>(reverse.size()))
+                {
+                    continue;
+                }
+                const SiftNearestMatch& reverseCandidate = reverse[static_cast<std::size_t>(index1)];
+                if (reverseCandidate.index != index0 ||
+                    std::min(descriptorConfidence(candidate), descriptorConfidence(reverseCandidate)) <
+                        confidenceThreshold)
+                {
+                    continue;
+                }
+                const float ratio = std::max(candidate.ambiguity, reverseCandidate.ambiguity);
+                if (std::isfinite(ratio))
+                {
+                    mutualRatios.push_back(std::clamp(ratio, 0.0f, 1.0f));
+                }
+            }
+
+            // 小影像/低纹理像对本来候选就少，保留用户设置的宽松上限。候选充足时
+            // 取 75% 分位并留 0.02 余量，稳定地删除分布尾部的重复纹理歧义项。
+            if (static_cast<int>(mutualRatios.size()) < std::max(8, options.sparseCandidateCount))
+            {
+                return configuredMaximum;
+            }
+            const std::size_t quartileIndex =
+                std::min(mutualRatios.size() - 1, (mutualRatios.size() * 3) / 4);
+            std::nth_element(mutualRatios.begin(),
+                             mutualRatios.begin() + static_cast<std::ptrdiff_t>(quartileIndex),
+                             mutualRatios.end());
+            const float minimum = std::clamp(options.minimumAdaptiveRatio, 0.0f, configuredMaximum);
+            return std::clamp(mutualRatios[quartileIndex] + 0.02f, minimum, configuredMaximum);
+        }
+
     } // namespace
 
     MatchResult filterSiftMutualMatches(const std::vector<SiftNearestMatch>& forward,
                                         const std::vector<SiftNearestMatch>& reverse,
-                                        float confidenceThreshold,
-                                        float maximumAmbiguity)
+                                        const SiftMatchFilterOptions& options)
     {
         MatchResult result;
         result.sourceAlgorithm = kAutoSiftAlgorithmId;
@@ -33,8 +82,8 @@ namespace xjw::image_matching
         result.matchingScores0.assign(forward.size(), 0.0f);
         result.matchingScores1.assign(reverse.size(), 0.0f);
 
-        const float threshold = std::clamp(confidenceThreshold, 0.0f, 1.0f);
-        const float ambiguityLimit = std::clamp(maximumAmbiguity, 0.0f, 1.0f);
+        const float threshold = std::clamp(options.confidenceThreshold, 0.0f, 1.0f);
+        const float ambiguityLimit = effectiveRatioLimit(forward, reverse, options);
         for (int index0 = 0; index0 < static_cast<int>(forward.size()); ++index0)
         {
             const SiftNearestMatch& candidate = forward[static_cast<std::size_t>(index0)];

@@ -1,10 +1,9 @@
 #include "ProjectSurveyControl.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "io/MarkerCsv.h"
 #include "io/MarkerSetStore.h"
-#include "io/SurveyControlMigration.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -146,7 +145,6 @@ SurveyControlProjectImportResult publishMarkerSet(ProjectData *projectData,
     }
 
     QJsonObject metadata = projectData->coreFilesMeta();
-    metadata.remove(QStringLiteral("survey_control"));
     int control_count = 0;
     int check_count = 0;
     for (const control_points::Marker &marker : markerSet.markers())
@@ -196,32 +194,6 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
         return result;
     }
     return publishMarkerSet(projectData, imported.markerSet);
-}
-
-SurveyControlProjectImportResult migrateLegacySurveyControl(ProjectData *projectData)
-{
-    SurveyControlProjectImportResult result;
-    if (!projectData || !projectData->hasProject())
-    {
-        result.errorMessage = QStringLiteral("项目未打开，无法迁移旧测绘控制数据");
-        return result;
-    }
-
-    const QJsonObject legacy = projectData->coreFilesMeta()
-                                   .value(QStringLiteral("survey_control")).toObject();
-    if (legacy.isEmpty())
-    {
-        result.imported = true;
-        return result;
-    }
-
-    const auto migrated = control_points::migrateSurveyControl(legacy, imageIdentityMap(*projectData));
-    if (!migrated.ok)
-    {
-        result.errorMessage = migrated.error;
-        return result;
-    }
-    return publishMarkerSet(projectData, migrated.markerSet);
 }
 
 QJsonObject surveyControlDialogMetadata(ProjectData *projectData, QString *errorMessage)

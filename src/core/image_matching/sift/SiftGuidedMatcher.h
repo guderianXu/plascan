@@ -18,6 +18,9 @@ namespace xjw::image_matching
         int index0 = -1;
         int index1 = -1;
         float confidence = 0.0f;
+        float forwardRatio = 1.0f;
+        float reverseRatio = 1.0f;
+        float symmetricResidualPixels = -1.0f;
     };
 
     struct SiftGuidedMatchOptions

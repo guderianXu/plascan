@@ -433,8 +433,14 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.maxImageDim = options.featureMaxImageDim <= 0
         ? quality.maxImageDimension : options.featureMaxImageDim;
     tieOptions.matchThreshold = std::clamp(options.matchThreshold, 0.0f, 1.0f);
+    tieOptions.siftMaximumRatio = std::clamp(options.siftMaximumRatio, 0.0f, 1.0f);
+    tieOptions.siftMinimumAdaptiveRatio = std::clamp(
+        options.siftMinimumAdaptiveRatio, 0.0f, tieOptions.siftMaximumRatio);
+    tieOptions.adaptiveSiftRatio = options.adaptiveSiftRatio;
     tieOptions.geometryReprojThreshold = std::max(0.1, options.geometryReprojThreshold);
     tieOptions.geometryMinInliers = std::max(8, options.geometryMinInliers);
+    tieOptions.geometryMinInlierRatio = std::clamp(options.geometryMinInlierRatio, 0.01, 0.95);
+    tieOptions.geometryMinGridCoverage = std::clamp(options.geometryMinGridCoverage, 0.01, 1.0);
     tieOptions.geometryMaxIterations = std::max(100, options.geometryMaxIterations);
     tieOptions.enableGuidedMatching = options.guidedImageMatching;
     tieOptions.useExplicitKeypointLimit = true;
@@ -589,9 +595,16 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("feature_prefetch_depth"), tieOptions.featurePrefetchDepth);
     settings.insert(QStringLiteral("feature_max_image_dim"), tieOptions.maxImageDim);
     settings.insert(QStringLiteral("match_threshold"), tieOptions.matchThreshold);
+    settings.insert(QStringLiteral("sift_maximum_ratio"), tieOptions.siftMaximumRatio);
+    settings.insert(QStringLiteral("sift_minimum_adaptive_ratio"),
+                    tieOptions.siftMinimumAdaptiveRatio);
+    settings.insert(QStringLiteral("adaptive_sift_ratio"), tieOptions.adaptiveSiftRatio);
     settings.insert(QStringLiteral("geometry_reprojection_threshold_px"),
                     tieOptions.geometryReprojThreshold);
     settings.insert(QStringLiteral("geometry_min_inliers"), tieOptions.geometryMinInliers);
+    settings.insert(QStringLiteral("geometry_min_inlier_ratio"), tieOptions.geometryMinInlierRatio);
+    settings.insert(QStringLiteral("geometry_min_grid_coverage"),
+                    tieOptions.geometryMinGridCoverage);
     settings.insert(QStringLiteral("geometry_max_iterations"), tieOptions.geometryMaxIterations);
     settings.insert(QStringLiteral("tie_point_grid_columns"), tieOptions.tiePointGridColumns);
     settings.insert(QStringLiteral("tie_point_grid_rows"), tieOptions.tiePointGridRows);

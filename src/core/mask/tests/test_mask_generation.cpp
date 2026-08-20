@@ -395,7 +395,7 @@ TEST(BiRefNetImageProcessingTest, RestoresLetterboxAndKeepsSeparateForegroundReg
     EXPECT_EQ(mask.at<uchar>(5, 100), 255);
 }
 
-TEST(BiRefNetMaskGeneratorTest, ContractIsFixed1024TensorRtOnly)
+TEST(BiRefNetMaskGeneratorTest, ContractIsFixed1024WithCudaAndCpuBackends)
 {
     const xjw::mask::BiRefNetMaskGeneratorConfig config;
 
@@ -406,9 +406,47 @@ TEST(BiRefNetMaskGeneratorTest, ContractIsFixed1024TensorRtOnly)
     EXPECT_EQ(config.morphologyRadius, 0);
     EXPECT_FALSE(config.keepLargestComponent);
     EXPECT_TRUE(config.preferFp16);
+    EXPECT_TRUE(config.allowDeviceFallback);
     EXPECT_EQ(xjw::mask::parseBiRefNetBackendType("cuda"),
               xjw::mask::BiRefNetBackendType::TensorRt);
-    EXPECT_FALSE(xjw::mask::parseBiRefNetBackendType("cpu").has_value());
+    EXPECT_EQ(xjw::mask::parseBiRefNetBackendType("cpu"),
+              xjw::mask::BiRefNetBackendType::OnnxRuntimeCpu);
+    EXPECT_EQ(xjw::mask::biRefNetBackendTypeToken(
+                  xjw::mask::BiRefNetBackendType::OnnxRuntimeCpu),
+              "onnxruntime_cpu");
+}
+
+TEST(BiRefNetMaskGeneratorTest, ReportsCpuAndSelectedCudaCapabilities)
+{
+    const xjw::mask::BiRefNetInferenceCapabilities capabilities =
+        xjw::mask::detectBiRefNetInferenceCapabilities(0);
+    EXPECT_TRUE(capabilities.hasOnnxRuntimeCpu);
+    EXPECT_NE(capabilities.summary.find("ONNX Runtime CPU available"), std::string::npos);
+    EXPECT_NE(capabilities.summary.find("CUDA devices="), std::string::npos);
+}
+
+TEST(BiRefNetMaskGeneratorIntegrationTest, OnnxModelRunsOnOnnxRuntimeCpuWhenExplicitlyEnabled)
+{
+    const char* enabled = std::getenv("PLASCAN_BIREFNET_CPU_INTEGRATION");
+    if (!enabled || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set PLASCAN_BIREFNET_CPU_INTEGRATION=1 to run the real BiRefNet CPU test.";
+    }
+    const char* model = std::getenv("PLASCAN_BIREFNET_MODEL");
+    ASSERT_NE(model, nullptr);
+    ASSERT_TRUE(std::filesystem::is_regular_file(model));
+
+    xjw::mask::BiRefNetMaskGeneratorConfig config;
+    config.modelPath = model;
+    config.backend = xjw::mask::BiRefNetBackendType::OnnxRuntimeCpu;
+    xjw::mask::BiRefNetMaskGenerator generator(config);
+    const cv::Mat image = makeAsteroidLikeImage();
+    const xjw::mask::BiRefNetMaskResult result = generator.generate(image);
+    ASSERT_FALSE(result.mask.empty());
+    EXPECT_EQ(result.mask.size(), image.size());
+    EXPECT_FALSE(result.usedCuda);
+    EXPECT_EQ(result.actualBackend, xjw::mask::BiRefNetBackendType::OnnxRuntimeCpu);
+    EXPECT_EQ(result.precision, xjw::mask::BiRefNetInferencePrecision::Fp32);
 }
 
 TEST(BiRefNetMaskGeneratorIntegrationTest, OnnxModelRunsOnTensorRtWhenExplicitlyEnabled)

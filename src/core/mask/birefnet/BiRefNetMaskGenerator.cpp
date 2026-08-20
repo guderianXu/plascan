@@ -7,6 +7,8 @@
 #include <QCryptographicHash>
 #include <QFile>
 
+#include <onnxruntime_c_api.h>
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -78,6 +80,8 @@ std::string biRefNetBackendTypeToken(BiRefNetBackendType backend)
         return "auto";
     case BiRefNetBackendType::TensorRt:
         return "tensorrt";
+    case BiRefNetBackendType::OnnxRuntimeCpu:
+        return "onnxruntime_cpu";
     }
     return "auto";
 }
@@ -92,6 +96,10 @@ std::optional<BiRefNetBackendType> parseBiRefNetBackendType(const std::string& t
     if (normalized == "tensorrt" || normalized == "cuda" || normalized == "gpu")
     {
         return BiRefNetBackendType::TensorRt;
+    }
+    if (normalized == "onnxruntimecpu" || normalized == "cpu")
+    {
+        return BiRefNetBackendType::OnnxRuntimeCpu;
     }
     return std::nullopt;
 }
@@ -124,7 +132,8 @@ BiRefNetInferenceCapabilities detectBiRefNetInferenceCapabilities(int cudaDevice
     result.errorMessage = toUtf8(detected.errorMessage);
 
     std::ostringstream summary;
-    summary << "BiRefNet requires TensorRT; compiled=" << (result.tensorRtCompiled ? "yes" : "no")
+    summary << "ONNX Runtime CPU available (" << OrtGetApiBase()->GetVersionString()
+            << "); TensorRT compiled=" << (result.tensorRtCompiled ? "yes" : "no")
             << "; available=" << (result.tensorRtAvailable ? "yes" : "no")
             << "; CUDA devices=" << result.cudaDeviceCount
             << "; FP16=" << (result.supportsFp16 ? "available" : "unavailable");
@@ -159,7 +168,7 @@ public:
                 "The bundled BiRefNet Dynamic deployment model requires a fixed 1024x1024 input.");
         }
         _modelSha256 = sha256File(_config.modelPath);
-        _backend = createBiRefNetTensorRtBackend(_config);
+        initializeBackend();
     }
 
     BiRefNetMaskResult generate(const cv::Mat& image)
@@ -191,6 +200,11 @@ public:
         return _modelSha256;
     }
 
+    const std::string& fallbackReason() const
+    {
+        return _fallbackReason;
+    }
+
 private:
     BiRefNetMaskResult makeResult(cv::Mat mask) const
     {
@@ -200,9 +214,11 @@ private:
         result.requestedBackend = _config.backend;
         result.actualBackend = metadata.backend;
         result.precision = metadata.precision;
-        result.usedCuda = true;
+        result.usedCuda = metadata.backend == BiRefNetBackendType::TensorRt;
+        result.deviceFallback = !_fallbackReason.empty();
         result.engineReused = metadata.engineReused;
         result.deviceLabel = metadata.deviceLabel;
+        result.fallbackReason = _fallbackReason;
         result.enginePath = metadata.enginePath;
         result.outputName = metadata.outputName;
         result.environmentSummary = metadata.environmentSummary;
@@ -212,7 +228,35 @@ private:
 
     BiRefNetMaskGeneratorConfig _config;
     std::unique_ptr<BiRefNetInferenceBackend> _backend;
+    std::string _fallbackReason;
     std::string _modelSha256;
+
+    void initializeBackend()
+    {
+        if (_config.backend == BiRefNetBackendType::OnnxRuntimeCpu)
+        {
+            _backend = createBiRefNetOnnxRuntimeCpuBackend(_config);
+            return;
+        }
+        try
+        {
+            _backend = createBiRefNetTensorRtBackend(_config);
+        }
+        catch (const std::exception& error)
+        {
+            if (_config.backend == BiRefNetBackendType::TensorRt && !_config.allowDeviceFallback)
+            {
+                throw;
+            }
+            _fallbackReason = error.what();
+            if (_config.statusCallback)
+            {
+                _config.statusCallback("BiRefNet CUDA/TensorRT 不可用，正在回退到 ONNX Runtime CPU：" +
+                                       _fallbackReason);
+            }
+            _backend = createBiRefNetOnnxRuntimeCpuBackend(_config);
+        }
+    }
 };
 
 BiRefNetMaskGenerator::BiRefNetMaskGenerator(const BiRefNetMaskGeneratorConfig& config)
@@ -262,6 +306,11 @@ std::string BiRefNetMaskGenerator::environmentSummary() const
 std::string BiRefNetMaskGenerator::modelSha256() const
 {
     return _impl->modelSha256();
+}
+
+std::string BiRefNetMaskGenerator::fallbackReason() const
+{
+    return _impl->fallbackReason();
 }
 
 } // namespace xjw::mask

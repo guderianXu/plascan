@@ -6,7 +6,7 @@
 #include "MarkerReferencePanel.h"
 #include "MarkerWorkspaceController.h"
 #include "PrintMarkersDialog.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 
 #include <gtest/gtest.h>

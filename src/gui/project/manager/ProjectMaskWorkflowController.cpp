@@ -5,7 +5,7 @@
 #include "Logger.h"
 #include "MaskGenerator.h"
 #include "ProjectMaskInferenceAdapter.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectMetadataOperations.h"

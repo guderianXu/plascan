@@ -88,6 +88,20 @@ install(TARGETS plascan_gui
   COMPONENT Runtime
 )
 
+if(WIN32)
+  set(_plascan_onnxruntime_destination bin)
+else()
+  set(_plascan_onnxruntime_destination lib)
+endif()
+install(FILES "${PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY}"
+  DESTINATION "${_plascan_onnxruntime_destination}"
+  COMPONENT Runtime)
+install(FILES "${PLASCAN_ONNXRUNTIME_LICENSE_FILE}"
+  DESTINATION share/plascan/onnxruntime
+  RENAME LICENSE
+  COMPONENT Runtime)
+unset(_plascan_onnxruntime_destination)
+
 install(FILES
   "${CMAKE_SOURCE_DIR}/scripts/env/bootstrap_python_runtime.ps1"
   "${CMAKE_SOURCE_DIR}/scripts/env/setup_python_runtime.py"

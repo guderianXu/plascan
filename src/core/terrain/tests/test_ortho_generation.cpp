@@ -87,12 +87,14 @@ xjw::OrthoImageInput writeProjectionInput(QTemporaryDir *directory,
     return input;
 }
 
-TEST(OrthoGenerationOptionsTest, ParsesStableDefaultsAndLegacyResolution)
+TEST(OrthoGenerationOptionsTest, ParsesStablePixelSizeSettings)
 {
     xjw::OrthoGenerationOptions options;
     QString error;
     ASSERT_TRUE(xjw::OrthoGenerationOptions::fromJson(
-        QJsonObject{{QStringLiteral("resolution"), 0.25}},
+        QJsonObject{
+            {QStringLiteral("pixel_size_x"), 0.25},
+            {QStringLiteral("pixel_size_y"), 0.25}},
         &options,
         &error))
         << error.toStdString();
@@ -105,22 +107,6 @@ TEST(OrthoGenerationOptionsTest, ParsesStableDefaultsAndLegacyResolution)
     EXPECT_DOUBLE_EQ(options.pixelSizeX, 0.25);
     EXPECT_DOUBLE_EQ(options.pixelSizeY, 0.25);
     EXPECT_FALSE(options.useProjectMasks);
-}
-
-TEST(OrthoGenerationOptionsTest, AcceptsLegacyResolutionModeToken)
-{
-    xjw::OrthoGenerationOptions options;
-    QString error;
-    ASSERT_TRUE(xjw::OrthoGenerationOptions::fromJson(
-        QJsonObject{
-            {QStringLiteral("resolution_mode"),
-             QStringLiteral("maximum_dimension")},
-            {QStringLiteral("maximum_dimension"), 2048}},
-        &options,
-        &error))
-        << error.toStdString();
-    EXPECT_EQ(options.sizingMode, xjw::OrthoSizingMode::MaximumDimension);
-    EXPECT_EQ(options.maximumDimension, 2048);
 }
 
 TEST(OrthoGenerationOptionsTest, RoundTripsUserFacingSettings)

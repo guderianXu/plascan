@@ -1,6 +1,6 @@
 #include "ProjectTiePointResultService.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 
 #include <QDir>

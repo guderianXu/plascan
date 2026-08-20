@@ -8,16 +8,45 @@
 
 #include <vector>
 
+namespace xjw::image_matching
+{
+struct PairMatchData;
+}
+
 namespace xjw
 {
 namespace matchphotos
 {
 
-// 低支持度的两视几何模型容易被重复结构伪造。强支持像对依据内点数，
-// 弱支持像对还必须有足够高的内点率，避免错误边污染多视轨迹。
-bool passesGeometryQualityGate(int rawMatchCount,
-                               int inlierCount,
-                               int minimumInliers);
+struct GeometryQualityMetrics
+{
+    int rawMatchCount = 0;
+    int inlierCount = 0;
+    double inlierRatio = 0.0;
+    double image0GridCoverage = 0.0;
+    double image1GridCoverage = 0.0;
+    bool adjacentImages = false;
+};
+
+struct GeometryQualityDecision
+{
+    bool passed = false;
+    double score = 0.0;
+    double requiredInlierRatio = 1.0;
+    double requiredGridCoverage = 1.0;
+};
+
+GeometryQualityDecision evaluateGeometryQuality(
+    const GeometryQualityMetrics &metrics,
+    const MatchPhotosOptions &options);
+GeometryQualityMetrics measureGeometryQuality(
+    const image_matching::PairMatchData &pair,
+    const MatchPhotosOptions &options,
+    bool adjacentImages);
+bool areSequenceAdjacent(const MatchPhotosContext &context,
+                         const MatchPhotosOptions &options,
+                         const QString &image0Path,
+                         const QString &image1Path);
 
 // 几何结果只在全部影响 USAC 与质量门的参数、OpenCV 实现版本均一致时复用。
 // 该指纹与原始特征/匹配指纹分离，使几何调参无需重新运行 LightGlue。

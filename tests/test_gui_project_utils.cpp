@@ -6,14 +6,14 @@
 
 #include "project/ProjectIO.h"
 #include "ProjectCameraImportService.h"
-#include "ProjectResourceCleanupService.h"
+#include "ProjectResourceCleanup.h"
 #include "ProjectTiePointResultService.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "DepthFrameQualificationPolicy.h"
 #include "DepthFrameUtils.h"
-#include "ProjectFilesManager.h"
+#include "project/ProjectDocumentModel.h"
 #include "ProjectDashboardSummary.h"
-#include "ProjectReferenceDatasets.h"
+#include "ReferenceDatasetWorkflow.h"
 #include "ProjectReferenceTerrainBa.h"
 #include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraIO.h"
@@ -24,7 +24,7 @@
 #include "TriangulationService.h"
 #include "ImageMatchRepository.h"
 #include "ProjectWorkflowReports.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectMetadataOperations.h"
 #include "PointCloudWorkflowConfig.h"
@@ -2476,7 +2476,7 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityAcceptsCurrentLineage
     EXPECT_EQ(compatibility.frameCount, 2);
 }
 
-TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityVerifiesLegacyCamerasAfterArchiveRewrite)
+TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsLegacySignatureAfterArchiveRewrite)
 {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
@@ -2559,19 +2559,8 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityVerifiesLegacyCameras
     }
     metadata[QStringLiteral("depth_map_results")] = depth_records;
 
-    const auto compatible = xjw::gui::project::assessStoredDepthBatchCompatibility(
-        metadata, temp_dir.path());
-    EXPECT_TRUE(compatible.compatible) << compatible.reason.toStdString();
-
-    QJsonObject changed = metadata;
-    QJsonArray changed_images = changed.value(QStringLiteral("images")).toArray();
-    QJsonObject changed_image = changed_images.at(0).toObject();
-    changed_image[QStringLiteral("camera")] =
-        xjw::common::project::cameraToJson(makeCamera(1.1, 2.0, 3.0));
-    changed_images[0] = changed_image;
-    changed[QStringLiteral("images")] = changed_images;
     const auto rejected = xjw::gui::project::assessStoredDepthBatchCompatibility(
-        changed, temp_dir.path());
+        metadata, temp_dir.path());
     EXPECT_FALSE(rejected.compatible);
     EXPECT_TRUE(rejected.reason.contains(QStringLiteral("已过期")));
 }
@@ -5459,7 +5448,7 @@ TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePrevie
     };
 
     EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(legacyRecord));
-    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
+    EXPECT_EQ(xjw::core::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
               QStringLiteral("两视预览云"));
 }
 
@@ -5475,7 +5464,7 @@ TEST(SparsePointWorkflowUtilsTest, LocalOptimAcceptsExternalPlyWithoutSidecar)
         {5.00, 5.0, 5.0}
     });
 
-    xjw::gui::project::SparsePointContext context;
+    xjw::core::project::SparsePointContext context;
     context.sparseCloudPath = plyPath;
 
     QJsonObject settings;
@@ -5485,10 +5474,10 @@ TEST(SparsePointWorkflowUtilsTest, LocalOptimAcceptsExternalPlyWithoutSidecar)
     settings[QStringLiteral("minVoxelPoints")] = 2;
     settings[QStringLiteral("localReprojFilter")] = true;
 
-    xjw::gui::project::SparsePointOperationResult result;
+    xjw::core::project::SparsePointOperationResult result;
     QString errorMessage;
     const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
-    EXPECT_TRUE(xjw::gui::project::runSparsePointLocalOptim(context,
+    EXPECT_TRUE(xjw::core::project::runSparsePointLocalOptim(context,
                                                            settings,
                                                            outputDir,
                                                            &result,
@@ -5522,7 +5511,7 @@ TEST(SparsePointWorkflowUtilsTest, ProjectResultModeUsesSidecarWhenExternalPathS
     });
     writeMinimalSparseSidecar(sidecarPath, {1, 3, 4});
 
-    xjw::gui::project::SparsePointContext context;
+    xjw::core::project::SparsePointContext context;
     context.sparseCloudPath = sourcePlyPath;
     context.sidecarPath = sidecarPath;
 
@@ -5536,10 +5525,10 @@ TEST(SparsePointWorkflowUtilsTest, ProjectResultModeUsesSidecarWhenExternalPathS
     settings[QStringLiteral("filterByStatistical")] = false;
     settings[QStringLiteral("filterByDensity")] = false;
 
-    xjw::gui::project::SparsePointOperationResult result;
+    xjw::core::project::SparsePointOperationResult result;
     QString errorMessage;
     const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_project"));
-    EXPECT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(context,
+    EXPECT_TRUE(xjw::core::project::runSparsePointOutlierRemoval(context,
                                                                settings,
                                                                outputDir,
                                                                &result,
@@ -5578,7 +5567,7 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSideca
                                      });
     writeMinimalSparseSidecar(sidecarPath, {1, 3, 4});
 
-    xjw::gui::project::SparsePointContext context;
+    xjw::core::project::SparsePointContext context;
     context.sparseCloudPath = sourcePlyPath;
     context.sidecarPath = sidecarPath;
 
@@ -5592,10 +5581,10 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSideca
     settings[QStringLiteral("filterByStatistical")] = false;
     settings[QStringLiteral("filterByDensity")] = false;
 
-    xjw::gui::project::SparsePointOperationResult result;
+    xjw::core::project::SparsePointOperationResult result;
     QString errorMessage;
     const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_colored"));
-    ASSERT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(context,
+    ASSERT_TRUE(xjw::core::project::runSparsePointOutlierRemoval(context,
                                                                settings,
                                                                outputDir,
                                                                &result,
@@ -5673,10 +5662,10 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesPointJsonAndRefreshesQ
                     {QStringLiteral("quality_metrics_available"), true}},
         sourceQuality);
     QString writeError;
-    ASSERT_TRUE(xjw::gui::project::writeJsonObjectFile(
+    ASSERT_TRUE(xjw::core::project::writeJsonObjectFile(
         sidecarPath, sourceRoot, &writeError)) << writeError.toStdString();
 
-    xjw::gui::project::SparsePointContext context;
+    xjw::core::project::SparsePointContext context;
     context.sidecarPath = sidecarPath;
     context.selectedImages = {
         QStringLiteral("1.jpg"), QStringLiteral("2.jpg"), QStringLiteral("3.jpg")};
@@ -5690,10 +5679,10 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesPointJsonAndRefreshesQ
         {QStringLiteral("filterByStatistical"), false},
         {QStringLiteral("filterByDensity"), false}
     };
-    xjw::gui::project::SparsePointOperationResult result;
+    xjw::core::project::SparsePointOperationResult result;
     QString errorMessage;
     const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_preserved"));
-    ASSERT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(
+    ASSERT_TRUE(xjw::core::project::runSparsePointOutlierRemoval(
         context, settings, outputDir, &result, &errorMessage)) << errorMessage.toStdString();
 
     QFile outputFile(result.sidecarPath);
@@ -7935,18 +7924,18 @@ TEST(GenerateMaskDialogTest, ExposesU2NetTensorRtAndOpenCvCpuSettings)
 
     const QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("u2net"));
-    EXPECT_EQ(settings.value(QStringLiteral("u2net_backend")).toString(), QStringLiteral("auto"));
-    EXPECT_EQ(settings.value(QStringLiteral("u2net_device")).toString(), QStringLiteral("auto"));
-    EXPECT_FALSE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
-    EXPECT_EQ(settings.value(QStringLiteral("u2net_input_size")).toInt(), 320);
-    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
+    EXPECT_FALSE(settings.contains(QStringLiteral("u2net_backend")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("u2net_device")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("u2net_allow_fallback")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("u2net_input_size")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("u2net_mask_threshold")));
     EXPECT_EQ(settings.value(QStringLiteral("ai_backend")).toString(), QStringLiteral("auto"));
     EXPECT_FALSE(settings.value(QStringLiteral("ai_allow_fallback")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("ai_input_size")).toInt(), 320);
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("ai_mask_threshold")).toDouble(), 0.5);
 }
 
-TEST(GenerateMaskDialogTest, ExposesBiRefNetDynamicAsFixedTensorRtOnlyModel)
+TEST(GenerateMaskDialogTest, ExposesBiRefNetDynamicWithTensorRtAndOnnxRuntimeCpu)
 {
     GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
     auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
@@ -7967,12 +7956,15 @@ TEST(GenerateMaskDialogTest, ExposesBiRefNetDynamicAsFixedTensorRtOnlyModel)
     ASSERT_GE(biRefNetIndex, 0);
     methodCombo->setCurrentIndex(biRefNetIndex);
 
-    EXPECT_EQ(deviceCombo->count(), 1);
-    EXPECT_EQ(deviceCombo->currentData().toString(), QStringLiteral("tensorrt"));
-    EXPECT_LT(deviceCombo->findData(QStringLiteral("cpu")), 0);
+    EXPECT_EQ(deviceCombo->count(), 3);
+    EXPECT_EQ(deviceCombo->currentData().toString(), QStringLiteral("auto"));
+    const int cpuIndex = deviceCombo->findData(QStringLiteral("cpu"));
+    ASSERT_GE(cpuIndex, 0);
+    EXPECT_EQ(deviceCombo->itemText(cpuIndex), QStringLiteral("ONNX Runtime CPU"));
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("tensorrt")), 0);
     EXPECT_FALSE(fallbackCheck->isEnabled());
-    EXPECT_TRUE(fallbackCheck->isHidden());
-    EXPECT_FALSE(fallbackCheck->isChecked());
+    EXPECT_FALSE(fallbackCheck->isHidden());
+    EXPECT_TRUE(fallbackCheck->isChecked());
     EXPECT_EQ(inputSizeSpin->value(), 1024);
     EXPECT_FALSE(inputSizeSpin->isEnabled());
     EXPECT_DOUBLE_EQ(thresholdSpin->value(), 0.5);
@@ -7980,8 +7972,9 @@ TEST(GenerateMaskDialogTest, ExposesBiRefNetDynamicAsFixedTensorRtOnlyModel)
 
     const QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("birefnet_dynamic"));
-    EXPECT_EQ(settings.value(QStringLiteral("ai_backend")).toString(), QStringLiteral("tensorrt"));
-    EXPECT_FALSE(settings.value(QStringLiteral("ai_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("ai_backend")).toString(), QStringLiteral("auto"));
+    EXPECT_TRUE(settings.value(QStringLiteral("ai_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("ai_cuda_device")).toInt(), 0);
     EXPECT_EQ(settings.value(QStringLiteral("ai_input_size")).toInt(), 1024);
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("ai_mask_threshold")).toDouble(), 0.5);
 
@@ -8063,8 +8056,10 @@ TEST(GenerateMaskDialogTest, OffersVerifiedDownloadWhenBiRefNetDynamicModelIsMis
     EXPECT_TRUE(download_button->text().contains(QStringLiteral("BiRefNet Dynamic")));
     EXPECT_FALSE(download_button->isHidden());
     EXPECT_TRUE(download_button->isEnabled());
-    EXPECT_EQ(device_combo->count(), 1);
-    EXPECT_EQ(device_combo->currentData().toString(), QStringLiteral("tensorrt"));
+    EXPECT_EQ(device_combo->count(), 3);
+    EXPECT_EQ(device_combo->currentData().toString(), QStringLiteral("auto"));
+    EXPECT_GE(device_combo->findData(QStringLiteral("tensorrt")), 0);
+    EXPECT_GE(device_combo->findData(QStringLiteral("cpu")), 0);
     EXPECT_EQ(input_size_spin->value(), 1024);
     EXPECT_FALSE(buttons->button(QDialogButtonBox::Ok)->isEnabled());
 }
@@ -9247,8 +9242,8 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
         << "The GUI thread should only apply the already-loaded snapshot.";
     EXPECT_TRUE(openBlock.contains(QStringLiteral("loadProjectResultsAsync(projectPath);")))
         << "Heavy result metadata should be loaded after the core project opens.";
-    EXPECT_TRUE(openBlock.contains(QStringLiteral("if (!snapshot.resultsLoaded)")))
-        << "Core metadata must not be cleared by a later empty async result load.";
+    EXPECT_FALSE(openBlock.contains(QStringLiteral("snapshot.resultsLoaded")))
+        << "The core-only open snapshot must not carry the removed result-loading compatibility flag.";
     EXPECT_FALSE(openBlock.contains(QStringLiteral("_uiCommands->openProjectFromPath(plascanPath)")))
         << "The old synchronous UI command path blocks the GUI while the archive is read.";
 
@@ -12066,17 +12061,17 @@ TEST(DownstreamSparseInputGateTest, ResolveSparseContextSkipsPreviewAndRequiresP
     QJsonObject meta;
     meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{formalRecord, previewRecord};
 
-    xjw::gui::project::SparsePointContext context;
+    xjw::core::project::SparsePointContext context;
     QString errorMessage;
-    EXPECT_TRUE(xjw::gui::project::resolveSparsePointContext(meta, -1, &context, &errorMessage));
+    EXPECT_TRUE(xjw::core::project::resolveSparsePointContext(meta, -1, &context, &errorMessage));
     EXPECT_EQ(context.sourceResultIndex, 0);
 
     errorMessage.clear();
-    EXPECT_FALSE(xjw::gui::project::resolveSparsePointContext(meta, 1, &context, &errorMessage));
+    EXPECT_FALSE(xjw::core::project::resolveSparsePointContext(meta, 1, &context, &errorMessage));
     EXPECT_TRUE(errorMessage.contains(QStringLiteral("两视")));
 
     errorMessage.clear();
-    EXPECT_TRUE(xjw::gui::project::resolveSparsePointContext(meta, 0, &context, &errorMessage));
+    EXPECT_TRUE(xjw::core::project::resolveSparsePointContext(meta, 0, &context, &errorMessage));
     EXPECT_EQ(context.sourceResultIndex, 0);
 }
 
@@ -13195,8 +13190,7 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
         QStringLiteral("raw_inverse_depth_spread_path"),
         QStringLiteral("raw_adaptive_geometry_support_weight_path"),
         QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
-        QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
-        QStringLiteral("raw_adaptive_geometry_conflict_weight_path")};
+        QStringLiteral("raw_adaptive_geometry_conflict_ratio_path")};
     QJsonObject finalGeometryEvidence;
     QJsonObject level2GeometryEvidence;
     QStringList generatedArtifacts{
@@ -13257,7 +13251,7 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
     metadata[QStringLiteral("depth_map_results")] = QJsonArray{record};
     projectData.updateMetadata(metadata, false);
 
-    const auto result = xjw::gui::project::ProjectResourceCleanupService::cleanupGeneratedData(
+    const auto result = xjw::core::project::ProjectResourceCleanupService::cleanupGeneratedData(
         &projectData,
         QStringLiteral("深度图"),
         QStringList{finalDepth});
@@ -13792,18 +13786,16 @@ TEST(ProjectFilesManagerTest, ReferenceDatasetsAreStoredAsProjectResults)
     reference[QStringLiteral("role")] = QStringLiteral("validation");
     reference[QStringLiteral("path")] = QStringLiteral("/tmp/reference/dem_001.tif");
 
-    QJsonObject legacyMeta;
-    legacyMeta[QStringLiteral("images")] = QJsonArray{image};
-    legacyMeta[QStringLiteral("reference_datasets")] = QJsonArray{reference};
-
     EXPECT_TRUE(ProjectFilesManager::isResultKey(QStringLiteral("reference_datasets")));
 
-    files.setData(legacyMeta);
+    files.setCoreData(QJsonObject{{QStringLiteral("images"), QJsonArray{image}}});
+    files.setResultsData(QJsonObject{
+        {QStringLiteral("reference_datasets"), QJsonArray{reference}}});
 
     EXPECT_FALSE(files.coreData().contains(QStringLiteral("reference_datasets")));
     ASSERT_TRUE(files.resultsData().contains(QStringLiteral("reference_datasets")));
     EXPECT_EQ(files.resultsData().value(QStringLiteral("reference_datasets")).toArray().size(), 1);
-    EXPECT_EQ(files.data().value(QStringLiteral("reference_datasets")).toArray().at(0).toObject()
+    EXPECT_EQ(files.combinedData().value(QStringLiteral("reference_datasets")).toArray().at(0).toObject()
                   .value(QStringLiteral("path")).toString(),
               QStringLiteral("/tmp/reference/dem_001.tif"));
 }
@@ -13825,7 +13817,7 @@ TEST(ProjectReferenceDatasetsTest, RegisterReferenceDatasetUpsertsByPath)
     referenceFile.close();
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referencePath,
                                                             QStringLiteral("dem"),
                                                             QStringLiteral("validation"),
@@ -13840,7 +13832,7 @@ TEST(ProjectReferenceDatasetsTest, RegisterReferenceDatasetUpsertsByPath)
     EXPECT_EQ(record.value(QStringLiteral("storage")).toString(), QStringLiteral("reference"));
     EXPECT_TRUE(record.contains(QStringLiteral("created_at")));
 
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referencePath,
                                                             QStringLiteral("dem"),
                                                             QStringLiteral("ba_prior"),
@@ -13868,7 +13860,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportRegistersReferenceReadiness)
     referenceDem.close();
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceDemPath,
                                                             QStringLiteral("dem"),
                                                             QStringLiteral("validation"),
@@ -13885,7 +13877,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportRegistersReferenceReadiness)
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(
         &projectData,
         QStringLiteral("reference_quality_test"));
 
@@ -14091,7 +14083,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportComputesSameGridDemDifferenceMet
                                               &ioError)) << ioError.toStdString();
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceDemPath,
                                                             QStringLiteral("dem"),
                                                             QStringLiteral("validation"),
@@ -14104,7 +14096,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportComputesSameGridDemDifferenceMet
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(
         &projectData,
         QStringLiteral("reference_quality_dem_diff_test"));
 
@@ -14162,7 +14154,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportComputesPairedPointCloudAlignmen
     });
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceCloudPath,
                                                             QStringLiteral("point_cloud"),
                                                             QStringLiteral("validation"),
@@ -14175,7 +14167,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportComputesPairedPointCloudAlignmen
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(
         &projectData,
         QStringLiteral("reference_quality_cloud_diff_test"));
 
@@ -14234,7 +14226,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportReadsUncompressedLasReferenceClo
     });
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceCloudPath,
                                                             QStringLiteral("lidar"),
                                                             QStringLiteral("validation"),
@@ -14247,7 +14239,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportReadsUncompressedLasReferenceClo
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(
         &projectData,
         QStringLiteral("reference_quality_las_diff_test"));
 
@@ -14294,7 +14286,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportAlignsUnpairedReferenceCloudByNe
     });
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceCloudPath,
                                                             QStringLiteral("point_cloud"),
                                                             QStringLiteral("validation"),
@@ -14307,7 +14299,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportAlignsUnpairedReferenceCloudByNe
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+    const auto result = xjw::core::project::writeReferenceDatasetQualityReport(
         &projectData,
         QStringLiteral("reference_quality_unpaired_cloud_test"));
 
@@ -14343,7 +14335,7 @@ TEST(ProjectReferenceDatasetsTest, TerrainPriorPreflightReportsBundleAdjustReadi
     referenceDem.close();
 
     QString error;
-    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+    ASSERT_TRUE(xjw::core::project::registerReferenceDataset(&projectData,
                                                             referenceDemPath,
                                                             QStringLiteral("dem"),
                                                             QStringLiteral("ba_prior"),
@@ -14356,7 +14348,7 @@ TEST(ProjectReferenceDatasetsTest, TerrainPriorPreflightReportsBundleAdjustReadi
     };
     projectData.updateMetadata(meta, true);
 
-    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(
+    const auto result = xjw::core::project::writeReferenceTerrainPriorPreflightReport(
         &projectData,
         QStringLiteral("reference_prior_preflight_test"));
 
@@ -14465,7 +14457,7 @@ TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjec
     meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{atRecord};
     meta[QStringLiteral("depth_map_results")] = QJsonArray{
         QJsonObject{{QStringLiteral("status"), QStringLiteral("completed")},
-                    {QStringLiteral("valid_ratio"), 0.5}}
+                    {QStringLiteral("valid_coverage"), 0.5}}
     };
     meta[QStringLiteral("dem_results")] = QJsonArray{
         QJsonObject{{QStringLiteral("coverage_ratio"), 0.75}}
@@ -14600,55 +14592,6 @@ TEST(ProjectSurveyControlTest, KeepsMetadataUnchangedWhenSidecarSaveFails)
     EXPECT_FALSE(result.errorMessage.isEmpty());
     EXPECT_EQ(projectData.coreFilesMeta(), before);
     EXPECT_FALSE(projectData.coreFilesMeta().contains(QStringLiteral("survey_control")));
-}
-
-TEST(ProjectSurveyControlTest, MigratesLegacyMetadataOnceAndRemovesOldKey)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    ProjectData projectData;
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("legacy.plascan"));
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("image.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    ASSERT_GT(imageFile.write("image"), 0);
-    imageFile.close();
-    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("legacy")));
-    ASSERT_TRUE(projectData.addImages({imagePath}));
-    const QString projectImagePath = projectData.getAllImages().constFirst();
-
-    QJsonObject metadata = projectData.coreFilesMeta();
-    metadata[QStringLiteral("survey_control")] = QJsonObject{
-        {QStringLiteral("control_points"), QJsonArray{
-            QJsonObject{
-                {QStringLiteral("id"), QStringLiteral("GCP001")},
-                {QStringLiteral("x"), 1.0},
-                {QStringLiteral("y"), 2.0},
-                {QStringLiteral("z"), 3.0},
-                {QStringLiteral("observations"), QJsonArray{
-                    QJsonObject{
-                        {QStringLiteral("image_path"), projectImagePath},
-                        {QStringLiteral("u"), 10.0},
-                        {QStringLiteral("v"), 20.0}
-                    }
-                }}
-            }
-        }}
-    };
-    projectData.updateMetadata(metadata, true);
-
-    const auto migration = xjw::gui::project::migrateLegacySurveyControl(&projectData);
-
-    ASSERT_TRUE(migration.imported) << qPrintable(migration.errorMessage);
-    EXPECT_FALSE(projectData.coreFilesMeta().contains(QStringLiteral("survey_control")));
-    EXPECT_TRUE(projectData.coreFilesMeta().contains(QStringLiteral("marker_set")));
-    const auto loaded = xjw::control_points::MarkerSetStore(xjw::common::project::ProjectIO::markerSetPath(projectPath)).load();
-    ASSERT_TRUE(loaded.ok) << qPrintable(loaded.error);
-    ASSERT_EQ(loaded.markerSet.markers().size(), 1u);
-    ASSERT_EQ(loaded.markerSet.markers()[0].projections.size(), 1u);
-    EXPECT_EQ(loaded.markerSet.markers()[0].projections[0].state,
-              xjw::control_points::ProjectionState::ManualPinned);
 }
 
 TEST(PhotoStripWidgetTest, ClickSelectsPhotoAndActivationOpensPhoto)
@@ -15667,8 +15610,6 @@ QJsonObject makeStoredDepthPolicyMetadata(
              static_cast<int>(scene_profiles.size())},
             {QStringLiteral("config_hash"), QStringLiteral("policy-config")},
             {QStringLiteral("project_input_signature"), signature},
-            {QStringLiteral("project_input_signature_version"),
-             xjw::gui::project::kProjectDepthInputSignatureVersion},
             {QStringLiteral("reconstruction_generation_id"),
              QStringLiteral("policy-generation")},
             {QStringLiteral("algorithm_revision"),

@@ -1,6 +1,6 @@
 #include "CanvasWidget.h"
 #include "MarkerWorkspaceController.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 
 #include <gtest/gtest.h>
 

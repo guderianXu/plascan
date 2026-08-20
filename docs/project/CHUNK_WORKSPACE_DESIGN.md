@@ -326,17 +326,16 @@ flowchart LR
 | 组件 | 建议位置 | 职责 |
 |---|---|---|
 | `ProjectIndex`、`ChunkId`、`ChunkSummary` | `src/common/project` | 与 GUI 无关的格式和 DTO |
-| `ChunkState`、`ChunkSnapshot` | `src/gui/project/data`，后续可下沉 | 内存状态、revision、只读快照 |
-| `ProjectStateStore` | `src/gui/project/data` | Chunk 列表、当前 Chunk、变更信号 |
+| `ChunkState`、`ChunkSnapshot` | `src/common/project` | 内存状态、revision、只读快照 |
+| `ProjectStateStore` | `src/common/project` | Chunk 列表、当前 Chunk、变更信号 |
 | `ChunkStore` | `src/gui/project/archive` | `chunk.zip` 读写、格式门禁和校验 |
 | `ChunkResourceResolver` | `src/gui/project/archive` | 将 Chunk UUID URI 解析到对应数字目录 |
 | `ProjectTreeModel` | `src/gui/widgets` | 将 Chunk 摘要和资源 DTO 转为树节点 |
 | `ChunkTaskContext` | `src/gui/project/tasks` | 固化任务启动时的项目、Chunk 和 revision |
 | `ChunkResultCommitter` | `src/gui/project/services` | 校验任务上下文并原子登记成果 |
 
-`ProjectData` 在架构过渡期继续作为兼容 facade，但不应继续扩展新的全局结果接口。新代码直接按
-`chunk_id` 访问 `ProjectStateStore`，原有 `currentMeta()`、`getAllImages()` 等接口临时映射到
-当前 Chunk。
+`ProjectData` 作为项目会话模型，不应继续扩展新的全局结果接口。新代码直接按
+`chunk_id` 访问项目状态，现有 `currentMeta()`、`getAllImages()` 等接口只服务当前 Chunk。
 
 核心算法不依赖工程格式或 GUI，只接收显式输入 DTO、输出目录和取消/进度接口。
 

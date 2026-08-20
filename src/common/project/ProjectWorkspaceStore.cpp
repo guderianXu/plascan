@@ -26,7 +26,6 @@ using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectResourceRef;
 
 constexpr auto ChunkEntryPrefix = "chunk/";
-constexpr auto LegacyWorkspaceEntryPrefix = "workspace/";
 
 void setError(QString *errorMessage, const QString &message)
 {
@@ -199,9 +198,7 @@ bool copyTree(const QString &source,
 
 bool isChunkEntry(const QString &entryPath)
 {
-    return entryPath.startsWith(QString::fromLatin1(ChunkEntryPrefix))
-        || entryPath.startsWith(
-            QString::fromLatin1(LegacyWorkspaceEntryPrefix));
+    return entryPath.startsWith(QString::fromLatin1(ChunkEntryPrefix));
 }
 
 QString chunkRelativePath(const QString &entryPath)
@@ -210,12 +207,6 @@ QString chunkRelativePath(const QString &entryPath)
     {
         return entryPath.mid(
             static_cast<int>(qstrlen(ChunkEntryPrefix)));
-    }
-    if (entryPath.startsWith(
-            QString::fromLatin1(LegacyWorkspaceEntryPrefix)))
-    {
-        return entryPath.mid(
-            static_cast<int>(qstrlen(LegacyWorkspaceEntryPrefix)));
     }
     return {};
 }

@@ -72,6 +72,11 @@ endif()
 find_package(OpenCV REQUIRED COMPONENTS ${PLASCAN_OPENCV_COMPONENTS})
 message(STATUS "plascan: found OpenCV ${OpenCV_VERSION} (${PLASCAN_OPENCV_COMPONENTS})")
 
+# BiRefNet's ONNX graph uses GatherND and extensive shape operations that are
+# not supported by the OpenCV 4.x importer. Use the same runtime that verifies
+# the released model instead of exposing an unusable OpenCV CPU fallback.
+include(PlascanOnnxRuntime)
+
 # ── OpenCL（可选，用于 AMD/Intel/NVIDIA 通用 GPU 计算）─────────────────────────────
 if(PLASCAN_ENABLE_OPENCL)
   find_package(OpenCL 1.2 QUIET)

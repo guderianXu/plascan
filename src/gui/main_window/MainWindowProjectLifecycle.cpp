@@ -10,7 +10,7 @@
 #include "MenuWorkflowController.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectLifecyclePresenter.h"
 #include "ProjectManager.h"
 #include "ProjectUiHydrator.h"
@@ -356,19 +356,11 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         }
     }
 
-    if ((settings.contains(QStringLiteral("active_image_id"))
-         || settings.contains(QStringLiteral("active_image_path")))
-        && _canvas)
+    if (settings.contains(QStringLiteral("active_image_id")) && _canvas)
     {
         const QString stateKey =
             settings.value(QStringLiteral("active_image_id")).toString();
-        QString imagePath = projectImagePathForStateKey(stateKey);
-        if (imagePath.isEmpty())
-        {
-            imagePath = projectImagePathForStateKey(
-                settings.value(QStringLiteral("active_image_path"))
-                    .toString());
-        }
+        const QString imagePath = projectImagePathForStateKey(stateKey);
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
             const auto session = _projectManager

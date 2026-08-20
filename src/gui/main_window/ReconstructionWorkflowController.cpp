@@ -6,7 +6,7 @@
 #include "reconstruction/GenerateModelDialog.h"
 #include "ProjectManager.h"
 #include "ProjectModelWorkflowPolicy.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "reconstruction/TextureMappingDialog.h"
 
 #include <QDir>
@@ -293,7 +293,7 @@ PointCloudProjectState pointCloudProjectState(const QJsonObject &metadata)
     const QJsonArray sparse_results =
         metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
     const int production_index =
-        xjw::gui::project::findLatestProductionAtResultIndex(metadata);
+        xjw::core::project::findLatestProductionAtResultIndex(metadata);
     if (production_index >= 0 && production_index < sparse_results.size())
     {
         state.hasProductionSparseResult = true;

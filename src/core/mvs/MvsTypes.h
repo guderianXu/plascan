@@ -73,7 +73,6 @@ struct PatchMatchConfig
     float photometricUniquenessRelativeDepthStep = 0.01f; ///< 竞争深度相对偏移（正负各一次）
     float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
     float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
-    bool  useCuda            = true;    ///< 旧版兼容字段；Auto 下 false 强制 CPU，显式 backend 优先
     PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  returnNativeResolution = false; ///< 仅返回 PatchMatch 工作分辨率；默认保持对外全尺寸契约

@@ -65,7 +65,7 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
         << "Aerial production MVS should use enough source views for consensus";
     EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.60f)
         << "Production PatchMatch confidence threshold should reject low-confidence full-frame depths";
-    EXPECT_TRUE(cfg.useCuda);
+    EXPECT_EQ(cfg.backend, PatchMatchBackend::Auto);
     EXPECT_FALSE(cfg.cudaFallbackToCpu)
         << "CUDA failures must remain visible after the run selects CUDA";
     EXPECT_FALSE(cfg.openClFallbackToCpu)

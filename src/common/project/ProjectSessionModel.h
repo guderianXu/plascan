@@ -1,5 +1,5 @@
 // =============================================================================
-// 文件名: ProjectData.h
+// 文件名: ProjectSessionModel.h
 // 描述:   项目数据层核心类声明。
 //         ProjectData 是项目信息的唯一数据来源（Single Source of Truth），
 //         封装 .plascan + .files 工程读写、运行时元数据的内存管理，
@@ -69,7 +69,6 @@ struct ProjectOpenSnapshot
     QString chunkName;
     int chunkDirectory = 0;
     bool recoveredFromTemporary = false;
-    bool resultsLoaded = false;
 };
 
 struct ProjectResultsSnapshot
@@ -165,7 +164,7 @@ public:
 
     // === 元数据访问 ===
     // 获取当前已加载的运行时元数据；getter 不执行文件 IO。
-    QJsonObject metadata() const { return _filesManager.data(); }
+    QJsonObject metadata() const { return _filesManager.combinedData(); }
     /// 返回包含惰性 results 字段的完整当前 Chunk 元数据。
     QJsonObject metadataIncludingResults() const;
     // 获取核心数据（仅 project_files 字段，不触发惰性加载，快速）

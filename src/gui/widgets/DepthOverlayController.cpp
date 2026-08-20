@@ -108,7 +108,7 @@ void DepthOverlayController::request(
     }
 
     const QString project_path = _projectPath;
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [artifact = resolved_artifact, options, image_path, project_path]()
         {
@@ -119,13 +119,20 @@ void DepthOverlayController::request(
             }
             return views::loadDepthOverlay(artifact, options, source_image);
         },
-        [generation, image_path, cache_key](DepthOverlayController *self,
-                                            views::DepthOverlayRenderResult result)
+        [generation, image_path, cache_key](
+            DepthOverlayController *self,
+            xjw::gui::tasks::TaskOutcome<views::DepthOverlayRenderResult> outcome)
         {
             if (!self->isCurrentGeneration(generation))
             {
                 return;
             }
+            if (!outcome.succeeded())
+            {
+                emit self->overlayFailed(image_path, outcome.errorMessage);
+                return;
+            }
+            views::DepthOverlayRenderResult result = std::move(*outcome.value);
             if (!result.errorMessage.isEmpty() || result.overlay.isNull())
             {
                 emit self->overlayFailed(

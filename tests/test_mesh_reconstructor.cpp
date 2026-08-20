@@ -9268,7 +9268,7 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
               QVector<int>({3, 7, 9}));
 }
 
-TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePaths)
+TEST(DepthMapMeshBuilderTest, ResolvesAdaptiveGeometryEvidencePaths)
 {
     namespace fs = std::filesystem;
     const fs::path root =
@@ -9276,7 +9276,6 @@ TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePa
     fs::remove_all(root);
     fs::create_directories(root);
     std::ofstream(root / "depth_0.bin").put('\0');
-    std::ofstream(root / "depth_1.bin").put('\0');
     std::ofstream(root / "depth_2.bin").put('\0');
     const fs::path absolute_effective_view_path =
         fs::absolute(root / "absolute_effective_views.bin");
@@ -9292,11 +9291,6 @@ TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePa
         << absolute_effective_view_path.generic_string()
         << "\",\"raw_adaptive_geometry_conflict_ratio_path\":"
            "\"evidence/conflict_ratio.bin\"},{"
-           "\"ref_index\":1,\"status\":\"completed\","
-           "\"algorithm_revision\":13,"
-           "\"raw_depth_path\":\"depth_1.bin\","
-           "\"raw_adaptive_geometry_conflict_weight_path\":"
-           "\"evidence/legacy_conflict_weight.bin\"},{"
            "\"ref_index\":2,\"status\":\"completed\","
            "\"raw_depth_path\":\"depth_2.bin\"}]}";
     manifest.close();
@@ -9304,7 +9298,7 @@ TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePa
     const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
         QString::fromStdString(root.string()));
 
-    ASSERT_EQ(frames.size(), 3);
+    ASSERT_EQ(frames.size(), 2);
     const QString root_path = QString::fromStdString(root.string());
     EXPECT_EQ(
         frames.front().adaptiveGeometrySupportWeightPath,
@@ -9318,16 +9312,9 @@ TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePa
         frames.front().adaptiveGeometryConflictRatioPath,
         QDir::cleanPath(
             QDir(root_path).filePath(QStringLiteral("evidence/conflict_ratio.bin"))));
-    EXPECT_TRUE(frames.front().adaptiveGeometryConflictWeightPath.isEmpty());
-    EXPECT_EQ(
-        frames.at(1).adaptiveGeometryConflictWeightPath,
-        QDir::cleanPath(QDir(root_path).filePath(
-            QStringLiteral("evidence/legacy_conflict_weight.bin"))));
     EXPECT_TRUE(frames.at(1).adaptiveGeometryConflictRatioPath.isEmpty());
-    EXPECT_TRUE(frames.at(2).adaptiveGeometrySupportWeightPath.isEmpty());
-    EXPECT_TRUE(frames.at(2).adaptiveGeometryEffectiveViewCountPath.isEmpty());
-    EXPECT_TRUE(frames.at(2).adaptiveGeometryConflictRatioPath.isEmpty());
-    EXPECT_TRUE(frames.at(2).adaptiveGeometryConflictWeightPath.isEmpty());
+    EXPECT_TRUE(frames.at(1).adaptiveGeometrySupportWeightPath.isEmpty());
+    EXPECT_TRUE(frames.at(1).adaptiveGeometryEffectiveViewCountPath.isEmpty());
 
     fs::remove_all(root);
 }

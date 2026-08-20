@@ -300,8 +300,6 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             QStringLiteral("algorithm_revision")).toInt(0);
         frame.projectInputSignature =
             record.value(QStringLiteral("project_input_signature")).toString();
-        frame.projectInputSignatureVersion =
-            record.value(QStringLiteral("project_input_signature_version")).toInt(1);
         frame.reconstructionGenerationId =
             record.value(QStringLiteral("reconstruction_generation_id")).toString();
         frame.cameraModel = record.value(QStringLiteral("camera_model")).toObject();
@@ -310,8 +308,7 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             xjw::mvs::qualifyMvsDepthFrameArtifact(record);
         frame.acceptance = qualification.acceptance;
         frame.fusionEligibilityKnown =
-            record.contains(QStringLiteral("fusion_eligible"))
-            || qualification.reclassified;
+            record.contains(QStringLiteral("fusion_eligible"));
         frame.fusionEligible = qualification.fusionEligible;
         frame.useDiscreteGeometryFallback =
             qualification.useDiscreteGeometryFallback;

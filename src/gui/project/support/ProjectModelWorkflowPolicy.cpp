@@ -3,7 +3,7 @@
 #include "ProjectDepthBatchLineage.h"
 #include "DepthFrameQualificationPolicy.h"
 #include "DepthFrameUtils.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -268,25 +268,6 @@ SparseScaffoldSource canonicalSparseScaffold(
             QDir::cleanPath(points_json_info.absoluteFilePath())};
 }
 
-int consistentProjectInputSignatureVersion(
-    const xjw::core::project::StoredDepthFramesResult &stored_frames)
-{
-    int version = -1;
-    for (const auto &frame : stored_frames.frames)
-    {
-        if (version < 0)
-        {
-            version = frame.projectInputSignatureVersion;
-        }
-        else if (version != frame.projectInputSignatureVersion)
-        {
-            return 0;
-        }
-    }
-    return version;
-}
-
-
 QString consistentDepthConfigHash(
     const xjw::core::project::StoredDepthFramesResult &stored_frames)
 {
@@ -361,7 +342,8 @@ QJsonObject selectedAerialTriangulationResult(const QJsonObject &project_metadat
     int at_index = requested_index;
     if (at_index < 0 || at_index >= at_results.size())
     {
-        at_index = findLatestProductionAtResultIndex(project_metadata);
+        at_index = xjw::core::project::findLatestProductionAtResultIndex(
+            project_metadata);
     }
     if (at_index < 0 && !at_results.isEmpty())
     {
@@ -570,8 +552,7 @@ QString projectDepthInputSignature(const QJsonObject &project_metadata,
 {
     return canonicalProjectDepthInputSignature(
         project_metadata,
-        aerial_triangulation_result_index,
-        kProjectDepthInputSignatureVersion);
+        aerial_triangulation_result_index);
 }
 
 SparseScaffoldSource resolveSparseScaffoldSource(
@@ -713,20 +694,10 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     if (!current_input_signature.isEmpty() &&
         stored_input_signature != current_input_signature)
     {
-        const int signature_version =
-            consistentProjectInputSignatureVersion(stored_frames);
-        const bool verified_legacy_batch =
-            signature_version == 1 &&
-            !current_generation_id.isEmpty() &&
-            current_generation_id == stored_generation_id &&
-            legacyDepthCamerasMatchCurrentProject(stored_frames, project_metadata);
-        if (!verified_legacy_batch)
-        {
-            result.reason = QStringLiteral(
-                "所选深度图批次已过期：当前工程的影像、相机参数或空三结果已发生变化。"
-                "为避免融合错误位姿下的深度，请重新估计深度图后再生成模型。");
-            return result;
-        }
+        result.reason = QStringLiteral(
+            "所选深度图批次已过期：当前工程的影像、相机参数或空三结果已发生变化。"
+            "为避免融合错误位姿下的深度，请重新估计深度图后再生成模型。");
+        return result;
     }
 
     result.compatible = true;

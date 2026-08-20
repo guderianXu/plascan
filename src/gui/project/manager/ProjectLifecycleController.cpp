@@ -2,7 +2,7 @@
 
 #include "GuiTaskRunner.h"
 #include "Logger.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectUiCommands.h"
 
 #include <QDir>
@@ -108,10 +108,7 @@ void ProjectLifecycleController::openProjectFromPath(const QString &requestedPat
             }
 
             emit self->projectOpenProgressChanged(QStringLiteral("正在启动结果数据后台加载..."), 95);
-            if (!snapshot.resultsLoaded)
-            {
-                self->loadProjectResultsAsync(projectPath);
-            }
+            self->loadProjectResultsAsync(projectPath);
 
             self->_openInProgress = false;
             emit self->projectOpenFinished(true, QStringLiteral("项目已打开"));

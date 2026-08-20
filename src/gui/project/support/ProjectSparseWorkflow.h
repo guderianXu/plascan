@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -25,25 +25,25 @@ struct SparsePointWorkflowSpec
 
 struct SparsePointWorkflowResult
 {
-    OperationResult status;
-    SparsePointOperationResult operation;
+    xjw::common::OperationResult status;
+    xjw::core::project::SparsePointOperationResult operation;
 };
 
 SparsePointWorkflowSpec sparsePointWorkflowSpec(SparsePointWorkflowKind kind);
 
 bool runSparsePointWorkflow(SparsePointWorkflowKind kind,
-                            const SparsePointContext &context,
+                            const xjw::core::project::SparsePointContext &context,
                             const QJsonObject &settings,
                             const QString &outputDir,
-                            SparsePointOperationResult *result,
+                            xjw::core::project::SparsePointOperationResult *result,
                             QString *errorMessage);
 
 SparsePointWorkflowResult runSparsePointWorkflowResult(SparsePointWorkflowKind kind,
-                                                       const SparsePointContext &context,
+                                                       const xjw::core::project::SparsePointContext &context,
                                                        const QJsonObject &settings,
                                                        const QString &outputDir);
 
 QString buildSparsePointWorkflowSuccessMessage(const SparsePointWorkflowSpec &spec,
-                                               const SparsePointOperationResult &result);
+                                               const xjw::core::project::SparsePointOperationResult &result);
 
 } // namespace xjw::gui::project

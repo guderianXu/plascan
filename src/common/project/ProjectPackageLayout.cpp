@@ -185,14 +185,9 @@ bool ProjectPackageLayout::isChunkDirectoryName(const QString &name)
     return expression.match(name).hasMatch();
 }
 
-QString ProjectPackageLayout::workspaceDirectory(const QString &projectPath)
-{
-    return chunkDirectory(projectPath, 1);
-}
-
 QString ProjectPackageLayout::resourcesDirectory(const QString &projectPath)
 {
-    return QDir(workspaceDirectory(projectPath)).filePath(
+    return QDir(chunkDirectory(projectPath, 1)).filePath(
         QStringLiteral("resources"));
 }
 

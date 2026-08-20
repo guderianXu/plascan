@@ -552,7 +552,7 @@ void ProjectData::markDirtyIfRequested(bool markDirty)
 
 void ProjectData::emitCurrentMetadataChanged()
 {
-    emit metadataChanged(_filesManager.data());
+    emit metadataChanged(_filesManager.combinedData());
 }
 
 void ProjectData::scheduleArchiveSync(bool coreDirty,
@@ -1153,7 +1153,6 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
         snapshot.configMeta[QStringLiteral("project_id")] = projectId;
     }
 
-    snapshot.resultsLoaded = containsResultKeys(snapshot.filesMeta);
     snapshot.success = true;
     workspace.releaseRuntime();
     return snapshot;
@@ -1339,7 +1338,8 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     _activeChunkId = snapshot.chunkId;
     _activeChunkName = snapshot.chunkName;
     _activeChunkDirectory = snapshot.chunkDirectory;
-    _filesManager.setData(QJsonObject());
+    _filesManager.setCoreData(ProjectFilesManager::defaultFiles());
+    _filesManager.setResultsData(ProjectFilesManager::defaultResults());
     _configManager.setData(QJsonObject());
     _resultsLoaded = false;
     _resultsLoading = false;
@@ -1356,15 +1356,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     const QJsonObject filesMeta = snapshot.filesMeta.isEmpty()
         ? ProjectFilesManager::defaultFiles()
         : snapshot.filesMeta;
-    if (containsResultKeys(filesMeta))
-    {
-        _filesManager.setData(filesMeta);
-        _resultsLoaded = true;
-    }
-    else
-    {
-        _filesManager.setCoreData(filesMeta);
-    }
+    _filesManager.setCoreData(filesMeta);
 
     QJsonObject core = _filesManager.coreData();
     const bool assignedImageUuids = ensureImageUuids(&core);
@@ -2275,7 +2267,8 @@ bool ProjectData::closeProject(QString *errorMsg)
     _activeChunkId.clear();
     _activeChunkName.clear();
     _activeChunkDirectory = 0;
-    _filesManager.setData(QJsonObject());
+    _filesManager.setCoreData(ProjectFilesManager::defaultFiles());
+    _filesManager.setResultsData(ProjectFilesManager::defaultResults());
     _configManager.setData(QJsonObject());
     _isDirty = false;
     _resultsLoaded = false;
@@ -2323,24 +2316,34 @@ void ProjectData::syncToArchive()
 void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
 {
     const bool hasResults = containsResultKeys(meta);
-    const bool preserveLoadedResults = !hasResults && _resultsLoaded;
-    const QJsonObject existingResults = preserveLoadedResults ? _filesManager.resultsData() : QJsonObject();
-
-    _filesManager.setData(meta);
-
-    QJsonObject core = _filesManager.coreData();
-    if (ensureImageUuids(&core))
+    QJsonObject core;
+    QJsonObject results;
+    for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
     {
-        _filesManager.setCoreData(core);
+        if (ProjectFilesManager::isResultKey(it.key()))
+        {
+            results.insert(it.key(), it.value());
+        }
+        else
+        {
+            core.insert(it.key(), it.value());
+        }
+    }
+    _filesManager.setCoreData(core);
+    if (hasResults)
+    {
+        _filesManager.setResultsData(results);
+    }
+
+    QJsonObject normalized_core = _filesManager.coreData();
+    if (ensureImageUuids(&normalized_core))
+    {
+        _filesManager.setCoreData(normalized_core);
     }
 
     if (hasResults) {
         _resultsLoaded = true;
     }
-    else if (preserveLoadedResults) {
-        _filesManager.setResultsData(existingResults);
-    }
-
     markDirtyIfRequested(markDirty);
     if (markDirty) {
         scheduleArchiveSync(true, hasResults, false);
@@ -2652,7 +2655,7 @@ ProjectData::prepareResourceCleanupPersistence(
     persistence._projectPath = _projectPath;
     persistence._chunkId = _activeChunkId;
     persistence._chunkDirectory = _activeChunkDirectory;
-    persistence._originalMetadata = _filesManager.data();
+    persistence._originalMetadata = _filesManager.combinedData();
     persistence._updatedMetadata = updatedMetadata;
     persistence._wasDirty = _isDirty;
 
@@ -2716,7 +2719,7 @@ bool ProjectData::finalizeResourceCleanupPersistence(
     }
     const bool generationCurrent = persistence._generation
         == _persistenceCommitCoordinator->currentGeneration();
-    const QJsonObject currentMetadata = _filesManager.data();
+    const QJsonObject currentMetadata = _filesManager.combinedData();
     const QJsonObject finalMetadata = keepUpdatedMetadata
         ? currentMetadata
         : mergeCleanupRollback(currentMetadata,
@@ -3274,7 +3277,7 @@ bool ProjectData::appendIntersectionResult(const QJsonObject &result, QString *e
 QJsonObject ProjectData::metadataIncludingResults() const
 {
     ensureResultsLoaded();
-    return _filesManager.data();
+    return _filesManager.combinedData();
 }
 
 QJsonArray ProjectData::getIntersectionResults() const

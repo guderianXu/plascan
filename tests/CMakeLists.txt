@@ -134,7 +134,6 @@ target_link_libraries(test_reference_models PRIVATE
 )
 target_include_directories(test_reference_models PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data
 )
 set_target_properties(test_reference_models PROPERTIES AUTOMOC ON)
 gtest_discover_tests(test_reference_models)
@@ -608,7 +607,6 @@ target_link_libraries(test_project_data PRIVATE
 target_include_directories(test_project_data PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/gui/config
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data
 )
 gtest_discover_tests(test_project_data)
 
@@ -796,7 +794,6 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/tasks
     ${CMAKE_SOURCE_DIR}/src/gui/project
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
@@ -1408,7 +1405,6 @@ target_include_directories(test_marker_detection_job_builder PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/markers
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data
     ${CMAKE_SOURCE_DIR}/src/core/control_points
 )
 gtest_discover_tests(test_marker_detection_job_builder DISCOVERY_MODE PRE_TEST)

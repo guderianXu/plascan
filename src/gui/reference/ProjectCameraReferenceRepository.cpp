@@ -1,7 +1,7 @@
 #include "ProjectCameraReferenceRepository.h"
 
 #include "CameraReferenceProjectIdentity.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "io/CameraReferenceSetStore.h"
 #include "project/ProjectIO.h"
 

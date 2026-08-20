@@ -386,10 +386,6 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory,
                 object.value(QStringLiteral(
                     "raw_adaptive_geometry_conflict_ratio_path")).toString());
-            frame.adaptiveGeometryConflictWeightPath = resolveArtifactPath(
-                directory,
-                object.value(QStringLiteral(
-                    "raw_adaptive_geometry_conflict_weight_path")).toString());
             frame.inverseDepthMeanPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
             frame.inverseDepthSpreadPath = resolveArtifactPath(

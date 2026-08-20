@@ -1,7 +1,7 @@
 #pragma once
 
 #include "task/MatchPhotosResult.h"
-#include "ProjectFilesManager.h"
+#include "project/ProjectDocumentModel.h"
 
 #include <QJsonObject>
 #include <QString>

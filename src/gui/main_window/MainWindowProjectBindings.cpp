@@ -58,7 +58,7 @@
 #include "ProjectTiePointResultService.h"
 #include "project/ProjectIO.h"
 #include "project/SparseResultQuality.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectDashboardWidget.h"
 #include "PhotoStripWidget.h"
 #include "AppConfigManager.h"
@@ -360,17 +360,10 @@ void MainWindow::setupProjectManager()
             int rotation =
                 xjw::gui::config::imageViewRotationForPath(
                     _imageViewRotations, stateKey);
-            if (rotation == 0 && stateKey != path)
-            {
-                rotation =
-                    xjw::gui::config::imageViewRotationForPath(
-                        _imageViewRotations, path);
-            }
             _canvas->setViewRotationDegrees(
                 rotation);
             saveUiSetting(QJsonObject{
-                {QStringLiteral("active_image_id"), stateKey},
-                {QStringLiteral("active_image_path"), QString()}
+                {QStringLiteral("active_image_id"), stateKey}
             });
             if (_projectManager)
             {
@@ -381,11 +374,6 @@ void MainWindow::setupProjectManager()
                 [this](const QString &path, int degrees)
         {
             const QString stateKey = projectImageStateKey(path);
-            if (stateKey != path)
-            {
-                _imageViewRotations.remove(
-                    xjw::gui::config::imageViewRotationPathKey(path));
-            }
             _imageViewRotations = xjw::gui::config::withImageViewRotation(
                 _imageViewRotations, stateKey, degrees);
             saveUiSetting(QJsonObject{

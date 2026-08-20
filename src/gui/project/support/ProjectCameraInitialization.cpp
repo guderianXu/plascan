@@ -1,6 +1,6 @@
 #include "ProjectCameraInitialization.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"

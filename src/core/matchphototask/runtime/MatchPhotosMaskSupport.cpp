@@ -111,28 +111,78 @@ cv::Mat normalizedMaskForImage(const cv::Mat &mask, const cv::Size &imageSize)
         grayMask.size() != imageSize)
     {
         cv::Mat resized;
-        cv::resize(grayMask, resized, imageSize, 0.0, 0.0, cv::INTER_NEAREST);
+        cv::resize(grayMask, resized, imageSize, 0.0, 0.0, cv::INTER_LINEAR);
         return resized;
     }
 
     return grayMask.clone();
 }
 
-bool isPointAllowedByMask(const cv::Mat &mask, const cv::Point2f &point)
+cv::Mat softenedExclusionMask(const cv::Mat &mask,
+                              const MatchPhotosOptions &options)
 {
     if (mask.empty())
     {
-        return true;
+        return {};
+    }
+    cv::Mat softened = mask;
+    const int radius = std::clamp(options.maskRelaxationRadius, 0, 32);
+    if (radius > 0)
+    {
+        const cv::Mat kernel = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE, cv::Size(radius * 2 + 1, radius * 2 + 1));
+        cv::erode(mask, softened, kernel);
+    }
+    return softened;
+}
+
+cv::Mat makeExtractorValidMask(const cv::Mat &mask,
+                               const cv::Size &extractorSize,
+                               const MatchPhotosOptions &options)
+{
+    if (mask.empty())
+    {
+        return {};
+    }
+    cv::Mat resized;
+    cv::resize(mask, resized, extractorSize, 0.0, 0.0, cv::INTER_LINEAR);
+    const cv::Mat softened = softenedExclusionMask(resized, options);
+    cv::Mat valid;
+    const double threshold = 255.0 * std::clamp(options.maskHardExclusionThreshold, 0.0f, 1.0f);
+    cv::compare(softened, cv::Scalar(threshold), valid, cv::CMP_LT);
+    return valid;
+}
+
+float maskPointWeight(const cv::Mat &mask,
+                      const cv::Point2f &point,
+                      const MatchPhotosOptions &options)
+{
+    if (mask.empty())
+    {
+        return 1.0f;
     }
 
     const int x = static_cast<int>(std::lround(point.x));
     const int y = static_cast<int>(std::lround(point.y));
     if (x < 0 || y < 0 || x >= mask.cols || y >= mask.rows)
     {
-        return false;
+        return 0.0f;
     }
+    const float exclusion = static_cast<float>(mask.at<uchar>(y, x)) / 255.0f;
+    if (exclusion >= std::clamp(options.maskHardExclusionThreshold, 0.0f, 1.0f))
+    {
+        return 0.0f;
+    }
+    return std::clamp(1.0f - exclusion,
+                      std::clamp(options.maskMinimumTiepointWeight, 0.0f, 1.0f),
+                      1.0f);
+}
 
-    return mask.at<uchar>(y, x) == 0;
+bool isPointAllowedByMask(const cv::Mat &mask,
+                          const cv::Point2f &point,
+                          const MatchPhotosOptions &options)
+{
+    return maskPointWeight(mask, point, options) > 0.0f;
 }
 
 QString maskPathForImage(const MatchPhotosContext &context, const QString &imagePath)

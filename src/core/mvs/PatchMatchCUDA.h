@@ -46,11 +46,8 @@ struct OpenClDeviceInfo
     std::string physicalDeviceIdentity;
 };
 
-/// Resolve the standalone estimator backend while preserving the legacy
-/// `useCuda=false` contract for callers that have not selected an explicit
-/// backend yet.
+/// Resolve the standalone estimator backend. Auto uses CUDA -> OpenCL -> CPU.
 PatchMatchBackend resolvePatchMatchEstimatorBackend(PatchMatchBackend requestedBackend,
-                                                     bool useCuda,
                                                      bool cudaAvailable,
                                                      bool openClAvailable) noexcept;
 

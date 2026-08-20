@@ -16,7 +16,8 @@ inline constexpr int kBiRefNetDynamicInputSize = 1024;
 enum class BiRefNetBackendType
 {
     Auto,
-    TensorRt
+    TensorRt,
+    OnnxRuntimeCpu
 };
 
 enum class BiRefNetInferencePrecision
@@ -28,6 +29,7 @@ enum class BiRefNetInferencePrecision
 
 struct BiRefNetInferenceCapabilities
 {
+    bool hasOnnxRuntimeCpu = true;
     bool tensorRtCompiled = false;
     bool tensorRtAvailable = false;
     bool hasCudaDevice = false;
@@ -43,6 +45,7 @@ struct BiRefNetMaskGeneratorConfig
 {
     std::string modelPath;
     BiRefNetBackendType backend = BiRefNetBackendType::Auto;
+    bool allowDeviceFallback = true;
     int cudaDevice = 0;
     int inputSize = kBiRefNetDynamicInputSize;
     float foregroundThreshold = 0.5f;
@@ -62,11 +65,13 @@ struct BiRefNetMaskResult
 {
     cv::Mat mask;
     BiRefNetBackendType requestedBackend = BiRefNetBackendType::Auto;
-    BiRefNetBackendType actualBackend = BiRefNetBackendType::TensorRt;
+    BiRefNetBackendType actualBackend = BiRefNetBackendType::OnnxRuntimeCpu;
     BiRefNetInferencePrecision precision = BiRefNetInferencePrecision::Unknown;
     bool usedCuda = false;
+    bool deviceFallback = false;
     bool engineReused = false;
     std::string deviceLabel;
+    std::string fallbackReason;
     std::string enginePath;
     std::string outputName;
     std::string environmentSummary;
@@ -98,6 +103,7 @@ public:
     std::string enginePath() const;
     std::string environmentSummary() const;
     std::string modelSha256() const;
+    std::string fallbackReason() const;
 
 private:
     class Impl;

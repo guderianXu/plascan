@@ -83,6 +83,12 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
     _u2netAllowFallbackCheck->setObjectName(QStringLiteral("u2netAllowFallbackCheck"));
     _u2netAllowFallbackCheck->setChecked(false);
 
+    _aiCudaDeviceSpin = new QSpinBox(this);
+    _aiCudaDeviceSpin->setObjectName(QStringLiteral("aiCudaDeviceSpin"));
+    _aiCudaDeviceSpin->setRange(0, 31);
+    _aiCudaDeviceSpin->setValue(0);
+    _aiCudaDeviceSpin->setToolTip(tr("TensorRT 使用的 CUDA 设备编号；每个设备维护独立 engine 缓存"));
+
     _u2netModelStatusLabel = new QLabel(this);
     _u2netModelStatusLabel->setObjectName(QStringLiteral("u2netModelStatusLabel"));
     _u2netModelStatusLabel->setWordWrap(true);
@@ -121,6 +127,7 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
     u2net_layout->addRow(tr("模型状态:"), _u2netModelStatusLabel);
     u2net_layout->addRow(QString(), _u2netDownloadButton);
     u2net_layout->addRow(tr("推理设备:"), _u2netDeviceCombo);
+    u2net_layout->addRow(tr("CUDA 设备:"), _aiCudaDeviceSpin);
     u2net_layout->addRow(QString(), _u2netAllowFallbackCheck);
     u2net_layout->addRow(tr("模型输入尺寸:"), _u2netInputSizeSpin);
     u2net_layout->addRow(tr("前景阈值:"), _u2netMaskThresholdSpin);
@@ -168,6 +175,8 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
             this, &GenerateMaskDialog::updateMethodState);
     connect(_u2netDeviceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &GenerateMaskDialog::updateMethodState);
+    connect(_aiCudaDeviceSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, &GenerateMaskDialog::updateAiModelStatusText);
     connect(_u2netDownloadButton, &QPushButton::clicked,
             this, &GenerateMaskDialog::downloadAiModel);
 
@@ -191,17 +200,10 @@ QJsonObject GenerateMaskDialog::collectSettings() const
     settings.insert(QStringLiteral("min_component_area"), _minComponentAreaSpin->value());
     const QString ai_backend = _u2netDeviceCombo->currentData().toString();
     settings.insert(QStringLiteral("ai_backend"), ai_backend);
+    settings.insert(QStringLiteral("ai_cuda_device"), _aiCudaDeviceSpin->value());
     settings.insert(QStringLiteral("ai_allow_fallback"), _u2netAllowFallbackCheck->isChecked());
     settings.insert(QStringLiteral("ai_input_size"), _u2netInputSizeSpin->value());
     settings.insert(QStringLiteral("ai_mask_threshold"), _u2netMaskThresholdSpin->value());
-    settings.insert(QStringLiteral("u2net_backend"), ai_backend);
-    // Keep the legacy key readable by older project builds. New values deliberately
-    // describe the inference backend rather than an OpenCV CUDA device.
-    settings.insert(QStringLiteral("u2net_device"), ai_backend);
-    settings.insert(QStringLiteral("u2net_allow_fallback"), _u2netAllowFallbackCheck->isChecked());
-    settings.insert(QStringLiteral("u2net_input_size"), _u2netInputSizeSpin->value());
-    settings.insert(QStringLiteral("u2net_mask_threshold"), _u2netMaskThresholdSpin->value());
-
     QString scope = QStringLiteral("selected_images");
     if (_scopeGroup->checkedId() == 0)
     {
@@ -252,17 +254,22 @@ void GenerateMaskDialog::updateMethodState()
             _u2netInputSizeSpin->setValue(xjw::mask::kU2NetModelInputSize);
             _u2netInputSizeSpin->setToolTip(tr("随附 U2Net ONNX 的固定输入尺寸"));
             _u2netDownloadButton->setText(tr("下载 U2Net 模型（167.8 MiB）"));
+            _u2netAllowFallbackCheck->setText(tr("TensorRT 失败时回退 OpenCV CPU"));
         }
         else
         {
-            _u2netDeviceCombo->addItem(tr("TensorRT GPU（必需）"), QStringLiteral("tensorrt"));
+            _u2netDeviceCombo->addItem(tr("自动（CUDA 优先，CPU 回退）"), QStringLiteral("auto"));
+            _u2netDeviceCombo->addItem(tr("TensorRT GPU"), QStringLiteral("tensorrt"));
+            _u2netDeviceCombo->addItem(tr("ONNX Runtime CPU"), QStringLiteral("cpu"));
             _u2netInputSizeSpin->setRange(xjw::mask::kBiRefNetDynamicInputSize,
                                           xjw::mask::kBiRefNetDynamicInputSize);
             _u2netInputSizeSpin->setValue(xjw::mask::kBiRefNetDynamicInputSize);
             _u2netInputSizeSpin->setToolTip(
                 tr("BiRefNet Dynamic 权重的部署模型固定使用 1024×1024 输入"));
             _u2netDownloadButton->setText(tr("下载 BiRefNet Dynamic 模型"));
-            _u2netAllowFallbackCheck->setChecked(false);
+            _u2netAllowFallbackCheck->setChecked(true);
+            _u2netAllowFallbackCheck->setText(
+                tr("TensorRT 失败时回退 ONNX Runtime CPU"));
         }
         _configuredAiMethod = method;
     }
@@ -276,8 +283,10 @@ void GenerateMaskDialog::updateMethodState()
     _u2netDeviceCombo->setEnabled(is_ai);
     const bool force_tensorrt = _u2netDeviceCombo
         && _u2netDeviceCombo->currentData().toString() == QLatin1String("tensorrt");
-    _u2netAllowFallbackCheck->setEnabled(is_u2net && force_tensorrt);
-    _u2netAllowFallbackCheck->setVisible(!is_birefnet);
+    _u2netAllowFallbackCheck->setEnabled(is_ai && force_tensorrt);
+    _u2netAllowFallbackCheck->setVisible(is_ai);
+    _aiCudaDeviceSpin->setEnabled(is_ai &&
+        _u2netDeviceCombo->currentData().toString() != QLatin1String("cpu"));
     _u2netInputSizeSpin->setEnabled(false);
     _u2netMaskThresholdSpin->setEnabled(is_ai);
     updateAiModelStatusText();
@@ -310,8 +319,8 @@ void GenerateMaskDialog::updateAiModelStatusText()
     if (is_u2net)
     {
         const auto status = xjw::common::model::u2netModelStatus(resolver);
-        static const xjw::mask::U2NetInferenceCapabilities capabilities =
-            xjw::mask::detectU2NetInferenceCapabilities();
+        const xjw::mask::U2NetInferenceCapabilities capabilities =
+            xjw::mask::detectU2NetInferenceCapabilities(_aiCudaDeviceSpin->value());
         status_label = status.label;
         status_detail = status.detail;
         is_installed = status.isInstalled;
@@ -336,16 +345,16 @@ void GenerateMaskDialog::updateAiModelStatusText()
     else
     {
         const auto status = xjw::common::model::biRefNetDynamicModelStatus(resolver);
-        static const xjw::mask::BiRefNetInferenceCapabilities capabilities =
-            xjw::mask::detectBiRefNetInferenceCapabilities();
+        const xjw::mask::BiRefNetInferenceCapabilities capabilities =
+            xjw::mask::detectBiRefNetInferenceCapabilities(_aiCudaDeviceSpin->value());
         status_label = status.label;
         status_detail = status.detail;
         is_installed = status.isInstalled;
-        backend_available = capabilities.tensorRtAvailable;
+        backend_available = true;
         capability_summary = QString::fromStdString(capabilities.summary);
         if (capabilities.tensorRtAvailable)
         {
-            backend_status = tr("TensorRT %1 可用；GPU：%2；%3；不支持 CPU 回退")
+            backend_status = tr("TensorRT %1 可用；GPU：%2；%3；失败时可回退 CPU")
                 .arg(QString::fromStdString(capabilities.tensorRtVersion),
                      QString::fromStdString(capabilities.gpuName),
                      capabilities.supportsFp16 ? tr("优先 FP16") : tr("使用 FP32"));
@@ -353,7 +362,7 @@ void GenerateMaskDialog::updateAiModelStatusText()
         else
         {
             const QString reason = QString::fromStdString(capabilities.errorMessage);
-            backend_status = tr("BiRefNet Dynamic 必须使用 TensorRT GPU，当前不可用：%1")
+            backend_status = tr("所选 CUDA/TensorRT 当前不可用，将使用 ONNX Runtime CPU：%1")
                                  .arg(reason.isEmpty() ? tr("当前构建或设备不支持 TensorRT") : reason);
         }
     }

@@ -66,31 +66,6 @@ cv::Mat resizeImage(const cv::Mat &image, int maximumDimension, double *scale)
     return resized;
 }
 
-cv::Mat makeExtractorValidMask(const cv::Mat &exclusionMask,
-                               const cv::Size &extractorSize)
-{
-    if (exclusionMask.empty())
-    {
-        return cv::Mat();
-    }
-
-    cv::Mat resized;
-    if (exclusionMask.size() == extractorSize)
-    {
-        resized = exclusionMask;
-    }
-    else
-    {
-        cv::resize(exclusionMask, resized, extractorSize, 0.0, 0.0, cv::INTER_NEAREST);
-    }
-
-    // PlaScan 项目蒙版使用 0=有效、非 0=排除；统一算法接口使用非 0=有效。
-    // 在模块边界只转换一次，避免不同提取器各自解释蒙版造成语义反转。
-    cv::Mat validMask;
-    cv::compare(resized, cv::Scalar(0), validMask, cv::CMP_EQ);
-    return validMask;
-}
-
 } // namespace
 
 MatchPhotosStageReport FeatureStage::run(
@@ -218,7 +193,8 @@ MatchPhotosStageReport FeatureStage::run(
                 prepared.maskPath = maskPathForImage(context, request.imagePath);
                 const cv::Mat exclusionMask =
                     loadMaskForImage(context, request.imagePath, original.size());
-                prepared.mask = makeExtractorValidMask(exclusionMask, prepared.inputImage.size());
+                prepared.mask = makeExtractorValidMask(
+                    exclusionMask, prepared.inputImage.size(), options);
                 prepared.maskReadMs = phaseTimer.elapsed();
             }
             prepared.preparationMs = totalTimer.elapsed();
@@ -286,6 +262,9 @@ MatchPhotosStageReport FeatureStage::run(
             : image_matching::SiftComputeBackend::Cuda;
         runtime.adaptiveSift = autoSift;
         runtime.rootSift = autoSift;
+        runtime.siftMaximumRatio = options.siftMaximumRatio;
+        runtime.siftMinimumAdaptiveRatio = options.siftMinimumAdaptiveRatio;
+        runtime.adaptiveSiftRatio = options.adaptiveSiftRatio;
         if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
         {
             runtime.tensorRtFeatureEnginePath = loma_package.featureEnginePath;

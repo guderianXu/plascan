@@ -77,8 +77,7 @@ struct OrthoGenerationOptions
 
     static bool fromJson(const QJsonObject &settings,
                          OrthoGenerationOptions *options,
-                         QString *errorMsg = nullptr,
-                         double legacyResolution = 0.0);
+                         QString *errorMsg = nullptr);
 
     bool validate(QString *errorMsg = nullptr) const;
     QJsonObject toResolvedJson() const;

@@ -1,7 +1,7 @@
 #include "DataTreeWidget.h"
 
 #include "ui_DataTreeWidget.h"
-#include "ProjectWorkflowUtils.h"
+#include "ProjectWorkflowOperations.h"
 #include "WorkspaceSectionIcons.h"
 #include "project/ProjectIO.h"
 

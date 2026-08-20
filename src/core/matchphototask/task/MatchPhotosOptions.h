@@ -69,8 +69,17 @@ struct MatchPhotosOptions
     // CUDA SIFT 流水线最多预读的影像数，避免大 TIFF 占满主机内存。
     int featurePrefetchDepth = 2;
     float matchThreshold = 0.15f;
+    // SIFT 最近邻/次近邻距离比。自适应模式把该值作为宽松上限，在候选充足时
+    // 根据当前像对的双向互检分布自动收紧；小像对保留上限，避免少量匹配被裁空。
+    float siftMaximumRatio = 0.98f;
+    float siftMinimumAdaptiveRatio = 0.78f;
+    bool adaptiveSiftRatio = true;
     double geometryReprojThreshold = 1.5;
     int geometryMinInliers = 20;
+    double geometryMinInlierRatio = 0.18;
+    double geometryMinGridCoverage = 0.12;
+    int geometryGridColumns = 4;
+    int geometryGridRows = 4;
     int geometryMaxIterations = 10000;
     int maxTiePointsPerImage = 4000;
     int maxTiePointsPerGridCell = 500;
@@ -79,6 +88,7 @@ struct MatchPhotosOptions
     bool enableGeometryVerification = true;
     bool enableTrackBuild = true;
     bool enableGuidedMatching = false;
+    bool guidedRequireMultiViewConsistency = true;
     bool useExplicitKeypointLimit = false;
     bool useGenericPreselection = true;
     bool useReferencePreselection = false;
@@ -91,6 +101,12 @@ struct MatchPhotosOptions
     // 特征本身不再持久化，因此“重置对齐 + 复用匹配”不会重新提取 SIFT。
     bool reuseExistingMatches = true;
     float stationaryTiePointMaxPixelMotion = 1.0f;
+
+    // 项目蒙版是排除概率（0=有效，255=确定排除）。只硬裁高置信度且位于
+    // 排除区内部的点；边界和不确定区域以软权重保留。
+    float maskHardExclusionThreshold = 0.90f;
+    float maskMinimumTiepointWeight = 0.20f;
+    int maskRelaxationRadius = 2;
 
     // 在特征、匹配、几何验证和轨迹阶段接入现有核心模块前，
     // 框架默认先以 plan-only 方式运行。

@@ -51,7 +51,6 @@ QByteArray pointCloudEstimateSignature(QJsonObject settings)
     {
         settings.remove(QStringLiteral("pixel_size_x"));
         settings.remove(QStringLiteral("pixel_size_y"));
-        settings.remove(QStringLiteral("resolution"));
     }
     if (settings.value(QStringLiteral("bounds_auto")).toBool())
     {
@@ -170,7 +169,6 @@ bool MapProjectDialog::runEstimate(bool reportError)
     {
         estimateSettings[QStringLiteral("pixel_size_x")] = 0.0;
         estimateSettings[QStringLiteral("pixel_size_y")] = 0.0;
-        estimateSettings[QStringLiteral("resolution")] = 0.0;
     }
     if (!_boundsUserEdited)
     {

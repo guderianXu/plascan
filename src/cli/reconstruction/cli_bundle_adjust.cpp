@@ -10,7 +10,7 @@
 #include "project/BaInputBuilder.h"
 #include "BundleAdjust.h"
 #include "BundleAdjustService.h"
-#include "ProjectFilesManager.h"
+#include "project/ProjectDocumentModel.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectSession.h"
 #include "ProjectCameraIO.h"

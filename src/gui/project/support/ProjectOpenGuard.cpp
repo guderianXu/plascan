@@ -1,6 +1,6 @@
 #include "ProjectOpenGuard.h"
 
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 
 #include <QMessageBox>
 

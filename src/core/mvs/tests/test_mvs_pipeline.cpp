@@ -867,7 +867,6 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
     auto srcCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
 
     xjw::mvs::PatchMatchConfig cfg;
-    cfg.useCuda           = false;
     cfg.backend           = xjw::mvs::PatchMatchBackend::Cpu;
     cfg.downsampleFactor  = 2;
     cfg.patchHalf         = 2;
@@ -938,7 +937,6 @@ TEST(MvsPipelineTest, PatchMatchRejectsNonPositiveIterationCount)
 
     xjw::mvs::PatchMatchConfig config;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
-    config.useCuda = false;
     config.numIterations = 0;
 
     cv::Mat depth;
@@ -980,7 +978,6 @@ TEST(MvsPipelineTest, PatchMatchCpuHonorsPerPixelDepthRadius)
         focal, focal, width * 0.5, height * 0.5, identity, center_source);
 
     xjw::mvs::PatchMatchConfig config;
-    config.useCuda = false;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
     config.downsampleFactor = 2;
     config.patchHalf = 2;
@@ -2170,7 +2167,6 @@ TEST(DepthFrameQualityGateTest, AcceptsStableOrbitalObjectWithPartialCoverage)
     input.largestComponentRatio = 0.82f;
     input.meanConfidence = 0.76f;
     input.multiViewConsistency = 0.73f;
-    input.sparseDepthMedianRelativeError = 0.04f;
 
     const xjw::mvs::DepthFrameQualityDecision decision =
         xjw::mvs::evaluateDepthFrame(input);
@@ -2875,7 +2871,6 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
     auto srcCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
 
     xjw::mvs::PatchMatchConfig cfg;
-    cfg.useCuda           = false;
     cfg.backend           = xjw::mvs::PatchMatchBackend::Cpu;
     cfg.downsampleFactor  = 2;
     cfg.patchHalf         = 2;

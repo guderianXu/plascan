@@ -21,7 +21,6 @@ add_library(control_points STATIC
     model/MarkerSetValidator.cpp
     io/MarkerSetJson.cpp
     io/MarkerSetStore.cpp
-    io/SurveyControlMigration.cpp
     io/MarkerCsv.cpp
     io/MarkerCsvExport.cpp
     commands/MarkerChangeSet.cpp
@@ -83,17 +82,6 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_marker_set_store DISCOVERY_MODE PRE_TEST)
-
-    add_executable(test_survey_control_migration
-        tests/test_survey_control_migration.cpp
-    )
-
-    target_link_libraries(test_survey_control_migration PRIVATE
-        control_points
-        GTest::gtest_main
-    )
-
-    gtest_discover_tests(test_survey_control_migration DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_marker_change_set
         tests/test_marker_change_set.cpp

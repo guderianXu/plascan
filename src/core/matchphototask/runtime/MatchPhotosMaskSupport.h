@@ -32,7 +32,18 @@ bool shouldApplyMasksToTiepoints(const MatchPhotosOptions &options);
 
 /// 将任意通道/尺寸蒙版规范成 CV_8U；0=允许，非 0=排除。
 cv::Mat normalizedMaskForImage(const cv::Mat &mask, const cv::Size &imageSize);
-bool isPointAllowedByMask(const cv::Mat &mask, const cv::Point2f &point);
+/// 将排除概率蒙版向内部收缩，保留分割边界和低置信度区域。
+cv::Mat softenedExclusionMask(const cv::Mat &mask,
+                              const MatchPhotosOptions &options);
+cv::Mat makeExtractorValidMask(const cv::Mat &mask,
+                               const cv::Size &extractorSize,
+                               const MatchPhotosOptions &options);
+float maskPointWeight(const cv::Mat &mask,
+                      const cv::Point2f &point,
+                      const MatchPhotosOptions &options);
+bool isPointAllowedByMask(const cv::Mat &mask,
+                          const cv::Point2f &point,
+                          const MatchPhotosOptions &options);
 
 QString maskPathForImage(const MatchPhotosContext &context, const QString &imagePath);
 cv::Mat loadMaskForImage(const MatchPhotosContext &context,

@@ -2,7 +2,7 @@
 
 #include "DualImageViewer.h"
 #include "MarkerWorkspaceController.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"

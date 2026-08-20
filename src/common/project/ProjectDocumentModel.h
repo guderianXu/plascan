@@ -50,11 +50,9 @@ public:
     bool isResultsDirty() const { return _resultsDirty; }
     void clearResultsDirty() { _resultsDirty = false; }
 
-    // ── 兼容接口（返回 core + results 合并视图，仅在需要全量数据时使用）──
-    QJsonObject data() const;
-    /// 将整体 JSON（旧格式）拆分写入 core/results 两个内部对象（迁移用）
-    void setData(const QJsonObject &data);
-    // 判断某个 key 是否属于 results 域
+    /// 返回 core + results 的只读合并视图。
+    QJsonObject combinedData() const;
+    // 判断某个 key 是否属于 results 域。
     static bool isResultKey(const QString &key);
 
     // ── 默认结构 ─────────────────────────────────────────────────────────

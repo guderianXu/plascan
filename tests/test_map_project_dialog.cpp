@@ -328,9 +328,8 @@ TEST(MapProjectDialogTest, EmitsCompleteSettingsForCustomRegion)
     EXPECT_EQ(
         emittedSettings.value(QStringLiteral("sizing_mode")).toString(),
         QStringLiteral("maximum_dimension"));
-    EXPECT_EQ(
-        emittedSettings.value(QStringLiteral("resolution_mode")).toString(),
-        QStringLiteral("maximum_dimension"));
+    EXPECT_FALSE(emittedSettings.contains(QStringLiteral("resolution_mode")));
+    EXPECT_FALSE(emittedSettings.contains(QStringLiteral("resolution")));
     EXPECT_EQ(
         emittedSettings.value(QStringLiteral("maximum_dimension")).toInt(),
         3);

@@ -1,5 +1,5 @@
 // =============================================================================
-// 文件名: ProjectFilesManager.cpp
+// 文件名: ProjectDocumentModel.cpp
 // 描述:   ProjectFilesManager 内存数据模型实现。
 //
 //         数据拆分为两个对象，分别对应 Chunk doc.json 中的两个字段：
@@ -63,7 +63,7 @@ QJsonObject ProjectFilesManager::defaultResults()
     return QJsonObject();   // 所有数组按需初始化为空，无需预建
 }
 
-// ── 拆分/合并接口 ─────────────────────────────────────────────────────────────
+// ── 分域接口 ─────────────────────────────────────────────────────────────────
 
 void ProjectFilesManager::setResultsData(const QJsonObject &data)
 {
@@ -71,31 +71,13 @@ void ProjectFilesManager::setResultsData(const QJsonObject &data)
     _resultsDirty = false;
 }
 
-QJsonObject ProjectFilesManager::data() const
+QJsonObject ProjectFilesManager::combinedData() const
 {
-    // 合并 core + results，供需要全量数据的历史调用方使用
     QJsonObject merged = _coreFiles;
     for (auto it = _resultFiles.constBegin(); it != _resultFiles.constEnd(); ++it) {
         merged.insert(it.key(), it.value());
     }
     return merged;
-}
-
-void ProjectFilesManager::setData(const QJsonObject &data)
-{
-    // 将旧格式的整体 JSON 拆分到 core 和 results 两个内存对象
-    QJsonObject core;
-    QJsonObject results;
-    for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
-        if (isResultKey(it.key())) {
-            results.insert(it.key(), it.value());
-        } else {
-            core.insert(it.key(), it.value());
-        }
-    }
-    _coreFiles    = core;
-    _resultFiles  = results;
-    _resultsDirty = false;
 }
 
 // ── 查询接口 ─────────────────────────────────────────────────────────────────

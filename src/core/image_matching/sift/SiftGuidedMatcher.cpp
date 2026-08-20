@@ -182,7 +182,20 @@ namespace xjw::image_matching
                 continue;
             }
             const float distance = std::max(candidate.distance, reverseCandidate.distance);
-            result.push_back({index0, candidate.peerIndex, std::clamp(1.0f - 0.5f * distance * distance, 0.0f, 1.0f)});
+            const double residual = sampsonDistance(
+                fundamental,
+                features0.keypoints[static_cast<std::size_t>(index0)].pt,
+                features1.keypoints[static_cast<std::size_t>(candidate.peerIndex)].pt);
+            if (!std::isfinite(residual) || residual > options.epipolarThresholdPixels)
+            {
+                continue;
+            }
+            result.push_back({index0,
+                              candidate.peerIndex,
+                              std::clamp(1.0f - 0.5f * distance * distance, 0.0f, 1.0f),
+                              candidate.ratio,
+                              reverseCandidate.ratio,
+                              static_cast<float>(residual)});
         }
         std::stable_sort(result.begin(),
                          result.end(),

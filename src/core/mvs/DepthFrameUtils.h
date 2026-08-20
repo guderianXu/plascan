@@ -36,7 +36,6 @@ struct StoredDepthFrameRecord
     QString device;
     QString configHash;
     QString projectInputSignature;
-    int projectInputSignatureVersion = 1;
     QString reconstructionGenerationId;
     QJsonObject cameraModel;
     QString sceneProfile;
