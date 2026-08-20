@@ -12652,16 +12652,15 @@ TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFa
     EXPECT_TRUE(dualSource.contains(QStringLiteral("emit loadFailed(message)")));
 }
 
-TEST(WindowsBuildScriptTest, GuiTargetOutputsPlascanExeOnWindows)
+TEST(GuiBuildOutputTest, GuiTargetOutputsPlascanOnEveryPlatform)
 {
     const QString cmake = readProjectSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
     const QString readme = readProjectSourceFile(QStringLiteral("scripts/build_win/README.md"));
     ASSERT_FALSE(cmake.isEmpty());
     ASSERT_FALSE(readme.isEmpty());
 
-    EXPECT_TRUE(cmake.contains(QStringLiteral("if(WIN32)")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("set(PLASCAN_GUI_OUTPUT_NAME \"plascan\")")));
-    EXPECT_TRUE(cmake.contains(QStringLiteral("set(PLASCAN_GUI_OUTPUT_NAME \"plascan_gui.bin\")")));
+    EXPECT_FALSE(cmake.contains(QStringLiteral("set(PLASCAN_GUI_OUTPUT_NAME \"plascan_gui.bin\")")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("OUTPUT_NAME \"${PLASCAN_GUI_OUTPUT_NAME}\"")));
     EXPECT_TRUE(readme.contains(QStringLiteral("bin\\plascan.exe")));
     EXPECT_FALSE(readme.contains(QStringLiteral("bin\\plascan_gui.bin.exe")));

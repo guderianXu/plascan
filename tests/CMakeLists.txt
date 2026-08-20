@@ -14,6 +14,15 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_TEST_QT_COMPONENTS})
 find_package(Python3 COMPONENTS Interpreter)
 
+# vcpkg builds Qt statically on macOS. Static platform plugins cannot be found
+# through QT_QPA_PLATFORM_PLUGIN_PATH, so tests that request the offscreen
+# backend must import it into their executable explicitly.
+function(plascan_import_qt_offscreen_plugin target_name)
+    if(APPLE AND TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(${target_name} INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+endfunction()
+
 add_test(
     NAME CMakeDependencyPathsTest
     COMMAND ${CMAKE_COMMAND}
@@ -812,6 +821,7 @@ target_include_directories(test_gui_project_utils PRIVATE
 if(WIN32)
     target_link_libraries(test_gui_project_utils PRIVATE ole32 user32 uuid)
 endif()
+plascan_import_qt_offscreen_plugin(test_gui_project_utils)
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 gtest_discover_tests(test_gui_project_utils
@@ -850,6 +860,7 @@ target_include_directories(test_map_project_dialog PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common
     ${OpenCV_INCLUDE_DIRS}
 )
+plascan_import_qt_offscreen_plugin(test_map_project_dialog)
 gtest_discover_tests(test_map_project_dialog
     DISCOVERY_TIMEOUT 60
     DISCOVERY_MODE PRE_TEST
@@ -880,6 +891,7 @@ target_include_directories(test_workflow_settings_dialog PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
     ${CMAKE_SOURCE_DIR}/src/core/mvs
 )
+plascan_import_qt_offscreen_plugin(test_workflow_settings_dialog)
 gtest_discover_tests(test_workflow_settings_dialog
     DISCOVERY_TIMEOUT 60
     DISCOVERY_MODE PRE_TEST
@@ -916,6 +928,7 @@ target_include_directories(test_workspace_section_icons PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/common
 )
+plascan_import_qt_offscreen_plugin(test_workspace_section_icons)
 gtest_discover_tests(test_workspace_section_icons
     DISCOVERY_TIMEOUT 60
     DISCOVERY_MODE PRE_TEST
@@ -954,6 +967,7 @@ target_include_directories(test_workflow_parameter_dialog_style PRIVATE
 target_compile_definitions(test_workflow_parameter_dialog_style PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+plascan_import_qt_offscreen_plugin(test_workflow_parameter_dialog_style)
 gtest_discover_tests(test_workflow_parameter_dialog_style
     DISCOVERY_TIMEOUT 60
     DISCOVERY_MODE PRE_TEST

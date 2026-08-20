@@ -197,11 +197,7 @@ endif()
 # 设置RPATH
 #==============================================================================
 
-if(WIN32)
-  set(PLASCAN_GUI_OUTPUT_NAME "plascan")
-else()
-  set(PLASCAN_GUI_OUTPUT_NAME "plascan_gui.bin")
-endif()
+set(PLASCAN_GUI_OUTPUT_NAME "plascan")
 
 set_target_properties(plascan_gui PROPERTIES
   OUTPUT_NAME "${PLASCAN_GUI_OUTPUT_NAME}"

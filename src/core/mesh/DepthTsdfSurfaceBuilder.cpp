@@ -64,6 +64,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
 #elif defined(__linux__)
 #include <sys/sysinfo.h>
 #endif
@@ -96,6 +98,27 @@ std::uint64_t availablePhysicalMemoryBytes()
     if (GlobalMemoryStatusEx(&status))
     {
         return static_cast<std::uint64_t>(status.ullAvailPhys);
+    }
+#elif defined(__APPLE__)
+    vm_statistics64_data_t statistics{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t page_size = 0;
+    const mach_port_t host = mach_host_self();
+    const kern_return_t page_result = host_page_size(host, &page_size);
+    const kern_return_t statistics_result = host_statistics64(
+        host,
+        HOST_VM_INFO64,
+        reinterpret_cast<host_info64_t>(&statistics),
+        &count);
+    mach_port_deallocate(mach_task_self(), host);
+    if (page_result == KERN_SUCCESS && statistics_result == KERN_SUCCESS)
+    {
+        const std::uint64_t available_pages =
+            static_cast<std::uint64_t>(statistics.free_count)
+            + static_cast<std::uint64_t>(statistics.inactive_count)
+            + static_cast<std::uint64_t>(statistics.speculative_count)
+            + static_cast<std::uint64_t>(statistics.purgeable_count);
+        return available_pages * static_cast<std::uint64_t>(page_size);
     }
 #elif defined(__linux__)
     struct sysinfo status{};

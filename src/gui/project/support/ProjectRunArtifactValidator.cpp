@@ -72,8 +72,29 @@ bool isPhysicalDirectory(const QString &path)
 #ifdef Q_OS_WIN
     isLink = isLink || info.isJunction();
 #endif
-    return info.isDir() && !isLink && !canonicalPath(path).isEmpty()
-        && canonicalPath(path) == comparablePath(info.absoluteFilePath());
+    const QString canonical = canonicalPath(path);
+    const QString absolute = comparablePath(info.absoluteFilePath());
+    if (!info.isDir() || isLink || canonical.isEmpty())
+    {
+        return false;
+    }
+    if (canonical == absolute)
+    {
+        return true;
+    }
+#ifdef Q_OS_MACOS
+    // macOS exposes /var as the system-owned alias /private/var. Accept that
+    // root alias while still rejecting a symlink or alias at the run directory.
+    const QString varAlias = QStringLiteral("/var");
+    const QString canonicalVar = canonicalPath(varAlias);
+    if (!canonicalVar.isEmpty()
+        && absolute.startsWith(varAlias + QLatin1Char('/'))
+        && canonical == canonicalVar + absolute.sliced(varAlias.size()))
+    {
+        return true;
+    }
+#endif
+    return false;
 }
 
 bool sameExistingPath(const QString &first, const QString &second)

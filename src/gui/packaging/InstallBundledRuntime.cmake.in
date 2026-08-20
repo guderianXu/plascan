@@ -14,7 +14,7 @@ if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
 endif()
 string(REGEX REPLACE "/$" "" _physical_prefix "${_physical_prefix}")
 
-set(_app_bin "${_physical_prefix}/bin/plascan_gui.bin")
+set(_app_bin "${_physical_prefix}/bin/plascan")
 set(_physical_lib_dir "${_physical_prefix}/lib")
 set(_physical_plugin_root "${_physical_prefix}/plugins")
 set(_bundle_prefixes "@PLASCAN_LINUX_RUNTIME_PREFIXES@")

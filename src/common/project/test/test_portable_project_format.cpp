@@ -172,7 +172,7 @@ TEST(PortableProjectFormatTest, ResolvesEntryOnlyInsideExistingRoot)
     const QString resolved = PortableProjectFormat::resolveEntryPath(
         temporary.path(), QStringLiteral("resources/images/frame.tif"), &error);
     EXPECT_EQ(resolved,
-              QDir(temporary.path()).filePath(
+              QDir(QDir(temporary.path()).canonicalPath()).filePath(
                   QStringLiteral("resources/images/frame.tif")));
     EXPECT_TRUE(error.isEmpty());
 

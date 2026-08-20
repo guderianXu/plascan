@@ -356,26 +356,20 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
   ]=] COMPONENT Runtime)
 endif()
 
-if(NOT WIN32)
+if(UNIX AND NOT APPLE)
   set(PLASCAN_LAUNCHER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_gui_launcher.sh.in")
   set(PLASCAN_PATH_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_path.sh.in")
 
-  configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan" @ONLY)
-  configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" @ONLY)
+  configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan-launcher" @ONLY)
   configure_file("${PLASCAN_PATH_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" @ONLY)
 
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan"
-    DESTINATION bin
-    COMPONENT Runtime)
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui"
-    DESTINATION bin
-    COMPONENT Runtime)
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh"
     DESTINATION /etc/profile.d
     RENAME plascan.sh
     COMPONENT Runtime)
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan"
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan-launcher"
     DESTINATION /usr/bin
+    RENAME plascan
     COMPONENT Runtime)
 endif()
 

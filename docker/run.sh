@@ -26,7 +26,7 @@ case "$CMD" in
             -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
             plascan-build bash -c "
                 mkdir -p /tmp/runtime-root && chmod 700 /tmp/runtime-root && \
-                build/bin/plascan_gui.bin \$@
+                build/bin/plascan \$@
             "
         ;;
     feature_extract_cli|feature_match_cli|dense_match_cli|rectify_cli|triangulate_cli)

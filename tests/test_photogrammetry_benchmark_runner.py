@@ -72,7 +72,7 @@ class PhotogrammetryBenchmarkRunnerTest(unittest.TestCase):
             dataset = summary["datasets"][0]
             self.assertEqual(dataset["dataset_id"], "middlebury_dino_sparse_ring")
             self.assertEqual(dataset["image_count"], 2)
-            self.assertEqual(Path(dataset["list_file"]), list_path)
+            self.assertEqual(Path(dataset["list_file"]), list_path.resolve())
             self.assertIn("--stop-after-sfm", dataset["command"])
             self.assertIn("--force", dataset["command"])
 

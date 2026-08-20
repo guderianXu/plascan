@@ -15,6 +15,10 @@ constexpr float kQuantizationScale = 16.0f;
 
 float binCenter(std::size_t index)
 {
+    if (index == kDepthVisibilityHistogramBinCount / 2)
+    {
+        return 0.0f;
+    }
     return -1.0f +
         (static_cast<float>(index) + 0.5f) *
             (2.0f / static_cast<float>(kDepthVisibilityHistogramBinCount));

@@ -112,6 +112,30 @@
       }
     },
     {
+      "name": "macos-vcpkg-release",
+      "displayName": "macOS Apple Silicon vcpkg Release",
+      "description": "Builds the native Apple Silicon CPU configuration without CUDA, TensorRT, or OpenCL backends",
+      "inherits": "vcpkg-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "Python3_EXECUTABLE": "${sourceDir}/.venv/bin/python",
+        "CPACK_GENERATOR": "TGZ",
+        "PLASCAN_BUNDLE_RUNTIME": "OFF",
+        "PLASCAN_ENABLE_CUDA": "OFF",
+        "PLASCAN_ENABLE_OPENCL": "OFF",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/macos-vcpkg-release/vcpkg_installed",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx"
+      }
+    },
+    {
       "name": "windows-vcpkg-debug",
       "displayName": "Windows vcpkg Debug",
       "inherits": "vcpkg-base",
@@ -205,6 +229,11 @@
       "jobs": 0
     },
     {
+      "name": "macos-vcpkg-release",
+      "configurePreset": "macos-vcpkg-release",
+      "jobs": 0
+    },
+    {
       "name": "linux-package-cuda-smoke-stage",
       "configurePreset": "linux-vcpkg-cuda-package-release",
       "targets": [
@@ -289,6 +318,13 @@
       }
     },
     {
+      "name": "macos-vcpkg-release",
+      "configurePreset": "macos-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "windows-vcpkg-debug",
       "configurePreset": "windows-vcpkg-debug",
       "output": {
@@ -365,6 +401,19 @@
       "variables": {
         "CPACK_PACKAGE_CHECKSUM": "SHA256",
         "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/build/linux-vcpkg-cuda-package-release/packages/release"
+      }
+    },
+    {
+      "name": "macos-vcpkg-release",
+      "configurePreset": "macos-vcpkg-release",
+      "generators": [
+        "TGZ"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/macos-vcpkg-release"
       }
     },
     {

@@ -44,6 +44,29 @@ QString comparablePath(const QString &path)
     return normalized;
 }
 
+bool canonicalMatchesAbsolute(const QFileInfo &info)
+{
+    const QString canonical = comparablePath(info.canonicalFilePath());
+    const QString absolute = comparablePath(info.absoluteFilePath());
+    if (canonical == absolute)
+    {
+        return true;
+    }
+#ifdef Q_OS_MACOS
+    // /var is a system-owned alias of /private/var on macOS. QTemporaryDir
+    // uses the alias, so allow that root mapping without allowing a link at
+    // the run directory itself.
+    const QString varAlias = QStringLiteral("/var");
+    const QString canonicalVar = comparablePath(
+        QFileInfo(varAlias).canonicalFilePath());
+    return !canonicalVar.isEmpty()
+        && absolute.startsWith(varAlias + QLatin1Char('/'))
+        && canonical == canonicalVar + absolute.sliced(varAlias.size());
+#else
+    return false;
+#endif
+}
+
 bool directoryContainsLink(const QString &directoryPath)
 {
     QStringList pending{QFileInfo(directoryPath).absoluteFilePath()};
@@ -186,8 +209,7 @@ bool createRunOutputDirectory(const QString &baseOutputRoot,
     }
     const QFileInfo runsRootInfo(runsRoot);
     if (!runsRootInfo.isDir() || isFilesystemLink(runsRootInfo)
-        || comparablePath(runsRootInfo.canonicalFilePath())
-            != comparablePath(runsRootInfo.absoluteFilePath()))
+        || !canonicalMatchesAbsolute(runsRootInfo))
     {
         setError(errorMessage,
                  QStringLiteral("运行根目录不是安全的实体目录：%1")
@@ -281,8 +303,7 @@ bool removeUnpublishedRunDirectory(const QString &baseOutputRoot,
     }
     const QFileInfo runsRootInfo(runsRoot);
     if (!runsRootInfo.isDir() || isFilesystemLink(runsRootInfo)
-        || comparablePath(runsRootInfo.canonicalFilePath())
-            != comparablePath(runsRootInfo.absoluteFilePath())
+        || !canonicalMatchesAbsolute(runsRootInfo)
         || !targetInfo.isDir() || isFilesystemLink(targetInfo))
     {
         setError(errorMessage,

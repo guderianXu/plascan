@@ -85,7 +85,7 @@ if(NOT _contents_result EQUAL 0)
 endif()
 
 set(_required_paths
-    "./opt/plascan/bin/plascan_gui.bin"
+    "./opt/plascan/bin/plascan"
     "./opt/plascan/resources/models/U2Net_v1.onnx"
     "./opt/plascan/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx"
     "./usr/bin/plascan"

@@ -330,8 +330,9 @@ TEST(DenseCloudRefineCliGTest, NormalizesMissingIntermediateOutputComponents)
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
     EXPECT_TRUE(QFileInfo::exists(normalizedOutput));
     ASSERT_TRUE(QFileInfo::exists(normalizedReport));
+    const QString canonicalOutput = QFileInfo(normalizedOutput).canonicalFilePath();
     EXPECT_EQ(readJsonObject(normalizedReport).value(QStringLiteral("output")).toString(),
-              QDir::toNativeSeparators(normalizedOutput));
+              QDir::toNativeSeparators(canonicalOutput));
 }
 
 TEST(DenseCloudRefineCliGTest, ReportLockKeepsBothExistingArtifactsUnchanged)

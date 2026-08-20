@@ -1,18 +1,12 @@
 #!/usr/bin/env sh
 set -eu
 
-SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-APP_ROOT="$(CDPATH= cd -- "${SELF_DIR}/.." && pwd)"
-APP_BIN="${APP_ROOT}/bin/plascan_gui.bin"
+APP_ROOT="/opt/plascan"
+APP_BIN="${APP_ROOT}/bin/plascan"
 
 if [ ! -x "${APP_BIN}" ]; then
-  if [ -x "/opt/plascan/bin/plascan_gui.bin" ]; then
-    APP_ROOT="/opt/plascan"
-    APP_BIN="/opt/plascan/bin/plascan_gui.bin"
-  else
-    echo "plascan_gui.bin not found: ${APP_BIN}" >&2
-    exit 1
-  fi
+  echo "plascan not found: ${APP_BIN}" >&2
+  exit 1
 fi
 
 LIB_DIR="${APP_ROOT}/lib"

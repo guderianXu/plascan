@@ -2,11 +2,11 @@
 set -eu
 
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-APP_BIN="${SELF_DIR}/plascan_gui.bin"
+APP_BIN="${SELF_DIR}/plascan"
 LIB_DIR="${SELF_DIR}/../lib"
 
 if [ ! -x "${APP_BIN}" ]; then
-  APP_BIN="/opt/plascan/bin/plascan_gui.bin"
+  APP_BIN="/opt/plascan/bin/plascan"
   LIB_DIR="/opt/plascan/lib"
 fi
 

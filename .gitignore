@@ -21,6 +21,7 @@ testData/火星数据/
 testData/tw2/
 testData/tw600/
 build*
+!docs/BUILD_MACOS.md
 !scripts/build_win/
 !scripts/build_win/**
 docker/debs/

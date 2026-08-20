@@ -376,12 +376,14 @@ TEST(CameraFormatConverterSafetyTest, NormalizesMissingIntermediateComponentsInR
         conversionOptions(source, aliased_output));
 
     ASSERT_TRUE(result.success) << result.errorMessage;
-    EXPECT_EQ(result.outputDir, normalized_output);
-    EXPECT_EQ(result.imageCameraList, normalized_output / "image_camera.lis");
-    EXPECT_EQ(result.summaryPath, normalized_output / "summary.json");
+    const std::filesystem::path canonical_output =
+        std::filesystem::weakly_canonical(normalized_output);
+    EXPECT_EQ(result.outputDir, canonical_output);
+    EXPECT_EQ(result.imageCameraList, canonical_output / "image_camera.lis");
+    EXPECT_EQ(result.summaryPath, canonical_output / "summary.json");
     ASSERT_EQ(result.writtenCameraFiles.size(), 1U);
     EXPECT_EQ(result.writtenCameraFiles.front(),
-              normalized_output / "cameras" / "image.tsai");
+              canonical_output / "cameras" / "image.tsai");
     EXPECT_TRUE(std::filesystem::exists(result.imageCameraList));
     EXPECT_TRUE(std::filesystem::exists(result.summaryPath));
     EXPECT_TRUE(std::filesystem::exists(result.writtenCameraFiles.front()));

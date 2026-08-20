@@ -203,6 +203,9 @@ if(BUILD_TESTS)
         control_points
         GTest::gtest
     )
+    if(APPLE AND TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(test_marker_pdf_writer INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
     set(_marker_pdf_qt_platform_plugin_path
         "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
     gtest_discover_tests(test_marker_pdf_writer

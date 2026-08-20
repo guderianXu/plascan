@@ -9,6 +9,9 @@ if(TARGET control_points)
         LIBRARIES control_points Qt6::Core Qt6::Gui
         INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/core/control_points
     )
+    if(APPLE AND TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(marker_print_cli INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
 endif()
 
 if(BUILD_TESTS)

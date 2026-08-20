@@ -8,6 +8,17 @@ include_guard(GLOBAL)
 # ==============================================================================
 
 # ── Qt6 ───────────────────────────────────────────────────────────────────────
+# Several vcpkg packages export ZLIB::ZLIB in their link interfaces without
+# resolving it themselves. Create the target before loading those packages.
+find_package(ZLIB REQUIRED)
+if(NOT TARGET ZLIB::ZLIB)
+  add_library(ZLIB::ZLIB INTERFACE IMPORTED GLOBAL)
+  set_target_properties(ZLIB::ZLIB PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${ZLIB_INCLUDE_DIRS}"
+    INTERFACE_LINK_LIBRARIES "${ZLIB_LIBRARIES}"
+  )
+endif()
+
 # 核心库和 CLI 只依赖公开 Qt 组件；GUI 关闭时不触发 Widgets、
 # ShaderTools 或私有 Gui 模块的发现。
 set(PLASCAN_QT_COMPONENTS Core Gui Network Concurrent)
@@ -135,6 +146,28 @@ else()
 endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
+# ── OpenMP ────────────────────────────────────────────────────────────────────
+# PlaMatrix requires OpenMP for its CPU paths, so resolve the Homebrew fallback
+# before adding that submodule.
+if(PLASCAN_APPLE_SILICON)
+  find_package(OpenMP QUIET)
+  if(NOT OpenMP_CXX_FOUND)
+    execute_process(COMMAND brew --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(LIBOMP_PREFIX)
+      set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "OpenMP C++ flags" FORCE)
+      set(OpenMP_CXX_LIB_NAMES omp CACHE STRING "OpenMP C++ library names" FORCE)
+      set(OpenMP_omp_LIBRARY "${LIBOMP_PREFIX}/lib/libomp.dylib" CACHE FILEPATH "OpenMP library" FORCE)
+      find_package(OpenMP REQUIRED COMPONENTS CXX)
+      message(STATUS "plascan: found OpenMP via Homebrew (${LIBOMP_PREFIX})")
+    else()
+      message(FATAL_ERROR "plascan: OpenMP is required on macOS; install it with: brew install libomp")
+    endif()
+  endif()
+else()
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+endif()
+message(STATUS "plascan: found OpenMP ${OpenMP_CXX_VERSION}")
+
 # ── plamatrix (submodule) ──────────────────────────────────────────────────────
 # PlaMatrix CPU linear algebra is self-contained and native-only.
 if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER AND NOT PLASCAN_APPLE_SILICON)
@@ -173,31 +206,6 @@ if(MSVC AND PLAPOINT_WITH_CUDA)
   )
 endif()
 message(STATUS "plascan: using plapoint from 3rdparty/")
-
-# ── OpenMP ────────────────────────────────────────────────────────────────────
-if(PLASCAN_APPLE_SILICON)
-  # macOS 不自带 OpenMP, 尝试 Homebrew libomp
-  find_package(OpenMP QUIET)
-  if(NOT OpenMP_CXX_FOUND)
-    execute_process(COMMAND brew --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(LIBOMP_PREFIX)
-      set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include")
-      set(OpenMP_CXX_LIB_NAMES omp)
-      set(OpenMP_omp_LIBRARY ${LIBOMP_PREFIX}/lib/libomp.dylib)
-      set(OpenMP_CXX_FOUND TRUE)
-      message(STATUS "plascan: found OpenMP via Homebrew (${LIBOMP_PREFIX})")
-    else()
-      message(STATUS "plascan: OpenMP not found, install: brew install libomp")
-    endif()
-  endif()
-else()
-  find_package(OpenMP QUIET)
-endif()
-if(OpenMP_CXX_FOUND)
-  message(STATUS "plascan: found OpenMP ${OpenMP_CXX_VERSION}")
-else()
-  message(STATUS "plascan: OpenMP not found, single-thread fallback")
-endif()
 
 # ── GTest ─────────────────────────────────────────────────────────────────────
 if(BUILD_TESTS)

@@ -604,7 +604,7 @@ class RepoHygieneTest(unittest.TestCase):
                 for term in required_terms:
                     self.assertIn(term, text)
 
-    def test_linux_install_rules_have_single_plascan_launcher_owner(self):
+    def test_linux_install_rules_keep_launcher_separate_from_plascan_binary(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         gui_install = (ROOT / "src" / "gui" / "cmake" / "GuiInstall.cmake").read_text(encoding="utf-8")
         normalized_gui_install = " ".join(gui_install.split())
@@ -612,11 +612,15 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("resources/plascan.sh", root_cmake)
         self.assertIn("plascan_gui_launcher.sh.in", gui_install)
         self.assertIn(
-            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin',
+            'configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan-launcher" @ONLY)',
             normalized_gui_install,
         )
         self.assertIn(
-            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin',
+            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan-launcher" DESTINATION /usr/bin RENAME plascan',
+            normalized_gui_install,
+        )
+        self.assertNotIn(
+            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan-launcher" DESTINATION bin',
             normalized_gui_install,
         )
 

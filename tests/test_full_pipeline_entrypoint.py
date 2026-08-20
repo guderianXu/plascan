@@ -85,7 +85,7 @@ class FullPipelineEntrypointTest(unittest.TestCase):
 
             cmd = pipeline.build_command(args)
 
-            self.assertEqual(Path(cmd[0]), executable)
+            self.assertEqual(Path(cmd[0]), executable.resolve())
 
     def test_removed_legacy_flag_is_rejected(self):
         with self.assertRaises(SystemExit):

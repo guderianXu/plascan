@@ -137,9 +137,10 @@ class PreparePhotogrammetryBenchmarksTest(unittest.TestCase):
             lis_lines = result.image_camera_list.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lis_lines), 2)
             first_image, first_camera = shlex.split(lis_lines[0])
-            self.assertEqual((result.image_camera_list.parent / first_image).resolve(), scene_dir / "dinoSR0001.png")
+            self.assertEqual((result.image_camera_list.parent / first_image).resolve(),
+                             (scene_dir / "dinoSR0001.png").resolve())
             self.assertEqual((result.image_camera_list.parent / first_camera).resolve(),
-                             result.output_dir / "cameras" / "dinoSR0001.tsai")
+                             (result.output_dir / "cameras" / "dinoSR0001.tsai").resolve())
 
             tsai_text = (result.output_dir / "cameras" / "dinoSR0001.tsai").read_text(encoding="utf-8")
             self.assertIn("fu = 120", tsai_text)

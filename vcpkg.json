@@ -52,7 +52,28 @@
         "thread",
         "vulkan",
         "widgets"
-      ]
+      ],
+      "platform": "!osx"
+    },
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "concurrent",
+        "doubleconversion",
+        "freetype",
+        "gui",
+        "harfbuzz",
+        "jpeg",
+        "network",
+        "openssl",
+        "pcre2",
+        "png",
+        "testlib",
+        "thread",
+        "widgets"
+      ],
+      "platform": "osx"
     },
     {
       "name": "qtbase",
@@ -67,7 +88,10 @@
     },
     "qtshadertools",
     "tiff",
-    "vulkan",
+    {
+      "name": "vulkan",
+      "platform": "!osx"
+    },
     {
       "name": "vulkan-loader",
       "default-features": false,
