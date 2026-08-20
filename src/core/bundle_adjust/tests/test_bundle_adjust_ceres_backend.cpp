@@ -627,7 +627,7 @@ TEST(BundleAdjustCeresBackendTest, LegacyRequestDoesNotSilentlyIgnoreCameraPlane
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     EXPECT_EQ(result.requestedBackend, xjw::BABackend::LegacyCpu);
-    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_TRUE(result.backendFallback);
     EXPECT_LT(std::abs(result.refinedCameras[2].cameraCenter()[2]), 0.05);
 }
@@ -1113,17 +1113,20 @@ TEST(BundleAdjustLaserRangeValidationTest, RejectsInvalidShotFieldsAndUnobservab
         xjw::BASolveStatus::InvalidInput);
 }
 
-TEST(BundleAdjustLaserRangeBackendTest, AutoRequiresCeresAndUnsupportedBackendsDoNotIgnoreRange)
+TEST(BundleAdjustLaserRangeBackendTest, AutoUsesPlaMatrixAndUnsupportedBackendsDoNotIgnoreRange)
 {
     xjw::BAOptions selectionOptions;
     selectionOptions.backend = xjw::BABackend::Auto;
     selectionOptions.enableLaserRangeConstraints = true;
     const xjw::BABackendDecision decision =
         xjw::BundleAdjust::decideBackendForProblem({}, selectionOptions);
-    EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
+    EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCpu);
 
     EXPECT_TRUE(xjw::BundleAdjust::backendCapabilities(
                     xjw::BABackend::CeresCpu)
+                    .supportsLaserRangeConstraints);
+    EXPECT_TRUE(xjw::BundleAdjust::backendCapabilities(
+                    xjw::BABackend::PlaMatrixCpu)
                     .supportsLaserRangeConstraints);
     EXPECT_FALSE(xjw::BundleAdjust::backendCapabilities(
                      xjw::BABackend::LegacyCpu)
@@ -1160,8 +1163,6 @@ TEST(BundleAdjustLaserRangeBackendTest, AutoRequiresCeresAndUnsupportedBackendsD
 
 TEST(BundleAdjustLaserRangeBackendTest, AutoQualityRejectionNeverFallsBackWithoutRangeSupport)
 {
-    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
-
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
@@ -1189,7 +1190,7 @@ TEST(BundleAdjustLaserRangeBackendTest, AutoQualityRejectionNeverFallsBackWithou
         xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
 
     EXPECT_EQ(result.requestedBackend, xjw::BABackend::Auto);
-    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_FALSE(result.backendFallback);
     EXPECT_TRUE(result.qualityGateRejected);
     EXPECT_FALSE(result.solutionUsable);

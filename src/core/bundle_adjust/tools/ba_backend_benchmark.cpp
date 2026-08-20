@@ -313,6 +313,9 @@ void runCase(const std::string &name,
                   << ",plamatrix_final_cost=" << result.plaMatrixFinalCost
                   << ",plamatrix_accepted_steps=" << result.plaMatrixAcceptedSteps
                   << ",plamatrix_rejected_steps=" << result.plaMatrixRejectedSteps
+                  << ",plamatrix_linearizations=" << result.plaMatrixLinearizations
+                  << ",plamatrix_objective_evaluations="
+                  << result.plaMatrixObjectiveEvaluations
                   << ",plamatrix_rejected_initial_tracks="
                   << result.plaMatrixRejectedInitialTracks
                   << ",plamatrix_linear_solver="
@@ -325,6 +328,8 @@ void runCase(const std::string &name,
                   << result.plaMatrixSchurPatternReuses
                   << ",plamatrix_schur_assembly_on_device="
                   << (result.plaMatrixSchurAssemblyOnDevice ? 1 : 0)
+                  << ",plamatrix_mixed_precision_used="
+                  << (result.plaMatrixMixedPrecisionUsed ? 1 : 0)
                   << ",plamatrix_schur_assembly_seconds="
                   << result.plaMatrixSchurAssemblySeconds
                   << ",plamatrix_linear_solve_seconds="

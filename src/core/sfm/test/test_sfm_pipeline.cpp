@@ -445,7 +445,7 @@ TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
     options.maxIterations = 2;
     const hierarchical_ba_detail::BlockOutcome outcome =
         hierarchical_ba_detail::solveBlock(
-            0, block, reconstruction, options, 1, false);
+            0, block, reconstruction, options, 1);
 
     EXPECT_EQ(outcome.fixedTrackCount, 1);
     ASSERT_TRUE(outcome.accepted) << outcome.result.backendMessage;

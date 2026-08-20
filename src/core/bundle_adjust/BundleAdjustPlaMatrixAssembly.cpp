@@ -6,7 +6,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <memory>
+#include <numeric>
 #include <stdexcept>
+
+#include <omp.h>
 
 namespace xjw::detail::plamatrix_ba
 {
@@ -158,16 +163,18 @@ bool linearizeImageObservation(const std::vector<FramePinholeCamera>& input_came
 namespace
 {
 
-double assembleTrackResiduals(const std::vector<FramePinholeCamera>& input_cameras,
-                              const std::vector<BATrack>& tracks,
-                              const BAOptions& options,
-                              const ActiveProblem& active,
-                              const OptimizationState& state,
-                              int iteration,
-                              plamatrix::BlockNormalEquations<double>* equations)
+double assembleTrackRange(const std::vector<FramePinholeCamera>& input_cameras,
+                          const std::vector<BATrack>& tracks,
+                          const BAOptions& options,
+                          const ActiveProblem& active,
+                          const OptimizationState& state,
+                          int iteration,
+                          std::size_t begin,
+                          std::size_t end,
+                          plamatrix::BlockNormalEquations<double>* equations)
 {
     double cost = 0.0;
-    for (std::size_t track_index = 0; track_index < tracks.size(); ++track_index)
+    for (std::size_t track_index = begin; track_index < end; ++track_index)
     {
         if (!active.activeTrack[track_index])
         {
@@ -227,6 +234,77 @@ double assembleTrackResiduals(const std::vector<FramePinholeCamera>& input_camer
         }
     }
     return cost;
+}
+
+double assembleTrackResiduals(const std::vector<FramePinholeCamera>& input_cameras,
+                              const std::vector<BATrack>& tracks,
+                              const BAOptions& options,
+                              const ActiveProblem& active,
+                              const OptimizationState& state,
+                              int iteration,
+                              plamatrix::BlockNormalEquations<double>* equations)
+{
+    const int requested_threads = options.numThreads > 0
+        ? options.numThreads
+        : omp_get_max_threads();
+    const int thread_count = std::min<int>(
+        std::max(1, requested_threads), static_cast<int>(tracks.size()));
+    if (thread_count <= 1 || tracks.size() < 128)
+    {
+        return assembleTrackRange(
+            input_cameras, tracks, options, active, state, iteration,
+            0, tracks.size(), equations);
+    }
+
+    std::vector<double> partial_costs(static_cast<std::size_t>(thread_count), 0.0);
+    std::vector<std::exception_ptr> errors(static_cast<std::size_t>(thread_count));
+    std::vector<std::unique_ptr<plamatrix::BlockNormalEquations<double>>> partial_equations;
+    if (equations)
+    {
+        partial_equations.reserve(static_cast<std::size_t>(thread_count));
+        for (int thread = 0; thread < thread_count; ++thread)
+        {
+            partial_equations.push_back(
+                std::make_unique<plamatrix::BlockNormalEquations<double>>(
+                    active.primaryBlockCount,
+                    active.trackBlockCount + active.laserBlockCount,
+                    kPrimaryBlockSize,
+                    kEliminatedBlockSize));
+        }
+    }
+
+#pragma omp parallel for num_threads(thread_count) schedule(static, 1)
+    for (int thread = 0; thread < thread_count; ++thread)
+    {
+        const std::size_t begin = tracks.size() * static_cast<std::size_t>(thread) /
+                                  static_cast<std::size_t>(thread_count);
+        const std::size_t end = tracks.size() * static_cast<std::size_t>(thread + 1) /
+                                static_cast<std::size_t>(thread_count);
+        try
+        {
+            partial_costs[static_cast<std::size_t>(thread)] = assembleTrackRange(
+                input_cameras, tracks, options, active, state, iteration, begin, end,
+                equations ? partial_equations[static_cast<std::size_t>(thread)].get() : nullptr);
+        }
+        catch (...)
+        {
+            errors[static_cast<std::size_t>(thread)] = std::current_exception();
+        }
+    }
+
+    for (int thread = 0; thread < thread_count; ++thread)
+    {
+        const auto index = static_cast<std::size_t>(thread);
+        if (errors[index])
+        {
+            std::rethrow_exception(errors[index]);
+        }
+        if (equations)
+        {
+            equations->mergeFrom(*partial_equations[index]);
+        }
+    }
+    return std::accumulate(partial_costs.begin(), partial_costs.end(), 0.0);
 }
 
 double assembleAll(const std::vector<FramePinholeCamera>& input_cameras,

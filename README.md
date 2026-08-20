@@ -11,7 +11,7 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
-- vcpkg；Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP 和 GTest 等 C++ 依赖由 manifest 安装。
+- vcpkg；Qt6、OpenCV 4、GDAL、BLAS/LAPACK、libtiff、libzip、OpenMP 和 GTest 等 C++ 依赖由 manifest 安装。
 - TensorRT 可选；用于 GPU 匹配与 AI 蒙版，并与 CUDA Toolkit 一样作为外部 SDK 提供。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
 - OpenCL 1.2 SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
@@ -51,7 +51,7 @@ python scripts/env/run_tests.py --preset linux-vcpkg-release --output-on-failure
 
 PlaScan 的 C++ 构建统一使用 `vcpkg.json` 和 `CMakePresets.json`，配置时必须启用 vcpkg manifest
 toolchain。CMake 不读取 Conda 环境作为 C++ 依赖来源；CUDA 与 TensorRT 是可选的外部 SDK，通过其
-标准 CMake 路径显式提供。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖。
+标准 CMake 路径显式提供。vcpkg 负责 Qt6、OpenCV 4、GDAL、Linux BLAS/LAPACK、libtiff、libzip、GTest 等通用依赖。
 
 Linux:
 
@@ -65,7 +65,7 @@ cpack --preset linux-vcpkg-release
 
 本机 Ubuntu 的 CUDA 13.1 + NVIDIA OpenCL 开发构建使用独立 preset，不与 CPU/OpenCL 或正式 CUDA 13.1
 打包目录混用。该 preset 使用 `/usr/local/cuda-13.1/bin/nvcc`、GCC 13 host compiler 和 RTX 40 系列的 `sm_89`，同时
-启用 PlaScan/PlaMatrix/PlaPoint 的 CUDA 与 OpenCL 后端，以及 Ceres CUDA dense solver；TensorRT 不属于
+启用 PlaScan/PlaMatrix/PlaPoint 的 CUDA 与 OpenCL 后端；生产构建不安装或链接 Ceres，TensorRT 不属于
 vcpkg，当前开发 preset 默认关闭：
 
 ```bash
@@ -77,12 +77,11 @@ QT_QPA_PLATFORM=offscreen python scripts/env/run_tests.py \
   --preset linux-vcpkg-cuda-opencl-release --output-on-failure
 ```
 
-首次配置会在 `build/linux-vcpkg-cuda-opencl-release/vcpkg_installed` 安装带 `ceres-cuda` 的独立 manifest
+首次配置会在 `build/linux-vcpkg-cuda-opencl-release/vcpkg_installed` 安装独立的无 Ceres manifest
 依赖树。其它 CUDA Toolkit 路径、host compiler 或 GPU 架构应在命令行覆盖
 `CMAKE_CUDA_COMPILER`、`CMAKE_CUDA_HOST_COMPILER` 和 `PLASCAN_CUDA_ARCHITECTURES`；不要修改或复用
 CPU 构建的 vcpkg installed tree。可先用 `clinfo -l` 确认 OpenCL ICD 能枚举目标设备。
-仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`，`ceres` overlay 则把探测到的
-CUDA 编译器和 host compiler 显式传给 Ceres，防止系统仍保留 `/usr/bin/nvcc` 时误用旧 Toolkit。
+仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`。
 Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI 能为 XCB 窗口创建 surface；
 显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
 
@@ -214,10 +213,9 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 `build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
 构建目录自己的 TensorRT/CUDA 配置，避免其它 build cache 混入运行时 PATH。
 
-同一脚本默认启用 `ceres-cuda` manifest feature，用于 SfM/光束法平差中的 Ceres CUDA 后端；
-基础 Ceres 依赖同时启用 LAPACK 和 SuiteSparse，使 GPU 回退及 Linux/CPU 构建可使用稀疏 Schur 求解器。
-如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
-CPU 版 Ceres，脚本会提示重新运行 `-InstallDeps`，避免界面显示 CUDA 但实际只跑 CPU。
+同一脚本默认 `-EnableCeresCudaBa:$false`，正式 SfM/光束法平差使用 PlaMatrix。只有做数值对照测试时
+才显式传 `-EnableCeresCudaBa:$true`；该模式会启用 `PLASCAN_ENABLE_CERES_REFERENCE`，并安装
+`ceres-cuda;ceres-suitesparse`，不会改变生产默认后端。
 
 标准 Windows CUDA 构建由 TensorRT 加速 U2Net 和 BiRefNet ONNX；OpenCV 只为 U2Net 保留 CPU DNN
 回退，不安装 `opencv-dnn-cuda`，也不链接或分发 cuDNN。BiRefNet Dynamic 不提供 CPU 回退。
@@ -444,36 +442,35 @@ PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量�
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
 
 `bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
-point-only BA 和小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU；需要相机位姿优化且问题规模足够大时，
-Auto 会尝试 Ceres CUDA dense Schur；固定相机的显式 point-only CUDA 请求才使用 PlaScan 自研
+point-only BA 使用 legacy/OpenMP；联合相机、共享内参或物方软约束的小问题使用 PlaMatrix CPU，达到阈值后
+Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix OpenCL；固定相机的显式 point-only CUDA 请求才使用 PlaScan 自研
 `native_cuda` 点块后端。
 联合相机/三维点问题还可显式传 `--ba-backend plamatrix_cpu`、`plamatrix_cuda` 或
-`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM；三者只切换约化系统的
-CPU 块 Jacobi-PCG、CUDA 块 Jacobi-PCG 或 OpenCL 块 Jacobi-PCG。设备路径会记录实际设备名且不隐式回退 CPU，
-并在邻接签名一致时复用 Schur CSR pattern，但每轮重新计算全部数值和阻尼。CUDA/OpenCL 的 CSR
-拓扑仍由主机校验和缓存，Schur 数值乘加由设备 kernel 完成，并通过结果字段显式证明执行位置。
-这些路径目前作为 Ceres 对照验证阶段，不参与 Auto 默认选择；
-已支持分组共享焦距、完整 Brown 内参以及 GCP/LiDAR/比例尺/位姿/激光测距约束。
+`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM。CPU 会按规模自动选择 LAPACK
+稠密 Cholesky 或矩阵自由块 Jacobi-PCG；CUDA/OpenCL 使用 CSR 块 Jacobi-PCG。法方程和目标代价只遍历一次，
+LM 拒绝步复用当前线性化，track/Jacobian 采用确定性分片并行装配。设备路径会记录实际设备名且不隐式回退 CPU，
+并复用 Schur CSR pattern、设备缓冲和固定拓扑；CUDA 的 Schur 数值由装配 kernel 直接交给 PCG，不再经过
+device-host-device 往返。OpenCL 在 NVIDIA 595.84 驱动上保留稳定的主机 handoff，但同样复用装配缓冲和拓扑。
+这些路径已进入 Auto 默认选择，并支持分组共享焦距、完整 Brown 内参以及
+GCP/LiDAR/比例尺/位姿/相机平面/激光测距约束。GPU 不可用或求解失败时只回退 PlaMatrix CPU，不再回退 Ceres。
 `ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、`ba_used_gpu`、
 `ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时、native CUDA 活动工作集统计、
-PlaMatrix 初始/最终代价、LM 接受/拒绝步数、线性求解器、设备名、PCG 迭代、Schur 数值装配位置与耗时、
+PlaMatrix 初始/最终代价、线性化/目标遍历次数、LM 接受/拒绝步数、线性求解器、设备名、PCG 迭代、
+Schur 数值装配位置与耗时、混合精度实际使用状态、
 质量门控和回退原因。Auto 后端会优先保证 RMS 和有效
 track 比例；CUDA 候选若比 legacy 明显变差，
-会自动回退而不是强行使用 GPU。显式请求大规模 point-only Ceres 时也会按安全阈值回退，
-避免 dense QR 大矩阵不稳定。
-需要复现旧路径时可传
-`--ba-backend legacy_cpu`；需要强制 Ceres CPU 或 CUDA 时分别传 `--ba-backend ceres_cpu` /
-`--ba-backend ceres_cuda`；固定内参联合 BA 可传 `--ba-backend plamatrix_cpu`、
+会自动回退而不是强行使用 GPU。
+需要复现 point-only 旧路径时可传
+`--ba-backend legacy_cpu`；联合 BA 可传 `--ba-backend plamatrix_cpu`、
 `--ba-backend plamatrix_cuda` 或 `--ba-backend plamatrix_opencl`；需要强制自研
 CUDA 点块路径时传 `--ba-backend native_cuda`。
 `--ba-plamatrix-device` 指定 PlaMatrix CUDA/OpenCL 设备索引；OpenCL 进程级选择仍由
 `PLAMATRIX_OPENCL_DEVICE_INDEX` 初始化，二者不一致时明确报错。
 可用 `--ba-native-cuda-device` 和 `--ba-native-cuda-max-point-step` 调整显式
 native CUDA point-only 求解的设备与点块步长；`--ba-min-cuda-cameras` 和
-`--ba-min-cuda-observations` 用于 Ceres CUDA 自动选择阈值。
-Ceres CPU 按相机规模自动选择 Dense/Sparse/Iterative Schur；CUDA 在求解前按
-`--ba-max-cuda-memory-fraction` 检查 dense 工作集显存预算。Ceres CUDA 当前加速的是
-Ceres dense Schur 线性求解环节，不加速 residual/Jacobian 构建和 BA 输入构建。
+`--ba-min-cuda-observations` 用于 PlaMatrix GPU 自动选择阈值。当前默认交叉阈值为 128 台相机且
+30000 条观测；更小问题优先使用 CPU 稠密 Cholesky。Ceres CPU/CUDA 名称只在显式开启
+`PLASCAN_ENABLE_CERES_REFERENCE=ON` 的对照构建中可用；默认生产二进制不包含这些后端。
 native CUDA 当前首期接入的是固定相机投影下的 GPU 三维点块求解，并接入 Auto 质量门控；
 相机 Schur/PCG 更新尚未实现，因此不再暴露伪 PCG 参数或统计。
 

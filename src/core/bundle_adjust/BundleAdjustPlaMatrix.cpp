@@ -55,8 +55,7 @@ BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& came
     BAResult result;
     result.requestedBackend = options.backend;
     result.usedBackend = options.backend;
-    const auto solver_backend = plaMatrixLinearBackend(options.backend);
-    result.plaMatrixLinearSolverName = plaMatrixLinearBackendName(solver_backend);
+    auto solver_backend = plaMatrixLinearBackend(options.backend);
     result.refinedCameras = cameras;
     result.totalTracks = static_cast<int>(tracks.size());
     result.points.resize(tracks.size());
@@ -83,6 +82,12 @@ BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& came
         std::chrono::steady_clock::now() - setup_start).count();
     result.observationCount = active.observationCount;
     result.plaMatrixRejectedInitialTracks = active.rejectedInitialTracks;
+    if (solver_backend == plamatrix::SchurComplementLinearBackend::Cpu &&
+        active.primaryBlockCount <= std::max(1, options.maxDenseSchurCameras))
+    {
+        solver_backend = plamatrix::SchurComplementLinearBackend::DenseCpu;
+    }
+    result.plaMatrixLinearSolverName = plaMatrixLinearBackendName(solver_backend);
     if (active.observationCount == 0 && active.activeLaserRangeCount == 0)
     {
         result.solveStatus = BASolveStatus::InvalidInput;
@@ -94,9 +99,7 @@ BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& came
     const auto solve_start = std::chrono::steady_clock::now();
     plamatrix_ba::OptimizationState state = plamatrix_ba::initializeState(
         cameras, tracks, options, active);
-    double current_cost = plamatrix_ba::evaluateObjective(
-        cameras, tracks, options, active, state, 0);
-    result.plaMatrixInitialCost = current_cost;
+    double current_cost = std::numeric_limits<double>::quiet_NaN();
     plamatrix::LevenbergMarquardtOptions<double> lm_options;
     lm_options.initialDamping = std::clamp(options.damping, 1e-12, 1e12);
     plamatrix::LevenbergMarquardtStrategy<double> lm(lm_options);
@@ -108,108 +111,167 @@ BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& came
 
     try
     {
-        for (int iteration = 0; iteration < std::max(1, options.maxIterations) && !converged; ++iteration)
+        if (converged)
+        {
+            current_cost = plamatrix_ba::evaluateObjective(
+                cameras, tracks, options, active, state, 0);
+            result.plaMatrixInitialCost = current_cost;
+            ++result.plaMatrixObjectiveEvaluations;
+        }
+
+        const int iteration_budget = std::max(1, options.maxIterations);
+        while (iterations < iteration_budget && !converged)
         {
             if (isCancelled(options))
             {
                 cancelled = true;
                 break;
             }
-            current_cost = plamatrix_ba::evaluateObjective(
-                cameras, tracks, options, active, state, iteration);
+
+            const int stage_iteration = iterations;
+            double linearized_cost = 0.0;
             const auto equations = plamatrix_ba::buildNormalEquations(
-                cameras, tracks, options, active, state, iteration);
-            plamatrix::SchurComplementSolverOptions<double> solver_options;
-            solver_options.linearBackend = solver_backend;
-            solver_options.deviceIndex = options.plaMatrixDevice;
-            solver_options.maxIterations = solver_backend ==
-                    plamatrix::SchurComplementLinearBackend::Cpu
-                ? std::max(50, active.primaryBlockCount * 12)
-                : std::max(200, active.primaryBlockCount * 30);
-            solver_options.relativeTolerance = 1e-10;
-            solver_options.absoluteTolerance = 1e-12;
-            std::vector<double> primary_step;
-            std::vector<double> eliminated_step;
-            const auto solver_report = plamatrix::solveDampedSchurComplement(
-                equations,
-                lm.damping(),
-                solver_options,
-                solver_workspace,
-                &primary_step,
-                &eliminated_step);
-            result.plaMatrixLinearIterations += solver_report.iterations;
-            if (solver_backend != plamatrix::SchurComplementLinearBackend::Cpu)
+                cameras, tracks, options, active, state, stage_iteration,
+                &linearized_cost);
+            ++result.plaMatrixLinearizations;
+            ++result.plaMatrixObjectiveEvaluations;
+            current_cost = linearized_cost;
+            if (result.plaMatrixLinearizations == 1)
             {
-                if (solver_report.schurPatternReused)
-                {
-                    ++result.plaMatrixSchurPatternReuses;
-                }
-                else
-                {
-                    ++result.plaMatrixSchurPatternBuilds;
-                }
-            }
-            result.plaMatrixSchurAssemblySeconds += solver_report.schurAssemblySeconds;
-            result.plaMatrixLinearSolveSeconds += solver_report.linearSolveSeconds;
-            if (!solver_report.deviceName.empty())
-            {
-                result.plaMatrixDeviceName = solver_report.deviceName;
-                result.usedGpu = true;
-            }
-            result.plaMatrixSchurAssemblyOnDevice =
-                result.plaMatrixSchurAssemblyOnDevice ||
-                solver_report.schurAssemblyOnDevice;
-            ++iterations;
-            if (!solver_report.converged)
-            {
-                lm.rejectStep();
-                continue;
+                result.plaMatrixInitialCost = current_cost;
             }
 
-            const double step_norm = plamatrix_ba::maximumStepNorm(
-                primary_step, eliminated_step);
-            if (step_norm <= options.stepTolerance)
+            bool relinearize = false;
+            std::vector<double> retry_primary_step;
+            while (iterations < iteration_budget && !converged && !relinearize)
             {
-                converged = isFinalIntrinsicStage(options, state, iteration);
-                if (converged)
-                {
-                    break;
-                }
-                continue;
-            }
-            auto candidate_state = state;
-            plamatrix_ba::applyStep(
-                active, primary_step, eliminated_step, &candidate_state);
-            const double candidate_cost = plamatrix_ba::evaluateObjective(
-                cameras, tracks, options, active, candidate_state, iteration);
-            if (std::isfinite(candidate_cost) && candidate_cost < current_cost)
-            {
-                const double cost_change = current_cost - candidate_cost;
-                const double relative_cost_change =
-                    cost_change / std::max(1.0, std::abs(current_cost));
-                state = std::move(candidate_state);
-                current_cost = candidate_cost;
-                lm.acceptStep();
-                converged = isFinalIntrinsicStage(options, state, iteration) &&
-                            relative_cost_change <= kRelativeCostTolerance;
-            }
-            else
-            {
-                lm.rejectStep();
-            }
-
-            if (options.progressCallback)
-            {
-                const double rms = std::sqrt(
-                    std::max(0.0, current_cost) / std::max(1, active.observationCount));
-                if (!options.progressCallback(
-                        iteration + 1,
-                        std::max(1, options.maxIterations),
-                        rms,
-                        active.activeTrackCount))
+                if (isCancelled(options))
                 {
                     cancelled = true;
                     break;
+                }
+
+                plamatrix::SchurComplementSolverOptions<double> solver_options;
+                solver_options.linearBackend = solver_backend;
+                solver_options.deviceIndex = options.plaMatrixDevice;
+                solver_options.maxIterations =
+                    (solver_backend == plamatrix::SchurComplementLinearBackend::Cpu ||
+                     solver_backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
+                    ? std::max(50, active.primaryBlockCount * 12)
+                    : std::max(200, active.primaryBlockCount * 30);
+                if (stage_iteration < 2)
+                {
+                    solver_options.relativeTolerance = 1e-3;
+                }
+                else if (stage_iteration < 4)
+                {
+                    solver_options.relativeTolerance = 1e-5;
+                }
+                else
+                {
+                    solver_options.relativeTolerance = 1e-8;
+                }
+                if (iterations + 1 >= iteration_budget)
+                {
+                    solver_options.relativeTolerance = 1e-10;
+                }
+                solver_options.absoluteTolerance = 1e-12;
+                solver_options.useInitialGuess = !retry_primary_step.empty();
+                solver_options.useMixedPrecision =
+                    options.enablePlaMatrixMixedPrecision &&
+                    solver_backend == plamatrix::SchurComplementLinearBackend::Cuda &&
+                    active.primaryBlockCount >= 50;
+                std::vector<double> primary_step = retry_primary_step;
+                std::vector<double> eliminated_step;
+                const auto solver_report = plamatrix::solveDampedSchurComplement(
+                    equations,
+                    lm.damping(),
+                    solver_options,
+                    solver_workspace,
+                    &primary_step,
+                    &eliminated_step);
+                result.plaMatrixLinearIterations += solver_report.iterations;
+                if (solver_backend != plamatrix::SchurComplementLinearBackend::Cpu)
+                {
+                    if (solver_report.schurPatternReused)
+                    {
+                        ++result.plaMatrixSchurPatternReuses;
+                    }
+                    else
+                    {
+                        ++result.plaMatrixSchurPatternBuilds;
+                    }
+                }
+                result.plaMatrixSchurAssemblySeconds += solver_report.schurAssemblySeconds;
+                result.plaMatrixLinearSolveSeconds += solver_report.linearSolveSeconds;
+                if (!solver_report.deviceName.empty())
+                {
+                    result.plaMatrixDeviceName = solver_report.deviceName;
+                    result.usedGpu = true;
+                }
+                result.plaMatrixSchurAssemblyOnDevice =
+                    result.plaMatrixSchurAssemblyOnDevice ||
+                    solver_report.schurAssemblyOnDevice;
+                result.plaMatrixMixedPrecisionUsed =
+                    result.plaMatrixMixedPrecisionUsed || solver_report.mixedPrecisionUsed;
+                ++iterations;
+                if (!solver_report.converged)
+                {
+                    retry_primary_step = primary_step;
+                    lm.rejectStep();
+                    continue;
+                }
+
+                const double step_norm = plamatrix_ba::maximumStepNorm(
+                    primary_step, eliminated_step);
+                if (step_norm <= options.stepTolerance)
+                {
+                    converged = isFinalIntrinsicStage(
+                        options, state, stage_iteration);
+                    relinearize = !converged;
+                    continue;
+                }
+
+                auto candidate_state = state;
+                plamatrix_ba::applyStep(
+                    active, primary_step, eliminated_step, &candidate_state);
+                const double candidate_cost = plamatrix_ba::evaluateObjective(
+                    cameras, tracks, options, active, candidate_state,
+                    stage_iteration);
+                ++result.plaMatrixObjectiveEvaluations;
+                if (std::isfinite(candidate_cost) && candidate_cost < current_cost)
+                {
+                    const double cost_change = current_cost - candidate_cost;
+                    const double relative_cost_change =
+                        cost_change / std::max(1.0, std::abs(current_cost));
+                    state = std::move(candidate_state);
+                    current_cost = candidate_cost;
+                    lm.acceptStep();
+                    converged = isFinalIntrinsicStage(
+                                    options, state, stage_iteration) &&
+                                relative_cost_change <= kRelativeCostTolerance;
+                    relinearize = !converged;
+                }
+                else
+                {
+                    retry_primary_step = primary_step;
+                    lm.rejectStep();
+                }
+
+                if (options.progressCallback)
+                {
+                    const double rms = std::sqrt(
+                        std::max(0.0, current_cost) /
+                        std::max(1, active.observationCount));
+                    if (!options.progressCallback(
+                            iterations,
+                            iteration_budget,
+                            rms,
+                            active.activeTrackCount))
+                    {
+                        cancelled = true;
+                        break;
+                    }
                 }
             }
         }

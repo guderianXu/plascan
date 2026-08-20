@@ -142,13 +142,8 @@ TEST(BundleAdjustQualityGateTest, ExplicitNativeCudaFallsBackWhenControlPointsEn
     EXPECT_FALSE(result.backendMessage.empty());
 }
 
-TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
+TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFails)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
-    {
-        GTEST_SKIP() << "Ceres backend is not available in this build";
-    }
-
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-5.0, 0.0, 0.0),
         makeCamera(0.0, 0.0, 0.0),
@@ -174,8 +169,7 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
     options.maxIterations = 1;
     options.maxPointIterations = 1;
     options.maxCameraIterations = 1;
-    options.minCeresCudaCameras = 9999;
-    options.minCeresCpuObservations = 1;
+    options.minPlaMatrixGpuCameras = 9999;
     options.enableBackendQualityGate = true;
     options.compareAutoBackendWithLegacy = true;
     options.maxAcceptedRmsGrowth = 1e-12;

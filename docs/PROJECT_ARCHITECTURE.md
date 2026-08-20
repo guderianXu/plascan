@@ -197,8 +197,8 @@ core/
 │
 ├── bundle_adjust/              # 光束法平差
 │   ├── BundleAdjust.h/cpp      # BA 公共接口、独立行星激光 range shot、自动后端选择和状态回传
-│   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，联合普通 track、激光测距/落点及其它物方约束
-│   ├── BundleAdjustCeresPlanning.h/cpp # Dense/Sparse/Iterative Schur 规划和 CUDA 显存预算
+│   ├── BundleAdjustCeres.h/cpp # 仅在 PLASCAN_ENABLE_CERES_REFERENCE 下启用的数值对照后端
+│   ├── BundleAdjustCeresPlanning.h/cpp # 可选 Ceres 对照求解规划
 │   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
 │   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeCamera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustPlaMatrix.h/cpp # PlaMatrix 联合相机/点/内参 Schur-LM 后端
@@ -226,7 +226,7 @@ core/
 │   ├── PlanetaryLaserIsisJson.cpp # ISIS LidarData 单位换算、球面协方差转 XYZ 和虚拟像点保护
 │   ├── PlanetaryLaserBaAdapter.h/cpp # shot/影像唯一映射、frame/杆臂检查及独立 BA 约束装配
 │   ├── IsisControlNetworkPvl.h/cpp # ISIS 文本控制网、PointType 和一基像素量测解析
-│   ├── PlanetaryLineScanBundleAdjust*.h/cpp # USGSCSM 推扫控制网、逐行投影和稀疏 range 联合 Ceres P0
+│   ├── PlanetaryLineScanBundleAdjust*.h/cpp # USGSCSM 推扫控制网、逐行投影和 PlaMatrix 稀疏 range 联合 BA
 │   └── tests/                  # SI/ISIS 解析、协方差转换、关联歧义、模式边界与安全拒绝测试
 │
 ├── mask/                       # 照片蒙版生成与合成
@@ -544,18 +544,19 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 
 `bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 FramePinholeCamera/BATrack
 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，
-因此需要联合相机 BA 时 Auto 不会选择该后端。Ceres CPU/CUDA 在同一非线性问题中联合优化相机、三维点
-和分组共享焦距；CPU 按问题规模选择 Dense/Sparse/Iterative Schur，CUDA dense 求解前执行显存预算。
-Legacy CPU 保留小型固定焦距问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
+因此需要联合相机 BA 时 Auto 不会选择该后端。PlaMatrix 在同一非线性问题中联合优化相机、三维点、
+分组完整 Brown 内参和物方约束。Legacy CPU 保留 point-only 固定相机问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
 正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
-`plamatrix_cpu`、`plamatrix_cuda` 和 `plamatrix_opencl` 是 Ceres 联合 BA 的渐进替代路径：PlaScan
+`plamatrix_cpu`、`plamatrix_cuda` 和 `plamatrix_opencl` 是正式联合 BA 路径：PlaScan
 负责完整 Brown-Conrady 投影、解析相机/点/内参雅可比、物方约束、gauge、取消与统一质量复核，PlaMatrix 负责通用 Huber
-权重、二分块法方程、Schur 消元、CPU 块 Jacobi-PCG 或 CUDA/OpenCL CSR 块 Jacobi-PCG 和 LM 阻尼；
-设备路径复用经过完整邻接签名校验的主机端 CSR 拓扑，不复用数值或阻尼；CUDA/OpenCL kernel 每轮重新
-装配 Schur 数值，再交给对应设备的块 Jacobi-PCG。
-三个后端使用同一问题与测试数据并报告实际设备，不可用时不静默执行 CPU；当前仍不进入 Auto，
-完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有同数据 Ceres 对照回归。
-行星激光 range shot 当前由 Ceres 与 PlaMatrix 后端实现；后端能力表和输入校验阻止 Legacy CPU / Native CUDA 静默忽略
+权重、二分块法方程、Schur 消元、CPU 稠密 Cholesky/块 Jacobi-PCG、CUDA/OpenCL CSR 块 Jacobi-PCG 和 LM 阻尼。
+外层 LM 对拒绝步复用法方程，CPU 按问题规模自动选择直接或迭代解法；track 和推扫观测以固定连续分片并行装配，
+再按线程序确定性合并。设备路径复用经过完整邻接签名校验的 CSR 拓扑、装配缓冲和求解工作区；CUDA Schur
+装配输出通过设备内复制直接交给 PCG。OpenCL 因 NVIDIA 595.84 跨队列 buffer handoff 会触发驱动崩溃，
+当前保留数值主机 handoff，但固定拓扑和装配缓冲仍常驻复用。
+三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按规模选择 PlaMatrix CPU/CUDA/OpenCL，
+GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有同数据 Ceres 对照回归。
+行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU / Native CUDA 静默忽略
 该约束。结果单独返回参与求解的 shot 数、优化前后 range RMS 和逐 shot 落点/残差，不污染普通影像
 重投影 RMS、track 过滤计数或有效 track 比例。
 
@@ -1291,8 +1292,8 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 - **NVRTC**: 由显式配置的 CUDA Toolkit/TensorRT SDK 提供，不拼接环境管理器私有路径
 - **CUDA**: 检测到标准 CUDA 编译器后全局 `enable_language(CUDA)`；可通过 `PLASCAN_ENABLE_CUDA=OFF` 关闭
 - **Linux CUDA/OpenCL 开发构建**: `linux-vcpkg-cuda-opencl-release` 使用独立 vcpkg installed tree，
-  同时启用原生 CUDA、OpenCL 和 `ceres-cuda`；本机 CUDA 13.1 基线固定 GCC 13 host compiler 与 `sm_89`，
-  并通过项目 `cuda`/`ceres` vcpkg overlays 显式传递 CUDA compiler，避免混用系统旧版 `nvcc`；
+  同时启用原生 CUDA、PlaMatrix CUDA/OpenCL，不安装 Ceres；本机 CUDA 13.1 基线固定 GCC 13 host compiler 与 `sm_89`，
+  并通过项目 `cuda` vcpkg overlay 显式传递 CUDA compiler，避免混用系统旧版 `nvcc`；
   TensorRT 保持外部可选 SDK，不由 vcpkg 提供
 - **测试**: `-DBUILD_TESTS=ON` → CTest；按改动范围优先跑相关测试，再决定是否跑全量
 ## GUI 模块边界（2026-08）

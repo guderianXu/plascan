@@ -6,7 +6,7 @@
  *
  * 此后端针对“相机固定、仅优化三维点”的可分离 BA；它不是完整 Schur 联合 BA。
  * 不支持的物方约束和相机参数优化必须显式返回 UnsupportedConfiguration，
- * 由公共调度层决定是否回退 Ceres/CPU。
+ * 由公共调度层决定是否回退到支持相同问题语义的 CPU 后端。
  */
 
 #include "BundleAdjust.h"

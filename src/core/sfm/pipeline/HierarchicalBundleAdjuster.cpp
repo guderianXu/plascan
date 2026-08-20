@@ -228,12 +228,11 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
     const int total_threads = _owner._sfmOptions.baOptions.numThreads > 0
         ? _owner._sfmOptions.baOptions.numThreads
         : static_cast<int>(hardware_threads);
-    const bool ceres_available = BundleAdjust::isBackendAvailable(BABackend::CeresCpu);
     const int worker_count = resolveWorkerCount(
         static_cast<int>(blocks.size()),
         total_threads,
         _owner._sfmOptions.hierarchicalBAMaxConcurrentBlocks,
-        ceres_available);
+        true);
     const int minimum_threads_per_block = resolveWorkerThreadCount(
         total_threads, worker_count, worker_count - 1);
     const int maximum_threads_per_block = resolveWorkerThreadCount(
@@ -254,7 +253,7 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
         worker_count,
         minimum_threads_per_block,
         maximum_threads_per_block,
-        ceres_available ? "ceres_cpu" : BundleAdjust::backendName(block_options.backend),
+        BundleAdjust::backendName(BABackend::PlaMatrixCpu),
         block_options.maxIterations);
 
     std::unordered_map<ImageId, std::size_t> core_owner;
@@ -316,8 +315,7 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
                                       blocks[block_index],
                                       *_owner._reconstruction,
                                       block_options,
-                                      block_thread_count,
-                                      ceres_available);
+                                      block_thread_count);
                 }));
         }
         for (std::future<BlockOutcome> &future : futures)

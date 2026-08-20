@@ -145,6 +145,37 @@ bool usedLaserTime(const PlanetaryLineScanBaCamera &camera,
             ephemerisTimeSeconds);
 }
 
+bool isSupportedLineScanBackend(BABackend backend)
+{
+    return backend == BABackend::Auto ||
+           backend == BABackend::PlaMatrixCpu ||
+           backend == BABackend::PlaMatrixCuda ||
+           backend == BABackend::PlaMatrixOpenCl ||
+           backend == BABackend::CeresCpu;
+}
+
+BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions &options,
+                                int cameraCount,
+                                int observationCount)
+{
+    if (options.backend != BABackend::Auto)
+    {
+        return options.backend;
+    }
+    const bool useGpu = cameraCount >= std::max(1, options.minPlaMatrixGpuCameras) &&
+                        observationCount >=
+                            std::max(1, options.minPlaMatrixGpuObservations);
+    if (useGpu && BundleAdjust::isBackendAvailable(BABackend::PlaMatrixCuda))
+    {
+        return BABackend::PlaMatrixCuda;
+    }
+    if (useGpu && BundleAdjust::isBackendAvailable(BABackend::PlaMatrixOpenCl))
+    {
+        return BABackend::PlaMatrixOpenCl;
+    }
+    return BABackend::PlaMatrixCpu;
+}
+
 } // namespace
 
 bool triangulatePlanetaryLineScanRays(
@@ -216,6 +247,7 @@ bool runPlanetaryLineScanBundleAdjust(
         return false;
     }
     *result = PlanetaryLineScanBaResult{};
+    result->requestedBackend = options.backend;
     result->laserConstraintsEnabled = options.enableLaserRangeConstraints;
     if (cameras.size() < 2 || !controlNetwork.validate(errorMessage))
     {
@@ -243,7 +275,11 @@ bool runPlanetaryLineScanBundleAdjust(
         !finitePositive(options.maximumCameraAngleDegrees) ||
         !finiteNonNegative(options.imageHuberDeltaPixels) ||
         !finiteNonNegative(options.laserRangeHuberDeltaSigma) ||
-        options.maximumIterations <= 0 || options.threadCount < 0)
+        options.maximumIterations <= 0 || options.threadCount < 0 ||
+        options.plaMatrixDevice < 0 ||
+        options.minPlaMatrixGpuCameras <= 0 ||
+        options.minPlaMatrixGpuObservations <= 0 ||
+        !isSupportedLineScanBackend(options.backend))
     {
         setError(errorMessage, "planetary line-scan BA options contain invalid sigma or iteration values");
         return false;
@@ -443,10 +479,45 @@ bool runPlanetaryLineScanBundleAdjust(
         : 0;
     result->initialImageRmsPixels = detail::lineScanImageRms(workingSet);
     result->initialLaserRangeRmsMeters = detail::lineScanLaserRangeRms(workingSet);
-    if (!detail::solvePlanetaryLineScanBundleAdjustCeres(
-            &workingSet, options, result, errorMessage))
+    const detail::PlanetaryLineScanBaWorkingSet initialWorkingSet = workingSet;
+    PlanetaryLineScanBaOptions solverOptions = options;
+    solverOptions.backend = selectLineScanBackend(
+        options,
+        static_cast<int>(workingSet.cameraParameters.size()),
+        static_cast<int>(workingSet.imageObservations.size()));
+    result->usedBackend = solverOptions.backend;
+    bool solved = solverOptions.backend == BABackend::CeresCpu
+        ? detail::solvePlanetaryLineScanBundleAdjustCeres(
+              &workingSet, solverOptions, result, errorMessage)
+        : detail::solvePlanetaryLineScanBundleAdjustPlaMatrix(
+              &workingSet, solverOptions, result, errorMessage);
+    if (!solved &&
+        (solverOptions.backend == BABackend::PlaMatrixCuda ||
+         solverOptions.backend == BABackend::PlaMatrixOpenCl) &&
+        result->terminationType != "CANCELLED" &&
+        options.allowBackendFallback)
+    {
+        const std::string plaMatrixError = errorMessage ? *errorMessage : std::string{};
+        workingSet = initialWorkingSet;
+        solverOptions.backend = BABackend::PlaMatrixCpu;
+        result->backendFallback = true;
+        result->usedBackend = BABackend::PlaMatrixCpu;
+        solved = detail::solvePlanetaryLineScanBundleAdjustPlaMatrix(
+            &workingSet, solverOptions, result, errorMessage);
+        if (solved)
+        {
+            result->backendMessage = "PlaMatrix line-scan BA failed: " +
+                plaMatrixError + "; fell back to plamatrix_cpu";
+        }
+    }
+    if (!solved)
     {
         return false;
+    }
+    if (result->backendMessage.empty())
+    {
+        result->backendMessage = std::string("line-scan BA used ") +
+            BundleAdjust::backendName(result->usedBackend);
     }
     result->refinedImageRmsPixels = detail::lineScanImageRms(workingSet);
     result->refinedLaserRangeRmsMeters = detail::lineScanLaserRangeRms(workingSet);

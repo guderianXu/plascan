@@ -24,7 +24,6 @@ BlockOutcome solveBlock(std::size_t blockIndex,
                         const CovisibilityBlock &block,
                         const SfmReconstruction &reconstruction,
                         const BAOptions &baseOptions,
-                        int threadsPerBlock,
-                        bool useCeres);
+                        int threadsPerBlock);
 
 } // namespace xjw::hierarchical_ba_detail

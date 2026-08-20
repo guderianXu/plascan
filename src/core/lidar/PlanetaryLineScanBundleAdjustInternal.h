@@ -53,10 +53,24 @@ struct PlanetaryLineScanBaWorkingSet
 PlanetaryLineScanCamera::PoseBias lineScanPoseBias(
     const std::array<double, 6> &parameters);
 
+bool evaluateLineScanImageObservation(
+    const PlanetaryLineScanCamera &camera,
+    const LineScanImageObservation &observation,
+    const double *cameraParameters,
+    const double *point,
+    double imageSigmaPixels,
+    double *residuals);
+
 double lineScanImageRms(const PlanetaryLineScanBaWorkingSet &workingSet);
 double lineScanLaserRangeRms(const PlanetaryLineScanBaWorkingSet &workingSet);
 
 bool solvePlanetaryLineScanBundleAdjustCeres(
+    PlanetaryLineScanBaWorkingSet *workingSet,
+    const PlanetaryLineScanBaOptions &options,
+    PlanetaryLineScanBaResult *result,
+    std::string *errorMessage);
+
+bool solvePlanetaryLineScanBundleAdjustPlaMatrix(
     PlanetaryLineScanBaWorkingSet *workingSet,
     const PlanetaryLineScanBaOptions &options,
     PlanetaryLineScanBaResult *result,

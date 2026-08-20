@@ -4,7 +4,7 @@
 
 在相同联合 BA 数据、解析完整 Brown-Conrady 雅可比、物方约束、Huber 目标和 LM 外层策略下，
 只切换 PlaMatrix Schur 线性求解后端，验证 CPU、CUDA、OpenCL 与 Ceres CPU 的数值一致性。
-本阶段不改变生产环境的 Auto 后端选择，Ceres 继续作为行为基准与回退后端。
+Ceres 只作为显式开启的行为基准；生产环境 Auto 与失败回退均不再依赖 Ceres。
 
 ## 环境
 
@@ -18,6 +18,9 @@ CUDA/OpenCL 显式后端均在结果中返回真实设备名，测试同时断�
 `plamatrix_schur_assembly_on_device=1` 且无隐式 CPU 回退。
 
 ## 可复现命令
+
+下列含 `ceres_cpu` 的命令需要先启用 `PLASCAN_ENABLE_CERES_REFERENCE=ON` 及对应可选 vcpkg feature；
+生产构建可去掉列表中的 `ceres_cpu`，直接复测三个 PlaMatrix 后端。
 
 ```bash
 build/linux-vcpkg-cuda-opencl-release/bin/ba_backend_benchmark \
@@ -61,20 +64,48 @@ CUDA 设备端 Schur 数值装配约 `0.06898 s`、线性求解约 `0.06390 s`�
 ## 结论
 
 - CPU、CUDA、OpenCL 在两组相同输入上均收敛，RMS、鲁棒代价、相机和三维点结果满足自动化对比容差。
-- CUDA/OpenCL 路径会显式检查设备并报告设备名；设备不可用或索引无效时返回
-  `BackendUnavailable`，不会静默转入 PlaMatrix CPU。
+- CUDA/OpenCL 路径会显式检查设备并报告设备名；显式禁止回退时，设备不可用或索引无效会返回
+  `BackendUnavailable`。允许回退时只转入语义等价的 PlaMatrix CPU，不会转入 Ceres。
 - CUDA/OpenCL 已使用设备端块 Jacobi；80/3000 数据的迭代数与 CPU 一致，并在本次测量中快于
   PlaMatrix CPU，但仍明显慢于 Ceres CPU。
 - CSR 拓扑经过完整邻接签名验证后复用，数值、阻尼和 eliminated 逆块每轮重新计算，不会复用陈旧值。
 - CUDA/OpenCL 的 Schur 乘加已迁移到设备 kernel；主机保留拓扑验证、块逆和传输。80/3000 数据中
   CUDA/OpenCL 的设备装配分别比此前主机数值装配约快 46%/持平，并保持完全相同的最终结果。
-- 在更多真实数据验证前仍不把 PlaMatrix CUDA/OpenCL 纳入 Auto 默认选择。
+- 完成约束、退化输入、取消和无 Ceres 构建门禁后，PlaMatrix CPU/CUDA/OpenCL 已纳入 Auto 默认选择。
+
+## 2026-08-20 性能优化复测
+
+在保持上述 Ceres parity 用例全部通过的前提下，新增 LM 拒绝步线性化复用、确定性并行装配、
+CPU 稠密 Schur Cholesky、渐进式 PCG 容差、CUDA/OpenCL 常驻装配缓冲及 CUDA Schur device-to-device handoff。
+
+| 数据 | PlaMatrix CPU | PlaMatrix CUDA | PlaMatrix OpenCL | Ceres CPU |
+|------|---------------|----------------|------------------|-----------|
+| 12/240/1440 | 0.00780 s | 0.13972 s | 0.16651 s | 0.00635 s |
+| 80/3000/24000 | 0.24380 s | 0.24730 s | 0.30419 s | 0.07338 s |
+
+两组 PlaMatrix 最终 RMS 分别为 `0.04124357756`、`0.04404584261`；对应 Ceres 为
+`0.04124360793`、`0.04404585629`。12/240 CPU 相对优化前的 `0.08373 s` 约提升 10.7 倍，
+80/3000 CPU 相对 `0.55377 s` 约提升 2.3 倍。80/3000 GPU 累计 PCG 从约 815 降到 641；
+CUDA Schur 装配累计时间由约 `0.06898 s` 降到 `0.03004 s`，OpenCL 由约 `0.12475 s`
+降到 `0.08663 s`。混合精度在 RTX 4060 实测变慢，因此实现保留为显式实验开关，默认关闭。
+
+规模扫描显示 80 相机时 CPU 稠密直接解仍优于 GPU，而 150 相机/40000 观测时 CUDA 已快于 CPU；
+Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨队列零拷贝在 NVIDIA 595.84
+驱动触发异步事件线程崩溃，生产路径保留稳定主机 handoff；CUDA 已完全移除 Schur 数值 D2H/H2D 往返。
+
+## 生产替代门禁
+
+- 默认 `vcpkg.json` 不包含 Ceres，`PLASCAN_ENABLE_CERES_REFERENCE` 默认关闭。
+- 全新 CUDA 13.1/OpenCL 构建可在 vcpkg 实际移除 Ceres 后完成；GUI、frame BA CLI 和 line-scan BA CLI
+  的动态依赖及编译命令均不含 Ceres/glog/gflags/SuiteSparse。
+- 层级 BA、GCP、尺度条、姿态、相机平面、行星激光与 line-scan 流程不再强制选择或失败回退 Ceres。
+- Ceres 对照构建使用 `-DPLASCAN_ENABLE_CERES_REFERENCE=ON` 与可选 manifest feature，仍可重复运行同数据 parity。
 
 ## 自动化验证
 
 - PlaMatrix CPU：273/273 通过；无 CUDA 构建中的 9 个 GPU 用例按设计跳过。
 - PlaMatrix CUDA 13.1/OpenCL：502/502 通过。
-- PlaScan 全量：2698 项发现，2697 个非禁用测试零失败；其中外部模型/数据相关用例按既有条件跳过，
+- 最终无 Ceres 生产构建：2673 项发现，2672 个已执行测试零失败；其中外部模型/数据相关用例按既有条件跳过，
   另有一个既有 PatchMatch benchmark 被显式禁用。
 - BA 同数据测试会在设备存在时同时运行 PlaMatrix CPU/CUDA/OpenCL 和 Ceres，并检查后端身份、
   GPU 执行标志、设备名、设备 Schur 装配、迭代/耗时指标及相机、点、RMS、代价的一致性。

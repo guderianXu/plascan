@@ -13,8 +13,7 @@ BlockOutcome solveBlock(std::size_t block_index,
                         const CovisibilityBlock &block,
                         const SfmReconstruction &reconstruction,
                         const BAOptions &base_options,
-                        int threads_per_block,
-                        bool use_ceres)
+                        int threads_per_block)
 {
     BlockOutcome outcome;
     outcome.blockIndex = block_index;
@@ -97,7 +96,8 @@ BlockOutcome solveBlock(std::size_t block_index,
     }
 
     BAOptions options = base_options;
-    options.backend = use_ceres ? BABackend::CeresCpu : options.backend;
+    // 独立块并行时统一使用 CPU，避免多个求解器同时争抢同一 GPU 上下文。
+    options.backend = BABackend::PlaMatrixCpu;
     options.numThreads = std::max(1, threads_per_block);
     options.maxIterations = std::max(1, base_options.maxIterations);
     options.logIterationProgress = false;

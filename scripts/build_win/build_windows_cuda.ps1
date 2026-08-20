@@ -23,7 +23,7 @@ param(
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
-    [bool] $EnableCeresCudaBa = $true,
+    [bool] $EnableCeresCudaBa = $false,
     [switch] $SkipVsDevCmd
 )
 
@@ -1468,7 +1468,12 @@ if (-not $BuildOnly)
     $manifestFeaturesValue = ""
     if ($EnableCeresCudaBa)
     {
-        $manifestFeaturesValue = "ceres-cuda"
+        $manifestFeaturesValue = "ceres-cuda;ceres-suitesparse"
+        $configureArgs += "-DPLASCAN_ENABLE_CERES_REFERENCE=ON"
+    }
+    else
+    {
+        $configureArgs += "-DPLASCAN_ENABLE_CERES_REFERENCE=OFF"
     }
     if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))
     {

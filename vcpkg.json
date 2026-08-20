@@ -6,10 +6,6 @@
   "dependencies": [
     "apriltag",
     {
-      "name": "ceres",
-      "default-features": false
-    },
-    {
       "name": "gdal",
       "default-features": false,
       "features": [
@@ -21,6 +17,10 @@
     },
     "gtest",
     "libzip",
+    {
+      "name": "lapack",
+      "platform": "linux"
+    },
     "opencl",
     {
       "name": "opencv",
@@ -81,12 +81,10 @@
       "platform": "linux"
     }
   ],
-  "default-features": [
-    "ceres-suitesparse"
-  ],
+  "default-features": [],
   "features": {
     "ceres-cuda": {
-      "description": "Enable Ceres CUDA dense linear algebra for bundle adjustment.",
+      "description": "Enable the optional CUDA-capable Ceres reference backend for BA parity tests.",
       "dependencies": [
         {
           "name": "ceres",
@@ -98,7 +96,7 @@
       ]
     },
     "ceres-suitesparse": {
-      "description": "Enable Ceres SuiteSparse and LAPACK linear algebra in production builds.",
+      "description": "Enable the optional CPU Ceres reference backend for BA parity tests.",
       "dependencies": [
         {
           "name": "ceres",

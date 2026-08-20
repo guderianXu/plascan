@@ -190,6 +190,19 @@ TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem
     ASSERT_TRUE(plamatrix_result.solutionUsable) << plamatrix_result.backendMessage;
     EXPECT_EQ(plamatrix_result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_GT(plamatrix_result.plaMatrixAcceptedSteps, 0);
+    EXPECT_GT(plamatrix_result.plaMatrixLinearizations, 0);
+    EXPECT_GE(plamatrix_result.plaMatrixObjectiveEvaluations,
+              plamatrix_result.plaMatrixLinearizations);
+    EXPECT_LE(plamatrix_result.plaMatrixObjectiveEvaluations,
+              plamatrix_result.plaMatrixLinearizations +
+                  plamatrix_result.plaMatrixAcceptedSteps +
+                  plamatrix_result.plaMatrixRejectedSteps);
+    if (plamatrix_result.plaMatrixRejectedSteps > 0)
+    {
+        EXPECT_LT(plamatrix_result.plaMatrixLinearizations,
+                  plamatrix_result.plaMatrixAcceptedSteps +
+                      plamatrix_result.plaMatrixRejectedSteps);
+    }
     EXPECT_LT(plamatrix_result.plaMatrixFinalCost, plamatrix_result.plaMatrixInitialCost);
     EXPECT_NEAR(plamatrix_result.meanRmsAfter, ceres_result.meanRmsAfter, 2e-3);
     EXPECT_NEAR(plamatrix_result.plaMatrixFinalCost, ceres_result.ceresFinalCost, 2e-2);

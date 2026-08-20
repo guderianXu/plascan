@@ -161,7 +161,7 @@ TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
 {
     if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "Ceres CPU reference backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -251,7 +251,7 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesCeresCudaWhenAvailable)
+TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesAvailablePlaMatrixGpu)
 {
     xjw::BAProblemStats stats;
     stats.cameraCount = 120;
@@ -262,25 +262,25 @@ TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesCeresCudaWhenAvailabl
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
     options.refineSharedFocalLength = true;
-    options.minCeresCudaCameras = 1;
-    options.minCeresCudaObservations = 1;
-    options.minCeresCpuObservations = 1;
+    options.minPlaMatrixGpuCameras = 1;
+    options.minPlaMatrixGpuObservations = 1;
 
     const xjw::BABackendDecision decision =
         xjw::BundleAdjust::decideBackendForProblem(stats, options);
-    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCuda))
     {
-        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCuda);
-        EXPECT_EQ(decision.reason, "large_joint_shared_focal_uses_ceres_cuda");
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCuda);
+        EXPECT_EQ(decision.reason, "large_joint_problem_uses_plamatrix_cuda");
     }
-    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixOpenCl))
     {
-        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
-        EXPECT_EQ(decision.reason, "joint_shared_focal_requires_ceres");
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixOpenCl);
+        EXPECT_EQ(decision.reason, "large_joint_problem_uses_plamatrix_opencl");
     }
     else
     {
-        EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCpu);
+        EXPECT_EQ(decision.reason, "joint_problem_uses_plamatrix_cpu");
     }
 }
 
@@ -739,7 +739,7 @@ TEST(BundleAdjustSharedFocalTest,
         cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
-    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_NE(
         result.backendMessage.find("没有兼容的 legacy 回退"),
         std::string::npos);
@@ -748,11 +748,6 @@ TEST(BundleAdjustSharedFocalTest,
 TEST(BundleAdjustSharedFocalTest,
      AutoDoesNotQualityFallbackFocalPriorToLegacy)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
-    {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
-    }
-
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
@@ -773,7 +768,7 @@ TEST(BundleAdjustSharedFocalTest,
         cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
-    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_NE(
         result.backendMessage.find("稳定参考先验"),
         std::string::npos);

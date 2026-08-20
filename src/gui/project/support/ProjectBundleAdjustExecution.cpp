@@ -113,11 +113,7 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
     if (baInput.surveyControlTrackCount > 0 || baInput.markerControlPointConstraintCount > 0)
     {
         options.baOpt.enableControlPointConstraints = true;
-        if (baInput.markerControlPointConstraintCount > 0
-            && xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
-        {
-            options.baOpt.backend = xjw::BABackend::CeresCpu;
-        }
+        options.baOpt.backend = xjw::BABackend::Auto;
     }
     if (!baInput.scaleBarConstraints.empty())
     {

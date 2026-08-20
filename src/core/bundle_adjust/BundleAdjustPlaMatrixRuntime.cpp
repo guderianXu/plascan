@@ -33,6 +33,8 @@ const char* plaMatrixLinearBackendName(
     {
     case plamatrix::SchurComplementLinearBackend::Cpu:
         return "block_jacobi_pcg_cpu";
+    case plamatrix::SchurComplementLinearBackend::DenseCpu:
+        return "dense_cholesky_cpu";
     case plamatrix::SchurComplementLinearBackend::Cuda:
         return "block_jacobi_pcg_cuda";
     case plamatrix::SchurComplementLinearBackend::OpenCl:

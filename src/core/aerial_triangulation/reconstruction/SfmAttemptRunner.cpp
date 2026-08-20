@@ -203,7 +203,8 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->baOptions.backend = BABackend::Auto;
         options->baOptions.nativeCudaMaxPointStepNorm = 1.0;
         // 航测块的相机 Schur 系统随相机数增长显著。让 300k 观测以上的大相机块
-        // 提前进入 CUDA 候选；最终仍由显存预算和 BA 质量门控决定是否使用结果。
+        // 提前进入 PlaMatrix GPU 候选；最终仍由 BA 质量门控决定是否使用结果。
+        options->baOptions.minPlaMatrixGpuObservations = 300000;
         options->baOptions.minCeresCudaObservations = 300000;
         options->baOptions.minCeresCpuObservations = 50000;
         options->baOptions.enableBackendQualityGate = true;
@@ -261,17 +262,16 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
             options->baOptions.maxSharedFocalStepScale = 1.12;
             options->baOptions.maxSharedFocalIterations = 6;
         }
-        if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+        if (cpuOnly)
         {
-            // 保持注册阶段与粗焦距候选相同的自动后端，避免仅因求解器不同造成
-            // 点数/RMS 波动。最终完整全局 BA 释放共享内参时，BundleAdjust 会因
-            // joint_shared_intrinsics_requires_ceres 自动切换到 Ceres 联合求解。
+            // 保持注册阶段与粗焦距候选相同的自动后端；完整全局 BA 释放共享内参时，
+            // BundleAdjust 会自动选择 PlaMatrix CPU。
             options->baOptions.backend = BABackend::Auto;
         }
         else if (!cpuOnly)
         {
-            // GPU 规模不足时回落到 Ceres CPU，而不是回落到非联合的 Legacy 自标定。
-            options->baOptions.minCeresCpuObservations = 1;
+            // GPU 规模不足时回落到 PlaMatrix CPU，而不是非联合的 Legacy 自标定。
+            options->baOptions.minPlaMatrixGpuObservations = 300000;
         }
     }
 }

@@ -55,7 +55,7 @@
     {
       "name": "linux-vcpkg-cuda-opencl-release",
       "displayName": "Linux vcpkg CUDA 13.1 + OpenCL Release",
-      "description": "Builds the local Ubuntu CUDA 13.1 developer configuration with native CUDA, NVIDIA OpenCL, and Ceres CUDA",
+      "description": "Builds the local Ubuntu CUDA 13.1 developer configuration with native CUDA and NVIDIA OpenCL",
       "inherits": "linux-vcpkg-release",
       "binaryDir": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release",
       "environment": {
@@ -68,10 +68,10 @@
         "CUDAToolkit_ROOT": "/usr/local/cuda-13.1",
         "PLASCAN_CUDA_ARCHITECTURES": "89",
         "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_CERES_REFERENCE": "OFF",
         "PLASCAN_ENABLE_OPENCL": "ON",
         "PLASCAN_ENABLE_TENSORRT": "OFF",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed",
-        "VCPKG_MANIFEST_FEATURES": "ceres-cuda"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed"
       }
     },
     {
@@ -108,8 +108,7 @@
         "PLASCAN_BUNDLE_BIREFNET_DYNAMIC": "ON",
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed",
-        "VCPKG_MANIFEST_FEATURES": "ceres-cuda"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed"
       }
     },
     {
@@ -159,7 +158,6 @@
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vcpkg-cuda-release/vcpkg_installed",
-        "VCPKG_MANIFEST_FEATURES": "ceres-cuda",
         "VCPKG_MANIFEST_INSTALL": "OFF"
       }
     }

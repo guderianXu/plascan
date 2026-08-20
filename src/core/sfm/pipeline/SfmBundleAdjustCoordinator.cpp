@@ -1289,19 +1289,12 @@ void IncrementalSfm::runBundleAdjust(
     if (control_constraint_count > 0)
     {
         baOpt.enableControlPointConstraints = true;
-        // 当前阶段控制点约束统一走 Ceres CPU；原生 CUDA 约束雅可比在后续任务补齐。
-        if (BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
-        {
-            baOpt.backend = BABackend::CeresCpu;
-        }
+        baOpt.backend = BABackend::Auto;
     }
     if (control_scale_bar_count > 0)
     {
         baOpt.enableScaleBarConstraints = true;
-        if (BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
-        {
-            baOpt.backend = BABackend::CeresCpu;
-        }
+        baOpt.backend = BABackend::Auto;
     }
     AerialCameraPlaneEstimate cameraPlaneBefore;
     bool cameraPlaneConstraintActive = false;
@@ -1328,7 +1321,6 @@ void IncrementalSfm::runBundleAdjust(
             baOpt.sharedIntrinsicParameterMask) == 1;
     if (_sfmOptions.correctUnanchoredAerialDoming &&
         cameraPlaneBefore.valid &&
-        BundleAdjust::isBackendAvailable(BABackend::CeresCpu) &&
         SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
             localOnly,
             hasAerialSelfCalibrationAbsoluteConstraint,
@@ -1389,7 +1381,7 @@ void IncrementalSfm::runBundleAdjust(
             _sfmOptions.cameraLayerPreservationWeight,
             observations_per_camera);
         baOpt.cameraPlaneHuberDelta = 0.0;
-        baOpt.backend = BABackend::CeresCpu;
+        baOpt.backend = BABackend::Auto;
         // 大幅改变外参/畸变时，仍基于旧几何立即按点 RMS 标 invalid 会把尚未
         // 重三角化的点网误删。修正轮保留全部 BA 点，随后由统一的重三角化和
         // 几何过滤在新相机模型下重新评估。
@@ -1436,8 +1428,7 @@ void IncrementalSfm::runBundleAdjust(
             baOpt.sharedRadialK1PriorSigma);
     }
     if (!cameraPlaneConstraintActive &&
-        _sfmOptions.preserveCameraLayerDuringSelfCalibration &&
-        BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+        _sfmOptions.preserveCameraLayerDuringSelfCalibration)
     {
         const bool stableParallelCameraLayer =
             cameraPlaneBefore.valid &&
@@ -1472,7 +1463,7 @@ void IncrementalSfm::runBundleAdjust(
             // 这是对本轮新增漂移的正则项，不是对相机绝对形状的平面先验。
             // 使用完整二次项，使所有相机相对各自参考偏移得到一致约束。
             baOpt.cameraPlaneHuberDelta = 0.0;
-            baOpt.backend = BABackend::CeresCpu;
+            baOpt.backend = BABackend::Auto;
             cameraPlaneConstraintActive = true;
             Logger::instance()->infof(
                 "[BA] camera_layer_preservation scope=global cameras=%zu "
@@ -1620,7 +1611,7 @@ void IncrementalSfm::runBundleAdjust(
         const BABackendDecision decision = BundleAdjust::decideBackendForProblem(stats, baOpt);
         Logger::instance()->infof(
             "[BA] problem scope=%s cameras=%d tracks=%d observations=%d threads=%d "
-            "requested=%s selected=%s reason=%s ceresCudaAvailable=%s "
+            "requested=%s selected=%s reason=%s plaMatrixCudaAvailable=%s "
             "cudaMinCameras=%d cudaMinObservations=%d",
             scopeName,
             stats.cameraCount,
@@ -1630,9 +1621,9 @@ void IncrementalSfm::runBundleAdjust(
             BundleAdjust::backendName(baOpt.backend),
             BundleAdjust::backendName(decision.backend),
             decision.reason.c_str(),
-            BundleAdjust::isBackendAvailable(BABackend::CeresCuda) ? "true" : "false",
-            baOpt.minCeresCudaCameras,
-            baOpt.minCeresCudaObservations);
+            BundleAdjust::isBackendAvailable(BABackend::PlaMatrixCuda) ? "true" : "false",
+            baOpt.minPlaMatrixGpuCameras,
+            baOpt.minPlaMatrixGpuObservations);
     }
 
     // 首次自由网络自标定采用少量场景无关的焦距/低阶径向多起点，避免零畸变

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BundleAdjust.h"
 #include "IsisControlNetworkPvl.h"
 #include "PlanetaryLaserShot.h"
 #include "PlanetaryLineScanCamera.h"
@@ -27,6 +28,13 @@ struct PlanetaryLineScanBaCamera
 
 struct PlanetaryLineScanBaOptions
 {
+    BABackend backend = BABackend::Auto;
+    int plaMatrixDevice = 0;
+    int minPlaMatrixGpuCameras = 128;
+    int minPlaMatrixGpuObservations = 30000;
+    int maxDenseSchurCameras = 200;
+    bool allowBackendFallback = true;
+    std::shared_ptr<std::atomic<bool>> cancelFlag;
     bool enableLaserRangeConstraints = false;
     PlanetaryLaserLineScanTimeMode laserTimeMode =
         PlanetaryLaserLineScanTimeMode::ShotEphemerisTime;
@@ -80,9 +88,16 @@ struct PlanetaryLineScanBaResult
     bool success = false;
     bool solutionUsable = false;
     bool converged = false;
+    bool backendFallback = false;
+    bool usedGpu = false;
     bool laserConstraintsEnabled = false;
+    BABackend requestedBackend = BABackend::Auto;
+    BABackend usedBackend = BABackend::Auto;
     std::string terminationType;
     std::string message;
+    std::string backendMessage;
+    std::string linearSolverName;
+    std::string deviceName;
     std::string solverBriefReport;
     int controlPointCount = 0;
     int imageObservationCount = 0;

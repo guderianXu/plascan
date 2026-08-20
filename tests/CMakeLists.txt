@@ -372,8 +372,7 @@ target_include_directories(test_bundle_adjust_projection PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
-find_package(Ceres CONFIG QUIET)
-if(Ceres_FOUND AND TARGET Ceres::ceres)
+if(PLASCAN_ENABLE_CERES_REFERENCE)
     target_link_libraries(test_bundle_adjust_projection PRIVATE Ceres::ceres)
     target_compile_definitions(test_bundle_adjust_projection PRIVATE PLASCAN_TEST_HAS_CERES=1)
 endif()
@@ -414,12 +413,9 @@ target_include_directories(test_bundle_adjust_adaptive_camera_model PRIVATE
 gtest_discover_tests(test_bundle_adjust_adaptive_camera_model)
 
 # ==============================================================================
-# test_bundle_adjust_ceres_backend — BA Ceres/GPU 后端选择与回退
+# test_bundle_adjust_ceres_backend — 可选 Ceres reference 后端与 GPU 规划
 # ==============================================================================
-if(NOT TARGET Ceres::ceres)
-    find_package(Ceres CONFIG QUIET)
-endif()
-if(TARGET Ceres::ceres)
+if(PLASCAN_ENABLE_CERES_REFERENCE)
     add_executable(test_bundle_adjust_ceres_backend
         ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp
     )
@@ -435,7 +431,7 @@ if(TARGET Ceres::ceres)
     gtest_discover_tests(test_bundle_adjust_ceres_backend)
 
 else()
-    message(STATUS "tests: Ceres 未找到，跳过 test_bundle_adjust_ceres_backend")
+    message(STATUS "tests: Ceres reference disabled, skipping test_bundle_adjust_ceres_backend")
 endif()
 
 add_executable(test_bundle_adjust_plamatrix_backend

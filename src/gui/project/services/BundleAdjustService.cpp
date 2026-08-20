@@ -533,6 +533,10 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_plamatrix_final_cost")] = baResult.plaMatrixFinalCost;
     saveObj[QStringLiteral("ba_plamatrix_accepted_steps")] = baResult.plaMatrixAcceptedSteps;
     saveObj[QStringLiteral("ba_plamatrix_rejected_steps")] = baResult.plaMatrixRejectedSteps;
+    saveObj[QStringLiteral("ba_plamatrix_linearizations")] =
+        baResult.plaMatrixLinearizations;
+    saveObj[QStringLiteral("ba_plamatrix_objective_evaluations")] =
+        baResult.plaMatrixObjectiveEvaluations;
     saveObj[QStringLiteral("ba_plamatrix_rejected_initial_tracks")] =
         baResult.plaMatrixRejectedInitialTracks;
     saveObj[QStringLiteral("ba_plamatrix_linear_solver")] =
@@ -547,6 +551,8 @@ BaServiceResult BundleAdjustService::run(
         baResult.plaMatrixSchurPatternReuses;
     saveObj[QStringLiteral("ba_plamatrix_schur_assembly_on_device")] =
         baResult.plaMatrixSchurAssemblyOnDevice;
+    saveObj[QStringLiteral("ba_plamatrix_mixed_precision_used")] =
+        baResult.plaMatrixMixedPrecisionUsed;
     saveObj[QStringLiteral("ba_plamatrix_schur_assembly_seconds")] =
         baResult.plaMatrixSchurAssemblySeconds;
     saveObj[QStringLiteral("ba_plamatrix_linear_solve_seconds")] =
@@ -559,8 +565,9 @@ BaServiceResult BundleAdjustService::run(
             QString::fromLatin1(xjw::BundleAdjust::backendName(baOptions.backend));
         optObj[QStringLiteral("ba_cuda_device")] = baOptions.ceresCudaDevice;
         optObj[QStringLiteral("ba_plamatrix_device")] = baOptions.plaMatrixDevice;
-        optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minCeresCudaCameras;
-        optObj[QStringLiteral("ba_min_cuda_observations")] = baOptions.minCeresCudaObservations;
+        optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minPlaMatrixGpuCameras;
+        optObj[QStringLiteral("ba_min_cuda_observations")] =
+            baOptions.minPlaMatrixGpuObservations;
         optObj[QStringLiteral("ba_native_cuda_device")] = baOptions.nativeCudaDevice;
         optObj[QStringLiteral("ba_native_cuda_max_point_step")] =
             baOptions.nativeCudaMaxPointStepNorm;

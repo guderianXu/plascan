@@ -634,24 +634,28 @@ int main(int argc, char *argv[])
                    baBackendRaw,
                    "BA 求解后端: auto / legacy_cpu / plamatrix_cpu / plamatrix_cuda / "
                    "plamatrix_opencl / ceres_cpu / ceres_cuda / native_cuda");
-    app.add_option("--ba-cuda-device", baCudaDevice, "Ceres CUDA BA 使用的 GPU 设备 ID");
+    app.add_option("--ba-cuda-device",
+                   baCudaDevice,
+                   "仅参考构建中 Ceres CUDA BA 使用的 GPU 设备 ID");
     app.add_option("--ba-plamatrix-device",
                    baPlaMatrixDevice,
                    "PlaMatrix CUDA/OpenCL Schur PCG 使用的设备索引");
-    app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "低于该相机数时 Ceres CUDA BA 回退到 CPU");
+    app.add_option("--ba-min-cuda-cameras",
+                   baMinCudaCameras,
+                   "Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小相机数");
     app.add_option("--ba-min-cuda-observations",
                    baMinCudaObservations,
-                   "低于该观测数时自动 BA 不选择 Ceres CUDA");
+                   "Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小观测数");
     app.add_option("--ba-min-cpu-observations",
                    baMinCpuObservations,
-                   "低于该观测数时自动 BA 不选择 Ceres CPU");
+                   "仅参考构建保留的 Ceres CPU 规模参数");
     app.add_option("--ba-native-cuda-device", baNativeCudaDevice, "native_cuda BA 使用的 GPU 设备 ID");
     app.add_option("--ba-native-cuda-max-point-step",
                    baNativeCudaMaxPointStep,
                    "native_cuda 单次点块更新的最大三维位移范数");
     app.add_option("--ba-max-ceres-point-only-observations",
                    baMaxCeresPointOnlyObservations,
-                   "point-only Ceres BA 超过该观测数时回退 legacy_cpu");
+                   "仅参考构建中 point-only Ceres BA 的最大观测数");
     app.add_option("--ba-max-ceres-initial-track-rms",
                    baMaxCeresInitialTrackRms,
                    "Ceres 装配前初始 track RMS 粗差上限（像素），0 表示关闭");
@@ -968,6 +972,8 @@ int main(int argc, char *argv[])
     baOptions.backend = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
     baOptions.ceresCudaDevice = std::max(0, baCudaDevice);
     baOptions.plaMatrixDevice = std::max(0, baPlaMatrixDevice);
+    baOptions.minPlaMatrixGpuCameras = std::max(1, baMinCudaCameras);
+    baOptions.minPlaMatrixGpuObservations = std::max(1, baMinCudaObservations);
     baOptions.minCeresCudaCameras = std::max(1, baMinCudaCameras);
     baOptions.minCeresCudaObservations = std::max(1, baMinCudaObservations);
     baOptions.nativeCudaDevice = std::max(0, baNativeCudaDevice);

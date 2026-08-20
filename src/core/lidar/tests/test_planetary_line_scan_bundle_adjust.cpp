@@ -205,6 +205,7 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
     laser.shots.push_back(shot);
 
     xjw::lidar::PlanetaryLineScanBaOptions options;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.maximumIterations = 30;
     options.imageHuberDeltaPixels = 0.0;
     options.laserRangeWeight = 2.5;
@@ -213,28 +214,126 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
 
     xjw::lidar::PlanetaryLineScanBaResult noLaser;
     std::string error;
-    if (!xjw::lidar::runPlanetaryLineScanBundleAdjust(
-            cameras, network, &laser, options, &noLaser, &error) &&
-        error.find("requires a PlaScan build with Ceres") != std::string::npos)
-    {
-        GTEST_SKIP() << error;
-    }
+    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+        cameras, network, &laser, options, &noLaser, &error)) << error;
     ASSERT_TRUE(noLaser.success) << error;
+    EXPECT_EQ(noLaser.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_LT(noLaser.initialImageRmsPixels, 1.0e-6);
     EXPECT_GT(noLaser.refinedLaserRangeRmsMeters, 10.0);
 
     options.enableLaserRangeConstraints = true;
     xjw::lidar::PlanetaryLineScanBaResult withLaser;
-    if (!xjw::lidar::runPlanetaryLineScanBundleAdjust(
-            cameras, network, &laser, options, &withLaser, &error) &&
-        error.find("requires a PlaScan build with Ceres") != std::string::npos)
-    {
-        GTEST_SKIP() << error;
-    }
+    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+        cameras, network, &laser, options, &withLaser, &error)) << error;
     ASSERT_TRUE(withLaser.success) << error;
+    EXPECT_EQ(withLaser.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_EQ(withLaser.controlPointCount, 8);
     EXPECT_EQ(withLaser.imageObservationCount, 16);
     EXPECT_EQ(withLaser.activeLaserRangeCount, 1);
     EXPECT_LT(withLaser.refinedLaserRangeRmsMeters,
               noLaser.refinedLaserRangeRmsMeters * 0.1);
+
+    for (const xjw::BABackend backend :
+         {xjw::BABackend::PlaMatrixCuda, xjw::BABackend::PlaMatrixOpenCl})
+    {
+        if (!xjw::BundleAdjust::isBackendAvailable(backend))
+        {
+            continue;
+        }
+        options.backend = backend;
+        options.allowBackendFallback = false;
+        xjw::lidar::PlanetaryLineScanBaResult accelerated;
+        ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+            cameras, network, &laser, options, &accelerated, &error)) << error;
+        EXPECT_EQ(accelerated.usedBackend, backend);
+        EXPECT_TRUE(accelerated.usedGpu);
+        EXPECT_FALSE(accelerated.deviceName.empty());
+        EXPECT_NEAR(accelerated.refinedImageRmsPixels,
+                    withLaser.refinedImageRmsPixels, 1.0e-6);
+        EXPECT_NEAR(accelerated.refinedLaserRangeRmsMeters,
+                    withLaser.refinedLaserRangeRmsMeters, 1.0e-6);
+    }
+
+    options.backend = xjw::BABackend::Auto;
+    options.minPlaMatrixGpuCameras = 1000;
+    options.minPlaMatrixGpuObservations = 1000000;
+    xjw::lidar::PlanetaryLineScanBaResult automatic;
+    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+        cameras, network, &laser, options, &automatic, &error)) << error;
+    EXPECT_EQ(automatic.requestedBackend, xjw::BABackend::Auto);
+    EXPECT_EQ(automatic.usedBackend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_FALSE(automatic.backendFallback);
+
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        options.backend = xjw::BABackend::CeresCpu;
+        options.allowBackendFallback = false;
+        xjw::lidar::PlanetaryLineScanBaResult ceres;
+        ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+            cameras, network, &laser, options, &ceres, &error)) << error;
+        ASSERT_TRUE(ceres.success) << error;
+        EXPECT_EQ(ceres.usedBackend, xjw::BABackend::CeresCpu);
+        EXPECT_NEAR(withLaser.refinedImageRmsPixels,
+                    ceres.refinedImageRmsPixels, 1.0e-3);
+        EXPECT_NEAR(withLaser.refinedLaserRangeRmsMeters,
+                    ceres.refinedLaserRangeRmsMeters, 1.0e-3);
+        ASSERT_EQ(withLaser.cameras.size(), ceres.cameras.size());
+        for (std::size_t index = 0; index < withLaser.cameras.size(); ++index)
+        {
+            EXPECT_LT(distance(
+                withLaser.cameras[index].translationBodyFixedMeters,
+                ceres.cameras[index].translationBodyFixedMeters), 0.1);
+            EXPECT_LT(distance(
+                withLaser.cameras[index].angleAxisBodyFixedRadians,
+                ceres.cameras[index].angleAxisBodyFixedRadians), 1.0e-4);
+        }
+    }
+
+    laser.shots.front().pointMode = xjw::lidar::PlanetaryLaserPointMode::Constrained;
+    laser.shots.front().pointCovarianceBodyFixedMetersSquared = {{
+        0.01, 0.0, 0.0,
+        0.0, 0.01, 0.0,
+        0.0, 0.0, 0.01}};
+    options.backend = xjw::BABackend::PlaMatrixCpu;
+    xjw::lidar::PlanetaryLineScanBaResult constrained;
+    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+        cameras, network, &laser, options, &constrained, &error)) << error;
+    ASSERT_TRUE(constrained.success);
+    ASSERT_EQ(constrained.laserShots.size(), 1u);
+    EXPECT_LT(constrained.refinedLaserRangeRmsMeters,
+              noLaser.refinedLaserRangeRmsMeters * 0.1);
+
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        options.backend = xjw::BABackend::CeresCpu;
+        xjw::lidar::PlanetaryLineScanBaResult constrainedCeres;
+        ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+            cameras, network, &laser, options, &constrainedCeres, &error)) << error;
+        EXPECT_NEAR(constrained.refinedImageRmsPixels,
+                    constrainedCeres.refinedImageRmsPixels, 1.0e-3);
+        EXPECT_NEAR(constrained.refinedLaserRangeRmsMeters,
+                    constrainedCeres.refinedLaserRangeRmsMeters, 1.0e-3);
+        EXPECT_LT(distance(
+            constrained.laserShots.front().refinedPointBodyFixedMeters,
+            constrainedCeres.laserShots.front().refinedPointBodyFixedMeters), 0.1);
+    }
+
+    options.backend = xjw::BABackend::PlaMatrixCpu;
+    options.allowBackendFallback = true;
+    options.cancelFlag = std::make_shared<std::atomic<bool>>(true);
+    xjw::lidar::PlanetaryLineScanBaResult cancelled;
+    EXPECT_FALSE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
+        cameras, network, &laser, options, &cancelled, &error));
+    EXPECT_FALSE(cancelled.success);
+    EXPECT_FALSE(cancelled.solutionUsable);
+    EXPECT_FALSE(cancelled.backendFallback);
+    EXPECT_EQ(cancelled.usedBackend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_EQ(cancelled.terminationType, "CANCELLED");
+    for (const auto &camera : cancelled.cameras)
+    {
+        EXPECT_EQ(camera.translationBodyFixedMeters,
+                  (std::array<double, 3>{{0.0, 0.0, 0.0}}));
+        EXPECT_EQ(camera.angleAxisBodyFixedRadians,
+                  (std::array<double, 3>{{0.0, 0.0, 0.0}}));
+    }
 }

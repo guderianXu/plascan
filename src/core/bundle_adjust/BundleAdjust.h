@@ -28,10 +28,9 @@ namespace xjw
 /**
  * @brief BA 求解后端。
  *
- * LegacyCpu 为项目原有的手写 CPU/OpenMP 求解器；CeresCpu/CeresCuda 使用
- * Ceres 构建联合非线性最小二乘问题，其中 CeresCuda 仅在 Ceres 本身
- * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解；PlaMatrixCpu/Cuda/OpenCl
- * 共用固定内参联合 BA，只切换约化 Schur PCG；NativeCuda 当前只负责固定相机的三维点块优化。
+ * LegacyCpu 为项目原有的手写 CPU/OpenMP 求解器；PlaMatrixCpu/Cuda/OpenCl
+ * 共用完整联合 BA，只切换约化 Schur 的线性代数后端；CeresCpu/CeresCuda
+ * 保留为迁移期显式参考后端；NativeCuda 当前只负责固定相机的三维点块优化。
  */
 enum class BABackend
 {
@@ -300,14 +299,14 @@ struct BAOptions
     /// 是否优化所有相机共享的焦距尺度。该选项面向无相机文件/无 EXIF 的空三，
     /// 当前只释放 fu/fv 的公共 scale，主点和畸变保持固定，避免弱几何下过拟合。
     bool refineSharedFocalLength = false;
-    /// 是否优化标定组共享的 fy/fx 比例。仅由 Ceres 联合 BA 实现；默认关闭，
+    /// 是否优化标定组共享的 fy/fx 比例。由联合 BA 实现；默认关闭，
     /// 避免弱几何数据把外参误差吸收到像素宽高比中。
     bool refineSharedFocalAspectRatio = false;
     /// 是否优化标定组共享的主点偏移量。偏移相对于每台相机输入主点应用，
     /// 因而同一标定组可以保持各自分辨率对应的基础主点。
     bool refineSharedPrincipalPoint = false;
     /// 是否优化标定组共享的完整 Brown-Conrady 镜头畸变
-    /// (k1/k2/k3/p1/p2)。仅 Ceres 联合 BA 实现；应配合焦距弱先验和分阶段
+    /// (k1/k2/k3/p1/p2)。应配合焦距弱先验和分阶段
     /// 求解使用，避免镜头参数与外参在弱几何下同时漂移。
     bool refineSharedRadialDistortion = false;
     /// 是否在径向畸变自标定中继续释放 k2/k3/p1/p2。关闭时仅优化 k1，
@@ -431,15 +430,22 @@ struct BAOptions
     int ceresCudaDevice = 0;
     /// PlaMatrix CUDA/OpenCL Schur PCG 使用的稳定设备索引。
     int plaMatrixDevice = 0;
+    /// 实验性混合精度：先用 FP32 PCG 生成初值，再由 FP64 PCG 校正；
+    /// 默认关闭，只有目标 GPU 上基准确认收益后才启用。
+    bool enablePlaMatrixMixedPrecision = false;
+    /// Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小相机数量。
+    int minPlaMatrixGpuCameras = 128;
+    /// Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小观测数量。
+    int minPlaMatrixGpuObservations = 30000;
     /// 自研 CUDA BA 使用的 GPU 设备 ID。
     int nativeCudaDevice = 0;
     /// native_cuda 每个点块 LM step 允许的最大三维位移范数。
     double nativeCudaMaxPointStepNorm = 1.0;
-    /// 参考 COLMAP：问题太小时 GPU 数据搬运开销通常不划算，低于该相机数则回退 Ceres CPU。
+    /// 仅参考构建使用：问题太小时 GPU 数据搬运开销通常不划算，低于该相机数则使用 Ceres CPU。
     int minCeresCudaCameras = 50;
     /// 低于该观测数时，即使 CUDA 可用也优先使用 CPU，避免 GPU 调度/搬运开销大于收益。
     int minCeresCudaObservations = 500000;
-    /// 低于该观测数时，Auto 下的 Ceres CPU 通常也不如 legacy 交替 BA 划算。
+    /// 仅参考构建保留的 Ceres CPU 规模参数。
     int minCeresCpuObservations = 50000;
     /// point-only Ceres 使用 dense QR；超出该观测规模时默认回退 legacy，避免大矩阵内存/稳定性问题。
     int maxCeresPointOnlyObservations = 100000;
@@ -449,15 +455,16 @@ struct BAOptions
     /// Ceres 线性求解策略。Auto 在 CPU 上按问题规模选择 Dense/Sparse/Iterative
     /// Schur；CUDA 当前使用 Dense Schur/Dense QR，并受显存预算门禁保护。
     BACeresLinearSolver ceresLinearSolver = BACeresLinearSolver::Auto;
-    /// Auto 模式下使用 DENSE_SCHUR 的最大可变相机数量。
+    /// CPU 自动模式使用稠密 Schur Cholesky 的最大主变量块数量；
+    /// 超过后 PlaMatrix 使用矩阵自由 PCG，Ceres reference 使用其稀疏/迭代策略。
     int maxDenseSchurCameras = 200;
     /// Auto 模式下使用 SPARSE_SCHUR 的最大可变相机数量；更大问题使用 ITERATIVE_SCHUR。
     int maxSparseSchurCameras = 2000;
     /// Ceres CUDA 预计工作集最多占当前空闲显存的比例，超限时回退 CPU 求解器。
     double maxCeresCudaMemoryFraction = 0.70;
-    /// 请求 Ceres/GPU 后端不可用时是否回退到可用后端。
+    /// 请求加速后端不可用或求解失败时是否允许回退到语义等价的 CPU 后端。
     bool allowBackendFallback = true;
-    /// Auto 后端是否启用质量门控；显式指定 Ceres/CUDA 时不自动替用户回退质量。
+    /// Auto 后端是否启用质量门控；显式指定后端时不自动替用户回退质量。
     bool enableBackendQualityGate = true;
     /// Auto 候选后端允许的最大 RMS 增长倍率；超过则回退 legacy。
     double maxAcceptedRmsGrowth = 1.25;
@@ -599,6 +606,8 @@ struct BAResult
     double plaMatrixFinalCost = 0.0;                    ///< PlaMatrix 最终鲁棒目标函数值
     int plaMatrixAcceptedSteps = 0;                     ///< PlaMatrix 接受的 LM trial step 数
     int plaMatrixRejectedSteps = 0;                     ///< PlaMatrix 拒绝的 LM trial step 数
+    int plaMatrixLinearizations = 0;                    ///< 实际构建 Jacobian/法方程的次数
+    int plaMatrixObjectiveEvaluations = 0;              ///< 完整目标函数遍历次数（含线性化）
     int plaMatrixRejectedInitialTracks = 0;             ///< PlaMatrix 初始 gross gate 拒绝的 track 数
     std::string plaMatrixLinearSolverName = "none";     ///< CPU/CUDA/OpenCL Schur PCG 名称
     std::string plaMatrixDeviceName;                     ///< 实际执行 Schur PCG 的加速设备名
@@ -606,6 +615,7 @@ struct BAResult
     int plaMatrixSchurPatternBuilds = 0;                 ///< 加速后端 Schur CSR pattern 构建次数
     int plaMatrixSchurPatternReuses = 0;                 ///< 加速后端 Schur CSR pattern 复用次数
     bool plaMatrixSchurAssemblyOnDevice = false;         ///< Schur CSR 数值是否由 CUDA/OpenCL 设备装配
+    bool plaMatrixMixedPrecisionUsed = false;            ///< 是否使用 FP32 初解和 FP64 校正
     double plaMatrixSchurAssemblySeconds = 0.0;          ///< 加速后端累计 CSR Schur 组装耗时
     double plaMatrixLinearSolveSeconds = 0.0;            ///< 所有 LM trial 累计线性求解耗时
 

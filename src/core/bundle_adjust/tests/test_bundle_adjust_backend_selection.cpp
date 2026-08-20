@@ -2,13 +2,17 @@
 
 #include "BundleAdjust.h"
 #include "BundleAdjustCeresPlanning.h"
+#include "FramePinholeCamera.h"
 
-TEST(BundleAdjustBackendSelectionTest, SmallProblemUsesLegacyCpu)
+#include <array>
+#include <string>
+#include <vector>
+
+TEST(BundleAdjustBackendSelectionTest, PointOnlyProblemUsesLegacyCpu)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
-    options.minCeresCudaCameras = 50;
-    options.minCeresCudaObservations = 100000;
+    options.refineCameraPose = false;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 10;
@@ -20,13 +24,13 @@ TEST(BundleAdjustBackendSelectionTest, SmallProblemUsesLegacyCpu)
     EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
 }
 
-TEST(BundleAdjustBackendSelectionTest, SmallProblemExplainsWhyCudaIsNotUsed)
+TEST(BundleAdjustBackendSelectionTest, SmallJointProblemUsesPlaMatrixCpu)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
-    options.minCeresCudaCameras = 50;
-    options.minCeresCudaObservations = 500000;
-    options.minCeresCpuObservations = 50000;
+    options.refineCameraPose = true;
+    options.minPlaMatrixGpuCameras = 50;
+    options.minPlaMatrixGpuObservations = 500000;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 16;
@@ -36,16 +40,17 @@ TEST(BundleAdjustBackendSelectionTest, SmallProblemExplainsWhyCudaIsNotUsed)
     const xjw::BABackendDecision decision =
         xjw::BundleAdjust::decideBackendForProblem(stats, options);
 
-    EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
-    EXPECT_EQ(decision.reason, "below_accelerated_problem_size");
+    EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_EQ(decision.reason, "joint_problem_uses_plamatrix_cpu");
 }
 
-TEST(BundleAdjustBackendSelectionTest, LargeProblemCanSelectCudaWhenAvailable)
+TEST(BundleAdjustBackendSelectionTest, LargeJointProblemUsesAvailablePlaMatrixGpu)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
-    options.minCeresCudaCameras = 50;
-    options.minCeresCudaObservations = 100000;
+    options.refineCameraPose = true;
+    options.minPlaMatrixGpuCameras = 50;
+    options.minPlaMatrixGpuObservations = 100000;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 120;
@@ -54,13 +59,17 @@ TEST(BundleAdjustBackendSelectionTest, LargeProblemCanSelectCudaWhenAvailable)
 
     const xjw::BABackend selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
 
-    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCuda))
     {
-        EXPECT_EQ(selected, xjw::BABackend::CeresCuda);
+        EXPECT_EQ(selected, xjw::BABackend::PlaMatrixCuda);
+    }
+    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixOpenCl))
+    {
+        EXPECT_EQ(selected, xjw::BABackend::PlaMatrixOpenCl);
     }
     else
     {
-        EXPECT_NE(selected, xjw::BABackend::CeresCuda);
+        EXPECT_EQ(selected, xjw::BABackend::PlaMatrixCpu);
     }
 }
 
@@ -77,9 +86,8 @@ TEST(BundleAdjustBackendSelectionTest, NativeCudaCapabilityPreventsPoseRefinemen
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
-    options.minCeresCudaCameras = 1000;
-    options.minCeresCudaObservations = 1000000;
-    options.minCeresCpuObservations = 1000000;
+    options.minPlaMatrixGpuCameras = 1000;
+    options.minPlaMatrixGpuObservations = 1000000;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 4;
@@ -90,15 +98,14 @@ TEST(BundleAdjustBackendSelectionTest, NativeCudaCapabilityPreventsPoseRefinemen
     EXPECT_NE(selected, xjw::BABackend::NativeCuda);
 }
 
-TEST(BundleAdjustBackendSelectionTest, SharedFocalUsesJointCeresEvenForSmallProblem)
+TEST(BundleAdjustBackendSelectionTest, SharedFocalUsesPlaMatrixEvenForSmallProblem)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
     options.refineSharedFocalLength = true;
-    options.minCeresCudaCameras = 1000;
-    options.minCeresCudaObservations = 1000000;
-    options.minCeresCpuObservations = 1000000;
+    options.minPlaMatrixGpuCameras = 1000;
+    options.minPlaMatrixGpuObservations = 1000000;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 8;
@@ -106,14 +113,79 @@ TEST(BundleAdjustBackendSelectionTest, SharedFocalUsesJointCeresEvenForSmallProb
     stats.observationCount = 1600;
 
     const xjw::BABackend selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    EXPECT_EQ(selected, xjw::BABackend::PlaMatrixCpu);
+}
+
+TEST(BundleAdjustBackendSelectionTest, SoftConstraintUsesPlaMatrixWhenPoseIsFixed)
+{
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.enableControlPointConstraints = true;
+    options.minPlaMatrixGpuCameras = 1000;
+    options.minPlaMatrixGpuObservations = 1000000;
+
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 3;
+    stats.trackCount = 20;
+    stats.observationCount = 60;
+
+    const xjw::BABackendDecision decision =
+        xjw::BundleAdjust::decideBackendForProblem(stats, options);
+
+    EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_EQ(decision.reason, "constraint_problem_uses_plamatrix_cpu");
+}
+
+TEST(BundleAdjustBackendSelectionTest, ProductionBuildRejectsExplicitCeresWithoutLegacyFallback)
+{
     if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
-        EXPECT_EQ(selected, xjw::BABackend::CeresCpu);
+        GTEST_SKIP() << "Ceres reference backend is enabled in this build";
     }
-    else
-    {
-        EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
-    }
+
+    std::vector<xjw::FramePinholeCamera> cameras(2);
+    cameras[0].setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    cameras[0].setPose({{1.0, 0.0, 0.0,
+                         0.0, 1.0, 0.0,
+                         0.0, 0.0, 1.0}},
+                       {{-1.0, 0.0, 0.0}});
+    cameras[1].setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    cameras[1].setPose({{1.0, 0.0, 0.0,
+                         0.0, 1.0, 0.0,
+                         0.0, 0.0, 1.0}},
+                       {{1.0, 0.0, 0.0}});
+
+    xjw::BATrack track;
+    track.initialPoint = {{0.0, 0.0, 10.0}};
+    track.observations = {
+        xjw::BAObservation{0, 612.0, 384.0, 1.0},
+        xjw::BAObservation{1, 412.0, 384.0, 1.0},
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.allowBackendFallback = true;
+    options.refineCameraPose = false;
+
+    const xjw::BAResult cpu_result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_EQ(cpu_result.solveStatus, xjw::BASolveStatus::BackendUnavailable);
+    EXPECT_EQ(cpu_result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_FALSE(cpu_result.backendFallback);
+    EXPECT_NE(cpu_result.backendMessage.find("PLASCAN_ENABLE_CERES_REFERENCE=ON"),
+              std::string::npos);
+
+    options.backend = xjw::BABackend::CeresCuda;
+    const xjw::BAResult cuda_result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_EQ(cuda_result.solveStatus, xjw::BASolveStatus::BackendUnavailable);
+    EXPECT_EQ(cuda_result.usedBackend, xjw::BABackend::CeresCuda);
+    EXPECT_FALSE(cuda_result.backendFallback);
+    EXPECT_NE(cuda_result.backendMessage.find("PLASCAN_ENABLE_CERES_REFERENCE=ON"),
+              std::string::npos);
 }
 
 TEST(BundleAdjustCeresPlanningTest, AutoUsesSolverMatchingCameraScale)
@@ -145,15 +217,15 @@ TEST(BundleAdjustCeresPlanningTest, PointOnlyProblemUsesDenseQr)
     EXPECT_FALSE(plan.useCuda);
 }
 
-TEST(BundleAdjustBackendSelectionTest, LargeSharedRadialProblemUsesCeresCudaWhenAvailable)
+TEST(BundleAdjustBackendSelectionTest, LargeSharedRadialProblemUsesAvailablePlaMatrixGpu)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
     options.refineSharedFocalLength = true;
     options.refineSharedRadialDistortion = true;
-    options.minCeresCudaCameras = 50;
-    options.minCeresCudaObservations = 100000;
+    options.minPlaMatrixGpuCameras = 50;
+    options.minPlaMatrixGpuObservations = 100000;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 442;
@@ -162,22 +234,20 @@ TEST(BundleAdjustBackendSelectionTest, LargeSharedRadialProblemUsesCeresCudaWhen
 
     const xjw::BABackendDecision decision =
         xjw::BundleAdjust::decideBackendForProblem(stats, options);
-    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCuda))
     {
-        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCuda);
-        EXPECT_EQ(decision.reason, "large_joint_shared_intrinsics_uses_ceres_cuda");
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCuda);
+        EXPECT_EQ(decision.reason, "large_joint_problem_uses_plamatrix_cuda");
     }
-    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixOpenCl))
     {
-        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
-        EXPECT_EQ(decision.reason, "joint_shared_intrinsics_requires_ceres");
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixOpenCl);
+        EXPECT_EQ(decision.reason, "large_joint_problem_uses_plamatrix_opencl");
     }
     else
     {
-        // 无 Ceres 的构建只能让自动选择回到 LegacyCpu；实际求解入口随后会
-        // 明确拒绝 LegacyCpu 不支持的共享径向畸变优化，不会静默忽略参数。
-        EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
-        EXPECT_EQ(decision.reason, "below_accelerated_problem_size");
+        EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCpu);
+        EXPECT_EQ(decision.reason, "joint_problem_uses_plamatrix_cpu");
     }
 }
 

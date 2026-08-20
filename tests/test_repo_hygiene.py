@@ -105,19 +105,22 @@ class RepoHygieneTest(unittest.TestCase):
         )
         self.assertEqual("linux", linux_vulkan_loader["platform"])
         self.assertEqual(["xcb"], linux_vulkan_loader["features"])
-        self.assertIn("ceres-suitesparse", manifest["default-features"])
-        self.assertIn("ceres-suitesparse", manifest["features"])
-        production_ceres_features = manifest["features"]["ceres-suitesparse"]["dependencies"][0][
-            "features"
-        ]
-        self.assertEqual(["lapack", "suitesparse"], production_ceres_features)
-        ceres_dependency = next(
+        linux_lapack = next(
             dependency
             for dependency in manifest["dependencies"]
-            if isinstance(dependency, dict) and dependency.get("name") == "ceres"
+            if isinstance(dependency, dict) and dependency.get("name") == "lapack"
         )
-        self.assertFalse(ceres_dependency["default-features"])
-        self.assertNotIn("features", ceres_dependency)
+        self.assertEqual("linux", linux_lapack["platform"])
+        self.assertEqual([], manifest["default-features"])
+        self.assertNotIn("ceres", manifest["dependencies"])
+        self.assertIn("ceres-suitesparse", manifest["features"])
+        reference_ceres_dependency = manifest["features"]["ceres-suitesparse"]["dependencies"][0]
+        reference_ceres_features = reference_ceres_dependency[
+            "features"
+        ]
+        self.assertEqual("ceres", reference_ceres_dependency["name"])
+        self.assertFalse(reference_ceres_dependency["default-features"])
+        self.assertEqual(["lapack", "suitesparse"], reference_ceres_features)
 
         presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
         linux_cuda_opencl = next(
@@ -136,7 +139,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertEqual("ON", cuda_cache["PLASCAN_ENABLE_CUDA"])
         self.assertEqual("ON", cuda_cache["PLASCAN_ENABLE_OPENCL"])
         self.assertEqual("OFF", cuda_cache["PLASCAN_ENABLE_TENSORRT"])
-        self.assertEqual("ceres-cuda", cuda_cache["VCPKG_MANIFEST_FEATURES"])
+        self.assertNotIn("VCPKG_MANIFEST_FEATURES", cuda_cache)
+        self.assertEqual("OFF", cuda_cache["PLASCAN_ENABLE_CERES_REFERENCE"])
         self.assertEqual(
             "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed",
             cuda_cache["VCPKG_INSTALLED_DIR"],
@@ -409,7 +413,9 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("-UVCPKG_MANIFEST_FEATURES", text)
         self.assertIn("-UVCPKG_OVERLAY_PORTS", text)
         self.assertIn("manifestFeaturesValue", text)
-        self.assertIn('$manifestFeaturesValue = "ceres-cuda"', text)
+        self.assertIn('$manifestFeaturesValue = "ceres-cuda;ceres-suitesparse"', text)
+        self.assertIn("[bool] $EnableCeresCudaBa = $false", text)
+        self.assertIn("-DPLASCAN_ENABLE_CERES_REFERENCE=OFF", text)
         self.assertIn("Assert-OpenCvCpuOnlyFeatures", text)
         self.assertIn("Assert-CeresCudaFeatures", text)
         self.assertIn(

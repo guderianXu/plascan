@@ -14,16 +14,19 @@ class BaCudaContractsTest(unittest.TestCase):
     def read_text(self, relative_path: str) -> str:
         return read_text(relative_path)
 
-    def test_windows_cuda_build_enables_ceres_cuda_manifest_feature(self):
+    def test_windows_cuda_build_keeps_ceres_as_opt_in_reference(self):
         script = read_text("scripts/build_win/build_windows_cuda.ps1")
 
         self.assertIn("EnableCeresCudaBa", script)
-        self.assertIn("ceres-cuda", script)
+        self.assertIn('[bool] $EnableCeresCudaBa = $false', script)
+        self.assertIn('"ceres-cuda;ceres-suitesparse"', script)
+        self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=ON", script)
+        self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=OFF", script)
         self.assertIn("manifestFeaturesValue", script)
         self.assertIn("VCPKG_MANIFEST_FEATURES=$manifestFeaturesValue", script)
 
         manifest = json.loads(read_text("vcpkg.json"))
-        self.assertIn("ceres-suitesparse", manifest["default-features"])
+        self.assertEqual([], manifest["default-features"])
         suitesparse_dependencies = manifest["features"]["ceres-suitesparse"][
             "dependencies"
         ]

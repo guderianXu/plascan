@@ -1,5 +1,3 @@
-find_package(Ceres CONFIG QUIET)
-
 if(DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
     set(BA_HAS_NATIVE_CUDA TRUE)
     set(BA_NATIVE_CUDA_SOURCES BundleAdjustNativeCuda.cu)
@@ -50,12 +48,12 @@ target_link_libraries(bundle_adjust
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
-if(Ceres_FOUND)
+if(PLASCAN_ENABLE_CERES_REFERENCE)
     target_link_libraries(bundle_adjust PRIVATE Ceres::ceres)
     target_compile_definitions(bundle_adjust PRIVATE PLASCAN_BA_HAS_CERES=1)
-    message(STATUS "bundle_adjust: Ceres 后端已启用 (${CERES_VERSION})")
+    message(STATUS "bundle_adjust: optional Ceres reference backend enabled (${CERES_VERSION})")
 else()
-    message(STATUS "bundle_adjust: Ceres 未找到，仅启用 legacy CPU 后端")
+    message(STATUS "bundle_adjust: production build uses PlaMatrix without Ceres")
 endif()
 
 if(OpenMP_CXX_FOUND)

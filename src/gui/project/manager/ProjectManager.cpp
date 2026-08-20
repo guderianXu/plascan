@@ -2350,13 +2350,16 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.baOpt.plaMatrixDevice = qMax(
         0,
         extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
-    opts.baOpt.minCeresCudaCameras = qMax(
+    opts.baOpt.minPlaMatrixGpuCameras = qMax(
         1,
-        extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(opts.baOpt.minCeresCudaCameras));
-    opts.baOpt.minCeresCudaObservations = qMax(
+        extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(
+            opts.baOpt.minPlaMatrixGpuCameras));
+    opts.baOpt.minPlaMatrixGpuObservations = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(
-            opts.baOpt.minCeresCudaObservations));
+            opts.baOpt.minPlaMatrixGpuObservations));
+    opts.baOpt.minCeresCudaCameras = opts.baOpt.minPlaMatrixGpuCameras;
+    opts.baOpt.minCeresCudaObservations = opts.baOpt.minPlaMatrixGpuObservations;
     opts.baOpt.nativeCudaDevice = qMax(
         0,
         extraSettings.value(QStringLiteral("ba_native_cuda_device")).toInt(opts.baOpt.nativeCudaDevice));
