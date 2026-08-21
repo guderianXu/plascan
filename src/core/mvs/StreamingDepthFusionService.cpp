@@ -159,7 +159,7 @@ bool fuseDepthMapsStreaming(int frameCount,
 
         StereoFusionConfig fusionConfig;
         fusionConfig.minNumPixels = std::max(1, config.minConsistentViews);
-        fusionConfig.maxReprojError = config.depthConsistency;
+        float configured_reprojection_pixels = config.depthConsistency;
         fusionConfig.maxDepthError = 0.05f;
         fusionConfig.checkNumImages = std::min(neighborCount, static_cast<int>(frames.size()) - 1);
         fusionConfig.workerCount = std::max(1, config.workerCount);
@@ -178,8 +178,13 @@ bool fuseDepthMapsStreaming(int frameCount,
         {
             fusionConfig.minNumPixels = 1;
             fusionConfig.maxDepthError = std::max(fusionConfig.maxDepthError, 0.08f);
-            fusionConfig.maxReprojError = std::max(fusionConfig.maxReprojError, 3.0f);
+            configured_reprojection_pixels = std::max(
+                configured_reprojection_pixels, 3.0f);
         }
+
+        fusionConfig.maxReprojError = configured_reprojection_pixels;
+        fusionConfig.localDepthGradientRadiusPixels = 1;
+        fusionConfig.pixelParametersUsePreparedRaster = true;
 
         DepthMapFusion fusion(fusionConfig);
         std::vector<FusedPoint> batchPoints;

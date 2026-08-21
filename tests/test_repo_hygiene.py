@@ -111,7 +111,14 @@ class RepoHygieneTest(unittest.TestCase):
         }
         self.assertNotIn("lapack", production_dependency_names)
         self.assertNotIn("openblas", production_dependency_names)
+        self.assertNotIn("openmesh", production_dependency_names)
         self.assertNotIn("PLAMATRIX_WITH_SYSTEM_LINALG", packages_text)
+
+        meshing_cmake_text = (
+            ROOT / "src" / "core" / "mesh" / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("find_package(OpenMesh", meshing_cmake_text)
+        self.assertNotIn("OpenMeshSimplifier", meshing_cmake_text)
         plamatrix_cmake_text = (
             ROOT / "3rdparty" / "plamatrix" / "CMakeLists.txt"
         ).read_text(encoding="utf-8")

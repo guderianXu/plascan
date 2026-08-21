@@ -4,7 +4,7 @@
         {
             "name": "dino",
             "depth_map_dir": "${BUILD_DIR}/analysis/dino_true_pose_depth_moderate_strict/mvs",
-            "settings_json": "${REPO_ROOT}/scripts/validation/mesh_gui_detail_openmesh_dino_170k_v5.json",
+            "settings_json": "${REPO_ROOT}/scripts/validation/mesh_gui_detail_topology_safe_dino_170k_v5.json",
             "settings_key": "generate_model",
             "expected_depth_file_count": 161,
             "expected_depth_artifacts_sha256": "0f11813b9af8318dede1c8d1a110fbd05804ec4cc2be734b87b6239c31982b38",

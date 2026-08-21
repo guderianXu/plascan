@@ -64,6 +64,21 @@ bool containsReason(const QJsonArray &reasons, const QString &expected)
         });
 }
 
+bool hasConsistentQualityDecisionAcceptance(
+    const QString &acceptance,
+    const QJsonObject &quality_decision)
+{
+    if (!quality_decision.contains(QStringLiteral("acceptance")))
+    {
+        return true;
+    }
+    const QJsonValue nested_acceptance = quality_decision.value(
+        QStringLiteral("acceptance"));
+    return nested_acceptance.isString() &&
+        nested_acceptance.toString().trimmed().compare(
+            acceptance.trimmed(), Qt::CaseInsensitive) == 0;
+}
+
 }
 
 MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
@@ -74,8 +89,20 @@ MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
     MvsDepthFrameQualification qualification;
     qualification.acceptance = artifact.value(
         QStringLiteral("acceptance")).toString();
-    qualification.fusionEligible = artifact.value(
-        QStringLiteral("fusion_eligible")).toBool(false);
+    const QJsonValue fusion_eligible = artifact.value(
+        QStringLiteral("fusion_eligible"));
+    qualification.fusionEligibilityKnown = fusion_eligible.isBool();
+    qualification.fusionEligible =
+        qualification.fusionEligibilityKnown && fusion_eligible.toBool();
+    qualification.role = hasConsistentQualityDecisionAcceptance(
+                             qualification.acceptance,
+                             quality_decision)
+        ? qualifyDepthFrameRole(
+              qualification.acceptance,
+              qualification.fusionEligibilityKnown,
+              qualification.fusionEligible,
+              artifact.value(QStringLiteral("status")).toString())
+        : DepthFrameRole::Excluded;
 
     const QJsonArray quality_reasons = quality_decision.value(
         QStringLiteral("reasons")).toArray();
@@ -91,6 +118,22 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     QJsonObject object;
     object.insert(QStringLiteral("ref_index"), refIndex);
     object.insert(QStringLiteral("ref_image"), refImage);
+    if (!preparedImage.isEmpty())
+    {
+        object.insert(QStringLiteral("prepared_image"), preparedImage);
+    }
+    if (!preparedValidMaskPath.isEmpty())
+    {
+        object.insert(
+            QStringLiteral("prepared_valid_mask_path"),
+            preparedValidMaskPath);
+    }
+    if (!preparedCameraModel.isEmpty())
+    {
+        object.insert(
+            QStringLiteral("prepared_camera_model"),
+            preparedCameraModel);
+    }
     object.insert(QStringLiteral("source_images"), stringListToJsonArray(sourceImages));
     QJsonArray source_indices;
     for (const int source_index : sourceIndices)
@@ -205,6 +248,10 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("missing_reason_path"), missingReasonPath);
     object.insert(QStringLiteral("missing_reason_preview_path"),
                   missingReasonPreviewPath);
+    object.insert(QStringLiteral("effective_native_final_depth_grid"),
+                  effectiveNativeFinalDepthGrid);
+    object.insert(QStringLiteral("pixel_domain_diagnostics"),
+                  pixelDomainDiagnostics);
     object.insert(QStringLiteral("grid_width"), gridWidth);
     object.insert(QStringLiteral("grid_height"), gridHeight);
     object.insert(QStringLiteral("elapsed_ms"), QString::number(elapsedMs));
@@ -219,6 +266,12 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     MvsDepthFrameRecord record;
     record.refIndex = object.value(QStringLiteral("ref_index")).toInt(-1);
     record.refImage = object.value(QStringLiteral("ref_image")).toString();
+    record.preparedImage = object.value(
+        QStringLiteral("prepared_image")).toString();
+    record.preparedValidMaskPath = object.value(
+        QStringLiteral("prepared_valid_mask_path")).toString();
+    record.preparedCameraModel = object.value(
+        QStringLiteral("prepared_camera_model")).toObject();
     record.sourceImages = jsonArrayToStringList(object.value(QStringLiteral("source_images")).toArray());
     for (const QJsonValue &value : object.value(QStringLiteral("source_indices")).toArray())
     {
@@ -286,13 +339,9 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("pyramid_minimum_short_side")).toInt(0);
     record.pyramidDegradedReason = object.value(
         QStringLiteral("pyramid_degraded_reason")).toString();
-    record.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
+    record.sceneProfile = canonicalDepthSceneProfile(
+        object.value(QStringLiteral("scene_profile")).toString());
     record.filterMode = object.value(QStringLiteral("filter_mode")).toString();
-    record.acceptance = object.value(QStringLiteral("acceptance")).toString();
-    record.fusionEligibilityKnown = object.contains(
-        QStringLiteral("fusion_eligible"));
-    record.fusionEligible = object.value(
-        QStringLiteral("fusion_eligible")).toBool(false);
     record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
     record.cameraModel = object.value(QStringLiteral("camera_model")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
@@ -328,6 +377,10 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("missing_reason_path")).toString();
     record.missingReasonPreviewPath = object.value(
         QStringLiteral("missing_reason_preview_path")).toString();
+    record.effectiveNativeFinalDepthGrid = object.value(
+        QStringLiteral("effective_native_final_depth_grid")).toBool(false);
+    record.pixelDomainDiagnostics = object.value(
+        QStringLiteral("pixel_domain_diagnostics")).toObject();
     record.gridWidth = object.value(QStringLiteral("grid_width")).toInt(0);
     record.gridHeight = object.value(QStringLiteral("grid_height")).toInt(0);
     const QJsonValue elapsed = object.value(QStringLiteral("elapsed_ms"));
@@ -337,6 +390,12 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.configHash = object.value(QStringLiteral("config_hash")).toString();
     record.algorithmRevision = object.value(
         QStringLiteral("algorithm_revision")).toInt(0);
+    const MvsDepthFrameQualification qualification =
+        qualifyMvsDepthFrameArtifact(object);
+    record.acceptance = qualification.acceptance;
+    record.fusionEligibilityKnown = qualification.fusionEligibilityKnown;
+    record.fusionEligible = qualification.fusionEligible;
+    record.role = qualification.role;
     return record;
 }
 
@@ -475,14 +534,17 @@ QVector<MvsDepthFrameRecord> MvsWorkspaceManifest::completedFramesSortedByName()
 
 void MvsWorkspaceManifest::upsertFrame(const MvsDepthFrameRecord &record)
 {
-    const int index = findFrameIndex(record.refIndex);
+    MvsDepthFrameRecord normalized = record;
+    normalized.role = qualifyMvsDepthFrameArtifact(
+        normalized.toJson()).role;
+    const int index = findFrameIndex(normalized.refIndex);
     if (index >= 0)
     {
-        _frames[index] = record;
+        _frames[index] = normalized;
     }
     else
     {
-        _frames.push_back(record);
+        _frames.push_back(normalized);
     }
 }
 
@@ -506,6 +568,10 @@ void MvsWorkspaceManifest::markRunning(int refIndex, const QString &refImage, co
 void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
 {
     MvsDepthFrameRecord completed = record;
+    const bool has_explicit_acceptance =
+        !record.acceptance.trimmed().isEmpty();
+    const bool has_explicit_qualification_update =
+        has_explicit_acceptance || record.fusionEligibilityKnown;
     // A completed artifact belongs to the running implementation even when a
     // replay caller seeded the record from an older manifest. Keeping the
     // caller's stale value makes the root and per-frame revisions disagree.
@@ -550,7 +616,8 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
         completed.depthProvenanceSummary =
             _frames[index].depthProvenanceSummary;
     }
-    if (completed.qualityDecision.isEmpty() && index >= 0)
+    if (completed.qualityDecision.isEmpty() &&
+        !has_explicit_qualification_update && index >= 0)
     {
         completed.qualityDecision = _frames[index].qualityDecision;
     }
@@ -582,12 +649,13 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.filterMode = _frames[index].filterMode;
     }
-    if (completed.acceptance.isEmpty() && index >= 0)
+    // acceptance and fusion_eligible are one qualification decision. Inherit
+    // them only when the update supplies neither half; mixing a new half with
+    // a stale half can silently recreate a Primary role.
+    if (!has_explicit_acceptance && !completed.fusionEligibilityKnown &&
+        index >= 0)
     {
         completed.acceptance = _frames[index].acceptance;
-    }
-    if (!completed.fusionEligibilityKnown && index >= 0)
-    {
         completed.fusionEligibilityKnown =
             _frames[index].fusionEligibilityKnown;
         completed.fusionEligible = _frames[index].fusionEligible;
@@ -599,6 +667,20 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.cameraModel.isEmpty() && index >= 0)
     {
         completed.cameraModel = _frames[index].cameraModel;
+    }
+    if (completed.preparedImage.isEmpty() && index >= 0)
+    {
+        completed.preparedImage = _frames[index].preparedImage;
+    }
+    if (completed.preparedValidMaskPath.isEmpty() && index >= 0)
+    {
+        completed.preparedValidMaskPath =
+            _frames[index].preparedValidMaskPath;
+    }
+    if (completed.preparedCameraModel.isEmpty() && index >= 0)
+    {
+        completed.preparedCameraModel =
+            _frames[index].preparedCameraModel;
     }
     if (completed.poseRefinementDiagnostics.isEmpty() && index >= 0)
     {
@@ -662,6 +744,16 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return false;
     }
 
+    if (record.algorithmRevision >= kMvsPreparedRasterProvenanceRevision &&
+        (record.preparedImage.isEmpty() ||
+         !QFileInfo::exists(record.preparedImage) ||
+         record.preparedValidMaskPath.isEmpty() ||
+         !QFileInfo::exists(record.preparedValidMaskPath) ||
+         record.preparedCameraModel.isEmpty()))
+    {
+        return false;
+    }
+
     const auto artifact_exists = [](const QString &path)
     {
         return !path.isEmpty() && QFileInfo::exists(path);
@@ -682,8 +774,13 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
 
     if (record.algorithmRevision >= kMvsGeometrySourceOrdinalRevision)
     {
-        if (!artifact_exists(record.rawGeometrySourceMaskPath) ||
-            record.geometrySourceIndices.isEmpty() ||
+        const bool has_source_mask_path =
+            !record.rawGeometrySourceMaskPath.trimmed().isEmpty();
+        const bool has_source_ordinals =
+            !record.geometrySourceIndices.isEmpty();
+        if (has_source_mask_path != has_source_ordinals ||
+            (has_source_mask_path &&
+             !artifact_exists(record.rawGeometrySourceMaskPath)) ||
             record.geometrySourceIndices.size() > 16)
         {
             return false;
@@ -706,9 +803,13 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         }
     }
 
+    if (!isKnownDepthSceneProfile(record.sceneProfile))
+    {
+        return false;
+    }
     const bool requires_adaptive_geometry_evidence =
         record.algorithmRevision >= kMvsAdaptiveGeometryEvidenceRevision &&
-        record.sceneProfile == QStringLiteral("orbital_object");
+        isOrbitalDepthSceneProfile(record.sceneProfile);
     if (!requires_adaptive_geometry_evidence)
     {
         return true;
@@ -841,11 +942,31 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                     ? config.configuredSourceViewCount
                     : config.numSourceViews);
     root.insert(QStringLiteral("num_source_views"), config.numSourceViews);
+    if (std::isfinite(config.sourceMaximumAngleDegCap) &&
+        config.sourceMaximumAngleDegCap > 0.0f)
+    {
+        root.insert(QStringLiteral("source_maximum_angle_deg_cap"),
+                    config.sourceMaximumAngleDegCap);
+    }
+    if (config.evaluateCompleteVisibilityCandidatePool)
+    {
+        root.insert(
+            QStringLiteral("evaluate_complete_visibility_candidate_pool"),
+            true);
+    }
+    if (std::isfinite(config.sourceAngleSoftRankingStrength) &&
+        config.sourceAngleSoftRankingStrength > 0.0f)
+    {
+        root.insert(QStringLiteral("source_angle_soft_ranking_strength"),
+                    config.sourceAngleSoftRankingStrength);
+    }
     root.insert(QStringLiteral("z_near_scale"), config.zNearScale);
     root.insert(QStringLiteral("z_far_scale"), config.zFarScale);
     root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
     root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("preserve_native_final_depth_grid"),
+                config.preserveNativeFinalDepthGrid);
     root.insert(QStringLiteral("resolved_image_cache_strategy"),
                 QString::fromStdString(config.resolvedImageCacheStrategy));
     root.insert(QStringLiteral("resolved_image_cache_capacity"),

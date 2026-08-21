@@ -7,6 +7,10 @@
 #define PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH ""
 #endif
 
+#ifndef PLASCAN_TEXTURE_MAP_CLI_PATH
+#define PLASCAN_TEXTURE_MAP_CLI_PATH ""
+#endif
+
 namespace
 {
 
@@ -168,6 +172,184 @@ TEST(MvsDepthReprocessCliContractTest, PoseRefinementIsExplicitCandidateOnlyOptI
     });
 }
 
+TEST(MvsDepthReprocessCliContractTest, NativeFinalDepthGridIsExplicitAndAudited)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--native-depth-grid",
+        "config.preserveNativeFinalDepthGrid = nativeDepthGrid",
+        "preserve_native_final_depth_grid",
+        "仅通用、未极线校正帧",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     SourceMaximumAngleCapIsExplicitTighteningOnlyAndAudited)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--source-max-angle-deg",
+        "CLI::Range(0.0, 90.0)",
+        "config.sourceMaximumAngleDegCap",
+        "source_maximum_angle_deg_cap",
+        "source_maximum_angle_scope",
+        "patchmatch_source_plan",
+        "min_scene_maximum_and_configured_cap",
+        "0=禁用，只收紧场景推导值",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     SourceMaximumAngleCapCannotBeBypassedBySequenceFallback)
+{
+    const QString generator = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString planner = readSourceFile(
+        QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
+
+    expectContainsAll(generator, {
+        "if (angle_cap_enabled)",
+        "plannerOptions.allowSequenceFallback = false",
+        "mvsSourceAngleDiagnosticsToJson",
+        "safe_baseline_source_shortfall",
+        "applySourceAngleCapShortfallSafety",
+        "source_angle_cap_source_shortfall",
+    });
+    expectContainsAll(planner, {
+        "explicit_source_angle_cap",
+        "sequence_fallback_allowed",
+        "selected_source_count",
+        "selected_maximum_degrees",
+        "angle_rejected_candidate_count",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     CompleteVisibilityPoolAndSoftRankingAreExplicitAndAudited)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString planner = readSourceFile(
+        QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
+
+    expectContainsAll(source, {
+        "--source-complete-visibility-pool",
+        "--source-angle-soft-ranking-strength",
+        "默认关闭的专家实验",
+        "内部诊断",
+        "不作为普通用户质量策略",
+        "CLI::Range(0.0, 4.0)",
+        "config.evaluateCompleteVisibilityCandidatePool",
+        "config.sourceAngleSoftRankingStrength",
+        "validateMvsSourceRankingConfiguration",
+        "evaluate_complete_visibility_candidate_pool",
+        "source_candidate_pool_policy",
+        "complete_evaluated_visibility_candidate_pool",
+        "source_angle_soft_ranking_strength",
+        "legacy_score*exp(-strength*t)",
+    });
+    expectContainsAll(generator, {
+        "legacyCandidatePoolClosed",
+        "evaluateCompleteVisibilityCandidatePool",
+        "plannerOptions.auditSourceRanking",
+        "legacyCandidateAngles.push_back(medianAngle)",
+        "legacyCandidateAngles)",
+        "if (legacy_evaluated_candidate && hasRequiredPairQuality",
+        "if (_config.evaluateCompleteVisibilityCandidatePool)",
+        "plannerOptions.softMaxTriangulationAngleDeg",
+        "plannerOptions.maxTriangulationAngleDeg",
+        "mvsSourceRankingDiagnosticsToJson",
+    });
+    expectContainsAll(planner, {
+        "complete_evaluated_visibility_candidate_pool",
+        "all_co_visible_or_required_pairs",
+        "deterministic_bounded_graph",
+        "legacy_score*exp(-strength*t)",
+        "control_selected_count",
+        "treatment_selected_count",
+        "soft_maximum_degrees",
+        "effective_maximum_degrees",
+        "count_invariant",
+        "selection_changed",
+        "selected_view_set_changed",
+        "selected_order_changed",
+        "control_candidate_ranking",
+        "treatment_candidate_ranking",
+        "control_qualified_candidate_count",
+        "control_qualified_tier_entry_count",
+        "treatment_qualified_candidate_count",
+        "treatment_qualified_tier_entry_count",
+        "selected_by_plan",
+        "ranking_soft_maximum_degrees",
+        "ranking_effective_maximum_degrees",
+    });
+
+    const QString default_report_initializer = sectionBetween(
+        source,
+        "QJsonObject report{",
+        "if (completeVisibilityCandidatePool)");
+    expectNotContainsAll(default_report_initializer, {
+        "evaluate_complete_visibility_candidate_pool",
+        "source_candidate_pool_policy",
+        "source_angle_soft_ranking_strength",
+        "source_angle_soft_ranking_policy",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     RejectsSoftRankingWithoutCompletePoolOrWithHardCap)
+{
+    const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString manifestPath = writeReplayManifest(tempDir.path(), true);
+    const QString sparsePath =
+        QDir(tempDir.path()).filePath(QStringLiteral("empty_sparse.ply"));
+    writeBinaryPly(sparsePath, {});
+
+    const QString outputWithoutPool =
+        QDir(tempDir.path()).filePath(QStringLiteral("without_pool"));
+    const CliResult withoutPool = runCli(exe, {
+        QStringLiteral("--input-manifest"), manifestPath,
+        QStringLiteral("--sparse-cloud"), sparsePath,
+        QStringLiteral("--output-dir"), outputWithoutPool,
+        QStringLiteral("--source-angle-soft-ranking-strength"),
+        QStringLiteral("1"),
+    });
+    EXPECT_EQ(withoutPool.exitCode, 1);
+    expectContainsAll(withoutPool.stderrText, {
+        "soft ranking",
+        "complete visibility candidate pool",
+    });
+    EXPECT_FALSE(QFileInfo::exists(outputWithoutPool));
+
+    const QString outputWithCap =
+        QDir(tempDir.path()).filePath(QStringLiteral("with_cap"));
+    const CliResult withCap = runCli(exe, {
+        QStringLiteral("--input-manifest"), manifestPath,
+        QStringLiteral("--sparse-cloud"), sparsePath,
+        QStringLiteral("--output-dir"), outputWithCap,
+        QStringLiteral("--source-complete-visibility-pool"),
+        QStringLiteral("--source-angle-soft-ranking-strength"),
+        QStringLiteral("1"),
+        QStringLiteral("--source-max-angle-deg"), QStringLiteral("25"),
+    });
+    EXPECT_EQ(withCap.exitCode, 1);
+    expectContainsAll(withCap.stderrText, {
+        "soft ranking",
+        "hard source angle cap",
+    });
+    EXPECT_FALSE(QFileInfo::exists(outputWithCap));
+}
+
 TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticOptOut)
 {
     const QString source = readSourceFile(
@@ -177,6 +359,44 @@ TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticO
         "--disable-targeted-gap-recovery",
         "config.enableTargetedGapRecovery = !disableTargetedGapRecovery",
         "用于同输入 A/B 对比",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     StageSnapshotsAreSelectedBoundedAndConditionallyReported)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+
+    expectContainsAll(source, {
+        "--stage-snapshot-refs",
+        "--stage-snapshot-max-long-edge",
+        "--stage-snapshot-budget-mib",
+        "config.stageSnapshotReferenceIndices = stageSnapshotRefs",
+        "stage_snapshots/manifest.json",
+        "stage_snapshot_status",
+    });
+    expectContainsAll(generator, {
+        "MvsStageSnapshotStage::PatchMatchOutput",
+        "MvsStageSnapshotStage::CrossViewConsistency",
+        "MvsStageSnapshotStage::ConfidencePostprocess",
+        "MvsStageSnapshotStage::FinalAdmission",
+        "single_frame_output_after_sparse_prior_and_local_filter",
+        "after_cross_view_filter_and_repair_before_confidence_postprocess",
+        "after_confidence_postprocess_and_anchored_repair",
+        "after_final_quality_evaluation_before_artifact_publication",
+    });
+
+    const QString default_report_initializer = sectionBetween(
+        source,
+        "QJsonObject report{",
+        "if (completeVisibilityCandidatePool)");
+    expectNotContainsAll(default_report_initializer, {
+        "stage_snapshot_ref_indices",
+        "stage_snapshot_manifest",
+        "stage_snapshot_status",
     });
 }
 
@@ -309,10 +529,13 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
         QStringLiteral("src/cli/workflows/cli_aerial_triangulation.cpp"));
     const QString mesh = readSourceFile(
         QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+    const QString texture = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_texture_map.cpp"));
 
     expectContainsAll(cmake, {
         "aerial_triangulation_cli",
         "mesh_reconstruct_cli",
+        "texture_map_cli",
         "three_d_reconstruction_cli",
         "reconstruct_pipeline_cli",
     });
@@ -352,6 +575,13 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
     expectContainsAll(mesh, {
         "GUI 等价模型生成工具",
         "xjw::mesh::workflow::buildModel",
+    });
+    expectContainsAll(texture, {
+        "GUI 等价多视图纹理生成工具",
+        "--depth-map-dir",
+        "--allow-vertex-color-fallback",
+        "textureConfigFromSettings",
+        "xjw::mesh::workflow::buildTextureOnly",
     });
 }
 
@@ -453,13 +683,16 @@ TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
                        "opencl",
                        "--point-cloud-backend",
                        "--mvs-scene-profile",
+                       "general/custom",
                        "--mvs-depth-filter",
                        "--mvs-save-levels",
+                       "--mvs-native-depth-grid",
                        "--mvs-mask-dir",
                        "denseSettings.qualityProfile",
                        "depthConfig.sceneProfile",
                        "depthConfig.depthFilterMode",
-                       "depthConfig.saveIntermediatePyramidLevels"});
+                       "depthConfig.saveIntermediatePyramidLevels",
+                       "depthConfig.preserveNativeFinalDepthGrid"});
 }
 
 TEST(ReconstructPipelineCliGTest, ReportsCudaAndOpenClDepthFramesAsHybrid)
@@ -476,6 +709,42 @@ TEST(ReconstructPipelineCliGTest, ReportsCudaAndOpenClDepthFramesAsHybrid)
         "return QStringLiteral(\"hybrid\")",
         "return QStringLiteral(\"mixed\")",
     });
+}
+
+TEST(ReconstructPipelineCliGTest, ReportsOnlyLatestDepthArtifactForEachFrame)
+{
+    const QString pipeline = readSourceFile(
+        QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+    const QString replay = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    for (const QString *source : {&pipeline, &replay})
+    {
+        expectContainsAll(*source, {
+            "depthArtifactEvents",
+            "depthArtifactEvents.append(artifact)",
+            "latestJsonObjectsByNonNegativeIntegerKey",
+            "QStringLiteral(\"ref_index\")",
+        });
+    }
+}
+
+TEST(ReconstructPipelineCliGTest, ReusesQualifiedStoredDepthFramesForStreamingFusion)
+{
+    const QString pipeline = readSourceFile(
+        QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+
+    expectContainsAll(pipeline, {
+        "collectStoredDepthFramesForDirectory(",
+        "selectFusionEligibleStoredDepthFrames(",
+        "buildStoredFusionFrame(",
+        "storedFusionSourceIndices(",
+        "stored.refIndex",
+        "fuseDepthMapsStreaming(frame_count",
+    });
+    EXPECT_FALSE(pipeline.contains(QStringLiteral("loadFusionFrameFromDepthMap")));
+    EXPECT_FALSE(pipeline.contains(QStringLiteral(
+        "QStringLiteral(\"depth_%1.png\").arg(frameIndex)")));
 }
 
 TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)

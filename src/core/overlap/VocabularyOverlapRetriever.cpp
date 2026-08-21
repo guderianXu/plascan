@@ -659,6 +659,13 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
             setError(errorMsg, oss.str());
             return false;
         }
+        if (!cv::checkRange(current))
+        {
+            std::ostringstream oss;
+            oss << "影像描述子包含 NaN 或无穷值: " << images[i].imagePath;
+            setError(errorMsg, oss.str());
+            return false;
+        }
 
         if (descriptor_cols < 0)
         {

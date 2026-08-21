@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <limits>
 #include <vector>
 
 namespace {
@@ -185,6 +186,24 @@ TEST(VocabularyOverlapRetrieverTest, RejectsDescriptorDimensionMismatch)
 
     EXPECT_FALSE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &result, &error));
     EXPECT_NE(error.find("描述子维度"), std::string::npos);
+}
+
+TEST(VocabularyOverlapRetrieverTest, RejectsNonFiniteDescriptorsBeforeKMeans)
+{
+    cv::Mat invalid = makeGeneratedDescriptors(8, 4, 0.0f);
+    invalid.at<float>(3, 2) = std::numeric_limits<float>::quiet_NaN();
+    std::vector<xjw::VocabularyImageFeatures> images;
+    images.push_back(makeImage("valid.tif", makeGeneratedDescriptors(8, 4, 0.1f)));
+    images.push_back(makeImage("invalid.tif", invalid));
+
+    xjw::VocabularyOverlapConfig config;
+    xjw::VocabularyOverlapResult result;
+    std::string error;
+
+    EXPECT_FALSE(xjw::VocabularyOverlapRetriever::retrieve(
+        images, config, &result, &error));
+    EXPECT_NE(error.find("NaN 或无穷值"), std::string::npos);
+    EXPECT_NE(error.find("invalid.tif"), std::string::npos);
 }
 
 TEST(VocabularyOverlapRetrieverTest, CapsOnlyDescriptorsUsedByVocabularyAssignment)

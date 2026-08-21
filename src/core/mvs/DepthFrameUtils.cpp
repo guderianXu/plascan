@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -38,8 +39,12 @@ struct FastDepthMatHeader
     qint32 rows = 0;
     qint32 cols = 0;
     qint32 type = 0;
+    quint32 reserved = 0; // Former ABI padding; readers ignore legacy non-zero bytes.
     quint64 dataBytes = 0;
 };
+
+static_assert(sizeof(FastDepthMatHeader) == 40,
+              "Fast depth matrix header layout must remain backward compatible");
 
 QString firstExistingPath(const QStringList &paths)
 {
@@ -51,6 +56,93 @@ QString firstExistingPath(const QStringList &paths)
         }
     }
     return QString();
+}
+
+bool readPositiveSize(const QJsonObject &object,
+                      const QString &widthKey,
+                      const QString &heightKey,
+                      cv::Size *size)
+{
+    if (!size || !object.contains(widthKey) || !object.contains(heightKey))
+    {
+        return false;
+    }
+
+    const int width = object.value(widthKey).toInt(0);
+    const int height = object.value(heightKey).toInt(0);
+    if (width <= 0 || height <= 0)
+    {
+        return false;
+    }
+    *size = cv::Size(width, height);
+    return true;
+}
+
+bool validateNativePixelDomainContract(const StoredDepthFrameRecord &stored,
+                                       const cv::Size &rawDepthSize,
+                                       cv::Size *preparedRasterSize,
+                                       QString *errorMessage)
+{
+    if (!stored.effectiveNativeFinalDepthGrid)
+    {
+        return true;
+    }
+
+    cv::Size diagnostic_raster_size;
+    cv::Size diagnostic_grid_size;
+    const bool has_raster_size = readPositiveSize(
+        stored.pixelDomainDiagnostics,
+        QStringLiteral("raster_width"),
+        QStringLiteral("raster_height"),
+        &diagnostic_raster_size);
+    const bool has_grid_size = readPositiveSize(
+        stored.pixelDomainDiagnostics,
+        QStringLiteral("grid_width"),
+        QStringLiteral("grid_height"),
+        &diagnostic_grid_size);
+    const bool diagnostic_effective = stored.pixelDomainDiagnostics.value(
+        QStringLiteral("effective_native_final_depth_grid")).toBool(false);
+    if (!has_raster_size || !has_grid_size || !diagnostic_effective)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "原生深度网格记录缺少完整的 pixel_domain_diagnostics，"
+                "无法恢复 prepared raster 像素域");
+        }
+        return false;
+    }
+
+    const cv::Size stored_grid_size(stored.gridWidth, stored.gridHeight);
+    if (stored_grid_size.width <= 0 || stored_grid_size.height <= 0 ||
+        diagnostic_grid_size != stored_grid_size ||
+        diagnostic_grid_size != rawDepthSize ||
+        diagnostic_raster_size.width < diagnostic_grid_size.width ||
+        diagnostic_raster_size.height < diagnostic_grid_size.height)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "原生深度网格记录的 raster/grid 尺寸互相矛盾："
+                "diagnostic_raster=%1x%2 diagnostic_grid=%3x%4 "
+                "stored_grid=%5x%6 raw_depth=%7x%8")
+                                .arg(diagnostic_raster_size.width)
+                                .arg(diagnostic_raster_size.height)
+                                .arg(diagnostic_grid_size.width)
+                                .arg(diagnostic_grid_size.height)
+                                .arg(stored.gridWidth)
+                                .arg(stored.gridHeight)
+                                .arg(rawDepthSize.width)
+                                .arg(rawDepthSize.height);
+        }
+        return false;
+    }
+
+    if (preparedRasterSize)
+    {
+        *preparedRasterSize = diagnostic_raster_size;
+    }
+    return true;
 }
 
 QString resolveExistingRawDepthPath(const QString &pngPath, const QString &preferredPath = QString())
@@ -258,7 +350,14 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
         }
 
         StoredDepthFrameRecord frame;
+        frame.refIndex = record.value(QStringLiteral("ref_index")).toInt(-1);
         frame.refImage = record.value(QStringLiteral("ref_image")).toString();
+        frame.preparedImage = record.value(
+            QStringLiteral("prepared_image")).toString();
+        frame.preparedValidMaskPath = record.value(
+            QStringLiteral("prepared_valid_mask_path")).toString();
+        frame.preparedCameraModel = record.value(
+            QStringLiteral("prepared_camera_model")).toObject();
         frame.depthPng = depth_png;
         frame.rawDepthPath = raw_depth_path;
         frame.rawConfidencePath = resolveExistingRawConfidencePath(
@@ -304,14 +403,19 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             record.value(QStringLiteral("reconstruction_generation_id")).toString();
         frame.cameraModel = record.value(QStringLiteral("camera_model")).toObject();
         frame.sceneProfile = record.value(QStringLiteral("scene_profile")).toString();
+        frame.status = record.value(QStringLiteral("status")).toString();
         const xjw::mvs::MvsDepthFrameQualification qualification =
             xjw::mvs::qualifyMvsDepthFrameArtifact(record);
         frame.acceptance = qualification.acceptance;
-        frame.fusionEligibilityKnown =
-            record.contains(QStringLiteral("fusion_eligible"));
+        frame.fusionEligibilityKnown = qualification.fusionEligibilityKnown;
         frame.fusionEligible = qualification.fusionEligible;
+        frame.role = qualification.role;
         frame.useDiscreteGeometryFallback =
             qualification.useDiscreteGeometryFallback;
+        frame.effectiveNativeFinalDepthGrid = record.value(
+            QStringLiteral("effective_native_final_depth_grid")).toBool(false);
+        frame.pixelDomainDiagnostics = record.value(
+            QStringLiteral("pixel_domain_diagnostics")).toObject();
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
         if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))
@@ -520,6 +624,21 @@ bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireC
         }
     }
 
+    if (frame.algorithmRevision >=
+        xjw::mvs::kMvsPreparedRasterProvenanceRevision)
+    {
+        xjw::FramePinholeCamera prepared_camera;
+        if (frame.preparedImage.trimmed().isEmpty() ||
+            !QFileInfo::exists(frame.preparedImage) ||
+            frame.preparedValidMaskPath.trimmed().isEmpty() ||
+            !QFileInfo::exists(frame.preparedValidMaskPath) ||
+            !xjw::mvs::cameraFromMvsWorkspaceJson(
+                frame.preparedCameraModel, &prepared_camera))
+        {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -558,9 +677,16 @@ StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projec
 StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
                                                              const QString &batchDirectory)
 {
-    return collectStoredDepthFramesInDirectory(
+    return collectStoredDepthFramesForDirectory(
         projectMeta.value(QStringLiteral("depth_map_results")).toArray(),
         batchDirectory);
+}
+
+StoredDepthFramesResult collectStoredDepthFramesForDirectory(
+    const QJsonArray &depthResults,
+    const QString &batchDirectory)
+{
+    return collectStoredDepthFramesInDirectory(depthResults, batchDirectory);
 }
 
 StoredDepthFramesResult selectFusionEligibleStoredDepthFrames(
@@ -589,12 +715,11 @@ StoredDepthFramesResult selectFusionEligibleStoredDepthFrames(
         {
             ++validation_only_count;
         }
-        if (frame.fusionEligible)
+        if (frame.fusionEligibilityKnown && frame.fusionEligible)
         {
             ++fusion_eligible_count;
         }
-        if (xjw::mvs::isPrimaryFusionFrame(
-                frame.acceptance, frame.fusionEligible))
+        if (xjw::mvs::isPrimaryFusionFrame(frame.role))
         {
             result.frames.push_back(frame);
         }
@@ -708,7 +833,47 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
 {
     FusionFrameBuildResult result;
     const auto total_start = std::chrono::steady_clock::now();
+    if (!xjw::mvs::isKnownDepthSceneProfile(stored.sceneProfile))
+    {
+        result.status = {
+            false,
+            QStringLiteral("缓存深度帧的 scene_profile 缺失或无法识别: %1")
+                .arg(stored.sceneProfile)};
+        return result;
+    }
+    cv::Size declared_raster_size;
+    const bool has_declared_raster_size = readPositiveSize(
+        stored.pixelDomainDiagnostics,
+        QStringLiteral("raster_width"),
+        QStringLiteral("raster_height"),
+        &declared_raster_size);
+    const std::optional<xjw::CameraImageSize> current_camera_size =
+        camera.imageSize();
     result.frame.sourceCamera = camera;
+    result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
+    xjw::FramePinholeCamera prepared_camera;
+    if (!stored.preparedImage.trimmed().isEmpty() &&
+        QFileInfo::exists(stored.preparedImage) &&
+        xjw::mvs::cameraFromMvsWorkspaceJson(
+            stored.preparedCameraModel, &prepared_camera))
+    {
+        result.frame.sourceCamera = prepared_camera;
+        if (has_declared_raster_size)
+        {
+            result.frame.sourceCamera.setImageSize(xjw::CameraImageSize{
+                declared_raster_size.width,
+                declared_raster_size.height});
+        }
+        else if (current_camera_size.has_value())
+        {
+            // Revision-39 full-grid manifests predate pixel-domain diagnostics.
+            // Prepared rasters preserve the decoded source dimensions, so the
+            // current project camera remains a safe full-raster fallback.
+            result.frame.sourceCamera.setImageSize(*current_camera_size);
+        }
+        result.frame.imagePath = xjw::common::io::toUtf8Path(
+            stored.preparedImage);
+    }
     xjw::FramePinholeCamera stored_camera;
     const bool has_stored_camera = xjw::mvs::cameraFromMvsWorkspaceJson(
         stored.cameraModel, &stored_camera);
@@ -718,14 +883,30 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     result.frame.cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
     result.frame.imgW = stored.gridWidth;
     result.frame.imgH = stored.gridHeight;
-    result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
-
     const QString rawDepthPath = resolveExistingRawDepthPath(stored.depthPng, stored.rawDepthPath);
     const auto read_start = std::chrono::steady_clock::now();
     result.status = loadDepthMatStorage(rawDepthPath, &result.frame.depthMap);
     if (!result.status.ok)
     {
         return result;
+    }
+
+    cv::Size validated_native_raster_size;
+    QString pixel_domain_error;
+    if (!validateNativePixelDomainContract(
+            stored,
+            result.frame.depthMap.size(),
+            &validated_native_raster_size,
+            &pixel_domain_error))
+    {
+        result.status = {false, pixel_domain_error};
+        return result;
+    }
+    if (stored.effectiveNativeFinalDepthGrid)
+    {
+        result.frame.sourceCamera.setImageSize(xjw::CameraImageSize{
+            validated_native_raster_size.width,
+            validated_native_raster_size.height});
     }
 
     int camera_grid_width = 0;
@@ -795,7 +976,7 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     const bool require_adaptive_evidence =
         !stored.useDiscreteGeometryFallback &&
         stored.algorithmRevision >= xjw::mvs::kMvsAdaptiveGeometryEvidenceRevision &&
-        stored.sceneProfile == QStringLiteral("orbital_object");
+        xjw::mvs::isOrbitalDepthSceneProfile(stored.sceneProfile);
     const bool has_any_adaptive_evidence =
         !stored.useDiscreteGeometryFallback &&
         (!stored.rawAdaptiveGeometrySupportWeightPath.isEmpty() ||
@@ -849,6 +1030,15 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     resizeEvidenceMap(&evidence.adaptiveConflictRatio, fusion_size);
     const auto resize_done = std::chrono::steady_clock::now();
 
+    cv::Size raster_pixel_domain_size = fusion_size;
+    if (const auto prepared_size = result.frame.sourceCamera.imageSize();
+        prepared_size.has_value() && prepared_size->samples > 0 &&
+        prepared_size->lines > 0)
+    {
+        raster_pixel_domain_size = cv::Size(
+            prepared_size->samples, prepared_size->lines);
+    }
+
     const auto postprocess_start = resize_done;
     result.frame.depthPostprocess = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
         result.frame.depthMap,
@@ -857,7 +1047,8 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
         frameIndexFromPath(stored.rawDepthPath),
         viewCount,
         nullptr,
-        &evidence);
+        &evidence,
+        raster_pixel_domain_size);
     const auto postprocess_done = std::chrono::steady_clock::now();
     result.frame.geometrySupportCount = std::move(evidence.geometrySupportCount);
     if (!result.frame.geometrySupportCount.empty())

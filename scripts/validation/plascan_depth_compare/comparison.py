@@ -29,6 +29,7 @@ from .metrics import (
     relative_depth_metrics,
     spread_metrics,
     support_metrics,
+    resize_nearest,
 )
 
 
@@ -67,6 +68,7 @@ def side_report(
     sample_limit: int,
     aggregate: RunAggregates,
     seed: int,
+    resample_evidence_to_depth_grid: bool = False,
 ) -> tuple[dict[str, Any], str, bool | None]:
     frame_acceptance = acceptance(frame)
     eligible, eligibility_source = fusion_eligible(frame, frame_acceptance)
@@ -92,6 +94,7 @@ def side_report(
             sample_limit,
             aggregate.support,
             seed=seed + 1,
+            resample_source_to_depth_shape=resample_evidence_to_depth_grid,
         ),
         "inverse_depth_spread": spread_metrics(
             spread_path,
@@ -100,6 +103,7 @@ def side_report(
             sample_limit,
             aggregate.spread,
             seed=seed + 2,
+            resample_source_to_depth_shape=resample_evidence_to_depth_grid,
         ),
     }, frame_acceptance, eligible
 
@@ -108,10 +112,126 @@ def eligibility_label(value: bool | None) -> str:
     return "unknown" if value is None else str(value).lower()
 
 
+def _object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _integer(value: Any, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _finite(value: Any, field: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{field} must be numeric")
+    parsed = float(value)
+    if not np.isfinite(parsed):
+        raise ValueError(f"{field} must be finite")
+    return parsed
+
+
+def _camera_values(camera: dict[str, Any], field: str) -> np.ndarray:
+    scalars = [_finite(camera.get(key), f"{field}.{key}") for key in ("fx", "fy", "cx", "cy")]
+    pose: list[float] = []
+    for key, expected_size in (
+        ("rotation_world_to_camera", 9),
+        ("translation_world_to_camera", 3),
+        ("camera_center", 3),
+    ):
+        values = camera.get(key)
+        if not isinstance(values, list) or len(values) != expected_size:
+            raise ValueError(f"{field}.{key} must contain {expected_size} values")
+        pose.extend(_finite(value, f"{field}.{key}") for value in values)
+    return np.asarray(scalars + pose, dtype=np.float64)
+
+
+def validate_native_grid_transform(
+    baseline_frame: dict[str, Any],
+    candidate_frame: dict[str, Any],
+    baseline_shape: tuple[int, int],
+    candidate_shape: tuple[int, int],
+    ref_index: int,
+) -> dict[str, Any]:
+    """Fail closed unless the manifests prove one prepared-raster grid transform."""
+    baseline_diag = _object(
+        baseline_frame.get("pixel_domain_diagnostics"),
+        f"baseline[{ref_index}].pixel_domain_diagnostics",
+    )
+    candidate_diag = _object(
+        candidate_frame.get("pixel_domain_diagnostics"),
+        f"candidate[{ref_index}].pixel_domain_diagnostics",
+    )
+    baseline_raster = (
+        _integer(baseline_diag.get("raster_height"), "baseline.raster_height"),
+        _integer(baseline_diag.get("raster_width"), "baseline.raster_width"),
+    )
+    candidate_raster = (
+        _integer(candidate_diag.get("raster_height"), "candidate.raster_height"),
+        _integer(candidate_diag.get("raster_width"), "candidate.raster_width"),
+    )
+    candidate_grid = (
+        _integer(candidate_diag.get("grid_height"), "candidate.grid_height"),
+        _integer(candidate_diag.get("grid_width"), "candidate.grid_width"),
+    )
+    if baseline_raster != baseline_shape or candidate_raster != baseline_shape:
+        raise ValueError(
+            f"Prepared-raster shape contract mismatch for ref_index={ref_index}: "
+            f"baseline_depth={baseline_shape}, baseline_raster={baseline_raster}, "
+            f"candidate_raster={candidate_raster}"
+        )
+    if candidate_grid != candidate_shape:
+        raise ValueError(
+            f"Candidate grid diagnostics mismatch for ref_index={ref_index}: "
+            f"depth={candidate_shape}, diagnostics={candidate_grid}"
+        )
+    if baseline_diag.get("grid_matches_raster") is not True:
+        raise ValueError(f"Baseline ref_index={ref_index} is not a full-raster grid")
+    if candidate_diag.get("effective_native_final_depth_grid") is not True:
+        raise ValueError(f"Candidate ref_index={ref_index} is not an effective native grid")
+
+    baseline_camera = _object(baseline_frame.get("camera_model"), "baseline.camera_model")
+    candidate_camera = _object(candidate_frame.get("camera_model"), "candidate.camera_model")
+    candidate_prepared = _object(
+        candidate_frame.get("prepared_camera_model"), "candidate.prepared_camera_model"
+    )
+    baseline_values = _camera_values(baseline_camera, "baseline.camera_model")
+    prepared_values = _camera_values(candidate_prepared, "candidate.prepared_camera_model")
+    if not np.allclose(baseline_values, prepared_values, rtol=0.0, atol=1.0e-8):
+        raise ValueError(f"Prepared camera differs from baseline for ref_index={ref_index}")
+
+    scale_x = candidate_shape[1] / baseline_shape[1]
+    scale_y = candidate_shape[0] / baseline_shape[0]
+    expected_intrinsics = np.asarray(
+        [
+            baseline_values[0] * scale_x,
+            baseline_values[1] * scale_y,
+            (baseline_values[2] + 0.5) * scale_x - 0.5,
+            (baseline_values[3] + 0.5) * scale_y - 0.5,
+        ],
+        dtype=np.float64,
+    )
+    candidate_values = _camera_values(candidate_camera, "candidate.camera_model")
+    if not np.allclose(candidate_values[:4], expected_intrinsics, rtol=0.0, atol=1.0e-8):
+        raise ValueError(f"Half-pixel scaled camera mismatch for ref_index={ref_index}")
+    if not np.allclose(candidate_values[4:], baseline_values[4:], rtol=0.0, atol=1.0e-8):
+        raise ValueError(f"Camera pose mismatch for ref_index={ref_index}")
+    return {
+        "applied": True,
+        "method": "opencv_inter_nearest_baseline_to_candidate_grid",
+        "camera_contract_verified": True,
+        "scale_x": scale_x,
+        "scale_y": scale_y,
+    }
+
+
 def compare_depth_runs(
     baseline_manifest: Path,
     candidate_manifest: Path,
     quantile_sample_limit: int = DEFAULT_SAMPLE_LIMIT,
+    resample_baseline_to_candidate_grid: bool = False,
 ) -> dict[str, Any]:
     if quantile_sample_limit <= 0:
         raise ValueError("quantile_sample_limit must be positive")
@@ -140,6 +260,7 @@ def compare_depth_runs(
     baseline_only_pixel_count = 0
     candidate_only_pixel_count = 0
     frame_reports: list[dict[str, Any]] = []
+    grid_transform_count = 0
 
     for ordinal, key in enumerate(paired_keys):
         baseline_name, baseline_frame = baseline_frames[key]
@@ -153,11 +274,28 @@ def compare_depth_runs(
         assert baseline_depth_path is not None and candidate_depth_path is not None
         baseline_depth = read_fast_matrix(baseline_depth_path, CV_32FC1)
         candidate_depth = read_fast_matrix(candidate_depth_path, CV_32FC1)
+        baseline_source_shape = baseline_depth.shape
         if baseline_depth.shape != candidate_depth.shape:
-            raise ValueError(
-                f"Depth shape mismatch for ref_index={key[0]}, image={baseline_name}: "
-                f"baseline={baseline_depth.shape}, candidate={candidate_depth.shape}"
+            if not resample_baseline_to_candidate_grid:
+                raise ValueError(
+                    f"Depth shape mismatch for ref_index={key[0]}, image={baseline_name}: "
+                    f"baseline={baseline_depth.shape}, candidate={candidate_depth.shape}"
+                )
+            grid_transform = validate_native_grid_transform(
+                baseline_frame,
+                candidate_frame,
+                baseline_depth.shape,
+                candidate_depth.shape,
+                key[0],
             )
+            baseline_depth = resize_nearest(baseline_depth, candidate_depth.shape)
+            grid_transform_count += 1
+        else:
+            grid_transform = {
+                "applied": False,
+                "method": "identity",
+                "camera_contract_verified": True,
+            }
 
         baseline_depth_report, baseline_valid = depth_metrics(baseline_depth)
         candidate_depth_report, candidate_valid = depth_metrics(candidate_depth)
@@ -192,6 +330,7 @@ def compare_depth_runs(
             quantile_sample_limit,
             baseline_run,
             seed=5000 + ordinal * 10,
+            resample_evidence_to_depth_grid=grid_transform["applied"],
         )
         candidate_side, candidate_acceptance, candidate_eligible = side_report(
             candidate_frame,
@@ -220,6 +359,11 @@ def compare_depth_runs(
                     "rows": int(baseline_depth.shape[0]),
                     "columns": int(baseline_depth.shape[1]),
                 },
+                "baseline_source_shape": {
+                    "rows": int(baseline_source_shape[0]),
+                    "columns": int(baseline_source_shape[1]),
+                },
+                "grid_transform": grid_transform,
                 "baseline": baseline_side,
                 "candidate": candidate_side,
                 "comparison": {
@@ -262,6 +406,14 @@ def compare_depth_runs(
             "abs(candidate-baseline)/max(baseline,float32_epsilon), "
             "common valid pixels"
         ),
+        "grid_comparison": {
+            "policy": (
+                "verified_baseline_nearest_to_candidate_grid"
+                if resample_baseline_to_candidate_grid
+                else "identical_shapes_required"
+            ),
+            "transformed_frame_count": grid_transform_count,
+        },
         "quantile_sampling": {
             "method": "deterministic_uniform_reservoir",
             "sample_limit_per_distribution": quantile_sample_limit,

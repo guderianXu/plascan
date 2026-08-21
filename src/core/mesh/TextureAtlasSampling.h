@@ -29,7 +29,8 @@ TextureSampleStatus sampleTextureView(const PreparedView &view,
                                       const TextureMappingConfig &config,
                                       double medianEdgeLength,
                                       int padding,
-                                      WeightedColor *sample);
+                                      WeightedColor *sample,
+                                      int faceIndex = -1);
 
 cv::Vec3b blendTextureSamples(std::vector<WeightedColor> samples,
                               const TextureMappingConfig &config,

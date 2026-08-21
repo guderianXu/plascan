@@ -1,5 +1,6 @@
 #include "VisualHullDepthRefiner.h"
 
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "RobustSurfaceDisplacementSolver.h"
 #include "SurfaceReconstructorPostprocess.h"
@@ -457,6 +458,9 @@ std::vector<VertexDepthObservation> collectVertexObservations(
             static_cast<float>(target_world[2] - world[2]) * vertex.nz;
         const float frame_quality_weight = std::clamp(
             frame.frameQualityWeight, 0.0f, 1.0f);
+        const float frame_role_weight = frame.auxiliarySurfaceOnly
+            ? xjw::mvs::kCoverageAuxiliaryWeightMultiplier
+            : 1.0f;
         if (!std::isfinite(displacement) ||
             frame_quality_weight <= 1.0e-6f)
         {
@@ -475,6 +479,7 @@ std::vector<VertexDepthObservation> collectVertexObservations(
         const float confidence =
             std::clamp(observation.confidence, 0.0f, 1.0f) *
             frame_quality_weight *
+            frame_role_weight *
             repaired_weight *
             spread_weight;
         if (!(confidence > 0.0f))

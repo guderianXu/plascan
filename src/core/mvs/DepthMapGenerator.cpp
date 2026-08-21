@@ -79,6 +79,242 @@ using common::string_utils::asciiLowerCopy;
 namespace
 {
 
+constexpr int kFullRasterBoundaryEdgeRadiusPixels = 1;
+constexpr int kFullRasterLocalSameLayerRadiusPixels = 1;
+constexpr int kFullRasterSparseResidualRadiusPixels = 1;
+constexpr int kFullRasterConsistencySearchRadiusPixels = 1;
+constexpr float kFullRasterConsistencyRoundTripPixels = 3.0f;
+constexpr int kFullRasterMinimumSmallHoleArea = 64;
+constexpr float kSmallHoleAreaFraction = 0.002f;
+
+DepthPixelDomainScale pixelDomainScaleForResult(
+    const DepthFrameResult &result,
+    const cv::Size &grid_size)
+{
+    const cv::Size raster_size = result.preparedRasterSize.width > 0 &&
+            result.preparedRasterSize.height > 0
+        ? result.preparedRasterSize
+        : grid_size;
+    return depthPixelDomainScale(raster_size, grid_size);
+}
+
+int effectiveMinimumSmallHoleArea(const DepthFrameResult &result,
+                                  const cv::Size &grid_size)
+{
+    return scaleDepthPixelArea(
+        kFullRasterMinimumSmallHoleArea,
+        pixelDomainScaleForResult(result, grid_size));
+}
+
+int effectiveSparseResidualRadius(const DepthFrameResult &result,
+                                  const cv::Size &grid_size)
+{
+    return scaleDepthPixelRadius(
+        kFullRasterSparseResidualRadiusPixels,
+        pixelDomainScaleForResult(result, grid_size));
+}
+
+QJsonObject configuredEffectiveInteger(int configured, int effective)
+{
+    return QJsonObject{
+        {QStringLiteral("configured_full_raster"), configured},
+        {QStringLiteral("effective_grid"), effective}};
+}
+
+QJsonObject configuredEffectiveFloat(float configured, float effective)
+{
+    return QJsonObject{
+        {QStringLiteral("configured_full_raster"), configured},
+        {QStringLiteral("effective_grid"), effective}};
+}
+
+QJsonObject makePixelDomainDiagnostics(
+    const cv::Size &raster_size,
+    const cv::Size &grid_size,
+    const FusionConfig &fusion_config,
+    bool requested_native_final_grid,
+    bool effective_native_final_grid)
+{
+    const DepthPixelDomainScale scale = depthPixelDomainScale(
+        raster_size, grid_size);
+    const int quantized_boundary_edge_radius = scaleDepthPixelRadius(
+        kFullRasterBoundaryEdgeRadiusPixels, scale);
+    const int boundary_edge_radius =
+        fusion_config.enableBoundaryAwareRetention &&
+            scale.usesReducedGrid() &&
+            kFullRasterBoundaryEdgeRadiusPixels > 0
+        ? std::max(1, quantized_boundary_edge_radius)
+        : quantized_boundary_edge_radius;
+    const int boundary_protection_radius = scale.usesReducedGrid()
+        ? std::max(
+              0,
+              static_cast<int>(std::floor(
+                  static_cast<float>(
+                      fusion_config.boundaryProtectionRadiusPixels) *
+                  scale.linearScale + 1.0e-6f)))
+        : scaleDepthPixelRadius(
+              fusion_config.boundaryProtectionRadiusPixels, scale);
+    const int local_kernel = scaleDepthLocalOutlierKernel(
+        fusion_config.localDepthOutlierKernelSize, scale);
+    const int same_layer_radius = scaleDepthPixelRadius(
+        kFullRasterLocalSameLayerRadiusPixels, scale);
+    const int speckle_area = scaleDepthPixelArea(
+        fusion_config.minSpeckleComponentArea, scale);
+    const int sparse_radius = scaleDepthPixelRadius(
+        kFullRasterSparseResidualRadiusPixels, scale);
+    const int consistency_radius = scaleDepthPixelRadius(
+        kFullRasterConsistencySearchRadiusPixels, scale);
+    const float consistency_round_trip = scaleDepthPixelDistance(
+        kFullRasterConsistencyRoundTripPixels, scale);
+    const int minimum_hole_area = scaleDepthPixelArea(
+        kFullRasterMinimumSmallHoleArea, scale);
+    const float fusion_reprojection = scaleDepthPixelDistance(
+        fusion_config.pixelThresh, scale);
+    const bool boundary_retention_active =
+        fusion_config.enableBoundaryAwareRetention && boundary_edge_radius > 0;
+
+    QJsonObject boundary_edge = configuredEffectiveInteger(
+        kFullRasterBoundaryEdgeRadiusPixels,
+        boundary_retention_active ? boundary_edge_radius : 0);
+    boundary_edge.insert(QStringLiteral("quantized_grid"),
+                         quantized_boundary_edge_radius);
+    boundary_edge.insert(QStringLiteral("active"),
+                         boundary_retention_active);
+    if (!boundary_retention_active)
+    {
+        boundary_edge.insert(
+            QStringLiteral("disabled_reason"),
+            fusion_config.enableBoundaryAwareRetention
+                ? QStringLiteral("edge_radius_subpixel_on_depth_grid")
+                : QStringLiteral("configured_disabled"));
+    }
+    else if (scale.usesReducedGrid() &&
+             quantized_boundary_edge_radius == 0)
+    {
+        boundary_edge.insert(
+            QStringLiteral("quantization_strategy"),
+            QStringLiteral("minimum_single_grid_boundary_shell"));
+    }
+
+    QJsonObject boundary_protection = configuredEffectiveInteger(
+        fusion_config.boundaryProtectionRadiusPixels,
+        boundary_retention_active ? boundary_protection_radius : 0);
+    boundary_protection.insert(QStringLiteral("quantized_grid"),
+                               boundary_protection_radius);
+    boundary_protection.insert(QStringLiteral("active"),
+                               boundary_retention_active);
+    if (!boundary_retention_active)
+    {
+        boundary_protection.insert(
+            QStringLiteral("disabled_reason"),
+            QStringLiteral("boundary_edge_inactive"));
+    }
+
+    QJsonObject parameters;
+    parameters.insert(
+        QStringLiteral("boundary_edge_radius_pixels"),
+        boundary_edge);
+    parameters.insert(
+        QStringLiteral("boundary_protection_radius_pixels"),
+        boundary_protection);
+    parameters.insert(
+        QStringLiteral("local_depth_outlier_kernel_size"),
+        configuredEffectiveInteger(
+            fusion_config.localDepthOutlierKernelSize, local_kernel));
+    parameters.insert(
+        QStringLiteral("local_same_layer_radius_pixels"),
+        configuredEffectiveInteger(
+            kFullRasterLocalSameLayerRadiusPixels, same_layer_radius));
+    parameters.insert(
+        QStringLiteral("minimum_speckle_component_area"),
+        configuredEffectiveInteger(
+            fusion_config.minSpeckleComponentArea, speckle_area));
+    parameters.insert(
+        QStringLiteral("sparse_residual_radius_pixels"),
+        configuredEffectiveInteger(
+            kFullRasterSparseResidualRadiusPixels, sparse_radius));
+    QJsonObject consistency_search = configuredEffectiveInteger(
+        kFullRasterConsistencySearchRadiusPixels, consistency_radius);
+    consistency_search.insert(
+        QStringLiteral("subpixel_footprint_sampling"),
+        scale.usesReducedGrid() && consistency_radius == 0);
+    parameters.insert(
+        QStringLiteral("consistency_search_radius_pixels"),
+        consistency_search);
+    parameters.insert(
+        QStringLiteral("consistency_round_trip_pixels"),
+        configuredEffectiveFloat(
+            kFullRasterConsistencyRoundTripPixels, consistency_round_trip));
+    parameters.insert(
+        QStringLiteral("minimum_small_hole_area"),
+        configuredEffectiveInteger(
+            kFullRasterMinimumSmallHoleArea, minimum_hole_area));
+    parameters.insert(
+        QStringLiteral("maximum_small_hole_fraction"),
+        kSmallHoleAreaFraction);
+    parameters.insert(
+        QStringLiteral("fusion_reprojection_base_error_pixels"),
+        [&]()
+        {
+            QJsonObject value = configuredEffectiveFloat(
+                fusion_config.pixelThresh, fusion_reprojection);
+            value.insert(
+                QStringLiteral("scope"),
+                QStringLiteral(
+                    "base_before_view_count_or_streaming_runtime_override"));
+            value.insert(QStringLiteral("runtime_scaled_per_target_frame"),
+                         true);
+            return value;
+        }());
+    parameters.insert(
+        QStringLiteral("fusion_local_gradient_base_radius_pixels"),
+        [&]()
+        {
+            QJsonObject value = configuredEffectiveInteger(
+                kFullRasterLocalSameLayerRadiusPixels, same_layer_radius);
+            value.insert(QStringLiteral("runtime_scaled_per_target_frame"),
+                         true);
+            return value;
+        }());
+    parameters.insert(
+        QStringLiteral("legacy_inpaint_radius_pixels"),
+        QJsonObject{
+            {QStringLiteral("configured_full_raster"),
+             fusion_config.inpaintRadius},
+            {QStringLiteral("active_in_current_postprocess"), false}});
+    parameters.insert(
+        QStringLiteral("connectivity"),
+        QJsonObject{
+            {QStringLiteral("neighbors"), 8},
+            {QStringLiteral("domain"), QStringLiteral("depth_grid_topology")}});
+
+    QJsonObject diagnostics;
+    diagnostics.insert(
+        QStringLiteral("configured_pixel_domain"),
+        QStringLiteral("prepared_full_raster"));
+    diagnostics.insert(
+        QStringLiteral("effective_pixel_domain"),
+        QStringLiteral("depth_grid"));
+    diagnostics.insert(
+        QStringLiteral("requested_native_final_depth_grid"),
+        requested_native_final_grid);
+    diagnostics.insert(
+        QStringLiteral("effective_native_final_depth_grid"),
+        effective_native_final_grid);
+    diagnostics.insert(QStringLiteral("raster_width"), raster_size.width);
+    diagnostics.insert(QStringLiteral("raster_height"), raster_size.height);
+    diagnostics.insert(QStringLiteral("grid_width"), grid_size.width);
+    diagnostics.insert(QStringLiteral("grid_height"), grid_size.height);
+    diagnostics.insert(QStringLiteral("scale_x"), scale.scaleX);
+    diagnostics.insert(QStringLiteral("scale_y"), scale.scaleY);
+    diagnostics.insert(QStringLiteral("linear_scale"), scale.linearScale);
+    diagnostics.insert(QStringLiteral("area_scale"), scale.areaScale);
+    diagnostics.insert(
+        QStringLiteral("grid_matches_raster"), grid_size == raster_size);
+    diagnostics.insert(QStringLiteral("parameters"), parameters);
+    return diagnostics;
+}
+
 void calibrateFinalDepthConfidenceMap(
     cv::Mat &confidence_map,
     const cv::Mat *depth_provenance = nullptr)
@@ -320,6 +556,13 @@ QString normalizedMvsPathKey(const std::string &path)
     return QDir::cleanPath(absolutePath).replace(QLatin1Char('\\'), QLatin1Char('/')).toCaseFolded();
 }
 
+const std::string &mvsRasterPath(const CameraView &view)
+{
+    return view.preparedImagePath.empty()
+        ? view.imagePath
+        : view.preparedImagePath;
+}
+
 template <typename T>
 void addHashValue(QCryptographicHash *hash, const T &value)
 {
@@ -339,9 +582,17 @@ QString makeMvsDepthInputHash(const DepthGenConfig &config,
         hash.addData(image_path);
         const char separator = '\0';
         addHashValue(&hash, separator);
+        const std::string &raster_path = mvsRasterPath(view);
+        hash.addData(QByteArray::fromStdString(raster_path));
+        addHashValue(&hash, separator);
+        hash.addData(QByteArray::fromStdString(view.preparedValidMaskPath));
+        addHashValue(&hash, separator);
+        hash.addData(QByteArray::fromStdString(view.preparedValidMaskSource));
+        addHashValue(&hash, separator);
         addHashValue(&hash, view.imageWidth);
         addHashValue(&hash, view.imageHeight);
-        const QFileInfo image_info(QString::fromStdString(view.imagePath));
+        const QFileInfo image_info(
+            xjw::common::io::fromUtf8Path(raster_path));
         const qint64 image_size = image_info.exists() ? image_info.size() : -1;
         const qint64 image_modified = image_info.exists()
             ? image_info.lastModified().toMSecsSinceEpoch()
@@ -2094,12 +2345,15 @@ struct DepthConsistencySourceInput
     cv::Mat confidence;
     float reliabilityWeight = 1.0f;
     int sourceOrdinal = -1;
+    int searchRadiusPixels = kFullRasterConsistencySearchRadiusPixels;
+    bool evaluateSubpixelFootprint = false;
 };
 
 void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                                 const FramePinholeCamera &referenceCamera,
                                 const std::vector<DepthConsistencySourceInput> &sources,
                                 float relativeThreshold,
+                                float maximumRoundTripErrorPixels,
                                 int rowWorkers,
                                 const std::atomic<bool> &cancelled,
                                 cv::Mat &consistentVotes,
@@ -2190,9 +2444,10 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                         source.camera,
                         source.depth,
                         relativeThreshold,
-                        1,
-                        3.0f,
-                        accumulate_adaptive_evidence);
+                        source.searchRadiusPixels,
+                        maximumRoundTripErrorPixels,
+                        accumulate_adaptive_evidence,
+                        source.evaluateSubpixelFootprint);
                 if (accumulate_adaptive_evidence)
                 {
                     AdaptiveGeometryEvidenceObservation observation;
@@ -2395,7 +2650,10 @@ void updateDepthCompletenessAfterPostprocess(DepthFrameResult &result,
                    cv::INTER_NEAREST);
     }
     result.depthCompleteness.finalMetrics = analyzeDepthCompleteness(
-        depth, effective_mask);
+        depth,
+        effective_mask,
+        kSmallHoleAreaFraction,
+        effectiveMinimumSmallHoleArea(result, depth.size()));
 }
 
 DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
@@ -2489,8 +2747,8 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
     quality_input.multiViewConsistency = std::clamp(
         quality_consistency_keep_rate, 0.0f, 1.0f);
     quality_input.depthAtSearchBoundaryRatio = search_boundary_ratio;
-    quality_input.hasConstrainedSupportMask =
-        result.maskSource != "full_image" && result.maskCoverage < 0.999f;
+    quality_input.hasProjectSupportMask =
+        result.maskSource == "project" && result.maskCoverage < 0.999f;
     if (result.supportRegionMask && !result.supportRegionMask->empty())
     {
         cv::Mat effective_mask = *result.supportRegionMask;
@@ -2504,7 +2762,10 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
                        cv::INTER_NEAREST);
         }
         result.depthCompleteness.finalMetrics = analyzeDepthCompleteness(
-            quality_depth, effective_mask);
+            quality_depth,
+            effective_mask,
+            kSmallHoleAreaFraction,
+            effectiveMinimumSmallHoleArea(result, quality_depth.size()));
         quality_input.validWithinMaskRatio =
             result.depthCompleteness.finalMetrics.validInputs
             ? result.depthCompleteness.finalMetrics.validWithinMaskRatio
@@ -2532,10 +2793,20 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
         std::isfinite(discrete_summary.coreRatio) &&
         discrete_summary.coreRatio >= 0.0f;
     quality_input.discreteGeometryCoreRatio = discrete_summary.coreRatio;
+    quality_input.completeVisibilityCandidatePoolEnabled =
+        result.completeVisibilityCandidatePoolEnabled;
+    quality_input.completePoolChangedLegacyPlan =
+        result.completePoolChangedLegacyPlan;
+    quality_input.initialAcceptanceAvailable =
+        result.initialQualityAcceptanceAvailable;
+    quality_input.initialAcceptance = result.initialQualityAcceptance;
     result.sparseDepthResidual = summarizeSparseDepthResidual(
-        quality_depth, result.projectedSparseDepthSamples);
+        quality_depth,
+        result.projectedSparseDepthSamples,
+        effectiveSparseResidualRadius(result, quality_depth.size()));
     quality_input.sparseDepthResidual = result.sparseDepthResidual;
     result.qualityDecision = evaluateDepthFrame(quality_input);
+    detail::applySourceAngleCapShortfallSafety(result);
 }
 
 class AdaptivePatchMatchBackend final : public IPatchMatchBackend
@@ -2621,6 +2892,90 @@ private:
 };
 
 } // namespace
+
+void detail::applySourceAngleCapShortfallSafety(DepthFrameResult &result)
+{
+    if (!result.sourceAngleCapEnabled ||
+        result.sourceViewShortfall <= 0 ||
+        result.qualityDecision.acceptance == DepthFrameAcceptance::Rejected)
+    {
+        return;
+    }
+
+    if (result.qualityDecision.acceptance == DepthFrameAcceptance::Accepted)
+    {
+        result.qualityDecision.acceptance =
+            DepthFrameAcceptance::ValidationOnly;
+    }
+
+    constexpr const char *kReason =
+        "source_angle_cap_source_shortfall";
+    if (std::find(
+            result.qualityDecision.reasons.cbegin(),
+            result.qualityDecision.reasons.cend(),
+            kReason) == result.qualityDecision.reasons.cend())
+    {
+        result.qualityDecision.reasons.emplace_back(kReason);
+    }
+}
+
+std::vector<DepthConsistencyFrameSourcePlan> freezeDepthConsistencySourcePlans(
+    const std::vector<DepthFrameResult> &frames,
+    int view_count,
+    MvsSceneProfile scene_profile,
+    int requested_repair_source_count)
+{
+    if (view_count <= 0)
+    {
+        return {};
+    }
+
+    std::vector<bool> source_eligibility(
+        static_cast<std::size_t>(view_count), false);
+    const int available_frame_count = std::min(
+        view_count, static_cast<int>(frames.size()));
+    for (int frame_index = 0;
+         frame_index < available_frame_count;
+         ++frame_index)
+    {
+        source_eligibility[static_cast<std::size_t>(frame_index)] =
+            frames[static_cast<std::size_t>(frame_index)]
+                .eligibleAsConsistencySource();
+    }
+
+    std::vector<DepthConsistencyFrameSourcePlan> plans(
+        static_cast<std::size_t>(view_count));
+    for (int reference_index = 0;
+         reference_index < view_count;
+         ++reference_index)
+    {
+        DepthConsistencyFrameSourcePlan &plan =
+            plans[static_cast<std::size_t>(reference_index)];
+        plan.consistencySourceIndices = consistencySourceIndicesForFrame(
+            frames, reference_index, view_count);
+        if (scene_profile == MvsSceneProfile::OrbitalObject)
+        {
+            plan.geometrySourceViewIndices = planMvsRepairSourceViews(
+                plan.consistencySourceIndices,
+                source_eligibility,
+                reference_index,
+                requested_repair_source_count);
+            continue;
+        }
+
+        for (const int source_index : plan.consistencySourceIndices)
+        {
+            if (plan.geometrySourceViewIndices.size() >= 16 ||
+                source_index < 0 || source_index >= view_count ||
+                !source_eligibility[static_cast<std::size_t>(source_index)])
+            {
+                continue;
+            }
+            plan.geometrySourceViewIndices.push_back(source_index);
+        }
+    }
+    return plans;
+}
 
 cv::Mat DepthMapGenerator::buildContentMask(const cv::Mat &gray,
                                             float *coverage,
@@ -2846,6 +3201,11 @@ void DepthMapGenerator::setViews(const std::vector<CameraView> &views)
 {
     _views = views;
     _skipFrameMask.assign(_views.size(), 0);
+    {
+        std::lock_guard<std::mutex> lock(_preparedRasterArtifactsMutex);
+        _preparedRasterArtifacts.assign(
+            _views.size(), MvsPreparedRasterArtifact{});
+    }
     clearFrameCaches();
 }
 
@@ -2883,6 +3243,12 @@ void DepthMapGenerator::initializeWorkspaceManifest()
         std::lock_guard<std::mutex> lock(_workspaceManifestMutex);
         _workspaceManifestPath = manifestPathForOutput(_config, _outputDir);
         _depthConfigHash = makeMvsDepthInputHash(_config, _views, _sparse);
+        {
+            std::lock_guard<std::mutex> prepared_lock(
+                _preparedRasterArtifactsMutex);
+            _preparedRasterArtifacts.assign(
+                _views.size(), MvsPreparedRasterArtifact{});
+        }
         manifestPathForLog = _workspaceManifestPath;
         depthConfigHashForLog = _depthConfigHash;
         _workspaceManifest.clear();
@@ -3021,6 +3387,99 @@ void DepthMapGenerator::markManifestFrameFailed(int frameIndex, const QString &e
     {
         LOG_WARN(QStringLiteral("[MVS] 写入失败 manifest 失败: %1").arg(saveError));
     }
+}
+
+bool DepthMapGenerator::ensurePreparedRasterArtifact(
+    int frameIndex,
+    MvsPreparedRasterArtifact *artifact,
+    QString *errorMessage)
+{
+    if (!artifact || frameIndex < 0 ||
+        frameIndex >= static_cast<int>(_views.size()))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS prepared raster 帧参数无效");
+        }
+        return false;
+    }
+    if (_workspaceManifestPath.isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "MVS workspace 路径为空，无法持久化相机匹配的工作栅格");
+        }
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(_preparedRasterArtifactsMutex);
+    if (_preparedRasterArtifacts.size() != _views.size())
+    {
+        _preparedRasterArtifacts.assign(
+            _views.size(), MvsPreparedRasterArtifact{});
+    }
+    MvsPreparedRasterArtifact &cached =
+        _preparedRasterArtifacts[static_cast<std::size_t>(frameIndex)];
+    if (!cached.imagePath.empty() && !cached.validMaskPath.empty() &&
+        cached.camera.isValid() &&
+        QFileInfo::exists(xjw::common::io::fromUtf8Path(cached.imagePath)) &&
+        QFileInfo::exists(
+            xjw::common::io::fromUtf8Path(cached.validMaskPath)))
+    {
+        *artifact = cached;
+        if (errorMessage)
+        {
+            errorMessage->clear();
+        }
+        return true;
+    }
+
+    std::string load_error;
+    MvsImageCache::ImageLease image_lease = acquireImageFrame(
+        frameIndex, &load_error);
+    if (!image_lease)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "无法获取第 %1 帧以保存 prepared raster：%2")
+                                .arg(frameIndex)
+                                .arg(QString::fromStdString(load_error));
+        }
+        return false;
+    }
+
+    const CameraView &view = _views[static_cast<std::size_t>(frameIndex)];
+    MvsPreparedRasterArtifact saved;
+    std::string save_error;
+    if (!saveMvsPreparedRasterArtifact(
+            mvsRasterPath(view),
+            view.camera,
+            image_lease->validMask,
+            xjw::common::io::toUtf8Path(
+                QFileInfo(_workspaceManifestPath).absolutePath()),
+            frameIndex,
+            &saved,
+            &save_error))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "保存第 %1 帧 MVS prepared raster 失败：%2")
+                                .arg(frameIndex)
+                                .arg(QString::fromStdString(save_error));
+        }
+        return false;
+    }
+
+    cached = saved;
+    *artifact = saved;
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    return true;
 }
 
 void DepthMapGenerator::clearFrameCaches()
@@ -3209,11 +3668,19 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.refIndex = refIdx;
         plannerOptions.viewCount = NV;
         plannerOptions.maxSources = desiredSourceCount;
+        plannerOptions.sourceAngleSoftRankingStrength =
+            _config.sourceAngleSoftRankingStrength;
+        plannerOptions.auditSourceRanking =
+            _config.evaluateCompleteVisibilityCandidatePool;
         plannerOptions.rejectAngleOutliers = true;
         plannerOptions.minTriangulationAngleDeg = 0.2f;
-        plannerOptions.maxTriangulationAngleDeg =
+        const float recommended_maximum_angle =
             recommendedMvsSourceMaximumAngleDeg(
                 _effectiveSceneProfile, desiredSourceCount);
+        plannerOptions.maxTriangulationAngleDeg =
+            constrainMvsSourceMaximumAngleDeg(
+                recommended_maximum_angle,
+                _config.sourceMaximumAngleDegCap);
         struct RankedSourceCandidate
         {
             int viewIndex = -1;
@@ -3302,15 +3769,27 @@ void DepthMapGenerator::prepareFrameCaches()
         candidates.reserve(rankedSourceCandidates.size());
         int provenSourceCount = 0;
         int currentSourceScoreCutoff = -1;
+        int legacyEvaluatedCandidateCount = 0;
+        int completeEvaluatedCandidateCount = 0;
+        bool legacyCandidatePoolClosed = false;
+        std::vector<float> legacyCandidateAngles;
+        legacyCandidateAngles.reserve(rankedSourceCandidates.size());
         for (const RankedSourceCandidate &candidate : rankedSourceCandidates)
         {
             // remaining candidates are sorted by common count; once enough stronger sources are proven,
             // avoid spending more time sampling triangulation angles for weaker candidates.
-            if (provenSourceCount >= desiredSourceCount
-                && candidate.commonVisiblePoints <= currentSourceScoreCutoff)
+            if (!legacyCandidatePoolClosed &&
+                provenSourceCount >= desiredSourceCount &&
+                candidate.commonVisiblePoints <= currentSourceScoreCutoff)
             {
-                break;
+                legacyCandidatePoolClosed = true;
+                if (!_config.evaluateCompleteVisibilityCandidatePool)
+                {
+                    break;
+                }
             }
+            const bool legacy_evaluated_candidate =
+                !legacyCandidatePoolClosed;
 
             const float medianAngle = sampledMedianAngle(refIdx, candidate.viewIndex);
             MvsSourceCandidate sourceCandidate;
@@ -3361,10 +3840,16 @@ void DepthMapGenerator::prepareFrameCaches()
                 && (candidate.commonVisiblePoints > 0
                     || sourceCandidate.verifiedPairGeometry);
             candidates.push_back(sourceCandidate);
+            ++completeEvaluatedCandidateCount;
+            if (legacy_evaluated_candidate)
+            {
+                ++legacyEvaluatedCandidateCount;
+                legacyCandidateAngles.push_back(medianAngle);
+            }
             const bool hasRequiredPairQuality = !plannerOptions.requireVerifiedPairGeometry
                 || (sourceCandidate.verifiedPairGeometry
                     && sourceCandidate.geometricInliers >= plannerOptions.minGeometricInliers);
-            if (hasRequiredPairQuality
+            if (legacy_evaluated_candidate && hasRequiredPairQuality
                 && medianAngle >= plannerOptions.minTriangulationAngleDeg
                 && medianAngle <= plannerOptions.maxTriangulationAngleDeg)
             {
@@ -3375,20 +3860,13 @@ void DepthMapGenerator::prepareFrameCaches()
                 }
             }
         }
+        float scene_maximum_angle = recommended_maximum_angle;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
         {
-            std::vector<float> candidate_angles;
-            candidate_angles.reserve(candidates.size());
-            for (const MvsSourceCandidate &candidate : candidates)
-            {
-                candidate_angles.push_back(
-                    candidate.medianTriangulationAngleDeg);
-            }
-            plannerOptions.maxTriangulationAngleDeg =
-                adaptiveMvsSourceMaximumAngleDeg(
-                    _effectiveSceneProfile,
-                    desiredSourceCount,
-                    candidate_angles);
+            scene_maximum_angle = adaptiveMvsSourceMaximumAngleDeg(
+                _effectiveSceneProfile,
+                desiredSourceCount,
+                legacyCandidateAngles);
             // Failed SfM pairs are never promoted back into SfM. For a short
             // orbital sequence, a narrowly qualified failed pair may still be
             // useful as PatchMatch source-only evidence. PatchMatch now uses
@@ -3412,9 +3890,119 @@ void DepthMapGenerator::prepareFrameCaches()
             plannerOptions.strictFailedPairBackfillMaximumAngleDeg = 55.0f;
         }
 
+        plannerOptions.maxTriangulationAngleDeg =
+            constrainMvsSourceMaximumAngleDeg(
+                scene_maximum_angle,
+                _config.sourceMaximumAngleDegCap);
+        const bool angle_cap_enabled =
+            std::isfinite(_config.sourceMaximumAngleDegCap) &&
+            _config.sourceMaximumAngleDegCap > 0.0f;
+        const bool angle_cap_applied =
+            angle_cap_enabled &&
+            plannerOptions.maxTriangulationAngleDeg < scene_maximum_angle;
+        if (angle_cap_enabled)
+        {
+            // Sequence fallback has no measured triangulation angle. Letting it
+            // refill a cap-induced shortfall would silently bypass the explicit
+            // experiment boundary with an unaudited, potentially wider view.
+            plannerOptions.allowSequenceFallback = false;
+        }
+        LOG_DEBUG(
+            "[MVS][帧 %d][源视角角度] scene_max=%.3f cap=%.3f "
+            "effective_max=%.3f applied=%s",
+            refIdx,
+            scene_maximum_angle,
+            _config.sourceMaximumAngleDegCap,
+            plannerOptions.maxTriangulationAngleDeg,
+            angle_cap_applied ? "true" : "false");
+
         const MvsSourcePlan sourcePlan = requireVerifiedSourcePairsForReference
             ? planMvsSourceViewsVerifiedFirst(candidates, plannerOptions)
             : planMvsSourceViews(candidates, plannerOptions);
+        MvsSourcePlan legacy_pool_plan;
+        bool complete_pool_changed_legacy_plan = false;
+        if (_config.evaluateCompleteVisibilityCandidatePool)
+        {
+            const std::size_t legacy_candidate_count = std::min(
+                candidates.size(),
+                static_cast<std::size_t>(
+                    std::max(0, legacyEvaluatedCandidateCount)));
+            const std::vector<MvsSourceCandidate> legacy_candidates(
+                candidates.cbegin(),
+                candidates.cbegin() + legacy_candidate_count);
+            MvsSourcePlannerOptions legacy_options = plannerOptions;
+            legacy_options.sourceAngleSoftRankingStrength = 0.0f;
+            legacy_options.auditSourceRanking = false;
+            legacy_pool_plan = requireVerifiedSourcePairsForReference
+                ? planMvsSourceViewsVerifiedFirst(
+                      legacy_candidates, legacy_options)
+                : planMvsSourceViews(legacy_candidates, legacy_options);
+            complete_pool_changed_legacy_plan =
+                legacy_pool_plan.selected.size() != sourcePlan.selected.size();
+            if (!complete_pool_changed_legacy_plan)
+            {
+                for (std::size_t index = 0;
+                     index < sourcePlan.selected.size();
+                     ++index)
+                {
+                    const MvsSourcePlanEntry &legacy_entry =
+                        legacy_pool_plan.selected[index];
+                    const MvsSourcePlanEntry &complete_entry =
+                        sourcePlan.selected[index];
+                    if (legacy_entry.viewIndex != complete_entry.viewIndex ||
+                        legacy_entry.tier != complete_entry.tier)
+                    {
+                        complete_pool_changed_legacy_plan = true;
+                        break;
+                    }
+                }
+            }
+        }
+        QJsonObject source_angle_diagnostics =
+            mvsSourceAngleDiagnosticsToJson(
+                MvsSourceAnglePolicy{
+                    _config.sourceMaximumAngleDegCap,
+                    scene_maximum_angle,
+                    plannerOptions.maxTriangulationAngleDeg,
+                    angle_cap_enabled,
+                    angle_cap_applied,
+                    plannerOptions.allowSequenceFallback},
+                sourcePlan);
+        if (_config.evaluateCompleteVisibilityCandidatePool)
+        {
+            QJsonArray legacy_selected;
+            for (const MvsSourcePlanEntry &entry : legacy_pool_plan.selected)
+            {
+                legacy_selected.append(mvsSourcePlanEntryToJson(entry));
+            }
+            source_angle_diagnostics.insert(
+                QStringLiteral("legacy_pool_selected"), legacy_selected);
+            source_angle_diagnostics.insert(
+                QStringLiteral("complete_pool_changed_legacy_plan"),
+                complete_pool_changed_legacy_plan);
+            source_angle_diagnostics.insert(
+                QStringLiteral("soft_ranking"),
+                mvsSourceRankingDiagnosticsToJson(
+                    MvsSourceRankingPolicy{
+                        true,
+                        NV <= kMvsVisibilityFullPairViewLimit,
+                        NV,
+                        static_cast<int>(rankedSourceCandidates.size()),
+                        legacyEvaluatedCandidateCount,
+                        completeEvaluatedCandidateCount,
+                        _config.sourceAngleSoftRankingStrength,
+                        plannerOptions.softMaxTriangulationAngleDeg,
+                        plannerOptions.maxTriangulationAngleDeg},
+                    sourcePlan));
+        }
+        _frameCaches[static_cast<size_t>(refIdx)].sourceAngleDiagnostics =
+            std::move(source_angle_diagnostics);
+        _frameCaches[static_cast<size_t>(refIdx)]
+            .completeVisibilityCandidatePoolEnabled =
+            _config.evaluateCompleteVisibilityCandidatePool;
+        _frameCaches[static_cast<size_t>(refIdx)]
+            .completePoolChangedLegacyPlan =
+            complete_pool_changed_legacy_plan;
 
         auto &sources = _frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
         _frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = sourcePlan.selected;
@@ -3611,8 +4199,10 @@ bool DepthMapGenerator::probeImageMetadata(QString *errorMessage)
 
         MvsImageMetadata metadata;
         std::string probeError;
+        const std::string &raster_path = mvsRasterPath(
+            _views[static_cast<std::size_t>(index)]);
         if (!probeMvsImageMetadata(
-                _views[static_cast<std::size_t>(index)].imagePath,
+                raster_path,
                 &metadata,
                 &probeError))
         {
@@ -3687,12 +4277,12 @@ bool DepthMapGenerator::loadMvsImageFrame(
 
     const CameraView &view = _views[static_cast<std::size_t>(frameIndex)];
     frame->gray = xjw::common::io::readImage(
-        view.imagePath, cv::IMREAD_GRAYSCALE);
+        mvsRasterPath(view), cv::IMREAD_GRAYSCALE);
     if (frame->gray.empty())
     {
         if (errorMessage)
         {
-            *errorMessage = "无法解码影像: " + view.imagePath;
+            *errorMessage = "无法解码影像: " + mvsRasterPath(view);
         }
         return false;
     }
@@ -3701,7 +4291,45 @@ bool DepthMapGenerator::loadMvsImageFrame(
         return false;
     }
 
-    if (!view.validRegionMaskPath.empty())
+    if (!view.preparedValidMaskPath.empty())
+    {
+        cv::Mat prepared_valid_mask = xjw::common::io::readImage(
+            view.preparedValidMaskPath, cv::IMREAD_GRAYSCALE);
+        if (stopIfCancelled("MVS prepared valid mask load cancelled"))
+        {
+            return false;
+        }
+        if (prepared_valid_mask.empty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = "无法读取 MVS prepared valid mask: " +
+                    view.preparedValidMaskPath;
+            }
+            return false;
+        }
+        if (prepared_valid_mask.size() != frame->gray.size())
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    "MVS prepared valid mask 与 prepared raster 尺寸不一致";
+            }
+            return false;
+        }
+        cv::threshold(
+            prepared_valid_mask,
+            frame->validMask,
+            0.0,
+            255.0,
+            cv::THRESH_BINARY);
+        const std::string &prepared_mask_source =
+            view.preparedValidMaskSource;
+        frame->validMaskSource = prepared_mask_source == "project"
+            ? "project"
+            : (prepared_mask_source == "content" ? "content" : "technical");
+    }
+    else if (!view.validRegionMaskPath.empty())
     {
         const cv::Mat projectMask = xjw::common::io::readImage(
             view.validRegionMaskPath, cv::IMREAD_GRAYSCALE);
@@ -3731,7 +4359,7 @@ bool DepthMapGenerator::loadMvsImageFrame(
             {
                 return false;
             }
-            frame->projectMaskLoaded = true;
+            frame->validMaskSource = "project";
             if (contentRefined)
             {
                 LOG_DEBUG(QStringLiteral(
@@ -3753,7 +4381,7 @@ bool DepthMapGenerator::loadMvsImageFrame(
         }
     }
 
-    if (!frame->projectMaskLoaded)
+    if (frame->validMaskSource.empty())
     {
         float coverage = 0.0f;
         double otsuThreshold = 0.0;
@@ -3763,6 +4391,7 @@ bool DepthMapGenerator::loadMvsImageFrame(
             &coverage,
             &otsuThreshold,
             &adaptiveThreshold);
+        frame->validMaskSource = "content";
         if (stopIfCancelled("MVS content mask preparation cancelled"))
         {
             return false;
@@ -4625,7 +5254,8 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
                                                 int kernelSize,
                                                 float relDepthThreshold,
                                                 float maxRemovalRatio,
-                                                int refIdx)
+                                                int refIdx,
+                                                int sameLayerRadiusPixels)
 {
     if (depthMap.empty() || depthMap.type() != CV_32F)
     {
@@ -4672,8 +5302,12 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
                 // its own depth layer even when the local median belongs to
                 // the other layer. An isolated spike does not. Preserve the
                 // former and remove only unsupported one-pixel hypotheses.
+                const int same_layer_radius = std::clamp(
+                    sameLayerRadiusPixels, 0, 2);
                 int same_layer_neighbors = 0;
-                for (int delta_y = -1; delta_y <= 1; ++delta_y)
+                for (int delta_y = -same_layer_radius;
+                     delta_y <= same_layer_radius;
+                     ++delta_y)
                 {
                     const int neighbor_y = y + delta_y;
                     if (neighbor_y < 0 || neighbor_y >= depthMap.rows)
@@ -4681,7 +5315,9 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
                         continue;
                     }
                     const float *neighbor_row = depthMap.ptr<float>(neighbor_y);
-                    for (int delta_x = -1; delta_x <= 1; ++delta_x)
+                    for (int delta_x = -same_layer_radius;
+                         delta_x <= same_layer_radius;
+                         ++delta_x)
                     {
                         if (delta_x == 0 && delta_y == 0)
                         {
@@ -4706,7 +5342,9 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
                         }
                     }
                 }
-                if (same_layer_neighbors < 2)
+                const int minimum_same_layer_neighbors =
+                    same_layer_radius > 0 ? 2 : 1;
+                if (same_layer_neighbors < minimum_same_layer_neighbors)
                 {
                     maskRow[x] = 255;
                 }
@@ -4855,7 +5493,8 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                                                                     int refIdx,
                                                                     int viewCount,
                                                                     cv::Mat *missingReasonMap,
-                                                                    const DepthPostProcessEvidence *evidence)
+                                                                    const DepthPostProcessEvidence *evidence,
+                                                                    const cv::Size &rasterPixelDomainSize)
 {
     DepthPostProcessStats stats;
     if (depthMap.empty() || depthMap.type() != CV_32F)
@@ -4869,6 +5508,55 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
     if (stats.validBeforePostprocess <= 0)
     {
         return stats;
+    }
+
+    const cv::Size raster_size = rasterPixelDomainSize.width > 0 &&
+            rasterPixelDomainSize.height > 0
+        ? rasterPixelDomainSize
+        : depthMap.size();
+    const DepthPixelDomainScale pixel_scale = depthPixelDomainScale(
+        raster_size, depthMap.size());
+    const int quantized_boundary_edge_radius = scaleDepthPixelRadius(
+        1, pixel_scale);
+    const int boundary_edge_radius =
+        config.enableBoundaryAwareRetention &&
+            pixel_scale.usesReducedGrid()
+        ? std::max(1, quantized_boundary_edge_radius)
+        : quantized_boundary_edge_radius;
+    const int boundary_protection_radius = pixel_scale.usesReducedGrid()
+        ? std::max(
+              0,
+              static_cast<int>(std::floor(
+                  static_cast<float>(
+                      config.boundaryProtectionRadiusPixels) *
+                  pixel_scale.linearScale + 1.0e-6f)))
+        : scaleDepthPixelRadius(
+              config.boundaryProtectionRadiusPixels, pixel_scale);
+    const int local_outlier_kernel = scaleDepthLocalOutlierKernel(
+        config.localDepthOutlierKernelSize, pixel_scale);
+    const int same_layer_radius = scaleDepthPixelRadius(1, pixel_scale);
+    const int minimum_speckle_area = scaleDepthPixelArea(
+        config.minSpeckleComponentArea, pixel_scale);
+    if (pixel_scale.usesReducedGrid())
+    {
+        LOG_DEBUG(
+            "[MVS][帧 %d][像素域] raster=%dx%d grid=%dx%d scale=%.6f "
+            "boundary_edge=1->%d boundary_protection=%d->%d "
+            "local_kernel=%d->%d same_layer_radius=1->%d speckle_area=%d->%d",
+            refIdx,
+            raster_size.width,
+            raster_size.height,
+            depthMap.cols,
+            depthMap.rows,
+            pixel_scale.linearScale,
+            boundary_edge_radius,
+            config.boundaryProtectionRadiusPixels,
+            boundary_protection_radius,
+            config.localDepthOutlierKernelSize,
+            local_outlier_kernel,
+            same_layer_radius,
+            config.minSpeckleComponentArea,
+            minimum_speckle_area);
     }
 
     float confThresh = config.confidenceThresh;
@@ -4927,17 +5615,20 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         {
             cv::Mat beforeConfidence = depthMap.clone();
             cv::Mat protectedBoundary;
-            if (config.enableBoundaryAwareRetention)
+            if (config.enableBoundaryAwareRetention &&
+                boundary_edge_radius > 0)
             {
                 const cv::Mat valid_before = beforeConfidence > 0.0f;
                 cv::Mat eroded;
                 cv::erode(valid_before,
                           eroded,
                           cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                                                    cv::Size(3, 3)));
+                                                    cv::Size(
+                                                        2 * boundary_edge_radius + 1,
+                                                        2 * boundary_edge_radius + 1)));
                 cv::subtract(valid_before, eroded, protectedBoundary);
                 const int radius = std::clamp(
-                    config.boundaryProtectionRadiusPixels, 0, 8);
+                    boundary_protection_radius, 0, 8);
                 if (radius > 0)
                 {
                     cv::dilate(
@@ -5085,10 +5776,11 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         stats.localDepthOutlierRemoved = removeLocalDepthOutliers(
             depthMap,
             confidenceMap,
-            config.localDepthOutlierKernelSize,
+            local_outlier_kernel,
             config.localDepthOutlierRelThresh,
             config.maxLocalDepthOutlierRemovalRatio,
-            refIdx);
+            refIdx,
+            same_layer_radius);
         if (missingReasonMap)
         {
             markDepthLossReason(*missingReasonMap,
@@ -5104,7 +5796,7 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         stats.smallComponentRemoved = removeSmallDepthComponents(
             depthMap,
             confidenceMap,
-            config.minSpeckleComponentArea,
+            minimum_speckle_area,
             config.maxSpeckleRemovalRatio,
             refIdx);
         stats.speckleRemoved = stats.smallComponentRemoved;
@@ -5148,6 +5840,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     result.success = false;
 
     const DepthGenConfig &config = configOverride ? *configOverride : _config;
+    result.sourceAngleCapEnabled =
+        std::isfinite(config.sourceMaximumAngleDegCap) &&
+        config.sourceMaximumAngleDegCap > 0.0f;
     FrameTiming timing;
     const auto totalStart = Clock::now();
     auto stageStart = totalStart;
@@ -5184,6 +5879,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     const FramePinholeCamera refCam = referenceLease->preparedCamera;
     const int W = refImg.cols;
     const int H = refImg.rows;
+    result.preparedRasterSize = cv::Size(W, H);
 
     // 选择源帧（从缓存中取，省去重复加载）
     const int NV = static_cast<int>(_views.size());
@@ -5242,6 +5938,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         refIdx < static_cast<int>(_frameCaches.size()))
     {
         const auto &cache = _frameCaches[static_cast<size_t>(refIdx)];
+        result.sourceAngleDiagnostics = cache.sourceAngleDiagnostics;
+        result.completeVisibilityCandidatePoolEnabled =
+            cache.completeVisibilityCandidatePoolEnabled;
+        result.completePoolChangedLegacyPlan =
+            cache.completePoolChangedLegacyPlan;
         result.requestedSourceViewCount = cache.requestedSourceViewCount;
         result.sourceViewShortfall = std::max(
             0,
@@ -5428,14 +6129,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     {
         source_valid_masks.clear();
     }
-    const bool has_project_mask = referenceLease->projectMaskLoaded;
-    if (has_project_mask)
+    if (!referenceValidMask.empty())
     {
-        result.maskSource = "project";
-    }
-    else if (!referenceValidMask.empty())
-    {
-        result.maskSource = "content";
+        result.maskSource = referenceLease->validMaskSource.empty()
+            ? "technical"
+            : referenceLease->validMaskSource;
     }
     else
     {
@@ -5561,7 +6259,31 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     result.pyramidDegradedReason = pyramid_config.degradedReason;
     pyramid_config.sceneProfile = _effectiveSceneProfile;
     pyramid_config.filterMode = _effectiveDepthFilterMode;
+    pyramid_config.returnNativeFinalResolution =
+        shouldPreserveNativeFinalDepthGrid(
+            config.preserveNativeFinalDepthGrid,
+            _effectiveSceneProfile,
+            useRectified);
     pyramid_config.saveIntermediateLevels = _config.saveIntermediatePyramidLevels;
+    if (config.preserveNativeFinalDepthGrid)
+    {
+        if (pyramid_config.returnNativeFinalResolution)
+        {
+            LOG_INFO(QStringLiteral(
+                         "[MVS] 帧 %1 启用实验原生最终深度网格")
+                         .arg(refIdx));
+        }
+        else
+        {
+            const QString ignored_reason = useRectified
+                ? QStringLiteral("rectified_frame")
+                : QStringLiteral("non_custom_scene");
+            LOG_WARN(QStringLiteral(
+                         "[MVS] 帧 %1 忽略原生最终深度网格请求：%2；保持全尺寸契约")
+                         .arg(refIdx)
+                         .arg(ignored_reason));
+        }
+    }
     for (int level_index = 0; level_index < pyramid_config.activeLevelCount; ++level_index)
     {
         PatchMatchConfig &level_config = pyramid_config.levels[level_index].patchMatch;
@@ -5658,6 +6380,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     normalMap = std::move(pyramid_result.finalLevel.normalMap);
     supportCount = std::move(pyramid_result.finalLevel.supportCount);
     result.selectedLevel = pyramid_result.finalLevel.level;
+    result.effectiveNativeFinalDepthGrid =
+        pyramid_config.returnNativeFinalResolution;
     {
         std::vector<std::string> fallback_reasons;
         if (!pyramid_config.degradedReason.empty())
@@ -6018,6 +6742,21 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     const DepthFilterSettings quality_filter_settings = depthFilterSettings(
         _effectiveDepthFilterMode,
         static_cast<int>(sourceIndices.size()));
+    FusionConfig pixel_domain_fusion_config = config.fusion;
+    pixel_domain_fusion_config.minSpeckleComponentArea =
+        quality_filter_settings.minComponentArea;
+    const DepthPixelDomainScale output_pixel_scale = depthPixelDomainScale(
+        result.preparedRasterSize, depthMap.size());
+    const int output_local_kernel = scaleDepthLocalOutlierKernel(
+        config.fusion.localDepthOutlierKernelSize, output_pixel_scale);
+    const int output_same_layer_radius = scaleDepthPixelRadius(
+        kFullRasterLocalSameLayerRadiusPixels, output_pixel_scale);
+    result.pixelDomainDiagnostics = makePixelDomainDiagnostics(
+        result.preparedRasterSize,
+        depthMap.size(),
+        pixel_domain_fusion_config,
+        config.preserveNativeFinalDepthGrid,
+        result.effectiveNativeFinalDepthGrid);
     cv::Mat missing_reason_map = initializeDepthMissingReasonMap(
         depthMap, effectiveReferenceMask);
     const cv::Mat before_output_filter = depthMap.clone();
@@ -6028,10 +6767,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         const int previewOutliers = removeLocalDepthOutliers(
             depthMap,
             confMap,
-            config.fusion.localDepthOutlierKernelSize,
+            output_local_kernel,
             quality_filter_settings.localDepthOutlierRelThreshold,
             config.fusion.maxLocalDepthOutlierRemovalRatio,
-            refIdx);
+            refIdx,
+            output_same_layer_radius);
         if (previewOutliers > 0)
         {
             LOG_DEBUG("[MVS][帧 %d][后处理] 输出前局部突刺移除=%d", refIdx, previewOutliers);
@@ -6089,7 +6829,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
                                                    originalZNear,
                                                    originalZFar);
     result.depthCompleteness.finalMetrics = analyzeDepthCompleteness(
-        depthMap, effectiveReferenceMask);
+        depthMap,
+        effectiveReferenceMask,
+        kSmallHoleAreaFraction,
+        effectiveMinimumSmallHoleArea(result, depthMap.size()));
     DepthFrameQualityInput quality_input;
     quality_input.sceneProfile = _effectiveSceneProfile;
     quality_input.filterMode = _effectiveDepthFilterMode;
@@ -6100,8 +6843,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     quality_input.multiViewConsistencyAvailable = false;
     quality_input.depthAtSearchBoundaryRatio =
         result.qualityMetrics.depthAtSearchBoundaryRatio;
-    quality_input.hasConstrainedSupportMask =
-        result.maskSource != "full_image" && result.maskCoverage < 0.999f;
+    quality_input.hasProjectSupportMask =
+        result.maskSource == "project" && result.maskCoverage < 0.999f;
     quality_input.validWithinMaskRatio =
         result.depthCompleteness.finalMetrics.validInputs
         ? result.depthCompleteness.finalMetrics.validWithinMaskRatio
@@ -6109,9 +6852,14 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     quality_input.outputFilterRetentionRatio =
         result.depthCompleteness.outputFilterRetentionRatio;
     result.sparseDepthResidual = summarizeSparseDepthResidual(
-        depthMap, result.projectedSparseDepthSamples);
+        depthMap,
+        result.projectedSparseDepthSamples,
+        effectiveSparseResidualRadius(result, depthMap.size()));
     quality_input.sparseDepthResidual = result.sparseDepthResidual;
     result.qualityDecision = evaluateDepthFrame(quality_input);
+    detail::applySourceAngleCapShortfallSafety(result);
+    result.initialQualityAcceptanceAvailable = true;
+    result.initialQualityAcceptance = result.qualityDecision.acceptance;
 
     const QString quality_reasons = [&result]()
     {
@@ -6162,19 +6910,14 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     result.depthProvenance = QSharedPointer<cv::Mat>::create(
         initializeDepthProvenance(depthMap, targeted_gap_recovered_mask));
     result.missingReasonMap = QSharedPointer<cv::Mat>::create(missing_reason_map);
-    result.cameraModel = refCam;
-    if (!depthMap.empty() && (depthMap.cols != W || depthMap.rows != H))
-    {
-        result.cameraModel = refCam.scaledIntrinsics(
-            static_cast<double>(depthMap.cols) / std::max(1, W),
-            static_cast<double>(depthMap.rows) / std::max(1, H));
-    }
+    result.cameraModel = cameraForDepthGrid(
+        refCam, cv::Size(W, H), depthMap.size());
     result.success    = true;
     return result;
 }
 
 // =============================================================================
-FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res) const
+FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res)
 {
     FusionFrameInput frame;
     if (!res.eligibleForFusion())
@@ -6184,12 +6927,28 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
     frame.cameraModel = res.cameraModel.isValid()
         ? res.cameraModel
         : mvsPinholeCamera(_views[res.refViewIdx].camera);
-    frame.sourceCamera = _views[res.refViewIdx].camera;
+    const CameraView &view = _views[res.refViewIdx];
+    frame.sourceCamera = view.camera;
     frame.viewIndex = res.refViewIdx;
     frame.sourceImageIndices = res.sourceViewIndices;
     frame.imgW = res.depthMap ? res.depthMap->cols : 0;
     frame.imgH = res.depthMap ? res.depthMap->rows : 0;
-    frame.imagePath = _views[res.refViewIdx].imagePath;
+    frame.imagePath = mvsRasterPath(view);
+    {
+        std::lock_guard<std::mutex> lock(_preparedRasterArtifactsMutex);
+        if (res.refViewIdx >= 0 &&
+            res.refViewIdx < static_cast<int>(_preparedRasterArtifacts.size()))
+        {
+            const MvsPreparedRasterArtifact &prepared =
+                _preparedRasterArtifacts[static_cast<std::size_t>(
+                    res.refViewIdx)];
+            if (!prepared.imagePath.empty() && prepared.camera.isValid())
+            {
+                frame.imagePath = prepared.imagePath;
+                frame.sourceCamera = prepared.camera;
+            }
+        }
+    }
 
     if (!res.depthMap || res.depthMap->empty()) return frame;
 
@@ -6225,7 +6984,8 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
                                                            res.refViewIdx,
                                                            static_cast<int>(_views.size()),
                                                            nullptr,
-                                                           &postprocess_evidence);
+                                                           &postprocess_evidence,
+                                                           res.preparedRasterSize);
     }
 
     frame.depthMap   = filteredDepth;
@@ -6269,6 +7029,13 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     {
         return;
     }
+
+    const std::vector<DepthConsistencyFrameSourcePlan> source_plans =
+        freezeDepthConsistencySourcePlans(
+            _depthFrames,
+            NV,
+            _effectiveSceneProfile,
+            _config.crossViewHoleRepairSourceCount);
 
     // ── 先保存所有帧的原始深度图拷贝，避免顺序处理的级联清除问题 ──────
     const bool capture_adaptive_reliability =
@@ -6317,17 +7084,12 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 
         const auto frame_start = Clock::now();
         const int rowWorkers = resolvedTotalCpuThreadBudget(_config);
-        const std::vector<int> consistencySources =
-            consistencySourceIndicesForFrame(_depthFrames, i, NV);
-        const std::vector<int> repairSources =
-            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject
-            ? orbitalHoleRepairSourceIndices(
-                  _depthFrames,
-                  consistencySources,
-                  i,
-                  NV,
-                  _config.crossViewHoleRepairSourceCount)
-            : consistencySources;
+        const DepthConsistencyFrameSourcePlan &source_plan =
+            source_plans[static_cast<std::size_t>(i)];
+        const std::vector<int> &consistencySources =
+            source_plan.consistencySourceIndices;
+        const std::vector<int> &repairSources =
+            source_plan.geometrySourceViewIndices;
         _depthFrames[i].geometrySourceViewIndices = repairSources;
         const bool fewViews = useContradictionOnlyDepthConsistency(
             static_cast<int>(consistencySources.size()));
@@ -6417,6 +7179,14 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 input.reliabilityWeight = sourceGeometryReliabilityWeight(
                     _depthFrames[i], j);
                 input.sourceOrdinal = source_ordinal;
+                const DepthPixelDomainScale source_pixel_scale =
+                    pixelDomainScaleForResult(_depthFrames[j], depthJ.size());
+                input.searchRadiusPixels = scaleDepthPixelRadius(
+                    kFullRasterConsistencySearchRadiusPixels,
+                    source_pixel_scale);
+                input.evaluateSubpixelFootprint =
+                    source_pixel_scale.usesReducedGrid() &&
+                    input.searchRadiusPixels == 0;
                 consistency_inputs.push_back(std::move(input));
             }
             if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
@@ -6439,6 +7209,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             camI,
             consistency_inputs,
             relThresh,
+            scaleDepthPixelDistance(
+                kFullRasterConsistencyRoundTripPixels,
+                pixelDomainScaleForResult(_depthFrames[i], depthI.size())),
             rowWorkers,
             _cancelled,
             consistent_votes,
@@ -6661,7 +7434,11 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             depthI,
             depthBackup,
             restoration_confidence,
-            restoration_mask);
+            restoration_mask,
+            0.75f,
+            0.12f,
+            kSmallHoleAreaFraction,
+            effectiveMinimumSmallHoleArea(_depthFrames[i], depthI.size()));
         _depthFrames[i].depthCompleteness.restoredFromPrefilterCount += restored_count;
         int afterValid = cv::countNonZero(depthI > 0);
         float keepRate = beforeValid > 0 ? 100.f * afterValid / beforeValid : 0.f;
@@ -6801,6 +7578,15 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                                                 consistency_keep_rate,
                                                 adaptive_summary,
                                                 discrete_summary);
+        captureStageSnapshot(
+            i,
+            MvsStageSnapshotStage::CrossViewConsistency,
+            QStringLiteral(
+                "after_cross_view_filter_and_repair_before_confidence_postprocess"),
+            _depthFrames[i],
+            depthI,
+            restoration_confidence,
+            depthI > 0.0f);
         emit progressChanged(
             QStringLiteral("多视一致性：已处理 %1/%2，单帧耗时 %3 秒")
                 .arg(i + 1)
@@ -7450,6 +8236,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
     };
 
     const int row_workers = resolvedTotalCpuThreadBudget(_config);
+    const std::vector<DepthConsistencyFrameSourcePlan> source_plans =
+        freezeDepthConsistencySourcePlans(
+            _depthFrames,
+            view_count,
+            _effectiveSceneProfile,
+            _config.crossViewHoleRepairSourceCount);
     int completed_frames = 0;
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
@@ -7502,19 +8294,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         const FramePinholeCamera reference_camera = _depthFrames[frame_index].cameraModel.isValid()
             ? _depthFrames[frame_index].cameraModel
             : mvsPinholeCamera(_views[frame_index].camera);
-        const std::vector<int> source_indices = consistencySourceIndicesForFrame(
-            _depthFrames,
-            frame_index,
-            view_count);
-        const std::vector<int> repair_source_indices =
-            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject
-            ? orbitalHoleRepairSourceIndices(
-                  _depthFrames,
-                  source_indices,
-                  frame_index,
-                  view_count,
-                  _config.crossViewHoleRepairSourceCount)
-            : source_indices;
+        const DepthConsistencyFrameSourcePlan &source_plan =
+            source_plans[static_cast<std::size_t>(frame_index)];
+        const std::vector<int> &source_indices =
+            source_plan.consistencySourceIndices;
+        const std::vector<int> &repair_source_indices =
+            source_plan.geometrySourceViewIndices;
         _depthFrames[frame_index].geometrySourceViewIndices =
             repair_source_indices;
         const float relative_threshold = depthConsistencyRelativeThreshold(
@@ -7563,6 +8348,11 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             cache_budget > reference->byteSize()
                 ? cache_budget - static_cast<uint64_t>(reference->byteSize())
                 : estimated_source_bytes);
+        const float maximum_round_trip_error_pixels =
+            scaleDepthPixelDistance(
+                kFullRasterConsistencyRoundTripPixels,
+                pixelDomainScaleForResult(
+                    _depthFrames[frame_index], reference->depth.size()));
         auto flush_consistency_batch = [&]()
         {
             accumulateDepthConsistency(
@@ -7570,6 +8360,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 reference_camera,
                 consistency_inputs,
                 relative_threshold,
+                maximum_round_trip_error_pixels,
                 row_workers,
                 _cancelled,
                 consistent_votes,
@@ -7611,8 +8402,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 remove_pending_files();
                 return false;
             }
-            if (source_index == frame_index ||
-                !_depthFrames[source_index].eligibleAsConsistencySource())
+            if (source_index == frame_index)
             {
                 continue;
             }
@@ -7661,6 +8451,15 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 input.reliabilityWeight = sourceGeometryReliabilityWeight(
                     _depthFrames[frame_index], source_index);
                 input.sourceOrdinal = source_ordinal;
+                const DepthPixelDomainScale source_pixel_scale =
+                    pixelDomainScaleForResult(
+                        _depthFrames[source_index], source->depth.size());
+                input.searchRadiusPixels = scaleDepthPixelRadius(
+                    kFullRasterConsistencySearchRadiusPixels,
+                    source_pixel_scale);
+                input.evaluateSubpixelFootprint =
+                    source_pixel_scale.usesReducedGrid() &&
+                    input.searchRadiusPixels == 0;
                 consistency_inputs.push_back(std::move(input));
                 consistency_source_handles.push_back(source);
                 consistency_batch_bytes += source_bytes;
@@ -7881,7 +8680,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             filtered_depth,
             reference->depth,
             reference->confidence,
-            restoration_mask);
+            restoration_mask,
+            0.75f,
+            0.12f,
+            kSmallHoleAreaFraction,
+            effectiveMinimumSmallHoleArea(
+                _depthFrames[frame_index], filtered_depth.size()));
         _depthFrames[frame_index].depthCompleteness.restoredFromPrefilterCount +=
             restored_count;
         const auto repair_stage_end = Clock::now();
@@ -8245,6 +9049,15 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                             reference->depth,
                             filtered_depth,
                             DepthMissingReason::InsufficientGeometrySupport);
+        captureStageSnapshot(
+            frame_index,
+            MvsStageSnapshotStage::CrossViewConsistency,
+            QStringLiteral(
+                "after_cross_view_filter_and_repair_before_confidence_postprocess"),
+            _depthFrames[frame_index],
+            filtered_depth,
+            filtered_confidence,
+            filtered_depth > 0.0f);
         _depthFrames[frame_index].depthPostprocess = postprocessFusionDepthMap(
             filtered_depth,
             filtered_confidence,
@@ -8252,7 +9065,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             frame_index,
             view_count,
             _depthFrames[frame_index].missingReasonMap.data(),
-            &postprocess_evidence);
+            &postprocess_evidence,
+            _depthFrames[frame_index].preparedRasterSize);
         _depthFrames[frame_index].depthPostprocessApplied = true;
         cv::Mat final_interpolation_mask;
         const DepthAnchoredHoleInterpolationStats final_repair =
@@ -8321,6 +9135,14 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             repair_mask,
             geometry_evidence.supportCount,
             contradicted_votes);
+        captureStageSnapshot(
+            frame_index,
+            MvsStageSnapshotStage::ConfidencePostprocess,
+            QStringLiteral("after_confidence_postprocess_and_anchored_repair"),
+            _depthFrames[frame_index],
+            filtered_depth,
+            filtered_confidence,
+            filtered_depth > 0.0f);
         const cv::Mat &geometry_support = geometry_evidence.supportCount;
         const auto postprocess_stage_end = Clock::now();
         emit progressChanged(
@@ -8557,15 +9379,17 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             QStringLiteral("多视一致性：已处理 %1/%2").arg(completed_frames).arg(view_count),
             ratio);
         LOG_INFO(QStringLiteral(
-                     "[MVS] 流式一致性 frame=%1 workers=%2 valid=%3->%4 sources=%5 "
-                     "twoSource=%6/%7 cache=%8/%9 MiB "
-                     "timing_ms(source=%10 layer=%11 repair=%12 residual=%13 "
-                     "post=%14 write=%15 total=%16)")
+                     "[MVS] 流式一致性 frame=%1 workers=%2 valid=%3->%4 "
+                     "sources_preferred=%5 sources_frozen=%6 "
+                     "twoSource=%7/%8 cache=%9/%10 MiB "
+                     "timing_ms(source=%11 layer=%12 repair=%13 residual=%14 "
+                     "post=%15 write=%16 total=%17)")
                      .arg(frame_index)
                      .arg(row_workers)
                      .arg(valid_before)
                      .arg(valid_after)
                      .arg(source_indices.size())
+                     .arg(repair_source_indices.size())
                      .arg(repair_stats.twoSourceGrownPixelCount)
                      .arg(repair_stats.twoSourceCandidatePixelCount)
                      .arg(cache.currentBytes() / (1024 * 1024))
@@ -8813,6 +9637,15 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 artifact_result.adaptiveGeometryConflictRatio =
                     QSharedPointer<cv::Mat>::create(adaptive_conflict_ratio);
             }
+            captureStageSnapshot(
+                replacement.frameIndex,
+                MvsStageSnapshotStage::FinalAdmission,
+                QStringLiteral(
+                    "after_final_quality_evaluation_before_artifact_publication"),
+                artifact_result,
+                artifact_result.depthMap ? *artifact_result.depthMap : cv::Mat(),
+                artifact_result.confidence ? *artifact_result.confidence : cv::Mat(),
+                artifact_result.validMask ? *artifact_result.validMask : cv::Mat());
             if (!saveDepthFrameArtifacts(replacement.frameIndex,
                                          artifact_result,
                                          QStringLiteral("一致性过滤后")))
@@ -8820,17 +9653,25 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 remove_pending_files();
                 return false;
             }
-            QFile::remove(replacement.filteredGeometrySupportPath);
-            QFile::remove(replacement.filteredGeometrySourceMaskPath);
-            QFile::remove(replacement.filteredInverseDepthMeanPath);
-            QFile::remove(replacement.filteredInverseDepthSpreadPath);
-            QFile::remove(replacement.filteredAdaptiveSupportWeightPath);
-            QFile::remove(replacement.filteredAdaptiveEffectiveViewCountPath);
-            QFile::remove(replacement.filteredAdaptiveConflictRatioPath);
-            QFile::remove(replacement.filteredCrossViewRepairedMaskPath);
-            QFile::remove(replacement.filteredResidualReestimatedMaskPath);
-            QFile::remove(replacement.filteredDepthProvenancePath);
-            QFile::remove(replacement.filteredMissingReasonPath);
+            const auto remove_if_present = [](const QString &path)
+            {
+                if (!path.isEmpty())
+                {
+                    QFile::remove(path);
+                }
+            };
+            remove_if_present(replacement.filteredGeometrySupportPath);
+            remove_if_present(replacement.filteredGeometrySourceMaskPath);
+            remove_if_present(replacement.filteredInverseDepthMeanPath);
+            remove_if_present(replacement.filteredInverseDepthSpreadPath);
+            remove_if_present(replacement.filteredAdaptiveSupportWeightPath);
+            remove_if_present(
+                replacement.filteredAdaptiveEffectiveViewCountPath);
+            remove_if_present(replacement.filteredAdaptiveConflictRatioPath);
+            remove_if_present(replacement.filteredCrossViewRepairedMaskPath);
+            remove_if_present(replacement.filteredResidualReestimatedMaskPath);
+            remove_if_present(replacement.filteredDepthProvenancePath);
+            remove_if_present(replacement.filteredMissingReasonPath);
         }
     }
     LOG_INFO(QStringLiteral(
@@ -8916,6 +9757,26 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     const std::string missingReasonPreviewPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_missing_reason_preview.png";
+    const GeometrySourceOrdinalContract geometry_source_contract =
+        validateGeometrySourceOrdinalContract(
+            result.geometrySourceMask && !result.geometrySourceMask->empty()
+                ? *result.geometrySourceMask : cv::Mat(),
+            result.geometrySourceViewIndices,
+            frameIndex,
+            static_cast<int>(_views.size()),
+            result.depthMap->size());
+    if (!geometry_source_contract.valid)
+    {
+        const QString message = QStringLiteral(
+            "帧 %1 的几何来源位序契约无效：%2（来源数=%3）；拒绝写盘以避免 "
+            "geometry_source_mask 被错解")
+                                    .arg(frameIndex)
+                                    .arg(geometry_source_contract.errorMessage)
+                                    .arg(result.geometrySourceViewIndices.size());
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+        emit errorOccurred(message);
+        return false;
+    }
     bool previewSaved = !savePreviewPng;
     double previewMs = 0.0;
     if (savePreviewPng)
@@ -9110,12 +9971,41 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         }
         return true;
     };
-    const bool geometrySourceMaskSaved = save_geometry_evidence(
-        result.geometrySourceMask,
-        CV_16UC1,
-        rawGeometrySourceMaskPath,
-        QStringLiteral("跨视来源掩码"),
-        true);
+    bool geometrySourceMaskSaved = false;
+    if (geometry_source_contract.persistMask)
+    {
+        geometrySourceMaskSaved = save_geometry_evidence(
+            result.geometrySourceMask,
+            CV_16UC1,
+            rawGeometrySourceMaskPath,
+            QStringLiteral("跨视来源掩码"),
+            true);
+        if (saveRawDepth && !geometrySourceMaskSaved)
+        {
+            const QString message = QStringLiteral(
+                "帧 %1 的几何来源掩码写盘失败；拒绝保存不完整的位序契约")
+                                        .arg(frameIndex);
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+            emit errorOccurred(message);
+            return false;
+        }
+    }
+    else if (saveRawDepth)
+    {
+        const QString normalized_mask_path = QString::fromStdString(
+            rawGeometrySourceMaskPath);
+        if (QFileInfo::exists(normalized_mask_path) &&
+            !QFile::remove(normalized_mask_path))
+        {
+            const QString message = QStringLiteral(
+                "帧 %1 无跨视来源证据，但无法移除旧来源掩码：%2")
+                                        .arg(frameIndex)
+                                        .arg(normalized_mask_path);
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+            emit errorOccurred(message);
+            return false;
+        }
+    }
     const bool inverseDepthMeanSaved = save_geometry_evidence(
         result.inverseDepthMean,
         CV_32FC1,
@@ -9257,10 +10147,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             }
 
 
-            const cv::Size working_size = depthPyramidWorkingSize(
-                result.depthMap->cols,
-                result.depthMap->rows,
-                level.downsampleFactor);
+            // Estimator-owned intermediate levels are already normalized to their native
+            // PatchMatch grid.  Do not derive this size from the final result: the experimental
+            // native-final mode intentionally makes that result smaller than the prepared raster.
+            const cv::Size working_size = level.depth.size();
             const cv::Mat native_depth = restoreNativePyramidArtifact(level.depth, working_size);
             const cv::Mat native_confidence = restoreNativePyramidArtifact(
                 level.confidence,
@@ -9369,6 +10259,16 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
 
     if (previewSaved && rawSaved && savePreviewPng)
     {
+        MvsPreparedRasterArtifact prepared_raster;
+        QString prepared_raster_error;
+        if (!ensurePreparedRasterArtifact(
+                frameIndex, &prepared_raster, &prepared_raster_error))
+        {
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(prepared_raster_error));
+            emit errorOccurred(prepared_raster_error);
+            markManifestFrameFailed(frameIndex, prepared_raster_error);
+            return false;
+        }
         emit depthMapSaved(
             QString::fromStdString(pngPath),
             result.depthMap->cols,
@@ -9449,7 +10349,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                 result.depthMap->size(), CV_8UC1, cv::Scalar(255));
         }
         depthCompleteness.finalMetrics = analyzeDepthCompleteness(
-            *result.depthMap, completenessMask);
+            *result.depthMap,
+            completenessMask,
+            kSmallHoleAreaFraction,
+            effectiveMinimumSmallHoleArea(
+                result, result.depthMap->size()));
         if (result.depthPostprocessApplied)
         {
             depthCompleteness.preFusionPostprocessValidCount =
@@ -9511,70 +10415,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                 QStringLiteral("discrete_geometry_core_ratio"),
                 discrete_geometry_core.coreRatio);
         }
-        bool valid_geometry_source_indices =
-            !result.geometrySourceMask || result.geometrySourceMask->empty();
-        if (result.geometrySourceMask && !result.geometrySourceMask->empty())
-        {
-            valid_geometry_source_indices =
-                !result.geometrySourceViewIndices.empty() &&
-                result.geometrySourceViewIndices.size() <= 16;
-        }
-        std::vector<int> validated_geometry_source_indices;
-        validated_geometry_source_indices.reserve(
-            result.geometrySourceViewIndices.size());
         for (const int sourceIndex : result.geometrySourceViewIndices)
         {
-            if (sourceIndex < 0 ||
-                sourceIndex >= static_cast<int>(_views.size()) ||
-                sourceIndex == frameIndex ||
-                std::find(
-                    validated_geometry_source_indices.cbegin(),
-                    validated_geometry_source_indices.cend(),
-                    sourceIndex) !=
-                    validated_geometry_source_indices.cend())
-            {
-                valid_geometry_source_indices = false;
-                break;
-            }
-            validated_geometry_source_indices.push_back(sourceIndex);
             geometrySourceIndices.append(sourceIndex);
-        }
-        if (valid_geometry_source_indices && result.geometrySourceMask &&
-            !result.geometrySourceMask->empty())
-        {
-            if (result.geometrySourceMask->type() != CV_16UC1)
-            {
-                valid_geometry_source_indices = false;
-            }
-            else
-            {
-                double maximum_mask_value = 0.0;
-                cv::minMaxLoc(
-                    *result.geometrySourceMask,
-                    nullptr,
-                    &maximum_mask_value);
-                const std::uint32_t allowed_bits =
-                    result.geometrySourceViewIndices.size() == 16
-                    ? 0xFFFFU
-                    : ((std::uint32_t{1} <<
-                        result.geometrySourceViewIndices.size()) - 1U);
-                if (maximum_mask_value >
-                    static_cast<double>(allowed_bits))
-                {
-                    valid_geometry_source_indices = false;
-                }
-            }
-        }
-        if (!valid_geometry_source_indices)
-        {
-            const QString message = QStringLiteral(
-                "帧 %1 的几何来源位序表无效：来源数=%2；拒绝保存会导致 "
-                "geometry_source_mask 错解的产物")
-                                        .arg(frameIndex)
-                                        .arg(result.geometrySourceViewIndices.size());
-            LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
-            emit errorOccurred(message);
-            return false;
         }
         AdaptiveGeometryEvidenceMaps adaptive_evidence_maps;
         adaptive_evidence_maps.supportWeight =
@@ -9608,6 +10451,13 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                                      confidenceMap ? *confidenceMap : emptyConfidence,
                                      sourceQualitySummary.sourceViewCount);
         QJsonObject depthQualityJson = depthMapQualityMetricsToJson(depthQualityMetrics);
+        if (result.initialQualityAcceptanceAvailable)
+        {
+            depthQualityJson.insert(
+                QStringLiteral("initial_acceptance"),
+                QString::fromLatin1(depthFrameAcceptanceId(
+                    result.initialQualityAcceptance)));
+        }
         for (auto it = depthCompletenessJson.constBegin();
              it != depthCompletenessJson.constEnd();
              ++it)
@@ -9632,6 +10482,14 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                          _frameCaches[static_cast<size_t>(frameIndex)]
                              .sourceViewShortfallReason)
                    : QString());
+        const QJsonObject sourceAngleDiagnostics =
+            !result.sourceAngleDiagnostics.isEmpty()
+                ? result.sourceAngleDiagnostics
+                : (frameIndex >= 0 &&
+                    frameIndex < static_cast<int>(_frameCaches.size())
+                       ? _frameCaches[static_cast<size_t>(frameIndex)]
+                             .sourceAngleDiagnostics
+                       : QJsonObject{});
         depthQualityJson[QStringLiteral("requested_source_view_count")] = requestedSourceViewCount;
         depthQualityJson[QStringLiteral("source_view_shortfall")] = sourceViewShortfall;
         depthQualityJson[QStringLiteral("source_view_shortfall_reason")] =
@@ -9642,6 +10500,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             sourceQualitySummary.backfillSourceViewCount;
         depthQualityJson[QStringLiteral("sequence_fallback_source_view_count")] =
             sourceQualitySummary.sequenceFallbackSourceViewCount;
+        depthQualityJson[QStringLiteral("source_angle_diagnostics")] =
+            sourceAngleDiagnostics;
         const QJsonObject qualityDecisionJson =
             depthFrameQualityDecisionToJson(result.qualityDecision);
         QJsonArray pyramidLevelsJson = depthPyramidLevelsToJson(result.pyramidLevels);
@@ -9794,11 +10654,19 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                 ? QString::fromStdString(missingReasonPreviewPath)
                 : QString();
         artifact[QStringLiteral("ref_image")] = QString::fromStdString(_views[frameIndex].imagePath);
+        artifact[QStringLiteral("prepared_image")] =
+            QString::fromStdString(prepared_raster.imagePath);
+        artifact[QStringLiteral("prepared_valid_mask_path")] =
+            QString::fromStdString(prepared_raster.validMaskPath);
+        artifact[QStringLiteral("prepared_camera_model")] =
+            cameraModelToJson(prepared_raster.camera);
         artifact[QStringLiteral("source_images")] = sourceImages;
         artifact[QStringLiteral("source_indices")] = sourceIndices;
         artifact[QStringLiteral("geometry_source_indices")] =
             geometrySourceIndices;
         artifact[QStringLiteral("source_plan")] = sourcePlan;
+        artifact[QStringLiteral("source_angle_diagnostics")] =
+            sourceAngleDiagnostics;
         artifact[QStringLiteral("quality_profile")] =
             QString::fromStdString(_config.qualityProfile);
         artifact[QStringLiteral("configured_source_view_count")] =
@@ -9882,6 +10750,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("stage")] = stageLabel;
         artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
         artifact[QStringLiteral("elapsed_ms")] = result.elapsedMs;
+        artifact[QStringLiteral("effective_native_final_depth_grid")] =
+            result.effectiveNativeFinalDepthGrid;
+        artifact[QStringLiteral("pixel_domain_diagnostics")] =
+            result.pixelDomainDiagnostics;
         artifact[QStringLiteral("grid_width")] = result.depthMap->cols;
         artifact[QStringLiteral("grid_height")] = result.depthMap->rows;
         artifact[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
@@ -9892,6 +10764,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         MvsDepthFrameRecord record;
         record.refIndex = frameIndex;
         record.refImage = QString::fromStdString(_views[frameIndex].imagePath);
+        record.preparedImage = QString::fromStdString(
+            prepared_raster.imagePath);
+        record.preparedValidMaskPath = QString::fromStdString(
+            prepared_raster.validMaskPath);
+        record.preparedCameraModel = cameraModelToJson(
+            prepared_raster.camera);
         record.sourceImages = sourceImageList;
         for (const QJsonValue &source_value : sourceIndices)
         {
@@ -10002,6 +10880,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.missingReasonPreviewPath = missingReasonPreviewSaved
             ? QString::fromStdString(missingReasonPreviewPath)
             : QString();
+        record.effectiveNativeFinalDepthGrid =
+            result.effectiveNativeFinalDepthGrid;
+        record.pixelDomainDiagnostics = result.pixelDomainDiagnostics;
         record.gridWidth = result.depthMap->cols;
         record.gridHeight = result.depthMap->rows;
         record.elapsedMs = static_cast<qint64>(std::llround(result.elapsedMs));
@@ -10023,6 +10904,24 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     }
 
     return previewSaved && rawSaved;
+}
+
+void DepthMapGenerator::captureStageSnapshot(
+    int frameIndex,
+    MvsStageSnapshotStage stage,
+    const QString &boundary,
+    const DepthFrameResult &result,
+    const cv::Mat &depth,
+    const cv::Mat &confidence,
+    const cv::Mat &validMask)
+{
+    if (!_stageSnapshotRecorder ||
+        !_stageSnapshotRecorder->selected(frameIndex))
+    {
+        return;
+    }
+    _stageSnapshotRecorder->capture(
+        frameIndex, stage, boundary, result, depth, confidence, validMask);
 }
 
 void DepthMapGenerator::runDepthPoseRefinementCandidateStage(
@@ -10220,6 +11119,46 @@ void DepthMapGenerator::runInBackgroundImpl()
         return;
     }
 
+    std::string source_ranking_error;
+    if (!validateMvsSourceRankingConfiguration(
+            _config.evaluateCompleteVisibilityCandidatePool,
+            _config.sourceAngleSoftRankingStrength,
+            _config.sourceMaximumAngleDegCap,
+            &source_ranking_error))
+    {
+        const QString error = QStringLiteral(
+            "MVS 源视图软排序配置无效：%1")
+                                  .arg(QString::fromStdString(
+                                      source_ranking_error));
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(error));
+        emit errorOccurred(error);
+        emitFinishedOnce(false);
+        return;
+    }
+
+    _stageSnapshotRecorder.reset();
+    if (!_config.stageSnapshotReferenceIndices.empty())
+    {
+        _stageSnapshotRecorder = std::make_unique<MvsStageSnapshotRecorder>(
+            _config, NV);
+        if (!_stageSnapshotRecorder->enabled())
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][阶段快照] 诊断通道未启用：%1；主流程继续")
+                         .arg(_stageSnapshotRecorder->initializationError()));
+        }
+        else
+        {
+            LOG_INFO(QStringLiteral(
+                         "[MVS][阶段快照] 已启用：manifest=%1 refs=%2 "
+                         "max_long_edge=%3 budget=%4 MiB")
+                         .arg(_stageSnapshotRecorder->manifestPath())
+                         .arg(_config.stageSnapshotReferenceIndices.size())
+                         .arg(_config.stageSnapshotMaximumLongEdge)
+                         .arg(_config.stageSnapshotBudgetBytes / (1024 * 1024)));
+        }
+    }
+
     _sceneClassification = classifyMvsScene(_views, _sparse);
     _effectiveSceneProfile = _config.sceneProfile == MvsSceneProfile::Auto
         ? _sceneClassification.profile
@@ -10240,9 +11179,8 @@ void DepthMapGenerator::runInBackgroundImpl()
     _effectiveDepthFilterMode = _config.depthFilterMode;
     if (_config.adaptiveDepthFilterMode)
     {
-        _effectiveDepthFilterMode = _effectiveSceneProfile == MvsSceneProfile::AerialTerrain
-            ? DepthFilterMode::Moderate
-            : DepthFilterMode::Mild;
+        _effectiveDepthFilterMode = recommendedMvsDepthFilterMode(
+            _effectiveSceneProfile);
     }
     const int configured_source_count = _config.configuredSourceViewCount > 0
         ? _config.configuredSourceViewCount
@@ -10257,9 +11195,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     LOG_INFO(QStringLiteral(
                  "[MVS] 场景分类: profile=%1 plane_thickness=%2 down_looking=%3 "
                  "axis_convergence=%4 filter=%5 source_pool=%6 (configured=%7) reason=%8")
-                 .arg(_effectiveSceneProfile == MvsSceneProfile::AerialTerrain
-                          ? QStringLiteral("aerial_terrain")
-                          : QStringLiteral("orbital_object"))
+                 .arg(sceneProfileId(_effectiveSceneProfile))
                  .arg(_sceneClassification.planeThicknessRatio, 0, 'f', 3)
                  .arg(_sceneClassification.downLookingConsistency, 0, 'f', 3)
                  .arg(_sceneClassification.opticalAxisConvergence, 0, 'f', 3)
@@ -11340,6 +12276,28 @@ void DepthMapGenerator::runInBackgroundImpl()
                                  .arg(res.qualityMetrics.meanConfidence, 0, 'f', 3)
                                  .arg(QString::fromLatin1(depthFrameAcceptanceId(res.qualityDecision.acceptance)))
                                  .arg(elapsedMs, 0, 'f', 1));
+                    captureStageSnapshot(
+                        i,
+                        MvsStageSnapshotStage::PatchMatchOutput,
+                        QStringLiteral(
+                            "single_frame_output_after_sparse_prior_and_local_filter"),
+                        res,
+                        res.depthMap ? *res.depthMap : cv::Mat(),
+                        res.confidence ? *res.confidence : cv::Mat(),
+                        res.validMask ? *res.validMask : cv::Mat());
+                    if (res.qualityDecision.acceptance ==
+                        DepthFrameAcceptance::Rejected)
+                    {
+                        captureStageSnapshot(
+                            i,
+                            MvsStageSnapshotStage::FinalAdmission,
+                            QStringLiteral(
+                                "terminal_initial_rejection_before_consistency"),
+                            res,
+                            res.depthMap ? *res.depthMap : cv::Mat(),
+                            res.confidence ? *res.confidence : cv::Mat(),
+                            res.validMask ? *res.validMask : cv::Mat());
+                    }
                     saveQueue.enqueue(std::move(saveReservation), i, res, QStringLiteral("初始"));
 
                     if (keepDepthFramesInMemory.load() &&
@@ -11627,7 +12585,8 @@ void DepthMapGenerator::runInBackgroundImpl()
                                                                   res.refViewIdx,
                                                                   static_cast<int>(_views.size()),
                                                                   res.missingReasonMap.data(),
-                                                                  &postprocess_evidence);
+                                                                  &postprocess_evidence,
+                                                                  res.preparedRasterSize);
                 res.depthPostprocessApplied = true;
                 cv::Mat final_interpolation_mask;
                 const DepthAnchoredHoleInterpolationStats final_repair =
@@ -11705,6 +12664,15 @@ void DepthMapGenerator::runInBackgroundImpl()
                         *res.supportRegionMask,
                         res.geometrySupportCount ? *res.geometrySupportCount : cv::Mat());
                 }
+                captureStageSnapshot(
+                    i,
+                    MvsStageSnapshotStage::ConfidencePostprocess,
+                    QStringLiteral(
+                        "after_confidence_postprocess_and_anchored_repair"),
+                    res,
+                    *res.depthMap,
+                    confidence,
+                    *res.depthMap > 0.0f);
             }
             if (_cancelled.load())
             {
@@ -11815,6 +12783,15 @@ void DepthMapGenerator::runInBackgroundImpl()
                             ? *res.geometrySupportCount : cv::Mat());
                 }
             }
+            captureStageSnapshot(
+                i,
+                MvsStageSnapshotStage::FinalAdmission,
+                QStringLiteral(
+                    "after_final_quality_evaluation_before_artifact_publication"),
+                res,
+                res.depthMap ? *res.depthMap : cv::Mat(),
+                res.confidence ? *res.confidence : cv::Mat(),
+                res.validMask ? *res.validMask : cv::Mat());
             if (_cancelled.load())
             {
                 break;
@@ -11916,6 +12893,11 @@ void DepthMapGenerator::runInBackgroundImpl()
         _config.runFusion = false;
     }
 
+    if (_stageSnapshotRecorder)
+    {
+        _stageSnapshotRecorder->finalize();
+    }
+
     if (!_config.runFusion)
     {
         if (!_cancelled.load())
@@ -11982,7 +12964,8 @@ void DepthMapGenerator::runInBackgroundImpl()
     // 使用新的 StereoFusionConfig
     StereoFusionConfig fusionCfg;
     fusionCfg.minNumPixels   = _config.fusion.minConsistentViews;
-    fusionCfg.maxReprojError = _config.fusion.pixelThresh;
+    float configured_fusion_reprojection_pixels =
+        _config.fusion.pixelThresh;
     fusionCfg.maxDepthError  = _config.fusion.relDepthThresh;
     fusionCfg.checkNumImages = std::min(50, NV);
     fusionCfg.workerCount    = resolvedTotalCpuThreadBudget(_config);
@@ -12005,9 +12988,15 @@ void DepthMapGenerator::runInBackgroundImpl()
     if (NV <= 2) {
         fusionCfg.minNumPixels   = 1;   // 单观测即可，crossCheck 已保证质量
         fusionCfg.maxDepthError  = std::max(fusionCfg.maxDepthError, 0.08f); // 放宽至 8%
-        fusionCfg.maxReprojError = std::max(fusionCfg.maxReprojError, 3.0f); // 3 像素重投影误差
+        configured_fusion_reprojection_pixels = std::max(
+            configured_fusion_reprojection_pixels, 3.0f);
         LOG_WARN("[MVS][深度融合] 少视图模式: frames=%d min_pixels=1，已放宽融合阈值", NV);
     }
+
+    fusionCfg.maxReprojError = configured_fusion_reprojection_pixels;
+    fusionCfg.localDepthGradientRadiusPixels =
+        kFullRasterLocalSameLayerRadiusPixels;
+    fusionCfg.pixelParametersUsePreparedRaster = true;
 
     // 如果有稀疏云 AABB，设置包围盒过滤离群点
     // 但必须检查稀疏云与相机是否在同一坐标系（防止 GPS 稀疏云 vs SFM 相机失配）

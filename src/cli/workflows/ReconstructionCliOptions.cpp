@@ -45,8 +45,9 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
                    "PlaPoint backend: auto, cpu, cuda, opencl; auto prefers CUDA, then OpenCL, then CPU")
         ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl"}));
     app.add_option("--mvs-scene-profile", mvsSceneProfile,
-                   "MVS scene profile: auto, orbital_object, aerial_terrain")
-        ->check(CLI::IsMember({"auto", "orbital_object", "aerial_terrain"}));
+                   "MVS scene profile: auto, general/custom, orbital_object, aerial_terrain")
+        ->check(CLI::IsMember(
+            {"auto", "general", "custom", "orbital_object", "aerial_terrain"}));
     app.add_option("--mvs-depth-filter", mvsDepthFilter,
                    "MVS depth filter: auto, mild, moderate, aggressive")
         ->check(CLI::IsMember({"auto", "mild", "moderate", "aggressive"}));
@@ -54,6 +55,10 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
                    "directory containing <image stem>_mask.png project exclusion masks");
     app.add_flag("--mvs-save-levels", mvsSaveLevels,
                  "save Level 2/3 raw depth results for diagnostics");
+    app.add_flag(
+        "--mvs-native-depth-grid",
+        mvsNativeDepthGrid,
+        "experimental: keep the final PatchMatch grid for non-rectified general/custom scenes");
     app.add_flag("--mvs-two-source-growth", mvsTwoSourceGrowth,
                  "enable conservative two-source depth growth from three-source cores");
     app.add_option("--mvs-two-source-growth-distance", mvsTwoSourceGrowthDistance,

@@ -96,6 +96,7 @@ int main(int argc, char *argv[])
     std::string outputDir;
     std::string datasetId;
     bool overwrite = false;
+    bool preUndistortColmapImages = false;
     bool listFormats = false;
 
     app.add_flag("--list-formats", listFormats, "列出支持的输入相机格式");
@@ -105,6 +106,10 @@ int main(int argc, char *argv[])
     app.add_option("-o,--output-dir", outputDir, "输出目录，将写入 image_camera.lis 和 cameras/*.tsai");
     app.add_option("--dataset-id", datasetId, "写入 summary.json 的数据集标识");
     app.add_flag("--overwrite", overwrite, "覆盖非空输出目录");
+    app.add_flag(
+        "--pre-undistort-colmap-images",
+        preUndistortColmapImages,
+        "在导入边界生成无畸变且全像素有效的 PNG 针孔影像");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -143,6 +148,7 @@ int main(int argc, char *argv[])
     options.outputDir = xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(outputDir));
     options.datasetId = datasetId;
     options.overwrite = overwrite;
+    options.preUndistortColmapImages = preUndistortColmapImages;
 
     const auto result = xjw::camera::convertCameraDataset(options);
     if (!result.success)
@@ -156,6 +162,16 @@ int main(int argc, char *argv[])
     const std::string summaryPath = xjw::common::io::toUtf8Path(result.summaryPath);
     std::fprintf(stdout, "image_camera.lis: %s\n", imageCameraList.c_str());
     std::fprintf(stdout, "summary.json: %s\n", summaryPath.c_str());
+    if (result.preUndistortedImageCount > 0)
+    {
+        const std::string manifestPath = xjw::common::io::toUtf8Path(
+            result.preUndistortManifestPath);
+        std::fprintf(
+            stdout,
+            "预去畸变影像: %d，manifest: %s\n",
+            result.preUndistortedImageCount,
+            manifestPath.c_str());
+    }
     printWarnings(result.warnings);
     return cli::EXIT_OK;
 }

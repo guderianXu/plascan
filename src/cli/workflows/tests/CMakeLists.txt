@@ -15,6 +15,12 @@ if(TARGET mesh_reconstruct_cli)
     )
     add_dependencies(test_workflow_cli mesh_reconstruct_cli)
 endif()
+if(TARGET texture_map_cli)
+    target_compile_definitions(test_workflow_cli PRIVATE
+        PLASCAN_TEXTURE_MAP_CLI_PATH="$<TARGET_FILE:texture_map_cli>"
+    )
+    add_dependencies(test_workflow_cli texture_map_cli)
+endif()
 if(TARGET aerial_triangulation_cli)
     target_compile_definitions(test_workflow_cli PRIVATE
         PLASCAN_AERIAL_TRIANGULATION_CLI_PATH="$<TARGET_FILE:aerial_triangulation_cli>"

@@ -108,6 +108,7 @@ core/
 │   ├── PlanetaryLineScanCamera*.h/cpp # CameraModel 线阵实现、USGSCSM ISD、逐行时间与月固系时变姿轨
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
+│   ├── ColmapImageUndistorter.h/cpp # 复杂 COLMAP 模型的导入边界预去畸变
 │   ├── ProjectCameraIO.h/cpp   # FramePinholeCamera JSON/TSAI 与项目元数据适配
 │   └── test/                      # 相机测试与诊断程序
 │       ├── FramePinholeCamera_tests.cpp
@@ -294,7 +295,7 @@ core/
 │   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
 │   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
 │   ├── DepthPyramidPolicy.h/cpp # 从最终质量档生成 4D/2D/D 三级 PatchMatch 调度
-│   ├── MvsSceneClassifier.h/cpp # 根据相机布局、光轴和稀疏云厚度判定环拍/航测场景
+│   ├── MvsSceneClassifier.h/cpp # 根据相机布局、光轴和稀疏云判定航测/环拍/通用场景
 │   ├── DepthPyramidPropagation.h/cpp # 父层深度中心、不确定半径和边缘感知传播
 │   ├── DepthPyramidEstimator.h/cpp # Level 3/2/1 编排与逐层摘要
 │   ├── DepthCompletenessMetrics.h/cpp # 蒙版内覆盖、小孔/大开口/边界缺失与逐阶段保留率
@@ -375,7 +376,8 @@ core/
 │   ├── TextureMapper.h/cpp     # 纹理配置/结果门面及无相机时的顶点色回退
 │   ├── CameraTextureMapper.cpp # camera_projected_atlas_v3 兼容路径与 v4 调度
 │   ├── CameraTextureMapperV4.h/cpp # 多视图纹理 v4 阶段编排
-│   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度、曝光和网格邻接准备
+│   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度和网格邻接准备
+│   ├── TextureOverlapExposure.h/cpp + Solver.cpp # 共同可见 3D 点的 linear-sRGB 鲁棒曝光增益与 fail-closed 诊断
 │   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、top-K 评分、ICM 与小孤岛合并
 │   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
 │   ├── TextureAtlasPacker.h/cpp # 自适应 MaxRects/shelf chart 图集调度与缩放搜索
@@ -387,7 +389,7 @@ core/
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色
 │   ├── MeshQuadricSimplifier.h/cpp # 目标面数驱动、边界/锐边/翻转约束的 QEM 自适应简化
 │   ├── MeshFaceOrientation.h/cpp # 共享边面朝向统一及不可定向冲突面的最小清理
-│   ├── OpenMeshSimplifier.h/cpp # OpenMesh 拓扑约束减面、法向翻转保护与限位平滑
+│   ├── NativeMeshSimplifier.h/cpp # 原生拓扑安全 QEM 编排、面朝向修复与限位特征保护平滑
 │   ├── BoundaryAwareVoxelSimplifier.h/cpp # 多视图剪影保护、内部开放边界可聚类的体素简化后备
 │   ├── MeshTopologyQuality.h/cpp # 开放边/非流形/连通分量/三角形长宽比质量门及保拓扑边翻转优化
 │   ├── DepthTsdfFinalQualityGate.h/cpp # TSDF 写出前硬质量门；观测曲面仅放宽开放边比例
@@ -894,6 +896,9 @@ double 世界坐标中形成局部基线后再降为 float，深度后处理只�
 从 MVS revision 37 起，逐像素 `geometry_source_mask` 的 bit 位序由独立的
 `geometry_source_indices` 持久化；它表示一致性与跨视修复实际使用的来源序列，不能用较短的 PatchMatch
 `source_indices` 代替。写入、复用、完整性审计和 TSDF 载入都会检查表长、重复/非法来源及表长外置位；
+同一批次的一致性来源在逐帧后置质量门运行前冻结，避免较早帧被降为 `Rejected` 后按处理顺序级联移除
+较晚帧的来源。若某帧没有任何可用几何来源，则全零来源掩码与空位序表作为显式“无来源证据”状态
+一起省略；非零掩码没有精确位序表仍会在写盘前失败，TSDF 也不会回退到 `source_indices` 伪造位序。
 模型工作流拒绝 revision 37 以前缺少精确位序契约的环拍深度工件，要求重新估计深度图。
 
 工作区树只显示一个不可打开的聚合“深度图”节点，用于表明当前深度帧数量、质量档位和
@@ -933,13 +938,29 @@ PatchMatch；候选必须同时通过置信度和相对先验深度差门限，�
 前三类有影像测量证据的深度，只拒绝锚定插值来源，并在融合统计中单独记录策略拒绝数；旧版没有
 来源图的非当前深度批次不会被当前算法修订透明复用。
 
+MVS 自动场景分类先验证航测几何；其它采集只有在相机中心互异、近似共面、围绕稀疏云中心形成
+半径稳定且最大角缺口不超过 120° 的闭合环，并且光轴收敛中位数/P90 同时通过时，才启用环拍专属
+恢复和连续几何证据。其余前向、共线、重合、非平面或不完整采集统一进入通用 `custom` 配置并使用
+中等过滤，避免把“非航测”等同于“环拍”。该决策写入深度工件，旧 Auto 分类结果不会透明复用。
+
 MVS 源规划优先使用从当前存储匹配结果经 USAC/MAGSAC 验证的像对。空匹配文件或少于最少
 内点数的匹配只表示验证证据缺失，不能当作已证明失败；剩余源位由共享轨迹几何补足。16 视图及
 以上的密集环拍高质量任务最多使用六源，12 视图等稀疏环拍强制封顶为四个近邻源；通用 GUI
 质量预设传入的更大候选数不能覆盖这个场景上限，避免把约 90° 的第三环邻居当成逐像素必需确认。
 环拍最大三角化角从实际候选角度分布自适应计算，并受四源 70°、六源 90°
 安全上限约束。1024 级高质量影像的深度金字塔保留 `4→2→1` 全分辨率末层；大图继续使用配置的
-最终降采样以控制显存和运行时间。以上行为写入 source plan、算法修订号和重放报告，旧深度缓存
+最终降采样以控制显存和运行时间。默认仍把最终结果放大到 prepared raster 尺寸；
+CLI 可显式开启默认关闭的原生最终网格实验，但仅 `custom` 且未极线校正的帧会生效。
+深度相机按实际网格尺寸以半像素约定缩放，同时继续保留全分辨率 prepared raster/camera 供纹理和重放。
+所有像素域后处理配置仍解释为 prepared full-raster 像素，并按实际 grid/raster 的线性或面积比例量化；
+ds4 上不足一个网格像素的 3x3 局部核会变为 identity，而不是扩大为约 12 个原图像素。
+融合会先在 full-raster 域应用少视图/流式运行时覆盖，再按每个目标帧各自的实际网格独立缩放重投影阈值与局部梯度半径；
+manifest 中的融合参数明确标记为运行时覆盖前的 base 值，避免误解为最终窗口阈值。
+逐帧 artifact/manifest 显式保存 `effective_native_final_depth_grid`、raster/grid 尺寸、x/y/linear/area scale
+及 configured/effective 参数。环拍、航测、极线校正或未解析场景会失败关闭到全尺寸契约，开关也纳入工作区配置 hash。
+一致性开始前会冻结整批来源资格和每帧位序表，随后发生的帧级
+拒绝不会按处理顺序删掉晚帧来源。没有任何逐像素来源证据时，工件同时省略全零来源掩码和空位序表；
+非零掩码缺少精确位序仍会失败关闭。以上行为写入 source plan、算法修订号和重放报告，旧深度缓存
 不会静默复用。
 OpenCL 深度核保留参考图局部内存和运行时缓存；离散 OpenCL GPU 保持单设备执行槽，统一内存核显使用
 最多两个有界执行槽交错独立帧，以覆盖 Windows 驱动在超大 kernel 链之间的提交空档。最高质量档不削减深度候选/细化
@@ -960,6 +981,9 @@ OpenCL 默认用两个主机准备槽覆盖初始帧和一致性后残余重估�
 匹配相机中心成对距离推导的参考坐标尺度分开报告，避免把不同坐标单位误判为 PatchMatch 深度尺度错误。
 2026-08-12 三类真实数据结果见
 `docs/benchmarks/2026-08-12-depth-rendering-real-data-validation.md`。
+`plascan_eth3d_surface_eval` 独立加载 ETH3D `scan_alignment.mlp`，对 TSDF/Visual Hull 三角网格报告
+确定性双向采样距离、连通分量、边界/非流形边和 Euler 数。它不把逐帧深度提升自动视为模型提升；
+报告会明确区分该采样指标与 ETH3D 官方遮挡感知指标。
 
 PlaPoint 的 CPU-owned 高层接口对稀疏/稠密点云预处理独立执行 CUDA → OpenCL → CPU 选择，覆盖
 体素降采样、统计/半径离群点过滤、KNN 法向估计和高度格网；显式设备请求不静默替换。OpenCL 的公共
@@ -1060,10 +1084,10 @@ CUDA-only 深度回归中，14/14 帧进入融合，直接载体兼容路径为 
 逆深度统计用面积采样同步降尺度。没有 manifest 时目录扫描明确忽略 `depth_*_level_*.bin`，避免把中间
 产物误识别成无相机的最终帧。
 
-384 级任意 3D 模型且目标不超过 24 万面时，目标面数优先使用 OpenMesh 的 link condition、
-法线偏差和翻转约束减面，并执行有绝对位移上限的平滑；进入 OpenMesh 前先统一共享边面朝向，
-无法全局定向的极少数冲突面按最小集合移除。OpenMesh 不可用、被显式关闭或候选未通过拓扑门时，
-才回退到保开放边、锐边、link condition 和面翻转检查的项目 QEM。若碎边使 QEM 停在目标两倍以上，
+384 级任意 3D 模型且目标不超过 24 万面时，目标面数优先使用项目原生拓扑安全 QEM 的 link condition、
+法线偏差和翻转约束减面，并执行有绝对位移上限的特征保护平滑；简化前先统一共享边面朝向，
+无法全局定向的极少数冲突面按最小集合移除。候选被显式关闭、未达到目标或未通过拓扑质量门时，
+会以不带平滑的原生 QEM 进行一次保守重试。若碎边使 QEM 停在目标两倍以上，
 则以半体素起步、12 万面为质量地板执行自适应体素聚类后备。后备结果会清理重复/非流形面、再次执行
 受限小孔填充，并比较前后开放边、悬挂边界点和非流形边；任一拓扑指标增长超过 10% 时自动回退。
 体素聚类把开放边界顶点与内部顶点、不同开放边界分量分开聚合，避免轮廓质心被内部点向内拉缩。
@@ -1121,7 +1145,7 @@ Ultra 384 的低面数输出（目标面数不超过 12 万）会在等值面提
 节点数、合并/平衡拆分数、TGV 迭代/曲率/更新量、恢复样本数及两阶段耗时。求解只激活
 `|TSDF| <= 0.85` 的窄带节点，远场保持融合值，从而避免为不影响零面的数千万远场样本构图；
 默认一/二阶权重为 0.12/0.08，数据保真为 0.08，避免强 L1 保真把更新量钳成零。整条路径在 Dino/Temple
-同输入 A/B 中显著降低面数、开放边和法线粗糙度后，已纳入 384 分辨率且启用 OpenMesh、
+同输入 A/B 中显著降低面数、开放边和法线粗糙度后，已纳入 384 分辨率且启用原生拓扑安全简化、
 目标面数不超过 24 万的
 环拍高细节自动策略；用户显式设置 `tsdfAdaptiveTgvRegularization=false` 时仍可关闭。该自动策略同时
 启用保守的轮廓带零交叉支持，轮廓候选仍使用 0.45 的绝对 TSDF 门、至少两个几何来源和双单元投票；
@@ -1131,11 +1155,11 @@ MC33 提取后默认执行“受支持符号变化”过滤：每个保留面所
 `mc33_rejected_unsupported_cell_face_count`，开关写入
 `effective_mc33_require_supported_sign_change`。当用户禁用深度插值但启用可见性约束载体时，会关闭这个
 单元级后过滤；否则它会在 hyb2 一类窄带数据上拒绝过半数已经由观测与可见性共同约束的连通表面。
-任意 3D 深度模型在 320 及以上分辨率、目标面数不超过 24 万时即启用 OpenMesh/MC33 路径，避免旧式
+任意 3D 深度模型在 320 及以上分辨率、目标面数不超过 24 万时即启用原生拓扑安全简化/MC33 路径，避免旧式
 Marching Cubes 为每个三角形生成三个独立顶点后再依赖坐标焊接恢复连通性；后者会放大边界裂缝、法线
 不连续和三角片感。384 及以上仍额外启用下述高细节正则化策略。
-同一 OpenMesh 高细节路径仍以 2 像素深度有效边界腐蚀抑制外沿噪声，但会恢复其中第一圈满足几何支持至少 4、
-逆深度相对离散度不超过 0.01 且仍位于支持掩膜内的像素。超过 24 万面或显式关闭 OpenMesh
+同一原生高细节路径仍以 2 像素深度有效边界腐蚀抑制外沿噪声，但会恢复其中第一圈满足几何支持至少 4、
+逆深度相对离散度不超过 0.01 且仍位于支持掩膜内的像素。超过 24 万面或显式关闭拓扑安全简化
 的路径默认不启用该恢复，配置和恢复
 像素数分别写入 `effective_*boundary_recovery*` 与 `boundary_recovered_depth_valid_pixel_count`。
 单波段 TIFF 在请求彩色读取时会由公共 ImageIO 明确扩展为三通道 BGR，避免顶点着色器把有效灰度影像
@@ -1230,7 +1254,7 @@ cli/
 工程型入口通过 `plascan_common_project` 的 `ProjectSession` 创建或打开根索引指定的默认
 Chunk，统一处理项目 URI、共享影像、产物目录、相机与结果写回；也可通过 `--chunk-id`
 或 `--chunk-name` 显式选择 Chunk。旧工程不会由 CLI 隐式迁移。
-`workflows/` 提供空中三角测量、三维重建 CLI、生成模型、DEM/正射完整流水线，以及原生
+`workflows/` 提供空中三角测量、三维重建 CLI、生成模型、多视图纹理、DEM/正射完整流水线，以及原生
 `small_body_terrain_cli` 全球径向 DEM/DOM 入口；GUI 不再提供旧版
 “三维重建”一键对话框，改由空三、密集处理和生成模型入口分阶段执行。菜单中的项目输入操作通过
 CLI 的输入清单与项目参数表达，不复制项目导入 UI。一键重建的深度融合、密集点云

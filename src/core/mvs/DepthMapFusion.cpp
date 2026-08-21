@@ -8,6 +8,8 @@
 // =============================================================================
 
 #include "DepthMapFusion.h"
+
+#include "DepthPyramidPolicy.h"
 #include "MvsImagePreprocessor.h"
 #include "concurrency/SafeWorkerGroup.h"
 #include "io/PathIO.h"
@@ -255,7 +257,10 @@ FusionRejectionStats DepthMapFusion::rejectionStats() const
     return stats;
 }
 
-bool DepthMapFusion::isPixelEligible(const FusionFrameInput &frame, int row, int col)
+bool DepthMapFusion::isPixelEligible(const FusionFrameInput &frame,
+                                     const FrameGeometry &geometry,
+                                     int row,
+                                     int col)
 {
     if (row < 0 || row >= frame.depthMap.rows || col < 0 || col >= frame.depthMap.cols)
     {
@@ -285,9 +290,14 @@ bool DepthMapFusion::isPixelEligible(const FusionFrameInput &frame, int row, int
         }
     }
 
-    if (_config.maxLocalDepthGradient > 0.0f)
+    const int local_gradient_radius = geometry.localDepthGradientRadiusPixels;
+    if (_config.maxLocalDepthGradient > 0.0f && local_gradient_radius > 0)
     {
-        constexpr int offsets[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        const int offsets[4][2] = {
+            {-local_gradient_radius, 0},
+            {local_gradient_radius, 0},
+            {0, -local_gradient_radius},
+            {0, local_gradient_radius}};
         std::array<float, 4> relative_differences{};
         int difference_count = 0;
         for (const auto &offset : offsets)
@@ -361,6 +371,44 @@ void DepthMapFusion::prepareGeometry(
         g.cameraModel = cam;
         g.W = frames[fi].imgW;
         g.H = frames[fi].imgH;
+        cv::Size raster_size(g.W, g.H);
+        if (_config.pixelParametersUsePreparedRaster)
+        {
+            if (const auto source_size = frames[fi].sourceCamera.imageSize();
+                source_size.has_value() && source_size->samples > 0 &&
+                source_size->lines > 0)
+            {
+                raster_size = cv::Size(source_size->samples, source_size->lines);
+            }
+        }
+        const DepthPixelDomainScale pixel_scale = depthPixelDomainScale(
+            raster_size, cv::Size(g.W, g.H));
+        const float max_reprojection_error = scaleDepthPixelDistance(
+            _config.maxReprojError, pixel_scale);
+        g.maxReprojectionErrorSquared =
+            max_reprojection_error * max_reprojection_error;
+        g.localDepthGradientRadiusPixels = std::clamp(
+            scaleDepthPixelRadius(
+                _config.localDepthGradientRadiusPixels, pixel_scale),
+            0,
+            2);
+        if (_config.pixelParametersUsePreparedRaster &&
+            pixel_scale.usesReducedGrid())
+        {
+            LOG_DEBUG(
+                "[MVS][深度融合][像素域] frame=%d raster=%dx%d grid=%dx%d "
+                "scale=%.6f reprojection=%.4f->%.4f local_gradient_radius=%d->%d",
+                fi,
+                raster_size.width,
+                raster_size.height,
+                g.W,
+                g.H,
+                pixel_scale.linearScale,
+                _config.maxReprojError,
+                max_reprojection_error,
+                _config.localDepthGradientRadiusPixels,
+                g.localDepthGradientRadiusPixels);
+        }
         const FramePinholeCamera::Intrinsics intrinsics = cam.intrinsics();
         const std::array<double, 9> rotation = cam.worldToCameraRotation();
         const std::array<double, 3> translation = cam.worldToCameraTranslation();
@@ -518,7 +566,6 @@ bool DepthMapFusion::fusePixel(
     std::vector<std::vector<char>> &fusedMask,
     FusedPoint &outPoint)
 {
-    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
     const float maxDepthErr = _config.maxDepthError;
     const float cosMaxNormErr = std::cos(_config.maxNormalError * (float)M_PI / 180.f);
 
@@ -574,7 +621,7 @@ bool DepthMapFusion::fusePixel(
             continue;
         }
 
-        if (!isPixelEligible(frames[fi], r, c))
+        if (!isPixelEligible(frames[fi], g, r, c))
         {
             continue;
         }
@@ -593,7 +640,7 @@ bool DepthMapFusion::fusePixel(
             // 重投影误差
             float du = u_proj - c;
             float dv = v_proj - r;
-            if (du*du + dv*dv > maxReprojSq)
+            if (du*du + dv*dv > g.maxReprojectionErrorSquared)
             {
                 _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
                 continue;
@@ -827,7 +874,6 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
     constexpr int kFrameCount = 2;
     const int maxRows = std::max(geom[0].H, geom[1].H);
     const int workerCount = resolveFusionWorkerCount(_config.workerCount, maxRows);
-    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
     const float cosMaxNormErr = std::cos(_config.maxNormalError * static_cast<float>(M_PI) / 180.f);
 
     LOG_INFO("[MVS][深度融合] 快速双视图融合: workers=%d min_pixels=%d",
@@ -956,7 +1002,8 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                     for (int col = 0; col < W; ++col)
                     {
                         const float depth = depthRow[col];
-                        if (depth <= 0.f || !isPixelEligible(frames[fi], row, col))
+                        if (depth <= 0.f ||
+                            !isPixelEligible(frames[fi], geom[fi], row, col))
                         {
                             continue;
                         }
@@ -1009,9 +1056,15 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                                 const float otherDepth = frames[other].depthMap.at<float>(otherRow, otherCol);
                                 const float zExpected = positiveDepth(
                                     geom[other].cameraModel, x0, y0, z0);
-                                bool consistent = isPixelEligible(frames[other], otherRow, otherCol) &&
+                                bool consistent = isPixelEligible(
+                                                      frames[other],
+                                                      geom[other],
+                                                      otherRow,
+                                                      otherCol) &&
                                                   zExpected > 0.f;
-                                if (consistent && du * du + dv * dv > maxReprojSq)
+                                if (consistent &&
+                                    du * du + dv * dv >
+                                        geom[other].maxReprojectionErrorSquared)
                                 {
                                     _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
                                     consistent = false;
@@ -1156,7 +1209,6 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     std::atomic<int> nextRow{0};
     const int requiredObservations = std::max(1, _config.minNumPixels);
     const bool requireNeighborAgreement = requiredObservations > 1 && frames.size() > 1;
-    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
     const float cosMaxNormErr = std::cos(_config.maxNormalError * static_cast<float>(M_PI) / 180.0f);
 
     std::vector<int> neighborFrames;
@@ -1333,7 +1385,8 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                 for (int col = 0; col < W; ++col)
                 {
                     const float depth = depthRow[col];
-                    if (depth <= 0.0f || !isPixelEligible(frames[fi], row, col))
+                    if (depth <= 0.0f ||
+                        !isPixelEligible(frames[fi], geom[fi], row, col))
                     {
                         continue;
                     }
@@ -1435,7 +1488,8 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             }
                             const float du = uOther - static_cast<float>(otherCol);
                             const float dv = vOther - static_cast<float>(otherRow);
-                            if (du * du + dv * dv > maxReprojSq)
+                            if (du * du + dv * dv >
+                                otherGeom.maxReprojectionErrorSquared)
                             {
                                 _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
                                 continue;
@@ -1445,7 +1499,10 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                 frames[otherFrame].depthMap.at<float>(otherRow, otherCol);
                             const float expectedDepth = positiveDepth(
                                 otherGeom.cameraModel, point.x, point.y, point.z);
-                            if (!isPixelEligible(frames[otherFrame], otherRow, otherCol) ||
+                            if (!isPixelEligible(frames[otherFrame],
+                                                 otherGeom,
+                                                 otherRow,
+                                                 otherCol) ||
                                 expectedDepth <= 0.0f)
                             {
                                 continue;

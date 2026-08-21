@@ -3,6 +3,7 @@
 #include "DepthProvenance.h"
 
 #include "DepthAuxiliaryBridgeSelector.h"
+#include "DepthFrameQualificationPolicy.h"
 #include "DepthMeasuredSupportConnectivity.h"
 #include "DepthTsdfNarrowBandActivation.h"
 #include "AdaptiveTsdfOctree.h"
@@ -21,7 +22,7 @@
 #include "MeshColorizer.h"
 #include "MeshFaceOrientation.h"
 #include "MeshQuadricSimplifier.h"
-#include "OpenMeshSimplifier.h"
+#include "NativeMeshSimplifier.h"
 #include "ProcessCpuTimer.h"
 #include "MeshTopologyQuality.h"
 #include "Mc33IsoSurfaceExtractor.h"
@@ -527,6 +528,11 @@ std::vector<std::uint8_t> multiViewSilhouetteBoundaryVertices(
     for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
     {
         const DepthTsdfFrame &frame = frames[frame_index];
+        if (frame.auxiliarySurfaceOnly)
+        {
+            silhouette_bands.push_back(cv::Mat());
+            continue;
+        }
         cv::Mat band;
         cv::morphologyEx(frame.supportMask, band, cv::MORPH_GRADIENT, kernel);
         cv::bitwise_and(band, frame.supportMask, band);
@@ -538,8 +544,7 @@ std::vector<std::uint8_t> multiViewSilhouetteBoundaryVertices(
         silhouette_bands.push_back(std::move(band));
     }
 
-    const int required_views = std::clamp(
-        minimumViews, 1, static_cast<int>(frames.size()));
+    const int required_views = std::max(1, minimumViews);
     const float absolute_tolerance =
         std::max(1.0f, depthToleranceVoxels) *
         std::max(maximumVoxelSize, 1.0e-8f);
@@ -557,6 +562,10 @@ std::vector<std::uint8_t> multiViewSilhouetteBoundaryVertices(
         for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
         {
             const DepthTsdfFrame &frame = frames[frame_index];
+            if (frame.auxiliarySurfaceOnly)
+            {
+                continue;
+            }
             double pixel[2]{};
             double camera_depth = 0.0;
             if (!frame.camera.projectWorldPointWithDepth(
@@ -630,6 +639,10 @@ std::pair<int, int> holeFillPatchSampleViewEvidence(
     for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
     {
         const DepthTsdfFrame &frame = frames[frame_index];
+        if (frame.auxiliarySurfaceOnly)
+        {
+            continue;
+        }
         if (frame.depth.empty() || frame.depth.type() != CV_32FC1 ||
             frame.confidence.empty() || frame.confidence.type() != CV_32FC1 ||
             frame.supportMask.empty() || frame.supportMask.type() != CV_8UC1 ||
@@ -869,8 +882,8 @@ VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
 
     std::unordered_set<std::uint64_t> visited_edges;
     visited_edges.reserve(edge_counts.size());
-    const int required_supporting_views = std::clamp(
-        minimumSupportingViews, 1, static_cast<int>(frames.size()));
+    const int required_supporting_views =
+        std::max(1, minimumSupportingViews);
     const int allowed_conflict_views = std::max(0, maximumConflictViews);
     const float absolute_tolerance =
         std::max(1.0f, depthToleranceVoxels) *
@@ -979,6 +992,10 @@ VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
                  ++frame_index)
             {
                 const DepthTsdfFrame &frame = frames[frame_index];
+                if (frame.auxiliarySurfaceOnly)
+                {
+                    continue;
+                }
                 const cv::Mat &valid_mask =
                     effectiveDepthValidMasks.size() == frames.size()
                     ? effectiveDepthValidMasks[frame_index]
@@ -1104,85 +1121,14 @@ QString frameArtifactError(const DepthFrameArtifact &artifact, const QString &re
              reason);
 }
 
-bool hasOnlyRecoverableOrbitalQualityReasons(const DepthFrameArtifact &artifact)
-{
-    if (artifact.qualityReasons.isEmpty())
-    {
-        return false;
-    }
-
-    static const QSet<QString> recoverableReasons{
-        QStringLiteral("insufficient_mask_normalized_coverage"),
-        QStringLiteral("depth_consistency_collapse"),
-        QStringLiteral("depth_consistency_coverage_loss"),
-        QStringLiteral("weak_multiview_consistency")
-    };
-    return std::all_of(
-        artifact.qualityReasons.cbegin(),
-        artifact.qualityReasons.cend(),
-        [](const QString &reason)
-        {
-            return recoverableReasons.contains(reason);
-        });
-}
-
-bool canUseRejectedOrbitalFrameAsAuxiliary(const DepthFrameArtifact &artifact)
-{
-    if (artifact.acceptance != QStringLiteral("rejected")
-        || artifact.sceneProfile != QStringLiteral("orbital_object")
-        || artifact.validCoverage < 0.02
-        || artifact.validWithinMaskRatio < 0.10
-        || artifact.consistencyRetentionRatio < 0.10
-        || artifact.largestComponentRatio < 0.15
-        || artifact.meanConfidence < 0.45
-        || artifact.sourceViewCount < 2)
-    {
-        return false;
-    }
-
-    return hasOnlyRecoverableOrbitalQualityReasons(artifact);
-}
-
-bool canPromoteHealthyOrbitalValidationFrame(const DepthFrameArtifact &artifact)
-{
-    return artifact.acceptance == QStringLiteral("validation_only")
-        && artifact.sceneProfile == QStringLiteral("orbital_object")
-        && artifact.algorithmRevision <
-            xjw::mvs::kMvsAdaptiveGeometryConflictRatioRevision
-        && artifact.validCoverage >= 0.02
-        && artifact.validWithinMaskRatio >= 0.90
-        && artifact.consistencyRetentionRatio >= 0.90
-        && artifact.largestComponentRatio >= 0.15
-        && artifact.meanConfidence >= 0.45
-        && artifact.sourceViewCount >= 2
-        && hasOnlyRecoverableOrbitalQualityReasons(artifact);
-}
-
 bool loadsAsAuxiliarySurfaceOnly(const DepthFrameArtifact &artifact)
 {
-    const bool recovered_rejected_frame =
-        canUseRejectedOrbitalFrameAsAuxiliary(artifact);
-    const bool promoted_validation_frame =
-        canPromoteHealthyOrbitalValidationFrame(artifact);
-    return (artifact.acceptance == QStringLiteral("validation_only")
-            && !promoted_validation_frame)
-        || recovered_rejected_frame;
+    return artifact.role == xjw::mvs::DepthFrameRole::CoverageAuxiliary;
 }
 
 bool canLoadDepthFrameArtifact(const DepthFrameArtifact &artifact)
 {
-    const bool recovered_rejected_frame =
-        canUseRejectedOrbitalFrameAsAuxiliary(artifact);
-    const bool promoted_validation_frame =
-        canPromoteHealthyOrbitalValidationFrame(artifact);
-    const bool validation_only = loadsAsAuxiliarySurfaceOnly(artifact);
-    const bool quality_override = validation_only || promoted_validation_frame;
-    return (artifact.status.isEmpty()
-            || artifact.status == QStringLiteral("completed"))
-        && (artifact.fusionEligible || quality_override)
-        && (artifact.acceptance != QStringLiteral("rejected")
-            || recovered_rejected_frame)
-        && artifact.acceptance != QStringLiteral("failed");
+    return artifact.role != xjw::mvs::DepthFrameRole::Excluded;
 }
 
 DepthAuxiliaryBridgeNode bridgeNode(
@@ -1192,7 +1138,7 @@ DepthAuxiliaryBridgeNode bridgeNode(
     DepthAuxiliaryBridgeNode node;
     node.frameIndex = frame_index;
     node.refIndex = artifact.refIndex;
-    node.primary = !loadsAsAuxiliarySurfaceOnly(artifact);
+    node.primary = xjw::mvs::isPrimaryFusionFrame(artifact.role);
     node.geometrySourceIndices.assign(
         artifact.geometrySourceIndices.cbegin(),
         artifact.geometrySourceIndices.cend());
@@ -1205,7 +1151,7 @@ DepthAuxiliaryBridgeNode bridgeNode(
     node.sourceViewCount = artifact.sourceViewCount;
     node.qualityReasonCount = artifact.qualityReasons.size();
     node.trustedPixelCount =
-        artifact.acceptance == QStringLiteral("validation_only") &&
+        artifact.role == xjw::mvs::DepthFrameRole::CoverageAuxiliary &&
             artifact.algorithmRevision >=
                 xjw::mvs::kMvsGeometrySourceOrdinalRevision
         ? artifact.trustedGeometryCorePixelCount
@@ -1406,16 +1352,16 @@ QVector<DepthFrameArtifact> selectMemoryBoundedDepthFrameArtifacts(
             selected.cbegin(), selected.cend(),
             [](const DepthFrameArtifact &artifact)
             {
-                return artifact.sceneProfile ==
-                        QStringLiteral("orbital_object") &&
+                return xjw::mvs::isOrbitalDepthSceneProfile(
+                           artifact.sceneProfile) &&
                     artifact.hasCameraModel && artifact.cameraModel.isValid();
             }) &&
         std::all_of(
             auxiliary.cbegin(), auxiliary.cend(),
             [](const DepthFrameArtifact &artifact)
             {
-                return artifact.sceneProfile ==
-                        QStringLiteral("orbital_object") &&
+                return xjw::mvs::isOrbitalDepthSceneProfile(
+                           artifact.sceneProfile) &&
                     artifact.hasCameraModel && artifact.cameraModel.isValid();
             });
     if (orbital_selection)
@@ -2497,6 +2443,29 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         return result;
     }
     result.discoveredArtifactCount = static_cast<int>(artifacts.size());
+    QString canonical_scene_profile;
+    for (const DepthFrameArtifact &artifact : artifacts)
+    {
+        if (artifact.role == xjw::mvs::DepthFrameRole::Excluded)
+        {
+            continue;
+        }
+        if (!xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+                artifact.sceneProfile, &canonical_scene_profile))
+        {
+            result.errorMessage = frameArtifactError(
+                artifact,
+                QStringLiteral(
+                    "usable depth-frame scene_profile is unknown or "
+                    "inconsistent with the batch: %1")
+                    .arg(artifact.sceneProfile));
+            result.elapsedMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started_at)
+                    .count();
+            return result;
+        }
+    }
     const QVector<DepthFrameArtifact> selected_artifacts =
         selectMemoryBoundedDepthFrameArtifacts(artifacts);
     const int artifact_count = static_cast<int>(selected_artifacts.size());
@@ -2629,20 +2598,18 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
     DepthTsdfFrameLoadResult result;
     for (const DepthFrameArtifact &artifact : artifacts)
     {
-        const bool recovered_rejected_frame =
-            canUseRejectedOrbitalFrameAsAuxiliary(artifact);
-        const bool promoted_validation_frame =
-            canPromoteHealthyOrbitalValidationFrame(artifact);
         const bool validation_only = loadsAsAuxiliarySurfaceOnly(artifact);
-        const bool quality_override =
-            validation_only || promoted_validation_frame;
-        if ((!artifact.status.isEmpty() && artifact.status != QStringLiteral("completed")) ||
-            (!artifact.fusionEligible && !quality_override) ||
-            (artifact.acceptance == QStringLiteral("rejected")
-             && !recovered_rejected_frame) ||
-            artifact.acceptance == QStringLiteral("failed"))
+        if (!canLoadDepthFrameArtifact(artifact))
         {
             continue;
+        }
+        if (!xjw::mvs::isKnownDepthSceneProfile(artifact.sceneProfile))
+        {
+            result.errorMessage = frameArtifactError(
+                artifact,
+                QStringLiteral("scene_profile is missing or unknown: %1")
+                    .arg(artifact.sceneProfile));
+            return result;
         }
         if (!artifact.hasCameraModel || !artifact.cameraModel.isValid())
         {
@@ -2656,7 +2623,7 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
         }
         const bool requires_current_orbital_evidence =
             artifact.algorithmRevision >= 11 &&
-            artifact.sceneProfile == QStringLiteral("orbital_object");
+            xjw::mvs::isOrbitalDepthSceneProfile(artifact.sceneProfile);
         const bool requires_adaptive_orbital_evidence =
             requires_current_orbital_evidence &&
             artifact.algorithmRevision >= 13;
@@ -2666,9 +2633,16 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
         const bool requires_depth_provenance =
             requires_current_orbital_evidence &&
             artifact.algorithmRevision >= 17;
+        const bool uses_exact_geometry_source_ordinals =
+            artifact.algorithmRevision >=
+            xjw::mvs::kMvsGeometrySourceOrdinalRevision;
+        const bool requires_legacy_geometry_source_mask =
+            requires_current_orbital_evidence &&
+            !uses_exact_geometry_source_ordinals;
         if (requires_current_orbital_evidence &&
             (artifact.geometrySupportPath.isEmpty() ||
-             artifact.geometrySourceMaskPath.isEmpty() ||
+             (requires_legacy_geometry_source_mask &&
+              artifact.geometrySourceMaskPath.isEmpty()) ||
              artifact.inverseDepthMeanPath.isEmpty() ||
              artifact.inverseDepthSpreadPath.isEmpty() ||
              artifact.crossViewRepairedMaskPath.isEmpty() ||
@@ -2679,9 +2653,10 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
                 artifact,
                 QStringLiteral(
                     "current orbital depth evidence is incomplete; "
-                    "regenerate depth maps so geometry support, source mask, "
-                    "inverse-depth statistics, repair provenance, and depth provenance "
-                    "are all present"));
+                    "regenerate depth maps so geometry support, inverse-depth "
+                    "statistics, repair provenance, and depth provenance are "
+                    "present; an exact source mask and ordinal table may only "
+                    "be omitted together when no source evidence exists"));
             return result;
         }
         if (requires_adaptive_orbital_evidence &&
@@ -2710,10 +2685,12 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
         frame.sceneProfile = artifact.sceneProfile;
         frame.algorithmRevision = artifact.algorithmRevision;
         frame.camera = artifact.cameraModel;
-        if (!artifact.geometrySourceMaskPath.isEmpty() &&
-            artifact.algorithmRevision >=
-                xjw::mvs::kMvsGeometrySourceOrdinalRevision &&
-            (artifact.geometrySourceIndices.isEmpty() ||
+        const bool has_geometry_source_mask =
+            !artifact.geometrySourceMaskPath.isEmpty();
+        const bool has_geometry_source_ordinals =
+            !artifact.geometrySourceIndices.isEmpty();
+        if (uses_exact_geometry_source_ordinals &&
+            (has_geometry_source_mask != has_geometry_source_ordinals ||
              artifact.geometrySourceIndices.size() >
                  static_cast<qsizetype>(
                      kDepthGeometryLocalSourceSlotCount)))
@@ -2721,13 +2698,13 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
             result.errorMessage = frameArtifactError(
                 artifact,
                 QStringLiteral(
-                    "geometry source ordinal table is missing or exceeds 16 "
-                    "entries; regenerate revision %1 depth maps")
+                    "geometry source mask and ordinal table must either both "
+                    "be present or both be omitted, and the table cannot "
+                    "exceed 16 entries; regenerate revision %1 depth maps")
                     .arg(xjw::mvs::kMvsGeometrySourceOrdinalRevision));
             return result;
         }
-        if (artifact.algorithmRevision >=
-            xjw::mvs::kMvsGeometrySourceOrdinalRevision)
+        if (uses_exact_geometry_source_ordinals)
         {
             QSet<int> unique_source_indices;
             for (const int source_index : artifact.geometrySourceIndices)
@@ -2745,10 +2722,11 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
                 unique_source_indices.insert(source_index);
             }
         }
-        frame.geometrySourceIndices =
-            artifact.geometrySourceIndices.isEmpty()
-            ? artifact.sourceIndices
-            : artifact.geometrySourceIndices;
+        frame.geometrySourceIndices = uses_exact_geometry_source_ordinals
+            ? artifact.geometrySourceIndices
+            : (artifact.geometrySourceIndices.isEmpty()
+                   ? artifact.sourceIndices
+                   : artifact.geometrySourceIndices);
         QString reason;
         if (!loadFloatMatrix(artifact.depthPath, &frame.depth, &reason))
         {
@@ -3113,7 +3091,7 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
         frame.trustedGeometryCorePixelCount =
             artifact.trustedGeometryCorePixelCount;
         frame.auxiliaryBridgeEligible =
-            artifact.acceptance == QStringLiteral("validation_only") &&
+            artifact.role == xjw::mvs::DepthFrameRole::CoverageAuxiliary &&
             artifact.algorithmRevision >=
                 xjw::mvs::kMvsGeometrySourceOrdinalRevision;
         frame.auxiliaryBridgeSelected = artifact.auxiliaryBridgeSelected;
@@ -3148,7 +3126,16 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
     DepthTsdfBoundsResult result;
     if (frames.size() < 3)
     {
-        result.errorMessage = QStringLiteral("TSDF bounds require at least 3 accepted depth frames");
+        result.errorMessage = QStringLiteral("TSDF bounds require at least 3 usable depth frames");
+        return result;
+    }
+    if (std::none_of(
+            frames.cbegin(), frames.cend(), [](const DepthTsdfFrame &frame)
+            {
+                return !frame.auxiliarySurfaceOnly;
+            }))
+    {
+        result.errorMessage = QStringLiteral("TSDF bounds require at least 1 primary depth frame");
         return result;
     }
 
@@ -3160,7 +3147,8 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
     std::array<std::vector<float>, 3> trusted_frame_highs;
     for (const DepthTsdfFrame &frame : frames)
     {
-        if (!frame.camera.isValid() || frame.depth.type() != CV_32FC1 ||
+        if (frame.auxiliarySurfaceOnly ||
+            !frame.camera.isValid() || frame.depth.type() != CV_32FC1 ||
             frame.depthValidMask.type() != CV_8UC1 ||
             frame.depthValidMask.size() != frame.depth.size() ||
             frame.supportMask.type() != CV_8UC1 ||
@@ -5065,8 +5053,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 frames.cbegin(), frames.cend(),
                 [](const DepthTsdfFrame &frame)
                 {
-                    return frame.sceneProfile ==
-                            QStringLiteral("orbital_object") &&
+                    return xjw::mvs::isOrbitalDepthSceneProfile(
+                               frame.sceneProfile) &&
                         frame.algorithmRevision >=
                             xjw::mvs::kMvsGeometrySourceOrdinalRevision &&
                         !frame.geometrySourceIndices.isEmpty();
@@ -8314,22 +8302,30 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         occupancy_frames.reserve(static_cast<std::size_t>(frames.size()));
         for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
         {
+            const DepthTsdfFrame &frame = frames[frame_index];
+            if (frame.auxiliarySurfaceOnly)
+            {
+                continue;
+            }
             if (effective_frame_quality_weights[frame_index] <= 0.0f)
             {
                 continue;
             }
-            const DepthTsdfFrame &frame = frames[frame_index];
             VisibilityOccupancyFrameView view;
             view.camera = &frame.camera;
             view.depth = &frame.depth;
             view.confidence = &frame.confidence;
             view.depthValidMask =
-                &effective_depth_valid_masks[frame_index];
+                erosion_pixels > 0
+                ? &effective_depth_valid_masks[frame_index]
+                : &frame.depthValidMask;
             view.supportMask = &frame.supportMask;
             view.frameWeight =
                 effective_frame_quality_weights[frame_index];
             occupancy_frames.push_back(view);
         }
+        result.statistics.visibilityOccupancyInputFrameCount =
+            static_cast<int>(occupancy_frames.size());
 
         VisibilityOccupancyOptions occupancy_options;
         occupancy_options.useSupportMaskSilhouette =
@@ -9473,16 +9469,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.voxelFallbackSilhouetteDepthToleranceVoxels;
     result.statistics.requestedSimplifyTargetFaces = options.simplifyTargetFaces;
     const PostprocessClock::time_point simplification_start = PostprocessClock::now();
-    if (options.enableOpenMeshSimplification &&
+    if (options.enableTopologySafeSimplification &&
         options.simplifyTargetFaces > 0 &&
         result.mesh.faceCount() > options.simplifyTargetFaces)
     {
         reportProgress(
-            QStringLiteral("正在进行 OpenMesh 拓扑约束简化..."), 87);
-        result.statistics.openMeshSimplificationAttempted = true;
-        result.statistics.openMeshSimplificationInputVertexCount =
+            QStringLiteral("正在进行原生拓扑安全简化..."), 87);
+        result.statistics.topologySafeSimplificationAttempted = true;
+        result.statistics.topologySafeSimplificationInputVertexCount =
             result.mesh.vertexCount();
-        result.statistics.openMeshSimplificationInputFaceCount =
+        result.statistics.topologySafeSimplificationInputFaceCount =
             result.mesh.faceCount();
 
         TriMesh candidate = result.mesh;
@@ -9490,75 +9486,88 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             boundaryTopology(result.mesh);
         const MeshTopologyQualityStatistics quality_before =
             evaluateMeshTopologyQuality(result.mesh);
-        result.statistics.openMeshBoundaryEdgeCountBefore =
+        result.statistics.topologySafeBoundaryEdgeCountBefore =
             topology_before.boundaryEdgeCount;
-        result.statistics.openMeshNonManifoldEdgeCountBefore =
+        result.statistics.topologySafeNonManifoldEdgeCountBefore =
             topology_before.nonManifoldEdgeCount;
 
-        OpenMeshSimplifyOptions simplify_options;
+        NativeMeshSimplifyOptions simplify_options;
         simplify_options.targetFaceCount = options.simplifyTargetFaces;
+        simplify_options.maximumPasses = options.simplificationMaximumPasses;
+        simplify_options.workerCount = options.workerCount;
+        simplify_options.minimumFaceArea = minimum_degenerate_face_area;
+        simplify_options.featureAngleDegrees =
+            options.simplificationFeatureAngleDegrees;
         simplify_options.maximumNormalDeviationDegrees =
-            options.openMeshMaximumNormalDeviationDegrees;
+            options.topologySafeMaximumNormalDeviationDegrees;
         simplify_options.maximumNormalFlippingDegrees =
-            options.openMeshMaximumNormalFlippingDegrees;
+            options.topologySafeMaximumNormalFlippingDegrees;
         simplify_options.smoothingIterations =
-            options.openMeshSmoothingIterations;
+            options.topologySafeSmoothingIterations;
         simplify_options.smoothingMaximumDisplacement =
-            options.openMeshSmoothingMaximumDisplacementVoxels *
+            options.topologySafeSmoothingMaximumDisplacementVoxels *
             std::max({
                 result.layout.voxelSize[0],
                 result.layout.voxelSize[1],
                 result.layout.voxelSize[2]});
         simplify_options.smoothingFeatureAngleDegrees =
-            options.openMeshSmoothingFeatureAngleDegrees;
-        simplify_options.notificationInterval =
-            options.openMeshNotificationInterval;
+            options.topologySafeSmoothingFeatureAngleDegrees;
         simplify_options.isCancelled = options.isCancelled;
         simplify_options.progress = [&reportProgress](
-            int collapsed_vertex_count,
-            int estimated_face_count)
+            int pass,
+            int face_count)
         {
             reportProgress(
                 QStringLiteral(
-                    "正在进行 OpenMesh 拓扑约束简化（已折叠 %1 点，约 %2 面）...")
-                    .arg(collapsed_vertex_count)
-                    .arg(estimated_face_count),
-                88);
+                    "正在进行原生拓扑安全简化（第 %1 轮，%2 面）...")
+                    .arg(pass)
+                    .arg(face_count),
+                std::min(89, 87 + pass / 8));
         };
 
-        const OpenMeshSimplifyStatistics simplify_statistics =
-            simplifyMeshWithOpenMesh(&candidate, simplify_options);
+        const NativeMeshSimplifyStatistics simplify_statistics =
+            simplifyMeshTopologySafe(&candidate, simplify_options);
         const MeshBoundaryTopology topology_after =
             boundaryTopology(candidate);
         const MeshTopologyQualityStatistics quality_after =
             evaluateMeshTopologyQuality(candidate);
-        result.statistics.openMeshSimplificationOutputVertexCount =
+        result.statistics.topologySafeSimplificationOutputVertexCount =
             candidate.vertexCount();
-        result.statistics.openMeshSimplificationOutputFaceCount =
+        result.statistics.topologySafeSimplificationOutputFaceCount =
             candidate.faceCount();
-        result.statistics.openMeshSimplificationCollapsedVertexCount =
-            simplify_statistics.collapsedVertexCount;
-        result.statistics.openMeshSimplificationRejectedInputFaceCount =
-            simplify_statistics.rejectedInputFaceCount;
-        result.statistics.openMeshInconsistentSharedEdgeCountBefore =
+        result.statistics.topologySafeSimplificationCollapsedEdgeCount =
+            simplify_statistics.collapsedEdgeCount;
+        result.statistics.topologySafeSimplificationRejectedBoundaryEdgeCount =
+            simplify_statistics.rejectedBoundaryEdgeCount;
+        result.statistics.topologySafeSimplificationRejectedFeatureEdgeCount =
+            simplify_statistics.rejectedFeatureEdgeCount;
+        result.statistics.topologySafeSimplificationRejectedTopologyEdgeCount =
+            simplify_statistics.rejectedTopologyEdgeCount;
+        result.statistics.topologySafeSimplificationRejectedFlipEdgeCount =
+            simplify_statistics.rejectedFlipEdgeCount;
+        result.statistics.topologySafeSimplificationRejectedTriangleQualityEdgeCount =
+            simplify_statistics.rejectedTriangleQualityEdgeCount;
+        result.statistics.topologySafeSimplificationPassCount =
+            simplify_statistics.passCount;
+        result.statistics.topologySafeInconsistentSharedEdgeCountBefore =
             simplify_statistics.inconsistentSharedEdgeCountBefore;
-        result.statistics.openMeshReorientedInputFaceCount =
+        result.statistics.topologySafeReorientedInputFaceCount =
             simplify_statistics.reorientedInputFaceCount;
-        result.statistics.openMeshRemovedContradictoryFaceCount =
+        result.statistics.topologySafeRemovedContradictoryFaceCount =
             simplify_statistics.removedContradictoryFaceCount;
-        result.statistics.openMeshOrientationConflictCount =
+        result.statistics.topologySafeOrientationConflictCount =
             simplify_statistics.orientationConflictCount;
-        result.statistics.openMeshSmoothingApplied =
+        result.statistics.topologySafeSmoothingApplied =
             simplify_statistics.smoothingApplied;
-        result.statistics.openMeshSimplificationReachedTarget =
+        result.statistics.topologySafeSimplificationReachedTarget =
             simplify_statistics.reachedTarget;
-        result.statistics.openMeshSimplificationCancelled =
+        result.statistics.topologySafeSimplificationCancelled =
             simplify_statistics.cancelled;
-        result.statistics.openMeshSimplificationError =
+        result.statistics.topologySafeSimplificationError =
             QString::fromStdString(simplify_statistics.error);
-        result.statistics.openMeshBoundaryEdgeCountAfter =
+        result.statistics.topologySafeBoundaryEdgeCountAfter =
             topology_after.boundaryEdgeCount;
-        result.statistics.openMeshNonManifoldEdgeCountAfter =
+        result.statistics.topologySafeNonManifoldEdgeCountAfter =
             topology_after.nonManifoldEdgeCount;
 
         const auto topology_growth_is_safe = [](int before, int after)
@@ -9569,7 +9578,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         const double maximum_accepted_normal_median = std::max(
             quality_before.adjacentNormalAngleMedianDegrees + 8.0,
             static_cast<double>(
-                options.openMeshMaximumNormalDeviationDegrees));
+                options.topologySafeMaximumNormalDeviationDegrees));
         const double maximum_accepted_high_aspect_ratio = std::max(
             quality_before.highAspectFaceRatio * 1.5, 0.10);
         const bool accept_simplification =
@@ -9588,9 +9597,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 maximum_accepted_normal_median &&
             quality_after.highAspectFaceRatio <=
                 maximum_accepted_high_aspect_ratio;
-        result.statistics.openMeshSimplificationAccepted =
+        result.statistics.topologySafeSimplificationAccepted =
             accept_simplification;
-        result.statistics.effectiveOpenMeshSimplification =
+        result.statistics.effectiveTopologySafeSimplification =
             accept_simplification;
         if (accept_simplification)
         {
@@ -9601,8 +9610,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             return result;
         }
     }
-    if ((!result.statistics.openMeshSimplificationAccepted ||
-         !result.statistics.openMeshSimplificationReachedTarget) &&
+    if ((!result.statistics.topologySafeSimplificationAccepted ||
+         !result.statistics.topologySafeSimplificationReachedTarget) &&
         options.enableQuadricSimplification &&
         options.simplifyTargetFaces > 0 &&
         result.mesh.faceCount() > options.simplifyTargetFaces)
@@ -10076,7 +10085,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 triangle_quality_is_safe;
 
             if (accept_final_fill &&
-                !result.statistics.openMeshSimplificationAccepted &&
+                !result.statistics.topologySafeSimplificationAccepted &&
                 options.enableQuadricSimplification &&
                 options.simplifyTargetFaces > 0 &&
                 candidate.faceCount() > options.simplifyTargetFaces)
@@ -11899,6 +11908,8 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
         {QStringLiteral(
              "visibility_occupancy_depth_support_fallback_count"),
          statistics.visibilityOccupancyDepthSupportFallbackCount},
+        {QStringLiteral("visibility_occupancy_input_frame_count"),
+         statistics.visibilityOccupancyInputFrameCount},
         {QStringLiteral("visibility_occupancy_sample_count"),
          static_cast<double>(statistics.visibilityOccupancySampleCount)},
         {QStringLiteral(
@@ -12718,48 +12729,58 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
              .preDenoisingFaceOrientationInconsistentSharedEdgeCountBefore},
         {QStringLiteral("pre_denoising_face_orientation_flipped_face_count"),
          statistics.preDenoisingFaceOrientationFlippedFaceCount},
-        {QStringLiteral("openmesh_simplification_attempted"),
-         statistics.openMeshSimplificationAttempted},
-        {QStringLiteral("effective_openmesh_simplification"),
-         statistics.effectiveOpenMeshSimplification},
-        {QStringLiteral("openmesh_simplification_accepted"),
-         statistics.openMeshSimplificationAccepted},
-        {QStringLiteral("openmesh_simplification_reached_target"),
-         statistics.openMeshSimplificationReachedTarget},
-        {QStringLiteral("openmesh_simplification_cancelled"),
-         statistics.openMeshSimplificationCancelled},
-        {QStringLiteral("openmesh_simplification_input_vertex_count"),
-         statistics.openMeshSimplificationInputVertexCount},
-        {QStringLiteral("openmesh_simplification_input_face_count"),
-         statistics.openMeshSimplificationInputFaceCount},
-        {QStringLiteral("openmesh_simplification_output_vertex_count"),
-         statistics.openMeshSimplificationOutputVertexCount},
-        {QStringLiteral("openmesh_simplification_output_face_count"),
-         statistics.openMeshSimplificationOutputFaceCount},
-        {QStringLiteral("openmesh_simplification_collapsed_vertex_count"),
-         statistics.openMeshSimplificationCollapsedVertexCount},
-        {QStringLiteral("openmesh_simplification_rejected_input_face_count"),
-         statistics.openMeshSimplificationRejectedInputFaceCount},
-        {QStringLiteral("openmesh_inconsistent_shared_edge_count_before"),
-         statistics.openMeshInconsistentSharedEdgeCountBefore},
-        {QStringLiteral("openmesh_reoriented_input_face_count"),
-         statistics.openMeshReorientedInputFaceCount},
-        {QStringLiteral("openmesh_removed_contradictory_face_count"),
-         statistics.openMeshRemovedContradictoryFaceCount},
-        {QStringLiteral("openmesh_orientation_conflict_count"),
-         statistics.openMeshOrientationConflictCount},
-        {QStringLiteral("openmesh_smoothing_applied"),
-         statistics.openMeshSmoothingApplied},
-        {QStringLiteral("openmesh_boundary_edge_count_before"),
-         statistics.openMeshBoundaryEdgeCountBefore},
-        {QStringLiteral("openmesh_boundary_edge_count_after"),
-         statistics.openMeshBoundaryEdgeCountAfter},
-        {QStringLiteral("openmesh_non_manifold_edge_count_before"),
-         statistics.openMeshNonManifoldEdgeCountBefore},
-        {QStringLiteral("openmesh_non_manifold_edge_count_after"),
-         statistics.openMeshNonManifoldEdgeCountAfter},
-        {QStringLiteral("openmesh_simplification_error"),
-         statistics.openMeshSimplificationError},
+        {QStringLiteral("topology_safe_simplification_attempted"),
+         statistics.topologySafeSimplificationAttempted},
+        {QStringLiteral("effective_topology_safe_simplification"),
+         statistics.effectiveTopologySafeSimplification},
+        {QStringLiteral("topology_safe_simplification_accepted"),
+         statistics.topologySafeSimplificationAccepted},
+        {QStringLiteral("topology_safe_simplification_reached_target"),
+         statistics.topologySafeSimplificationReachedTarget},
+        {QStringLiteral("topology_safe_simplification_cancelled"),
+         statistics.topologySafeSimplificationCancelled},
+        {QStringLiteral("topology_safe_simplification_input_vertex_count"),
+         statistics.topologySafeSimplificationInputVertexCount},
+        {QStringLiteral("topology_safe_simplification_input_face_count"),
+         statistics.topologySafeSimplificationInputFaceCount},
+        {QStringLiteral("topology_safe_simplification_output_vertex_count"),
+         statistics.topologySafeSimplificationOutputVertexCount},
+        {QStringLiteral("topology_safe_simplification_output_face_count"),
+         statistics.topologySafeSimplificationOutputFaceCount},
+        {QStringLiteral("topology_safe_simplification_collapsed_edge_count"),
+         statistics.topologySafeSimplificationCollapsedEdgeCount},
+        {QStringLiteral("topology_safe_simplification_rejected_boundary_edge_count"),
+         statistics.topologySafeSimplificationRejectedBoundaryEdgeCount},
+        {QStringLiteral("topology_safe_simplification_rejected_feature_edge_count"),
+         statistics.topologySafeSimplificationRejectedFeatureEdgeCount},
+        {QStringLiteral("topology_safe_simplification_rejected_topology_edge_count"),
+         statistics.topologySafeSimplificationRejectedTopologyEdgeCount},
+        {QStringLiteral("topology_safe_simplification_rejected_flip_edge_count"),
+         statistics.topologySafeSimplificationRejectedFlipEdgeCount},
+        {QStringLiteral("topology_safe_simplification_rejected_triangle_quality_edge_count"),
+         statistics.topologySafeSimplificationRejectedTriangleQualityEdgeCount},
+        {QStringLiteral("topology_safe_simplification_pass_count"),
+         statistics.topologySafeSimplificationPassCount},
+        {QStringLiteral("topology_safe_inconsistent_shared_edge_count_before"),
+         statistics.topologySafeInconsistentSharedEdgeCountBefore},
+        {QStringLiteral("topology_safe_reoriented_input_face_count"),
+         statistics.topologySafeReorientedInputFaceCount},
+        {QStringLiteral("topology_safe_removed_contradictory_face_count"),
+         statistics.topologySafeRemovedContradictoryFaceCount},
+        {QStringLiteral("topology_safe_orientation_conflict_count"),
+         statistics.topologySafeOrientationConflictCount},
+        {QStringLiteral("topology_safe_smoothing_applied"),
+         statistics.topologySafeSmoothingApplied},
+        {QStringLiteral("topology_safe_boundary_edge_count_before"),
+         statistics.topologySafeBoundaryEdgeCountBefore},
+        {QStringLiteral("topology_safe_boundary_edge_count_after"),
+         statistics.topologySafeBoundaryEdgeCountAfter},
+        {QStringLiteral("topology_safe_non_manifold_edge_count_before"),
+         statistics.topologySafeNonManifoldEdgeCountBefore},
+        {QStringLiteral("topology_safe_non_manifold_edge_count_after"),
+         statistics.topologySafeNonManifoldEdgeCountAfter},
+        {QStringLiteral("topology_safe_simplification_error"),
+         statistics.topologySafeSimplificationError},
         {QStringLiteral("final_face_orientation_repair_attempted"),
          statistics.finalFaceOrientationRepairAttempted},
         {QStringLiteral("final_face_orientation_repair_accepted"),

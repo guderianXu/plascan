@@ -36,6 +36,25 @@ QDir sourceDirectory(const QString &source_path)
     return QDir(info.isDir() ? info.absoluteFilePath() : info.absolutePath());
 }
 
+bool hasConsistentUsableSceneProfile(
+    const QVector<DepthFrameArtifact> &frames)
+{
+    QString canonical_scene_profile;
+    for (const DepthFrameArtifact &frame : frames)
+    {
+        if (frame.role == xjw::mvs::DepthFrameRole::Excluded)
+        {
+            continue;
+        }
+        if (!xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+                frame.sceneProfile, &canonical_scene_profile))
+        {
+            return false;
+        }
+    }
+    return !canonical_scene_profile.isEmpty();
+}
+
 QString resolveArtifactPath(const QDir &directory, const QString &path)
 {
     if (path.isEmpty())
@@ -290,7 +309,8 @@ bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
     std::array<std::vector<float>, 3> coordinates;
     for (const DepthFrameArtifact &frame : frames)
     {
-        if (!frame.hasCameraModel || frame.depthPath.isEmpty())
+        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) ||
+            !frame.hasCameraModel || frame.depthPath.isEmpty())
         {
             continue;
         }
@@ -360,13 +380,18 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
         {
             const QJsonObject object = value.toObject();
             const QString status = object.value(QStringLiteral("status")).toString();
-            if (!status.isEmpty() && status != QStringLiteral("completed"))
-            {
-                continue;
-            }
             DepthFrameArtifact frame;
             frame.refIndex = object.value(QStringLiteral("ref_index")).toInt(-1);
-            frame.refImage = resolveArtifactPath(directory, object.value(QStringLiteral("ref_image")).toString());
+            frame.sourceImage = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral("ref_image")).toString());
+            const QString prepared_image = object.value(
+                QStringLiteral("prepared_image")).toString();
+            frame.refImage = resolveArtifactPath(
+                directory,
+                prepared_image.isEmpty()
+                    ? object.value(QStringLiteral("ref_image")).toString()
+                    : prepared_image);
             frame.depthPath = resolveArtifactPath(directory, object.value(QStringLiteral("raw_depth_path")).toString());
             frame.confidencePath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("raw_confidence_path")).toString());
@@ -423,6 +448,9 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 xjw::mvs::qualifyMvsDepthFrameArtifact(object);
             frame.acceptance = qualification.acceptance;
             frame.fusionEligible = qualification.fusionEligible;
+            frame.fusionEligibilityKnown =
+                qualification.fusionEligibilityKnown;
+            frame.role = qualification.role;
             frame.useDiscreteGeometryFallback =
                 qualification.useDiscreteGeometryFallback;
             frame.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(
@@ -553,11 +581,16 @@ DepthMapVisualHullPreflightResult DepthMapMeshBuilder::inspectVisualHullApplicab
 {
     DepthMapVisualHullPreflightResult result;
     const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
+    if (!hasConsistentUsableSceneProfile(frames))
+    {
+        return result;
+    }
     QVector<const DepthFrameArtifact *> candidates;
     candidates.reserve(frames.size());
     for (const DepthFrameArtifact &frame : frames)
     {
-        if (frame.hasCameraModel && !frame.refImage.isEmpty())
+        if (xjw::mvs::isPrimaryFusionFrame(frame.role) &&
+            frame.hasCameraModel && !frame.refImage.isEmpty())
         {
             candidates.push_back(&frame);
         }
@@ -607,10 +640,18 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
 {
     DepthMapVisualHullResult result;
     const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
+    if (!hasConsistentUsableSceneProfile(frames))
+    {
+        result.message = QStringLiteral(
+            "深度图批次的 scene_profile 缺失、无法识别或不一致，"
+            "不能安全构建视觉外壳");
+        return result;
+    }
     std::vector<VisualHullView> views;
     for (const DepthFrameArtifact &frame : frames)
     {
-        if (!frame.hasCameraModel || frame.refImage.isEmpty())
+        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) ||
+            !frame.hasCameraModel || frame.refImage.isEmpty())
         {
             continue;
         }

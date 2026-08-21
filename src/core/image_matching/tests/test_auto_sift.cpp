@@ -11,8 +11,9 @@
 
 #include <cmath>
 #include <cstdint>
-#include <limits>
+#include <cstdio>
 #include <filesystem>
+#include <limits>
 
 namespace xjw::image_matching
 {
@@ -246,6 +247,7 @@ namespace xjw::image_matching
             ImageMatchingRuntimeConfig config;
             config.cudaDevice = 0;
             config.siftBackend = SiftComputeBackend::Cuda;
+            config.adaptiveSiftRatio = false;
             AutoSiftAlgorithm algorithm(config);
 
             const MatchResult result = algorithm.matchFeatures(makeSiftFeatures(607), makeSiftFeatures(531));
@@ -444,6 +446,41 @@ namespace xjw::image_matching
         TEST(AutoSiftDinoRegressionTest, OpenClIsConsistentWithCpu)
         {
             expectDinoBackendConsistentWithCpu(SiftComputeBackend::OpenCl);
+        }
+
+        TEST(AutoSiftDinoRegressionTest, CudaProducesFiniteRootSiftDescriptorsAcrossRing)
+        {
+            if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::Cuda, 0))
+            {
+                GTEST_SKIP() << "CUDA SIFT backend is unavailable";
+            }
+
+            ImageMatchingRuntimeConfig config;
+            config.siftBackend = SiftComputeBackend::Cuda;
+            config.adaptiveSift = true;
+            config.rootSift = true;
+            config.maxImageDimension = 640;
+            config.maxKeypoints = 6000;
+            for (int image_index = 1; image_index <= 16; ++image_index)
+            {
+                char image_name[32]{};
+                std::snprintf(image_name, sizeof(image_name), "dinoSR%04d.png", image_index);
+                const cv::Mat image = cv::imread(
+                    dinoImagePath(image_name).string(), cv::IMREAD_GRAYSCALE);
+                if (image.empty())
+                {
+                    GTEST_SKIP() << "Middlebury DinoSparseRing data is not downloaded";
+                }
+
+                ImageFeatureInput input;
+                input.grayImage = image;
+                input.originalWidth = image.cols;
+                input.originalHeight = image.rows;
+                const FeatureSet features = SiftFeatureExtractor::extract(input, config);
+
+                ASSERT_FALSE(features.empty()) << image_name;
+                EXPECT_TRUE(cv::checkRange(features.descriptors)) << image_name;
+            }
         }
 
     } // namespace

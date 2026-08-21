@@ -136,8 +136,10 @@ FramePinholeCamera FramePinholeCamera::scaledIntrinsics(double scaleX, double sc
     FramePinholeCamera scaledCamera = *this;
     scaledCamera._intrinsics.focalX *= scaleX;
     scaledCamera._intrinsics.focalY *= scaleY;
-    scaledCamera._intrinsics.principalX *= scaleX;
-    scaledCamera._intrinsics.principalY *= scaleY;
+    scaledCamera._intrinsics.principalX =
+        (scaledCamera._intrinsics.principalX + 0.5) * scaleX - 0.5;
+    scaledCamera._intrinsics.principalY =
+        (scaledCamera._intrinsics.principalY + 0.5) * scaleY - 0.5;
 
     if (scaledCamera._imageSize.has_value())
     {

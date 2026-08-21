@@ -19,6 +19,14 @@ if(TARGET meshing)
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/mesh
     )
+
+    add_plascan_cli(texture_map_cli
+        SOURCE cli_texture_map.cpp
+        LIBRARIES meshing plapoint::plapoint plascan_common_io Qt6::Core Qt6::Gui
+        INCLUDE_DIRECTORIES
+            ${CMAKE_SOURCE_DIR}/src/common
+            ${CMAKE_SOURCE_DIR}/src/core/mesh
+    )
 endif()
 
 if(TARGET terrain)

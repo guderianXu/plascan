@@ -1,5 +1,7 @@
 #include "TextureAtlasSampling.h"
 
+#include "TextureOverlapExposure.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -95,7 +97,10 @@ TextureSampleStatus localDepthEvidence(
     if (!view.evidenceCamera.projectWorldPointWithDepth(
             world.data(), pixel, camera_depth) ||
         !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-        !std::isfinite(camera_depth) || camera_depth <= 0.0)
+        !std::isfinite(camera_depth) || camera_depth <= 0.0 ||
+        pixel[0] < 0.0 || pixel[1] < 0.0 ||
+        pixel[0] > view.supportMask->cols - 1.0 ||
+        pixel[1] > view.supportMask->rows - 1.0)
     {
         return TextureSampleStatus::Rejected;
     }
@@ -179,7 +184,8 @@ TextureSampleStatus sampleTextureView(
     const TextureMappingConfig &config,
     double medianEdgeLength,
     int padding,
-    WeightedColor *sample)
+    WeightedColor *sample,
+    int faceIndex)
 {
     if (!sample || candidate.score <= 0.0f || view.colorBgr.empty())
     {
@@ -203,8 +209,14 @@ TextureSampleStatus sampleTextureView(
     {
         return TextureSampleStatus::Rejected;
     }
-    sample->color = bilinearColor(view.colorBgr, pixel[0], pixel[1]) *
-        view.exposureGain;
+    if (candidate.finalMeshVisibilityRequired && faceIndex >= 0 &&
+        !isFinalMeshFaceVisible(view, faceIndex, world))
+    {
+        return TextureSampleStatus::Rejected;
+    }
+    sample->color = applyLinearSrgbExposureGain(
+        bilinearColor(view.colorBgr, pixel[0], pixel[1]),
+        view.exposureGain);
     const float border_weight = std::clamp(
         support_distance / std::max(static_cast<float>(padding), 1.0f),
         0.10f,

@@ -77,7 +77,7 @@ add_library(meshing STATIC
     MeshFaceColorOptimizer.cpp
     MeshQuadricSimplifier.cpp
     MeshFaceOrientation.cpp
-    OpenMeshSimplifier.cpp
+    NativeMeshSimplifier.cpp
     MeshTopologyQuality.cpp
     DepthTsdfFinalQualityGate.cpp
     DepthTsdfRecoveryTransaction.cpp
@@ -90,9 +90,13 @@ add_library(meshing STATIC
     TextureAtlasPacker.cpp
     TextureAtlasMaxRects.cpp
     TextureSourcePreprocessor.cpp
+    TextureOverlapExposure.cpp
+    TextureOverlapExposureSolver.cpp
+    TextureMeshVisibility.cpp
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp
     TextureAtlasSampling.cpp
+    TextureSeamLeveling.cpp
     TextureAtlasBaker.cpp
     ModelOutputPolicy.cpp
     ModelWorkflowService.cpp
@@ -111,14 +115,6 @@ if(PLASCAN_MC33_INCLUDE_DIR)
     target_compile_definitions(meshing PRIVATE PLASCAN_HAS_MC33=1)
 else()
     target_compile_definitions(meshing PRIVATE PLASCAN_HAS_MC33=0)
-endif()
-
-find_package(OpenMesh CONFIG QUIET)
-if(OpenMesh_FOUND)
-    target_link_libraries(meshing PRIVATE OpenMeshCore OpenMeshTools)
-    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_OPENMESH=1)
-else()
-    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_OPENMESH=0)
 endif()
 
 target_include_directories(meshing PUBLIC

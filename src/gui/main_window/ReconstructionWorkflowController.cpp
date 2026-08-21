@@ -185,7 +185,9 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
                 cleanPath,
                 -1,
                 QString(),
-                allow_sparse_scaffold_fallback);
+                allow_sparse_scaffold_fallback,
+                xjw::gui::project::depthBatchRequirementsForModelSettings(
+                    QJsonObject{}));
         depth_properties.insert(
             QStringLiteral("depth_batch_compatible"),
             compatibility.compatible);

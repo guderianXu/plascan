@@ -12,6 +12,77 @@ namespace xjw
 namespace mvs
 {
 
+GeometrySourceOrdinalContract validateGeometrySourceOrdinalContract(
+    const cv::Mat &source_mask,
+    const std::vector<int> &source_view_indices,
+    int reference_view_index,
+    int view_count,
+    cv::Size expected_size)
+{
+    GeometrySourceOrdinalContract result;
+    if (source_mask.empty())
+    {
+        result.valid = source_view_indices.empty();
+        if (!result.valid)
+        {
+            result.errorMessage = QStringLiteral(
+                "几何来源掩码缺失，但位序表含 %1 个来源")
+                                      .arg(source_view_indices.size());
+        }
+        return result;
+    }
+    if (source_mask.type() != CV_16UC1 ||
+        (expected_size.area() > 0 && source_mask.size() != expected_size))
+    {
+        result.errorMessage = QStringLiteral(
+            "几何来源掩码必须是与深度图同尺寸的 CV_16UC1 矩阵");
+        return result;
+    }
+    if (source_view_indices.size() > 16)
+    {
+        result.errorMessage = QStringLiteral("几何来源位序表超过 16 个来源");
+        return result;
+    }
+
+    std::vector<int> validated_indices;
+    validated_indices.reserve(source_view_indices.size());
+    for (const int source_index : source_view_indices)
+    {
+        if (source_index < 0 || source_index >= view_count ||
+            source_index == reference_view_index ||
+            std::find(validated_indices.cbegin(),
+                      validated_indices.cend(),
+                      source_index) != validated_indices.cend())
+        {
+            result.errorMessage = QStringLiteral(
+                "几何来源位序表含越界、参考帧或重复来源：%1")
+                                      .arg(source_index);
+            return result;
+        }
+        validated_indices.push_back(source_index);
+    }
+
+    double maximum_mask_value = 0.0;
+    cv::minMaxLoc(source_mask, nullptr, &maximum_mask_value);
+    const std::uint32_t allowed_bits = source_view_indices.size() == 16
+        ? 0xFFFFU
+        : source_view_indices.empty()
+            ? 0U
+            : ((std::uint32_t{1} << source_view_indices.size()) - 1U);
+    if (maximum_mask_value > static_cast<double>(allowed_bits))
+    {
+        result.errorMessage = QStringLiteral(
+            "几何来源掩码使用了位序表外的 bit：最大值=%1，允许值=%2")
+                                  .arg(maximum_mask_value, 0, 'f', 0)
+                                  .arg(allowed_bits);
+        return result;
+    }
+
+    result.valid = true;
+    result.persistMask = !source_view_indices.empty();
+    return result;
+}
+
 namespace
 {
 
@@ -363,7 +434,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     float relativeThreshold,
     int searchRadius,
     float maximumRoundTripErrorPixels,
-    bool computeContinuousMetrics)
+    bool computeContinuousMetrics,
+    bool evaluateSubpixelFootprint)
 {
     ProjectedDepthConsistencyResult result;
     if (!referenceCamera.isValid() || !sourceCamera.isValid() ||
@@ -391,7 +463,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
         relativeThreshold,
         searchRadius,
         maximumRoundTripErrorPixels,
-        computeContinuousMetrics);
+        computeContinuousMetrics,
+        evaluateSubpixelFootprint);
 }
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
@@ -404,7 +477,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWo
     float relativeThreshold,
     int searchRadius,
     float maximumRoundTripErrorPixels,
-    bool computeContinuousMetrics)
+    bool computeContinuousMetrics,
+    bool evaluateSubpixelFootprint)
 {
     ProjectedDepthConsistencyResult result;
     if (!referenceCamera.isValid() || !sourceCamera.isValid() ||
@@ -460,17 +534,38 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWo
     }
 
     const int radius = std::clamp(searchRadius, 0, 2);
+    const bool use_subpixel_footprint =
+        evaluateSubpixelFootprint && radius == 0;
+    const int iteration_radius = use_subpixel_footprint ? 1 : radius;
+    constexpr float kMaximumNearestFootprintDistance = 0.7071069f;
     const float maximum_round_trip_error = std::max(0.0f, maximumRoundTripErrorPixels);
     float best_score = std::numeric_limits<float>::max();
     bool found_consistent = false;
-    for (int delta_row = -radius; delta_row <= radius; ++delta_row)
+    for (int delta_row = -iteration_radius;
+         delta_row <= iteration_radius;
+         ++delta_row)
     {
-        for (int delta_column = -radius; delta_column <= radius; ++delta_column)
+        for (int delta_column = -iteration_radius;
+             delta_column <= iteration_radius;
+             ++delta_column)
         {
             const int source_row = center_row + delta_row;
             const int source_column = center_column + delta_column;
             if (source_column < 0 || source_column >= sourceDepth.cols ||
                 source_row < 0 || source_row >= sourceDepth.rows)
+            {
+                continue;
+            }
+
+            const float projected_delta_x =
+                static_cast<float>(source_column - projected_source_pixel[0]);
+            const float projected_delta_y =
+                static_cast<float>(source_row - projected_source_pixel[1]);
+            const float source_pixel_error = std::sqrt(
+                projected_delta_x * projected_delta_x +
+                projected_delta_y * projected_delta_y);
+            if (use_subpixel_footprint &&
+                source_pixel_error > kMaximumNearestFootprintDistance)
             {
                 continue;
             }
@@ -542,12 +637,6 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWo
             const float relative_error = std::fabs(
                 measured_depth - static_cast<float>(expected_source_depth)) /
                 static_cast<float>(expected_source_depth);
-            const float projected_delta_x =
-                static_cast<float>(source_column - projected_source_pixel[0]);
-            const float projected_delta_y =
-                static_cast<float>(source_row - projected_source_pixel[1]);
-            const float source_pixel_error = std::sqrt(
-                projected_delta_x * projected_delta_x + projected_delta_y * projected_delta_y);
             const float score = round_trip_error + 0.25f * source_pixel_error + relative_error;
             if (score >= best_score)
             {

@@ -37,6 +37,7 @@ struct ReconstructionCliOptions
     std::string mvsDepthFilter = "auto";
     std::string mvsMaskDirArg;
     bool mvsSaveLevels = false;
+    bool mvsNativeDepthGrid = false;
     bool mvsTwoSourceGrowth = false;
     int mvsTwoSourceGrowthDistance = 3;
     double mvsTwoSourceGrowthSpread = 0.01;

@@ -401,7 +401,8 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
 
         DepthPyramidLevelConfig level_config = request.pyramidConfig.levels[index];
         const bool is_final_level = index + 1 == level_count;
-        level_config.patchMatch.returnNativeResolution = !is_final_level;
+        level_config.patchMatch.returnNativeResolution =
+            !is_final_level || request.pyramidConfig.returnNativeFinalResolution;
         const cv::Size target_size = depthPyramidWorkingSize(
             request.referenceImage.cols,
             request.referenceImage.rows,
@@ -449,7 +450,7 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         const bool level_ok = _backend->estimate(backend_request, level_result, &level_error);
         if (level_ok)
         {
-            if (!is_final_level)
+            if (level_config.patchMatch.returnNativeResolution)
             {
                 // Backends which support native output avoid a full-resolution upscale entirely.
                 // Normalizing here also keeps legacy/custom backends on the same pyramid contract.
@@ -519,9 +520,12 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
 
     if (has_parent)
     {
-        // The public estimator contract remains full-sized even when a finer level fails and the
-        // selected fallback is an internally native-resolution parent.
-        resizeLevelResultArtifacts(parent, request.referenceImage.size());
+        if (!request.pyramidConfig.returnNativeFinalResolution)
+        {
+            // The default public estimator contract remains full-sized even when a finer level
+            // fails and the selected fallback is an internally native-resolution parent.
+            resizeLevelResultArtifacts(parent, request.referenceImage.size());
+        }
         result.finalLevel = std::move(parent);
         result.success = true;
     }

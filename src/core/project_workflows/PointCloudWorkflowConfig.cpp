@@ -88,6 +88,11 @@ xjw::mvs::MvsSceneProfile sceneProfileFromString(const QString &value)
     {
         return xjw::mvs::MvsSceneProfile::AerialTerrain;
     }
+    if (normalized == QStringLiteral("custom") ||
+        normalized == QStringLiteral("general"))
+    {
+        return xjw::mvs::MvsSceneProfile::Custom;
+    }
     return xjw::mvs::MvsSceneProfile::Auto;
 }
 

@@ -1044,7 +1044,9 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 depth_source_path,
                 settings.value(QStringLiteral("at_index")).toInt(-1),
                 settings.value(QStringLiteral("sceneProfile")).toString(),
-                allow_sparse_scaffold_fallback);
+                allow_sparse_scaffold_fallback,
+                xjw::gui::project::depthBatchRequirementsForModelSettings(
+                    settings));
         if (!batch_compatibility.compatible)
         {
             QMessageBox::warning(_parentWidget,

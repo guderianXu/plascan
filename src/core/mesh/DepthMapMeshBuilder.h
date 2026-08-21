@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DepthFrameQualificationPolicy.h"
 #include "FramePinholeCamera.h"
 #include "MeshTypes.h"
 #include "VisualHullReconstructor.h"
@@ -17,7 +18,8 @@ namespace xjw::mesh
 struct DepthFrameArtifact
 {
     int refIndex = -1;
-    QString refImage;
+    QString sourceImage; ///< manifest 中的原始 ref_image，仅用于身份与诊断
+    QString refImage; ///< 与 cameraModel 同一零畸变栅格的实际取色影像
     QString depthPath;
     QString confidencePath;
     QString geometrySupportPath;
@@ -38,7 +40,9 @@ struct DepthFrameArtifact
     QString acceptance;
     QString sceneProfile;
     int algorithmRevision = 0;
-    bool fusionEligible = true;
+    bool fusionEligible = false;
+    bool fusionEligibilityKnown = false;
+    xjw::mvs::DepthFrameRole role = xjw::mvs::DepthFrameRole::Excluded;
     bool useDiscreteGeometryFallback = false;
     double validCoverage = -1.0;
     double validWithinMaskRatio = -1.0;

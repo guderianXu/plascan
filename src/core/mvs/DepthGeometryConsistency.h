@@ -5,10 +5,12 @@
 #include "MvsTypes.h"
 
 #include <QJsonObject>
+#include <QString>
 
 #include <opencv2/core.hpp>
 
 #include <array>
+#include <vector>
 
 namespace xjw
 {
@@ -66,6 +68,23 @@ struct DiscreteGeometryCoreSummary
     float coreRatio = -1.0f;
 };
 
+struct GeometrySourceOrdinalContract
+{
+    bool valid = false;
+    bool persistMask = false;
+    QString errorMessage;
+};
+
+/// Validate the exact bit-to-view mapping used by geometry source masks.
+/// A zero mask with no ordinal table is a valid explicit "no source evidence"
+/// state and is normalized by writers by omitting both fields.
+GeometrySourceOrdinalContract validateGeometrySourceOrdinalContract(
+    const cv::Mat &sourceMask,
+    const std::vector<int> &sourceViewIndices,
+    int referenceViewIndex,
+    int viewCount,
+    cv::Size expectedSize = {});
+
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
@@ -75,7 +94,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     float relativeThreshold,
     int searchRadius = 1,
     float maximumRoundTripErrorPixels = 3.0f,
-    bool computeContinuousMetrics = true);
+    bool computeContinuousMetrics = true,
+    bool evaluateSubpixelFootprint = false);
 
 /**
  * @brief Evaluate one source view using an already unprojected reference point.
@@ -95,7 +115,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWo
     float relativeThreshold,
     int searchRadius = 1,
     float maximumRoundTripErrorPixels = 3.0f,
-    bool computeContinuousMetrics = true);
+    bool computeContinuousMetrics = true,
+    bool evaluateSubpixelFootprint = false);
 
 AdaptiveGeometryEvidenceClass adaptiveGeometryEvidenceClass(
     const ProjectedDepthConsistencyResult &result);

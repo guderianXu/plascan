@@ -349,7 +349,7 @@ void applyCollapses(TriMesh *mesh, const std::vector<CollapseCandidate> &selecte
 
 } // namespace
 
-QuadricSimplifyStatistics simplifyMeshQuadric(
+static QuadricSimplifyStatistics simplifyMeshQuadricInPlace(
     TriMesh *mesh,
     const QuadricSimplifyOptions &options)
 {
@@ -792,6 +792,33 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
     statistics.outputVertexCount = mesh->vertexCount();
     statistics.outputFaceCount = mesh->faceCount();
     statistics.reachedTarget = mesh->faceCount() <= target;
+    return statistics;
+}
+
+QuadricSimplifyStatistics simplifyMeshQuadric(
+    TriMesh *mesh,
+    const QuadricSimplifyOptions &options)
+{
+    if (mesh == nullptr)
+    {
+        return {};
+    }
+
+    TriMesh candidate = *mesh;
+    QuadricSimplifyStatistics statistics =
+        simplifyMeshQuadricInPlace(&candidate, options);
+    if (!statistics.cancelled)
+    {
+        *mesh = std::move(candidate);
+    }
+    else
+    {
+        statistics.outputVertexCount = mesh->vertexCount();
+        statistics.outputFaceCount = mesh->faceCount();
+        statistics.collapsedEdgeCount = 0;
+        statistics.reachedTarget =
+            mesh->faceCount() <= std::max(4, options.targetFaceCount);
+    }
     return statistics;
 }
 

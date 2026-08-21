@@ -14,6 +14,7 @@
 #include "cli_common.h"
 #include "cli_photogrammetry_common.h"
 #include "CliConsole.h"
+#include "CliJsonIO.h"
 
 #include "FramePinholeCamera.h"
 #include "DenseCloudQualityFilter.h"
@@ -54,10 +55,8 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -744,206 +743,14 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
     return cloud;
 }
 
-bool loadCvMatStorage(const QString &path, cv::Mat *matrix, QString *error)
-{
-    const xjw::common::OperationResult result =
-        xjw::core::project::loadDepthMatStorage(path, matrix);
-    if (!result.ok && error)
-    {
-        *error = result.errorMessage;
-    }
-    return result.ok;
-}
-
-bool loadFusionFrameFromDepthMap(const QString &mvsDir,
-                                 const std::vector<xjw::mvs::CameraView> &views,
-                                 const xjw::mvs::FusionConfig &fusionConfig,
-                                 int frameIndex,
-                                 int fusionMaxImageDim,
-                                 xjw::mvs::FusionFrameInput *frame,
-                                 QString *error)
-{
-    if (!frame)
-    {
-        if (error) *error = QStringLiteral("内部错误：融合帧输出为空");
-        return false;
-    }
-    if (frameIndex < 0 || frameIndex >= static_cast<int>(views.size()))
-    {
-        if (error) *error = QStringLiteral("融合帧索引越界: %1").arg(frameIndex);
-        return false;
-    }
-
-    const QDir dir(mvsDir);
-    const QString depthPngPath = dir.filePath(QStringLiteral("depth_%1.png").arg(frameIndex));
-    const QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
-
-    cv::Mat depth;
-    if (!loadCvMatStorage(depthPath, &depth, error))
-    {
-        return false;
-    }
-
-    cv::Mat confidence;
-    const QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
-    if (QFileInfo::exists(confPath))
-    {
-        QString confError;
-        if (!loadCvMatStorage(confPath, &confidence, &confError))
-        {
-            std::fprintf(stderr, "  [MVS] 置信图读取失败，继续使用深度图: %s\n", qUtf8Printable(confError));
-        }
-    }
-
-    cv::Mat geometry_support;
-    const QString geometry_support_path =
-        xjw::core::project::rawGeometrySupportStoragePath(depthPngPath);
-    if (!loadCvMatStorage(geometry_support_path, &geometry_support, error))
-    {
-        if (error)
-        {
-            *error = QStringLiteral("融合所需跨视几何支持图不可用，请重新计算深度图：%1")
-                         .arg(*error);
-        }
-        return false;
-    }
-    if (geometry_support.type() != CV_16UC1 || geometry_support.size() != depth.size())
-    {
-        if (error)
-        {
-            *error = QStringLiteral(
-                "跨视几何支持图必须为与深度图同尺寸的 CV_16UC1：%1")
-                         .arg(geometry_support_path);
-        }
-        return false;
-    }
-
-    cv::Mat inverse_depth_spread;
-    const QString inverse_depth_spread_path =
-        xjw::core::project::rawInverseDepthSpreadStoragePath(depthPngPath);
-    if (!loadCvMatStorage(inverse_depth_spread_path, &inverse_depth_spread, error))
-    {
-        if (error)
-        {
-            *error = QStringLiteral("融合所需逆深度离散度图不可用，请重新计算深度图：%1")
-                         .arg(*error);
-        }
-        return false;
-    }
-    if (inverse_depth_spread.type() != CV_32FC1 ||
-        inverse_depth_spread.size() != depth.size())
-    {
-        if (error)
-        {
-            *error = QStringLiteral(
-                "逆深度离散度图必须为与深度图同尺寸的 CV_32FC1：%1")
-                         .arg(inverse_depth_spread_path);
-        }
-        return false;
-    }
-
-    xjw::mvs::DepthPostProcessEvidence evidence;
-    evidence.geometrySupportCount = geometry_support;
-    evidence.inverseDepthRelativeSpread = inverse_depth_spread;
-    const QString adaptive_support_path =
-        xjw::core::project::rawAdaptiveGeometrySupportWeightStoragePath(depthPngPath);
-    const QString adaptive_view_count_path =
-        xjw::core::project::rawAdaptiveGeometryEffectiveViewCountStoragePath(depthPngPath);
-    const QString adaptive_conflict_path =
-        xjw::core::project::rawAdaptiveGeometryConflictRatioStoragePath(depthPngPath);
-    const bool has_any_adaptive_evidence = QFileInfo::exists(adaptive_support_path) ||
-        QFileInfo::exists(adaptive_view_count_path) || QFileInfo::exists(adaptive_conflict_path);
-    if (has_any_adaptive_evidence)
-    {
-        const std::array<std::pair<QString, cv::Mat *>, 3> adaptive_maps{{
-            {adaptive_support_path, &evidence.adaptiveSupportWeight},
-            {adaptive_view_count_path, &evidence.adaptiveEffectiveViewCount},
-            {adaptive_conflict_path, &evidence.adaptiveConflictRatio}
-        }};
-        for (const auto &[path, target] : adaptive_maps)
-        {
-            if (!loadCvMatStorage(path, target, error))
-            {
-                return false;
-            }
-            if (target->type() != CV_32FC1 || target->size() != depth.size())
-            {
-                if (error)
-                {
-                    *error = QStringLiteral("连续几何证据类型或尺寸无效：%1").arg(path);
-                }
-                return false;
-            }
-        }
-    }
-
-    const xjw::mvs::CameraView &view = views[static_cast<std::size_t>(frameIndex)];
-    frame->sourceCamera = view.camera;
-    frame->cameraModel = view.camera.normalizedForPositiveDepth();
-    frame->cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
-    frame->imgW = depth.cols;
-    frame->imgH = depth.rows;
-    frame->imagePath = view.imagePath;
-    frame->depthMap = std::move(depth);
-    frame->confidence = std::move(confidence);
-    const bool downsampled = xjw::core::project::downsampleFusionFrameForMaxDimension(
-        frame,
-        fusionMaxImageDim);
-    const auto resize_evidence = [frame](cv::Mat *matrix)
-    {
-        if (!matrix || matrix->empty() || matrix->size() == frame->depthMap.size())
-        {
-            return;
-        }
-        cv::Mat resized;
-        cv::resize(*matrix,
-                   resized,
-                   frame->depthMap.size(),
-                   0.0,
-                   0.0,
-                   cv::INTER_NEAREST);
-        *matrix = std::move(resized);
-    };
-    resize_evidence(&evidence.geometrySupportCount);
-    resize_evidence(&evidence.inverseDepthRelativeSpread);
-    resize_evidence(&evidence.adaptiveSupportWeight);
-    resize_evidence(&evidence.adaptiveEffectiveViewCount);
-    resize_evidence(&evidence.adaptiveConflictRatio);
-    if (downsampled)
-    {
-        std::fprintf(stdout,
-                     "  [MVS] 融合帧 %d 降采样到 %dx%d (maxDim=%d)\n",
-                     frameIndex,
-                     frame->imgW,
-                     frame->imgH,
-                     fusionMaxImageDim);
-        std::fflush(stdout);
-    }
-
-    const xjw::mvs::DepthPostProcessStats postprocessStats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
-            frame->depthMap,
-            frame->confidence,
-            fusionConfig,
-            frameIndex,
-            static_cast<int>(views.size()),
-            nullptr,
-            &evidence);
-
-    frame->depthPostprocess = postprocessStats;
-    frame->geometrySupportCount = std::move(evidence.geometrySupportCount);
-    frame->geometrySupportCount.setTo(cv::Scalar(0), frame->depthMap <= 0.0f);
-    return true;
-}
-
-
-bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
-                                    const std::vector<xjw::mvs::CameraView> &views,
-                                    const xjw::core::project::DenseGenerationSettings &denseSettings,
-                                    const xjw::mvs::DepthGenConfig &depthConfig,
-                                    std::vector<xjw::mvs::FusedPoint> *fusedCloud,
-                                    std::vector<xjw::mvs::DepthPostProcessStats> *depthPostprocessStats,
-                                    QString *error)
+bool fuseDepthMapsStreamingFromDisk(
+    const xjw::core::project::StoredDepthFramesResult &storedFrames,
+    const std::vector<xjw::mvs::CameraView> &views,
+    const xjw::core::project::DenseGenerationSettings &denseSettings,
+    const xjw::mvs::DepthGenConfig &depthConfig,
+    std::vector<xjw::mvs::FusedPoint> *fusedCloud,
+    std::vector<xjw::mvs::DepthPostProcessStats> *depthPostprocessStats,
+    QString *error)
 {
     if (!fusedCloud || !depthPostprocessStats)
     {
@@ -953,30 +760,75 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
         }
         return false;
     }
+    if (!storedFrames.status.ok || storedFrames.frames.size() < 2)
+    {
+        if (error)
+        {
+            *error = storedFrames.status.ok
+                ? QStringLiteral("MVS 流式融合至少需要 2 帧合格主深度图")
+                : storedFrames.status.errorMessage;
+        }
+        return false;
+    }
+
+    const int frame_count = static_cast<int>(storedFrames.frames.size());
 
     xjw::mvs::StreamingDepthFusionConfig config;
     config.minConsistentViews = denseSettings.minConsistentViews;
     config.depthConsistency = denseSettings.depthConsistency;
     config.workerCount = denseSettings.threads;
     config.neighborCount = std::min(
-        static_cast<int>(views.size()) - 1,
+        frame_count - 1,
         std::clamp(std::max(4, denseSettings.minViews * 3), 2, 16));
 
     const xjw::mvs::FusionFrameLoader frameLoader =
         [&](int frameIndex, xjw::mvs::FusionFrameInput *frame, std::string *loaderError) {
-            QString frameError;
-            const bool ok = loadFusionFrameFromDepthMap(mvsDir,
-                                                        views,
-                                                        depthConfig.fusion,
-                                                        frameIndex,
-                                                        denseSettings.fusionMaxImageDim,
-                                                        frame,
-                                                        &frameError);
-            if (!ok && loaderError)
+            if (!frame || frameIndex < 0 || frameIndex >= frame_count)
             {
-                *loaderError = frameError.toUtf8().toStdString();
+                if (loaderError)
+                {
+                    *loaderError = "Stored fusion frame index is invalid";
+                }
+                return false;
             }
-            return ok;
+
+            const auto &stored = storedFrames.frames[static_cast<std::size_t>(
+                frameIndex)];
+            if (stored.refIndex < 0 ||
+                stored.refIndex >= static_cast<int>(views.size()))
+            {
+                if (loaderError)
+                {
+                    *loaderError = QStringLiteral(
+                        "缓存深度帧缺少有效的原始视角索引：ref_index=%1")
+                                           .arg(stored.refIndex)
+                                           .toUtf8()
+                                           .toStdString();
+                }
+                return false;
+            }
+
+            auto loaded = xjw::core::project::buildStoredFusionFrame(
+                stored,
+                views[static_cast<std::size_t>(stored.refIndex)].camera,
+                depthConfig.fusion,
+                frame_count,
+                denseSettings.fusionMaxImageDim);
+            if (!loaded.status.ok)
+            {
+                if (loaderError)
+                {
+                    *loaderError = loaded.status.errorMessage.toUtf8().toStdString();
+                }
+                return false;
+            }
+
+            *frame = std::move(loaded.frame);
+            frame->viewIndex = frameIndex;
+            frame->sourceImageIndices =
+                xjw::core::project::storedFusionSourceIndices(
+                    storedFrames.frames, frameIndex);
+            return true;
         };
     const xjw::mvs::FusedCloudReducer cloudReducer =
         [processing_device = denseSettings.processingDevice](
@@ -1011,7 +863,7 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
 
     xjw::mvs::StreamingDepthFusionResult result;
     std::string fusionError;
-    if (!xjw::mvs::fuseDepthMapsStreaming(static_cast<int>(views.size()),
+    if (!xjw::mvs::fuseDepthMapsStreaming(frame_count,
                                           config,
                                           frameLoader,
                                           &result,
@@ -1243,6 +1095,8 @@ QJsonObject mvsDepthConfigToJson(const xjw::mvs::DepthGenConfig &config)
         {QStringLiteral("fusion_confidence"), config.fusion.confidenceThresh},
         {QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews},
         {QStringLiteral("adaptive_depth_cache_memory"), config.adaptiveDepthCacheMemory},
+        {QStringLiteral("preserve_native_final_depth_grid"),
+         config.preserveNativeFinalDepthGrid},
         {QStringLiteral("max_depth_cache_ram_fraction"), config.maxDepthCacheRamFraction},
         {QStringLiteral("min_free_ram_bytes"), static_cast<double>(config.minFreeRamBytes)}
     };
@@ -1294,6 +1148,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &mvs_depth_filter = options.mvsDepthFilter;
     auto &mvs_mask_dir_arg = options.mvsMaskDirArg;
     auto &mvs_save_levels = options.mvsSaveLevels;
+    auto &mvs_native_depth_grid = options.mvsNativeDepthGrid;
     auto &mvsTwoSourceGrowth = options.mvsTwoSourceGrowth;
     auto &mvsTwoSourceGrowthDistance = options.mvsTwoSourceGrowthDistance;
     auto &mvsTwoSourceGrowthSpread = options.mvsTwoSourceGrowthSpread;
@@ -1957,6 +1812,11 @@ xjw::cli::ReconstructionCliOptions options;
     {
         depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
     }
+    else if (mvs_scene_profile == "general" ||
+             mvs_scene_profile == "custom")
+    {
+        depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::Custom;
+    }
     else
     {
         depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::Auto;
@@ -1987,6 +1847,7 @@ xjw::cli::ReconstructionCliOptions options;
         depthConfig.depthFilterMode = xjw::mvs::DepthFilterMode::Moderate;
     }
     depthConfig.saveIntermediatePyramidLevels = mvs_save_levels;
+    depthConfig.preserveNativeFinalDepthGrid = mvs_native_depth_grid;
     depthConfig.runFusion = false;
     depthConfig.saveIntermediateDepthMaps = true;
     depthConfig.intermediateDir = xjw::common::io::toUtf8Path(mvsDir);
@@ -2013,7 +1874,7 @@ xjw::cli::ReconstructionCliOptions options;
     QEventLoop loop;
     bool depthOk = false;
     QString mvsError;
-    QJsonArray depthArtifacts;
+    QJsonArray depthArtifactEvents;
     QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::progressChanged, &loop,
                      [](const QString &stage, float ratio) {
         xjw::cli::printScopedProgress(
@@ -2025,8 +1886,8 @@ xjw::cli::ReconstructionCliOptions options;
         std::fprintf(stderr, "  [MVS] %s\n", qUtf8Printable(message));
     });
     QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved, &loop,
-                     [&depthArtifacts](const QJsonObject &artifact) {
-        depthArtifacts.append(artifact);
+                     [&depthArtifactEvents](const QJsonObject &artifact) {
+        depthArtifactEvents.append(artifact);
     });
     QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::finished, &loop,
                      [&loop, &depthOk](bool success) {
@@ -2036,6 +1897,9 @@ xjw::cli::ReconstructionCliOptions options;
     QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
     loop.exec();
 
+    const QJsonArray depthArtifacts =
+        xjw::cli::latestJsonObjectsByNonNegativeIntegerKey(
+            depthArtifactEvents, QStringLiteral("ref_index"));
     const QString mvsBackendActual = mvsBackendFromArtifacts(depthArtifacts);
     report[QStringLiteral("mvs_backend_actual")] = mvsBackendActual;
 
@@ -2115,25 +1979,39 @@ xjw::cli::ReconstructionCliOptions options;
     }
     if (mvsOk)
     {
-        try
-        {
-            if (!fuseDepthMapsStreamingFromDisk(mvsDir,
-                                                views,
-                                                denseSettings,
-                                                depthConfig,
-                                                &fusedCloud,
-                                                &depthPostprocessStats,
-                                                &error))
-            {
-                mvsOk = false;
-                mvsError = error;
-            }
-        }
-        catch (const std::exception &exception)
+        const auto discovered_depth_frames =
+            xjw::core::project::collectStoredDepthFramesForDirectory(
+                depthArtifacts, mvsDir);
+        const auto fusion_depth_frames =
+            xjw::core::project::selectFusionEligibleStoredDepthFrames(
+                discovered_depth_frames);
+        if (!fusion_depth_frames.status.ok)
         {
             mvsOk = false;
-            mvsError = QStringLiteral("深度图融合异常: %1")
-                           .arg(QString::fromUtf8(exception.what()));
+            mvsError = fusion_depth_frames.status.errorMessage;
+        }
+        else
+        {
+            try
+            {
+                if (!fuseDepthMapsStreamingFromDisk(fusion_depth_frames,
+                                                    views,
+                                                    denseSettings,
+                                                    depthConfig,
+                                                    &fusedCloud,
+                                                    &depthPostprocessStats,
+                                                    &error))
+                {
+                    mvsOk = false;
+                    mvsError = error;
+                }
+            }
+            catch (const std::exception &exception)
+            {
+                mvsOk = false;
+                mvsError = QStringLiteral("深度图融合异常: %1")
+                               .arg(QString::fromUtf8(exception.what()));
+            }
         }
     }
     if (mvsOk)

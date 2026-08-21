@@ -20,11 +20,13 @@
 #include "DepthMissingReason.h"
 #include "DepthMemoryPolicy.h"
 #include "MvsImageCache.h"
+#include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "MvsSceneClassifier.h"
 #include "DenseCloudBuilder.h"
 #include "DensePointCloudCUDA.h"
 #include "MvsSourcePlanner.h"
+#include "MvsStageSnapshot.h"
 #include "MvsVisibilityGraphBuilder.h"
 #include "MvsViewSelection.h"
 #include "MvsWorkspaceManifest.h"
@@ -55,10 +57,19 @@ struct DepthFrameResult
 {
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
     bool depthFlippedZ = false;
+    cv::Size preparedRasterSize; ///< MVS 准备后的全分辨率影像尺寸；不随深度缓存释放丢失
+    bool effectiveNativeFinalDepthGrid = false; ///< 该帧实际采用实验原生最终网格策略
+    QJsonObject pixelDomainDiagnostics; ///< full-raster 参数到实际深度网格参数的显式审计
     FramePinholeCamera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     std::vector<int> geometrySourceViewIndices; ///< geometrySourceMask 的精确位序表，最多 16 个来源
     std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
+    QJsonObject sourceAngleDiagnostics; ///< 场景推导上限、实验 cap 与实际源视图角度上限
+    bool sourceAngleCapEnabled = false; ///< 强类型安全标志；不依赖 JSON 诊断执行 shortfall 降级
+    bool completeVisibilityCandidatePoolEnabled = false; ///< 默认关闭的完整候选池实验
+    bool completePoolChangedLegacyPlan = false; ///< 本帧最终计划是否真正不同于 legacy early-stop
+    bool initialQualityAcceptanceAvailable = false; ///< 最终准入不得伪造初始阶段角色
+    DepthFrameAcceptance initialQualityAcceptance = DepthFrameAcceptance::Rejected;
     int requestedSourceViewCount = 0; ///< 选择阶段请求的源视图数，不随缓存释放丢失
     int sourceViewShortfall = 0; ///< 请求数与实际可用源视图数之差
     std::string sourceViewShortfallReason; ///< 源视图不足的主要原因
@@ -95,7 +106,7 @@ struct DepthFrameResult
     SparseDepthResidualSummary sparseDepthResidual; ///< 最终深度相对稀疏锚点的稳健残差审计
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
     DepthFrameQualityDecision qualityDecision; ///< 是否允许进入多视融合
-    std::string maskSource;                  ///< project/content/full_image
+    std::string maskSource;                  ///< project/content/technical/full_image
     float maskCoverage = 1.0f;               ///< 参考影像中允许参与 MVS 的像素比例
     int selectedLevel = 0;                   ///< 实际采用的深度金字塔层级
     std::string fallbackReason;              ///< 层级减少或细层失败原因
@@ -159,6 +170,21 @@ struct DepthFrameResult
     }
 };
 
+struct DepthConsistencyFrameSourcePlan
+{
+    std::vector<int> consistencySourceIndices;
+    std::vector<int> geometrySourceViewIndices;
+};
+
+/// Freeze every frame's source plan before consistency updates any frame-level
+/// acceptance. This prevents processing order from removing sources from later
+/// frames in the same batch.
+std::vector<DepthConsistencyFrameSourcePlan> freezeDepthConsistencySourcePlans(
+    const std::vector<DepthFrameResult> &frames,
+    int viewCount,
+    MvsSceneProfile sceneProfile,
+    int requestedRepairSourceCount);
+
 namespace detail
 {
 /// Run one background task and invoke the failure handler exactly once when
@@ -166,6 +192,10 @@ namespace detail
 void runDepthMapBackgroundTaskWithExceptionBoundary(
     const std::function<void()> &task,
     const std::function<void(const QString &)> &failureHandler);
+
+/// An explicit source-angle experiment must never promote a frame whose
+/// PatchMatch source plan is short. Repeated quality refreshes remain idempotent.
+void applySourceAngleCapShortfallSafety(DepthFrameResult &result);
 }
 
 class DepthMapGenerator : public QObject
@@ -289,7 +319,8 @@ public:
                                         int kernelSize,
                                         float relDepthThreshold,
                                         float maxRemovalRatio,
-                                        int refIdx);
+                                        int refIdx,
+                                        int sameLayerRadiusPixels = 1);
 
     /// 融合前剔除孤立小连通域深度斑点，并同步清零对应置信度
     static int removeSmallDepthComponents(cv::Mat &depthMap,
@@ -305,7 +336,8 @@ public:
                                                            int refIdx,
                                                            int viewCount,
                                                            cv::Mat *missingReasonMap = nullptr,
-                                                           const DepthPostProcessEvidence *evidence = nullptr);
+                                                           const DepthPostProcessEvidence *evidence = nullptr,
+                                                           const cv::Size &rasterPixelDomainSize = {});
 
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
@@ -338,6 +370,9 @@ private:
         int requestedSourceViewCount = 0;
         int sourceViewShortfall = 0;
         std::string sourceViewShortfallReason;
+        QJsonObject sourceAngleDiagnostics;
+        bool completeVisibilityCandidatePoolEnabled = false;
+        bool completePoolChangedLegacyPlan = false;
     };
 
     /// 在 QtConcurrent 线程中运行的主函数
@@ -363,7 +398,7 @@ private:
     bool isSparsePointVisibleInFrame(int viewIdx, size_t pointIndex) const;
 
     /// 将 DepthFrameResult 组装为 FusionFrameInput
-    FusionFrameInput buildFusionFrame(const DepthFrameResult &res) const;
+    FusionFrameInput buildFusionFrame(const DepthFrameResult &res);
 
     /// 估计参考帧的深度范围
     bool estimateDepthRange(int refIdx,
@@ -411,6 +446,17 @@ private:
     bool saveDepthFrameArtifacts(int frameIndex,
                                  const DepthFrameResult &result,
                                  const QString &stageLabel);
+    void captureStageSnapshot(int frameIndex,
+                              MvsStageSnapshotStage stage,
+                              const QString &boundary,
+                              const DepthFrameResult &result,
+                              const cv::Mat &depth,
+                              const cv::Mat &confidence,
+                              const cv::Mat &validMask = cv::Mat());
+    bool ensurePreparedRasterArtifact(
+        int frameIndex,
+        MvsPreparedRasterArtifact *artifact,
+        QString *errorMessage = nullptr);
     void initializeWorkspaceManifest();
     void markManifestFrameRunning(int frameIndex);
     void markManifestFrameFailed(int frameIndex, const QString &error);
@@ -434,8 +480,8 @@ private:
     SparseCloud _sparse;
     DepthGenConfig _config;
     MvsSceneClassification _sceneClassification;
-    MvsSceneProfile _effectiveSceneProfile = MvsSceneProfile::OrbitalObject;
-    DepthFilterMode _effectiveDepthFilterMode = DepthFilterMode::Mild;
+    MvsSceneProfile _effectiveSceneProfile = MvsSceneProfile::Custom;
+    DepthFilterMode _effectiveDepthFilterMode = DepthFilterMode::Moderate;
     int _configuredSourceViewCount = 0;
     std::atomic<bool> _cancelled{false};
     std::atomic<bool> _finishedEmitted{false};
@@ -443,6 +489,7 @@ private:
     std::string _outputDir;
     std::string _consistencyDepthDirectory;
     bool _streamConsistencyStorageEnabled = false;
+    std::unique_ptr<MvsStageSnapshotRecorder> _stageSnapshotRecorder;
 
     /// 缓存已估计的深度帧
     std::vector<DepthFrameResult> _depthFrames;
@@ -451,6 +498,8 @@ private:
     /// 统一 MVS 图像 provider。eager 模式常驻全部帧，bounded 模式仅保留当前 worker 的引用帧和源帧。
     std::unique_ptr<MvsImageCache> _imageCache;
     MvsPipelineMemoryPolicyDecision _pipelineMemoryDecision;
+    std::vector<MvsPreparedRasterArtifact> _preparedRasterArtifacts;
+    std::mutex _preparedRasterArtifactsMutex;
 
     /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
     std::vector<FrameMvsCache> _frameCaches;

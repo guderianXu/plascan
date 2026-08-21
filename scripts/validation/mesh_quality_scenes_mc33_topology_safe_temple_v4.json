@@ -4,7 +4,7 @@
         {
             "name": "temple",
             "depth_map_dir": "${TEMPLE_DEPTH_DIR}",
-            "settings_json": "${REPO_ROOT}/scripts/validation/mesh_mc33_openmesh_temple_v4.json",
+            "settings_json": "${REPO_ROOT}/scripts/validation/mesh_mc33_topology_safe_temple_v4.json",
             "settings_key": "generate_model",
             "expected_depth_file_count": 161,
             "expected_depth_artifacts_sha256": "4824680a7144c758f5717ded09f8ad9a2f67d467fbb11fadc0c1688e711dc2ac",

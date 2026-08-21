@@ -206,6 +206,7 @@ bool loadMvsReplayViews(const QString &manifestPath,
 
     views->reserve(recordsByIndex.size());
     QSet<QString> replayImageIdentities;
+    QSet<QString> replayRasterIdentities;
     int expectedIndex = 0;
     for (const auto &[index, record] : recordsByIndex)
     {
@@ -222,18 +223,40 @@ bool loadMvsReplayViews(const QString &manifestPath,
             return false;
         }
 
-        const QString imagePath = resolveManifestPath(manifestPath, record.refImage);
-        if (!QFileInfo::exists(imagePath))
+        const QString source_image_path = resolveManifestPath(
+            manifestPath, record.refImage);
+        const bool has_prepared_image =
+            !record.preparedImage.trimmed().isEmpty();
+        const bool has_prepared_mask =
+            !record.preparedValidMaskPath.trimmed().isEmpty();
+        const bool has_prepared_camera = !record.preparedCameraModel.isEmpty();
+        if (has_prepared_image != has_prepared_mask ||
+            has_prepared_image != has_prepared_camera)
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("MVS replay 影像不存在：%1")
-                                    .arg(QDir::toNativeSeparators(imagePath));
+                *errorMessage = QStringLiteral(
+                    "MVS manifest 第 %1 帧的 prepared_image、prepared "
+                    "有效蒙版与 prepared_camera_model 不完整")
+                                    .arg(index);
             }
             views->clear();
             return false;
         }
-        const QString imageIdentity = replayImageIdentity(imagePath);
+        const QString raster_path = resolveManifestPath(
+            manifestPath,
+            has_prepared_image ? record.preparedImage : record.refImage);
+        if (!QFileInfo::exists(raster_path))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("MVS replay 工作栅格不存在：%1")
+                                    .arg(QDir::toNativeSeparators(raster_path));
+            }
+            views->clear();
+            return false;
+        }
+        const QString imageIdentity = replayImageIdentity(source_image_path);
         if (replayImageIdentities.contains(imageIdentity))
         {
             if (errorMessage)
@@ -241,16 +264,37 @@ bool loadMvsReplayViews(const QString &manifestPath,
                 *errorMessage = QStringLiteral(
                     "MVS manifest 含重复 ref_image：第 %1 帧与已有帧指向同一影像 %2")
                                     .arg(index)
-                                    .arg(QDir::toNativeSeparators(imagePath));
+                                    .arg(QDir::toNativeSeparators(source_image_path));
             }
             views->clear();
             return false;
         }
         replayImageIdentities.insert(imageIdentity);
+        const QString raster_identity = replayImageIdentity(raster_path);
+        if (replayRasterIdentities.contains(raster_identity))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral(
+                    "MVS manifest 第 %1 帧与已有帧指向同一 prepared raster：%2")
+                                    .arg(index)
+                                    .arg(QDir::toNativeSeparators(raster_path));
+            }
+            views->clear();
+            return false;
+        }
+        replayRasterIdentities.insert(raster_identity);
 
         CameraView view;
-        view.imagePath = xjw::common::io::toUtf8Path(imagePath);
-        if (!cameraFromMvsWorkspaceJson(record.cameraModel, &view.camera))
+        view.imagePath = xjw::common::io::toUtf8Path(source_image_path);
+        if (has_prepared_image)
+        {
+            view.preparedImagePath = xjw::common::io::toUtf8Path(raster_path);
+        }
+        const QJsonObject replay_camera = has_prepared_camera
+            ? record.preparedCameraModel
+            : record.cameraModel;
+        if (!cameraFromMvsWorkspaceJson(replay_camera, &view.camera))
         {
             if (errorMessage)
             {
@@ -261,34 +305,76 @@ bool loadMvsReplayViews(const QString &manifestPath,
         }
 
         const cv::Mat image = xjw::common::io::readImage(
-            view.imagePath, cv::IMREAD_GRAYSCALE);
+            has_prepared_image ? view.preparedImagePath : view.imagePath,
+            cv::IMREAD_GRAYSCALE);
         if (image.empty())
         {
             if (errorMessage)
             {
                 *errorMessage = QStringLiteral("无法读取 MVS replay 影像：%1")
-                                    .arg(QDir::toNativeSeparators(imagePath));
+                                    .arg(QDir::toNativeSeparators(raster_path));
             }
             views->clear();
             return false;
         }
         view.imageWidth = image.cols;
         view.imageHeight = image.rows;
+        view.camera.setImageSize(CameraImageSize{image.cols, image.rows});
 
-        const QString maskPath = maskPathForImage(maskDirectory, imagePath);
-        if (!maskPath.isEmpty())
+        const QString prepared_mask_path = resolveManifestPath(
+            manifestPath, record.preparedValidMaskPath);
+        if (!prepared_mask_path.isEmpty())
         {
-            if (!QFileInfo::exists(maskPath))
+            const cv::Mat prepared_mask = xjw::common::io::readImage(
+                prepared_mask_path, cv::IMREAD_GRAYSCALE);
+            if (prepared_mask.empty())
             {
                 if (errorMessage)
                 {
-                    *errorMessage = QStringLiteral("MVS replay 蒙版不存在：%1")
-                                        .arg(QDir::toNativeSeparators(maskPath));
+                    *errorMessage = QStringLiteral(
+                        "MVS replay prepared 有效蒙版不存在：%1")
+                                        .arg(QDir::toNativeSeparators(
+                                            prepared_mask_path));
                 }
                 views->clear();
                 return false;
             }
-            view.validRegionMaskPath = xjw::common::io::toUtf8Path(maskPath);
+            if (prepared_mask.size() != image.size())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral(
+                        "MVS replay prepared 有效蒙版与工作栅格尺寸不一致：%1")
+                                        .arg(QDir::toNativeSeparators(
+                                            prepared_mask_path));
+                }
+                views->clear();
+                return false;
+            }
+            view.preparedValidMaskPath = xjw::common::io::toUtf8Path(
+                prepared_mask_path);
+            view.preparedValidMaskSource =
+                record.maskSource.toUtf8().toStdString();
+        }
+        else
+        {
+            const QString mask_path = maskPathForImage(
+                maskDirectory, source_image_path);
+            if (!mask_path.isEmpty() && !QFileInfo::exists(mask_path))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS replay 蒙版不存在：%1")
+                                        .arg(QDir::toNativeSeparators(mask_path));
+                }
+                views->clear();
+                return false;
+            }
+            if (!mask_path.isEmpty())
+            {
+                view.validRegionMaskPath = xjw::common::io::toUtf8Path(
+                    mask_path);
+            }
         }
         views->push_back(std::move(view));
         ++expectedIndex;

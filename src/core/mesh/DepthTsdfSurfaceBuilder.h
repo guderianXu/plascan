@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DepthGeometrySourceEncoding.h"
+#include "DepthFrameQualificationPolicy.h"
 #include "FramePinholeCamera.h"
 #include "DepthMapMeshBuilder.h"
 #include "MeshTopologyQuality.h"
@@ -125,7 +126,8 @@ struct DepthTsdfOptions
     bool enableOrbitalFrameCoverageProtection = false;
     float maximumOrbitalAngularGapRatio = 2.0f;
     bool enableAuxiliarySurfaceOnlyIntegration = true;
-    float validationOnlyFrameWeightMultiplier = 0.35f;
+    float validationOnlyFrameWeightMultiplier =
+        xjw::mvs::kCoverageAuxiliaryWeightMultiplier;
     bool enableAuxiliaryBridgeOnlyIntegration = false;
     int auxiliaryBridgeMinimumGeometrySupport = 4;
     int auxiliaryBridgeMinimumSourceCount = 3;
@@ -311,13 +313,12 @@ struct DepthTsdfOptions
     bool compensateColorExposure = false;
     bool coherentFacePrimaryViewColors = false;
     bool enableQuadricSimplification = false;
-    bool enableOpenMeshSimplification = false;
-    float openMeshMaximumNormalDeviationDegrees = 180.0f;
-    float openMeshMaximumNormalFlippingDegrees = 75.0f;
-    int openMeshSmoothingIterations = 2;
-    float openMeshSmoothingMaximumDisplacementVoxels = 0.40f;
-    float openMeshSmoothingFeatureAngleDegrees = 120.0f;
-    int openMeshNotificationInterval = 4096;
+    bool enableTopologySafeSimplification = false;
+    float topologySafeMaximumNormalDeviationDegrees = 180.0f;
+    float topologySafeMaximumNormalFlippingDegrees = 75.0f;
+    int topologySafeSmoothingIterations = 2;
+    float topologySafeSmoothingMaximumDisplacementVoxels = 0.40f;
+    float topologySafeSmoothingFeatureAngleDegrees = 120.0f;
     bool enableVoxelFallbackSimplification = true;
     bool enableVoxelFallbackQemPolish = false;
     int voxelFallbackMinimumProtectedBoundaryVertices = 1;
@@ -619,6 +620,7 @@ struct DepthTsdfStatistics
     int effectiveVisibilityOccupancyClosingIterations = 0;
     int effectiveVisibilityOccupancyMinimumDepthFullViewsForSilhouettePrior = 0;
     int visibilityOccupancyDepthSupportFallbackCount = 0;
+    int visibilityOccupancyInputFrameCount = 0;
     std::uint64_t visibilityOccupancySampleCount = 0;
     std::uint64_t visibilityOccupancyBoundaryOccupiedCellCount = 0;
     std::uint64_t visibilityOccupancyBoundaryExposedQuadCount = 0;
@@ -985,27 +987,32 @@ struct DepthTsdfStatistics
     bool preDenoisingFaceOrientationRepairAccepted = false;
     int preDenoisingFaceOrientationInconsistentSharedEdgeCountBefore = 0;
     int preDenoisingFaceOrientationFlippedFaceCount = 0;
-    bool openMeshSimplificationAttempted = false;
-    bool effectiveOpenMeshSimplification = false;
-    bool openMeshSimplificationAccepted = false;
-    bool openMeshSimplificationReachedTarget = false;
-    bool openMeshSimplificationCancelled = false;
-    int openMeshSimplificationInputVertexCount = 0;
-    int openMeshSimplificationInputFaceCount = 0;
-    int openMeshSimplificationOutputVertexCount = 0;
-    int openMeshSimplificationOutputFaceCount = 0;
-    int openMeshSimplificationCollapsedVertexCount = 0;
-    int openMeshSimplificationRejectedInputFaceCount = 0;
-    int openMeshInconsistentSharedEdgeCountBefore = 0;
-    int openMeshReorientedInputFaceCount = 0;
-    int openMeshRemovedContradictoryFaceCount = 0;
-    int openMeshOrientationConflictCount = 0;
-    bool openMeshSmoothingApplied = false;
-    int openMeshBoundaryEdgeCountBefore = 0;
-    int openMeshBoundaryEdgeCountAfter = 0;
-    int openMeshNonManifoldEdgeCountBefore = 0;
-    int openMeshNonManifoldEdgeCountAfter = 0;
-    QString openMeshSimplificationError;
+    bool topologySafeSimplificationAttempted = false;
+    bool effectiveTopologySafeSimplification = false;
+    bool topologySafeSimplificationAccepted = false;
+    bool topologySafeSimplificationReachedTarget = false;
+    bool topologySafeSimplificationCancelled = false;
+    int topologySafeSimplificationInputVertexCount = 0;
+    int topologySafeSimplificationInputFaceCount = 0;
+    int topologySafeSimplificationOutputVertexCount = 0;
+    int topologySafeSimplificationOutputFaceCount = 0;
+    int topologySafeSimplificationCollapsedEdgeCount = 0;
+    int topologySafeSimplificationRejectedBoundaryEdgeCount = 0;
+    int topologySafeSimplificationRejectedFeatureEdgeCount = 0;
+    int topologySafeSimplificationRejectedTopologyEdgeCount = 0;
+    int topologySafeSimplificationRejectedFlipEdgeCount = 0;
+    int topologySafeSimplificationRejectedTriangleQualityEdgeCount = 0;
+    int topologySafeSimplificationPassCount = 0;
+    int topologySafeInconsistentSharedEdgeCountBefore = 0;
+    int topologySafeReorientedInputFaceCount = 0;
+    int topologySafeRemovedContradictoryFaceCount = 0;
+    int topologySafeOrientationConflictCount = 0;
+    bool topologySafeSmoothingApplied = false;
+    int topologySafeBoundaryEdgeCountBefore = 0;
+    int topologySafeBoundaryEdgeCountAfter = 0;
+    int topologySafeNonManifoldEdgeCountBefore = 0;
+    int topologySafeNonManifoldEdgeCountAfter = 0;
+    QString topologySafeSimplificationError;
     bool finalFaceOrientationRepairAttempted = false;
     bool finalFaceOrientationRepairAccepted = false;
     int finalFaceOrientationInconsistentSharedEdgeCountBefore = 0;

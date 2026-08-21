@@ -2,6 +2,7 @@
 #include "MvsWorkspaceReplay.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapGenerator.h"
+#include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
 #include "io/ImageIO.h"
@@ -16,8 +17,10 @@
 #include <QTemporaryDir>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <chrono>
+#include <cstdint>
 
 using xjw::mvs::MvsDepthFrameRecord;
 using xjw::mvs::MvsWorkspaceManifest;
@@ -66,6 +69,7 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.acceptance = QStringLiteral("accepted");
     record.fusionEligible = true;
     record.fusionEligibilityKnown = true;
+    record.sceneProfile = QStringLiteral("aerial_terrain");
     record.qualityProfile = QStringLiteral("highest");
     record.configuredSourceViewCount = 8;
     record.sourceViewCount = 2;
@@ -147,6 +151,107 @@ void writeJson(const QString &path, const QJsonObject &object)
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     ASSERT_GT(file.write(QJsonDocument(object).toJson()), 0);
 }
+
+QJsonArray doubleArray(const double *values, int count)
+{
+    QJsonArray result;
+    for (int index = 0; index < count; ++index)
+    {
+        result.append(values[index]);
+    }
+    return result;
+}
+
+QJsonObject cameraJson(const xjw::FramePinholeCamera &camera)
+{
+    const auto intrinsics = camera.intrinsics();
+    const auto rotation = camera.worldToCameraRotation();
+    const auto translation = camera.worldToCameraTranslation();
+    const auto center = camera.cameraCenter();
+    return QJsonObject{
+        {QStringLiteral("fx"), intrinsics.focalX},
+        {QStringLiteral("fy"), intrinsics.focalY},
+        {QStringLiteral("cx"), intrinsics.principalX},
+        {QStringLiteral("cy"), intrinsics.principalY},
+        {QStringLiteral("rotation_world_to_camera"),
+         doubleArray(rotation.data(), 9)},
+        {QStringLiteral("translation_world_to_camera"),
+         doubleArray(translation.data(), 3)},
+        {QStringLiteral("camera_center"), doubleArray(center.data(), 3)}};
+}
+
+xjw::FramePinholeCamera makeBrownCamera()
+{
+    xjw::FramePinholeCamera camera;
+    camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
+    camera.setPose({1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0},
+                   {0.0, 0.0, 0.0});
+    camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
+    camera.setImageSize(xjw::CameraImageSize{64, 48});
+    return camera;
+}
+
+void attachPreparedArtifactFiles(const QTemporaryDir &temporaryDirectory,
+                                 MvsDepthFrameRecord *record)
+{
+    ASSERT_NE(record, nullptr);
+    record->preparedImage = QDir(temporaryDirectory.path()).filePath(
+        QStringLiteral("prepared_%1.png").arg(record->refIndex));
+    record->preparedValidMaskPath = QDir(temporaryDirectory.path()).filePath(
+        QStringLiteral("prepared_%1_valid.png").arg(record->refIndex));
+    record->preparedCameraModel = record->cameraModel;
+    touchFile(record->preparedImage);
+    touchFile(record->preparedValidMaskPath);
+}
+}
+
+TEST(DepthFrameUtils,
+     FastDepthMatStorageHasDeterministicHeaderAndReadsLegacyPadding)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QDir directory(temporary_directory.path());
+    const QString first_path = directory.filePath(QStringLiteral("first.bin"));
+    const QString second_path = directory.filePath(QStringLiteral("second.bin"));
+    const QString legacy_path = directory.filePath(QStringLiteral("legacy.bin"));
+
+    const cv::Mat matrix(2, 3, CV_32FC1, cv::Scalar(1.25f));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(first_path, matrix).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(second_path, matrix).ok);
+
+    QFile first_file(first_path);
+    QFile second_file(second_path);
+    ASSERT_TRUE(first_file.open(QIODevice::ReadOnly));
+    ASSERT_TRUE(second_file.open(QIODevice::ReadOnly));
+    const QByteArray first_bytes = first_file.readAll();
+    const QByteArray second_bytes = second_file.readAll();
+    ASSERT_EQ(first_bytes.size(), second_bytes.size());
+    EXPECT_TRUE(first_bytes == second_bytes);
+    ASSERT_GE(first_bytes.size(), 40);
+    for (qsizetype offset = 28; offset < 32; ++offset)
+    {
+        EXPECT_EQ(static_cast<unsigned char>(first_bytes.at(offset)), 0u);
+    }
+
+    QByteArray legacy_bytes = first_bytes;
+    legacy_bytes[28] = static_cast<char>(0x12);
+    legacy_bytes[29] = static_cast<char>(0x34);
+    legacy_bytes[30] = static_cast<char>(0x56);
+    legacy_bytes[31] = static_cast<char>(0x78);
+    QFile legacy_file(legacy_path);
+    ASSERT_TRUE(legacy_file.open(QIODevice::WriteOnly));
+    ASSERT_EQ(legacy_file.write(legacy_bytes), legacy_bytes.size());
+    legacy_file.close();
+
+    cv::Mat loaded;
+    const auto load_result =
+        xjw::core::project::loadDepthMatStorage(legacy_path, &loaded);
+    ASSERT_TRUE(load_result.ok) << load_result.errorMessage.toStdString();
+    ASSERT_EQ(loaded.type(), matrix.type());
+    ASSERT_EQ(loaded.size(), matrix.size());
+    EXPECT_EQ(cv::norm(loaded, matrix, cv::NORM_INF), 0.0);
 }
 
 TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
@@ -158,7 +263,13 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
-    manifest.upsertFrame(makeRecord(2, QStringLiteral("image_002.jpg"), QStringLiteral("completed")));
+    MvsDepthFrameRecord record = makeRecord(
+        2, QStringLiteral("image_002.jpg"), QStringLiteral("completed"));
+    record.preparedImage = QStringLiteral("prepared_images/frame_000002.png");
+    record.preparedValidMaskPath = QStringLiteral(
+        "prepared_images/frame_000002_valid.png");
+    record.preparedCameraModel = record.cameraModel;
+    manifest.upsertFrame(record);
 
     QString error;
     ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
@@ -167,6 +278,15 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     ASSERT_TRUE(loaded.load(manifestPath, &error)) << error.toStdString();
     ASSERT_EQ(loaded.frames().size(), 1);
     EXPECT_EQ(loaded.frames().front().refImage, QStringLiteral("image_002.jpg"));
+    EXPECT_EQ(loaded.frames().front().preparedImage,
+              QStringLiteral("prepared_images/frame_000002.png"));
+    EXPECT_EQ(loaded.frames().front().preparedValidMaskPath,
+              QStringLiteral("prepared_images/frame_000002_valid.png"));
+    EXPECT_DOUBLE_EQ(
+        loaded.frames().front().preparedCameraModel
+            .value(QStringLiteral("fx"))
+            .toDouble(),
+        1200.0);
     EXPECT_EQ(loaded.frames().front().rawConfidencePath, QStringLiteral("confidence_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawGeometrySupportPath,
               QStringLiteral("geometry_support_002.bin"));
@@ -181,6 +301,8 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
               QVector<int>({7, 9, 11}));
     EXPECT_TRUE(loaded.frames().front().fusionEligibilityKnown);
     EXPECT_TRUE(loaded.frames().front().fusionEligible);
+    EXPECT_EQ(loaded.frames().front().role,
+              xjw::mvs::DepthFrameRole::Primary);
     EXPECT_EQ(loaded.frames().front().qualityProfile, QStringLiteral("highest"));
     EXPECT_EQ(loaded.frames().front().configuredSourceViewCount, 8);
     EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
@@ -262,6 +384,81 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("shared_tracks")).toInt(), 42);
 }
 
+TEST(DepthFrameUtils,
+     ManifestArtifactSelectionKeepsOnlyQualifiedSeedsAndReplayMetadata)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+
+    QJsonArray artifacts;
+    for (int index = 0; index < 4; ++index)
+    {
+        MvsDepthFrameRecord record = makeRecord(
+            index,
+            QDir(temporary_directory.path()).filePath(
+                QStringLiteral("image_%1.png").arg(index)),
+            QStringLiteral("completed"));
+        record.depthPng = QDir(temporary_directory.path()).filePath(
+            QStringLiteral("depth_%1.png").arg(index));
+        record.rawDepthPath = QDir(temporary_directory.path()).filePath(
+            QStringLiteral("depth_%1.bin").arg(index));
+        touchFile(record.depthPng);
+        touchFile(record.rawDepthPath);
+        attachPreparedArtifactFiles(temporary_directory, &record);
+
+        if (index == 1)
+        {
+            record.acceptance = QStringLiteral("validation_only");
+            // A stale/incorrect boolean must never override acceptance.
+            record.fusionEligible = true;
+        }
+        else if (index == 2)
+        {
+            record.acceptance = QStringLiteral("rejected");
+            record.fusionEligible = false;
+        }
+        if (index == 0)
+        {
+            record.sourceImages = {
+                QDir(temporary_directory.path()).filePath(
+                    QStringLiteral("image_3.png")),
+                QDir(temporary_directory.path()).filePath(
+                    QStringLiteral("image_1.png"))};
+            record.qualityDecision = QJsonObject{
+                {QStringLiteral("reasons"),
+                 QJsonArray{QStringLiteral(
+                     "adaptive_geometry_fallback_to_discrete_core")}}};
+        }
+        artifacts.append(record.toJson());
+    }
+
+    const auto discovered =
+        xjw::core::project::collectStoredDepthFramesForDirectory(
+            artifacts, temporary_directory.path());
+    ASSERT_TRUE(discovered.status.ok)
+        << discovered.status.errorMessage.toStdString();
+    ASSERT_EQ(discovered.frames.size(), 4u);
+    for (int index = 0; index < 4; ++index)
+    {
+        EXPECT_EQ(discovered.frames[static_cast<std::size_t>(index)].refIndex,
+                  index);
+    }
+
+    const auto selected =
+        xjw::core::project::selectFusionEligibleStoredDepthFrames(discovered);
+    ASSERT_TRUE(selected.status.ok)
+        << selected.status.errorMessage.toStdString();
+    ASSERT_EQ(selected.frames.size(), 2u);
+    EXPECT_EQ(selected.frames[0].refIndex, 0);
+    EXPECT_EQ(selected.frames[1].refIndex, 3);
+    EXPECT_TRUE(selected.frames[0].useDiscreteGeometryFallback);
+    EXPECT_FALSE(selected.frames[0].preparedImage.isEmpty());
+    EXPECT_FALSE(selected.frames[0].preparedCameraModel.isEmpty());
+    EXPECT_EQ(
+        xjw::core::project::storedFusionSourceIndices(selected.frames, 0),
+        (std::vector<int>{1}));
+}
+
 TEST(MvsWorkspaceManifest, SortsCompletedFramesByNaturalFileName)
 {
     MvsWorkspaceManifest manifest;
@@ -303,6 +500,7 @@ TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
         QStringLiteral("depth_003_geometry_source_mask.bin"));
     completed.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_003_provenance.png"));
+    attachPreparedArtifactFiles(tempDir, &completed);
     touchFile(completed.depthPng);
     touchFile(completed.rawDepthPath);
     touchFile(completed.rawGeometrySupportPath);
@@ -320,12 +518,19 @@ TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
     manifest.setConfigHash(QStringLiteral("cfg-a"));
 
     MvsDepthFrameRecord initial = makeRecord(5, QStringLiteral("image_005.jpg"), QStringLiteral("completed"));
+    initial.preparedImage = QStringLiteral("prepared_images/frame_000005.png");
+    initial.preparedValidMaskPath = QStringLiteral(
+        "prepared_images/frame_000005_valid.png");
+    initial.preparedCameraModel = initial.cameraModel;
     ASSERT_EQ(initial.sourcePlan.size(), 1);
     manifest.markCompleted(initial);
 
     MvsDepthFrameRecord filtered = initial;
     filtered.depthPng = QStringLiteral("filtered_depth_005.png");
     filtered.sourcePlan = QJsonArray();
+    filtered.preparedImage.clear();
+    filtered.preparedValidMaskPath.clear();
+    filtered.preparedCameraModel = QJsonObject();
     filtered.algorithmRevision =
         xjw::mvs::kMvsDepthAlgorithmRevision - 1;
     manifest.markCompleted(filtered);
@@ -334,6 +539,9 @@ TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
     EXPECT_EQ(manifest.frames().front().depthPng, QStringLiteral("filtered_depth_005.png"));
     EXPECT_EQ(manifest.frames().front().algorithmRevision,
               xjw::mvs::kMvsDepthAlgorithmRevision);
+    EXPECT_EQ(manifest.frames().front().preparedImage,
+              QStringLiteral("prepared_images/frame_000005.png"));
+    EXPECT_FALSE(manifest.frames().front().preparedCameraModel.isEmpty());
     ASSERT_EQ(manifest.frames().front().sourcePlan.size(), 1)
         << "Filtered depth artifact updates must not erase the source plan needed for reproducible MVS fusion";
     EXPECT_EQ(manifest.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("view_index")).toInt(), 7);
@@ -353,6 +561,340 @@ TEST(MvsWorkspaceManifest, PreservesExplicitFusionIneligibility)
     EXPECT_TRUE(loaded.fusionEligibilityKnown);
     EXPECT_FALSE(loaded.fusionEligible);
     EXPECT_EQ(loaded.acceptance, QStringLiteral("validation_only"));
+    EXPECT_EQ(loaded.role,
+              xjw::mvs::DepthFrameRole::CoverageAuxiliary);
+}
+
+TEST(MvsWorkspaceManifest,
+     ExplicitAcceptanceDoesNotInheritStalePrimaryEligibility)
+{
+    MvsWorkspaceManifest manifest;
+    MvsDepthFrameRecord primary = makeRecord(
+        7, QStringLiteral("image_007.jpg"), QStringLiteral("completed"));
+    primary.qualityDecision = QJsonObject{
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")}
+    };
+    manifest.markCompleted(primary);
+
+    MvsDepthFrameRecord validation_update;
+    validation_update.refIndex = 7;
+    validation_update.refImage = primary.refImage;
+    validation_update.acceptance = QStringLiteral("validation_only");
+    validation_update.fusionEligibilityKnown = false;
+    validation_update.fusionEligible = false;
+    manifest.markCompleted(validation_update);
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    const MvsDepthFrameRecord &updated = manifest.frames().front();
+    EXPECT_EQ(updated.acceptance, QStringLiteral("validation_only"));
+    EXPECT_FALSE(updated.fusionEligibilityKnown);
+    EXPECT_FALSE(updated.fusionEligible);
+    EXPECT_EQ(updated.role, xjw::mvs::DepthFrameRole::Excluded);
+    EXPECT_TRUE(updated.qualityDecision.isEmpty());
+    EXPECT_FALSE(updated.toJson().contains(QStringLiteral("fusion_eligible")));
+}
+
+TEST(MvsWorkspaceManifest,
+     ExplicitEligibilityDoesNotInheritStalePrimaryAcceptance)
+{
+    MvsWorkspaceManifest manifest;
+    MvsDepthFrameRecord primary = makeRecord(
+        8, QStringLiteral("image_008.jpg"), QStringLiteral("completed"));
+    primary.qualityDecision = QJsonObject{
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")}
+    };
+    manifest.markCompleted(primary);
+
+    MvsDepthFrameRecord partial_update;
+    partial_update.refIndex = 8;
+    partial_update.refImage = primary.refImage;
+    partial_update.fusionEligibilityKnown = true;
+    partial_update.fusionEligible = true;
+    manifest.markCompleted(partial_update);
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    const MvsDepthFrameRecord &updated = manifest.frames().front();
+    EXPECT_TRUE(updated.acceptance.isEmpty());
+    EXPECT_TRUE(updated.fusionEligibilityKnown);
+    EXPECT_TRUE(updated.fusionEligible);
+    EXPECT_EQ(updated.role, xjw::mvs::DepthFrameRole::Excluded);
+    EXPECT_TRUE(updated.qualityDecision.isEmpty());
+}
+
+TEST(MvsWorkspaceManifest,
+     MissingQualificationPairInheritsExistingDecisionAtomically)
+{
+    MvsWorkspaceManifest manifest;
+    MvsDepthFrameRecord primary = makeRecord(
+        9, QStringLiteral("image_009.jpg"), QStringLiteral("completed"));
+    primary.qualityDecision = QJsonObject{
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+        {QStringLiteral("reason"), QStringLiteral("original_gate")}
+    };
+    manifest.markCompleted(primary);
+
+    MvsDepthFrameRecord artifact_update;
+    artifact_update.refIndex = 9;
+    artifact_update.refImage = primary.refImage;
+    artifact_update.depthPng = QStringLiteral("filtered_depth_009.png");
+    manifest.markCompleted(artifact_update);
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    const MvsDepthFrameRecord &updated = manifest.frames().front();
+    EXPECT_EQ(updated.acceptance, QStringLiteral("accepted"));
+    EXPECT_TRUE(updated.fusionEligibilityKnown);
+    EXPECT_TRUE(updated.fusionEligible);
+    EXPECT_EQ(updated.role, xjw::mvs::DepthFrameRole::Primary);
+    EXPECT_EQ(updated.depthPng, QStringLiteral("filtered_depth_009.png"));
+    EXPECT_EQ(updated.qualityDecision, primary.qualityDecision);
+}
+
+TEST(MvsWorkspaceManifest,
+     MalformedFusionEligibilityIsUnknownAndExcluded)
+{
+    const auto expect_excluded = [](const QJsonValue &malformed_value)
+    {
+        QJsonObject artifact{
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("acceptance"), QStringLiteral("validation_only")}
+        };
+        artifact.insert(QStringLiteral("fusion_eligible"), malformed_value);
+
+        const xjw::mvs::MvsDepthFrameQualification qualification =
+            xjw::mvs::qualifyMvsDepthFrameArtifact(artifact);
+        EXPECT_FALSE(qualification.fusionEligibilityKnown);
+        EXPECT_FALSE(qualification.fusionEligible);
+        EXPECT_EQ(qualification.role, xjw::mvs::DepthFrameRole::Excluded);
+
+        const MvsDepthFrameRecord record =
+            MvsDepthFrameRecord::fromJson(artifact);
+        EXPECT_FALSE(record.fusionEligibilityKnown);
+        EXPECT_FALSE(record.fusionEligible);
+        EXPECT_EQ(record.role, xjw::mvs::DepthFrameRole::Excluded);
+    };
+
+    expect_excluded(QJsonValue(QJsonValue::Null));
+    expect_excluded(QJsonValue(QStringLiteral("true")));
+    expect_excluded(QJsonValue(QJsonObject{
+        {QStringLiteral("value"), true}
+    }));
+
+    const QJsonObject explicit_false{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+        {QStringLiteral("fusion_eligible"), false}
+    };
+    const xjw::mvs::MvsDepthFrameQualification known_false =
+        xjw::mvs::qualifyMvsDepthFrameArtifact(explicit_false);
+    EXPECT_TRUE(known_false.fusionEligibilityKnown);
+    EXPECT_FALSE(known_false.fusionEligible);
+    EXPECT_EQ(known_false.role, xjw::mvs::DepthFrameRole::Excluded);
+}
+
+TEST(MvsWorkspaceManifest,
+     NestedQualityAcceptanceMustMatchTopLevelQualification)
+{
+    const auto qualify = [](const QJsonValue &nested_acceptance)
+    {
+        const QJsonObject artifact{
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+            {QStringLiteral("fusion_eligible"), true},
+            {QStringLiteral("quality_decision"), QJsonObject{
+                {QStringLiteral("acceptance"), nested_acceptance}
+            }}
+        };
+        const xjw::mvs::MvsDepthFrameQualification qualification =
+            xjw::mvs::qualifyMvsDepthFrameArtifact(artifact);
+        EXPECT_TRUE(qualification.fusionEligibilityKnown);
+        EXPECT_TRUE(qualification.fusionEligible);
+        EXPECT_EQ(qualification.role, xjw::mvs::DepthFrameRole::Excluded);
+        EXPECT_EQ(MvsDepthFrameRecord::fromJson(artifact).role,
+                  xjw::mvs::DepthFrameRole::Excluded);
+    };
+
+    qualify(QJsonValue(QStringLiteral("rejected")));
+    qualify(QJsonValue(QJsonValue::Null));
+    qualify(QJsonValue(QJsonObject{
+        {QStringLiteral("value"), QStringLiteral("accepted")}
+    }));
+
+    const QJsonObject legacy_without_nested_acceptance{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+        {QStringLiteral("fusion_eligible"), true},
+        {QStringLiteral("quality_decision"), QJsonObject{
+            {QStringLiteral("calibrated_confidence"), 0.8}
+        }}
+    };
+    EXPECT_EQ(xjw::mvs::qualifyMvsDepthFrameArtifact(
+                  legacy_without_nested_acceptance).role,
+              xjw::mvs::DepthFrameRole::Primary);
+
+    QJsonObject normalized_match = legacy_without_nested_acceptance;
+    normalized_match[QStringLiteral("quality_decision")] = QJsonObject{
+        {QStringLiteral("acceptance"), QStringLiteral(" ACCEPTED ")}
+    };
+    EXPECT_EQ(xjw::mvs::qualifyMvsDepthFrameArtifact(
+                  normalized_match).role,
+              xjw::mvs::DepthFrameRole::Primary);
+}
+
+TEST(DepthFrameQualificationPolicy, AssignsRolesFailClosed)
+{
+    using xjw::mvs::DepthFrameRole;
+    using xjw::mvs::qualifyDepthFrameRole;
+
+    EXPECT_EQ(xjw::mvs::canonicalDepthSceneProfile(
+                  QStringLiteral(" Orbital_Object ")),
+              QStringLiteral("orbital_object"));
+    EXPECT_TRUE(xjw::mvs::isOrbitalDepthSceneProfile(
+        QStringLiteral(" Orbital_Object ")));
+    EXPECT_EQ(xjw::mvs::canonicalDepthSceneProfile(
+                  QStringLiteral(" GENERAL ")),
+              QStringLiteral("custom"));
+    EXPECT_FALSE(xjw::mvs::isKnownDepthSceneProfile(
+        QStringLiteral("mystery_profile")));
+
+    QString canonical_batch_profile;
+    EXPECT_TRUE(xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+        QStringLiteral(" Orbital_Object "), &canonical_batch_profile));
+    EXPECT_EQ(canonical_batch_profile, QStringLiteral("orbital_object"));
+    EXPECT_TRUE(xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+        QStringLiteral("orbital_object"), &canonical_batch_profile));
+    EXPECT_FALSE(xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+        QStringLiteral("aerial_terrain"), &canonical_batch_profile));
+    EXPECT_FALSE(xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+        QStringLiteral("mystery_profile"), &canonical_batch_profile));
+
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), true, true,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Primary);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral(" ACCEPTED "), true, true,
+                  QStringLiteral(" Completed ")),
+              DepthFrameRole::Primary);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("validation_only"), true, false,
+                  QStringLiteral("completed")),
+              DepthFrameRole::CoverageAuxiliary);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("validation_only"), true, true,
+                  QStringLiteral("completed")),
+              DepthFrameRole::CoverageAuxiliary);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), false, true,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("validation_only"), false, false,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), true, false,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("rejected"), true, true,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), true, true,
+                  QStringLiteral("failed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), true, true,
+                  QStringLiteral("running")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("unknown"), true, true,
+                  QStringLiteral("completed")),
+              DepthFrameRole::Excluded);
+    EXPECT_EQ(qualifyDepthFrameRole(
+                  QStringLiteral("accepted"), true, true, QString()),
+              DepthFrameRole::Excluded);
+}
+
+TEST(MvsWorkspaceManifest, PersistsEffectiveNativeGridAndPixelDomainAudit)
+{
+    MvsDepthFrameRecord record = makeRecord(
+        7, QStringLiteral("image_007.jpg"), QStringLiteral("completed"));
+    record.effectiveNativeFinalDepthGrid = true;
+    record.gridWidth = 1555;
+    record.gridHeight = 1036;
+    record.pixelDomainDiagnostics = QJsonObject{
+        {QStringLiteral("configured_pixel_domain"),
+         QStringLiteral("prepared_full_raster")},
+        {QStringLiteral("effective_pixel_domain"),
+         QStringLiteral("depth_grid")},
+        {QStringLiteral("requested_native_final_depth_grid"), true},
+        {QStringLiteral("effective_native_final_depth_grid"), true},
+        {QStringLiteral("raster_width"), 6221},
+        {QStringLiteral("raster_height"), 4146},
+        {QStringLiteral("grid_width"), 1555},
+        {QStringLiteral("grid_height"), 1036},
+        {QStringLiteral("scale_x"), 1555.0 / 6221.0},
+        {QStringLiteral("scale_y"), 1036.0 / 4146.0},
+        {QStringLiteral("linear_scale"), 0.25},
+        {QStringLiteral("area_scale"), 0.0625},
+        {QStringLiteral("grid_matches_raster"), false},
+        {QStringLiteral("parameters"),
+         QJsonObject{
+             {QStringLiteral("boundary_edge_radius_pixels"),
+              QJsonObject{
+                  {QStringLiteral("configured_full_raster"), 1},
+                  {QStringLiteral("quantized_grid"), 0},
+                  {QStringLiteral("effective_grid"), 0},
+                  {QStringLiteral("active"), false},
+                  {QStringLiteral("disabled_reason"),
+                   QStringLiteral("edge_radius_subpixel_on_depth_grid")}}},
+             {QStringLiteral("fusion_reprojection_base_error_pixels"),
+              QJsonObject{
+                  {QStringLiteral("configured_full_raster"), 1.5},
+                  {QStringLiteral("effective_grid"), 0.375},
+                  {QStringLiteral("scope"),
+                   QStringLiteral(
+                       "base_before_view_count_or_streaming_runtime_override")},
+                  {QStringLiteral("runtime_scaled_per_target_frame"), true}}}}}};
+
+    const QJsonObject json = record.toJson();
+    EXPECT_TRUE(json.value(
+        QStringLiteral("effective_native_final_depth_grid")).toBool());
+    EXPECT_EQ(json.value(QStringLiteral("grid_width")).toInt(), 1555);
+    EXPECT_EQ(json.value(QStringLiteral("grid_height")).toInt(), 1036);
+    ASSERT_TRUE(json.value(
+        QStringLiteral("pixel_domain_diagnostics")).isObject());
+
+    const MvsDepthFrameRecord loaded = MvsDepthFrameRecord::fromJson(json);
+    EXPECT_TRUE(loaded.effectiveNativeFinalDepthGrid);
+    EXPECT_EQ(loaded.gridWidth, 1555);
+    EXPECT_EQ(loaded.gridHeight, 1036);
+    EXPECT_EQ(loaded.pixelDomainDiagnostics.value(
+        QStringLiteral("raster_width")).toInt(), 6221);
+    EXPECT_DOUBLE_EQ(loaded.pixelDomainDiagnostics.value(
+        QStringLiteral("scale_x")).toDouble(), 1555.0 / 6221.0);
+    const QJsonObject parameters = loaded.pixelDomainDiagnostics.value(
+        QStringLiteral("parameters")).toObject();
+    const QJsonObject boundary_edge = parameters.value(
+        QStringLiteral("boundary_edge_radius_pixels")).toObject();
+    EXPECT_FALSE(boundary_edge.value(QStringLiteral("active")).toBool(true));
+    EXPECT_EQ(boundary_edge.value(
+        QStringLiteral("disabled_reason")).toString(),
+        QStringLiteral("edge_radius_subpixel_on_depth_grid"));
+    const QJsonObject fusion_base = parameters.value(
+        QStringLiteral("fusion_reprojection_base_error_pixels")).toObject();
+    EXPECT_TRUE(fusion_base.value(
+        QStringLiteral("runtime_scaled_per_target_frame")).toBool());
+    EXPECT_EQ(fusion_base.value(QStringLiteral("scope")).toString(),
+              QStringLiteral(
+                  "base_before_view_count_or_streaming_runtime_override"));
+
+    const MvsDepthFrameRecord legacy = MvsDepthFrameRecord::fromJson(
+        makeRecord(8, QStringLiteral("image_008.jpg"),
+                   QStringLiteral("completed")).toJson());
+    EXPECT_FALSE(legacy.effectiveNativeFinalDepthGrid);
+    EXPECT_TRUE(legacy.pixelDomainDiagnostics.isEmpty());
 }
 
 TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
@@ -482,6 +1024,274 @@ TEST(MvsWorkspaceReplay, RestoresOrderedViewsAndProjectMasks)
     EXPECT_EQ(views[0].imageHeight, 12);
     EXPECT_TRUE(views[0].camera.isValid());
     EXPECT_FALSE(views[0].validRegionMaskPath.empty());
+}
+
+TEST(MvsWorkspaceReplay,
+     UsesPreparedRasterAndFullResolutionCameraForBrownWorkspace)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("brown-prepared-raster"));
+    const xjw::FramePinholeCamera source_camera = makeBrownCamera();
+    for (int index = 0; index < 2; ++index)
+    {
+        cv::Mat source_color(48, 64, CV_8UC3);
+        for (int row = 0; row < source_color.rows; ++row)
+        {
+            for (int column = 0; column < source_color.cols; ++column)
+            {
+                source_color.at<cv::Vec3b>(row, column) = cv::Vec3b(
+                    static_cast<std::uint8_t>((row * 5 + index * 11) % 251),
+                    static_cast<std::uint8_t>((column * 7 + index * 13) % 251),
+                    static_cast<std::uint8_t>((row + column * 3) % 251));
+            }
+        }
+        const QString source_path = QDir(temporary_directory.path()).filePath(
+            QStringLiteral("source_%1.png").arg(index));
+        ASSERT_TRUE(xjw::common::io::writeImage(source_path, source_color));
+
+        cv::Mat source_gray;
+        cv::cvtColor(source_color, source_gray, cv::COLOR_BGR2GRAY);
+        cv::Mat source_valid_mask(
+            source_gray.size(), CV_8UC1, cv::Scalar(255));
+        cv::rectangle(
+            source_valid_mask,
+            cv::Rect(20, 14, 18, 16),
+            cv::Scalar(0),
+            cv::FILLED);
+        cv::Mat prepared_gray;
+        cv::Mat prepared_valid_mask;
+        xjw::FramePinholeCamera prepared_camera;
+        std::string preparation_error;
+        ASSERT_TRUE(xjw::mvs::prepareMvsImageAndMask(
+            source_gray,
+            source_valid_mask,
+            source_camera,
+            &prepared_gray,
+            &prepared_valid_mask,
+            &prepared_camera,
+            &preparation_error)) << preparation_error;
+
+        xjw::mvs::MvsPreparedRasterArtifact prepared_artifact;
+        ASSERT_TRUE(xjw::mvs::saveMvsPreparedRasterArtifact(
+            xjw::common::io::toUtf8Path(source_path),
+            source_camera,
+            prepared_valid_mask,
+            xjw::common::io::toUtf8Path(temporary_directory.path()),
+            index,
+            &prepared_artifact,
+            &preparation_error)) << preparation_error;
+
+        MvsDepthFrameRecord record = makeRecord(
+            index, source_path, QStringLiteral("completed"));
+        record.preparedImage = xjw::common::io::fromUtf8Path(
+            prepared_artifact.imagePath);
+        record.preparedValidMaskPath = xjw::common::io::fromUtf8Path(
+            prepared_artifact.validMaskPath);
+        record.maskSource = index == 0
+            ? QStringLiteral("content")
+            : QStringLiteral("project");
+        record.preparedCameraModel = cameraJson(prepared_artifact.camera);
+        record.cameraModel = cameraJson(
+            prepared_artifact.camera.scaledIntrinsics(0.5, 0.5));
+        record.gridWidth = 32;
+        record.gridHeight = 24;
+        manifest.markCompleted(record);
+    }
+
+    const QString manifest_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("mvs_manifest.json"));
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifest_path, &error))
+        << error.toStdString();
+
+    std::vector<xjw::mvs::CameraView> views;
+    ASSERT_TRUE(xjw::mvs::loadMvsReplayViews(
+        manifest_path, QString(), &views, &error)) << error.toStdString();
+    ASSERT_EQ(views.size(), 2);
+    EXPECT_EQ(views[0].imageWidth, 64);
+    EXPECT_EQ(views[0].imageHeight, 48);
+    EXPECT_DOUBLE_EQ(views[0].camera.focalX(), 40.0);
+    EXPECT_DOUBLE_EQ(views[0].camera.focalY(), 42.0);
+    EXPECT_FALSE(views[0].preparedImagePath.empty());
+    EXPECT_FALSE(views[0].preparedValidMaskPath.empty());
+    EXPECT_EQ(views[0].preparedValidMaskSource, "content");
+    EXPECT_EQ(views[1].preparedValidMaskSource, "project");
+    EXPECT_EQ(
+        QFileInfo(xjw::common::io::fromUtf8Path(views[0].imagePath))
+            .canonicalFilePath(),
+        QFileInfo(QDir(temporary_directory.path()).filePath(
+                      QStringLiteral("source_0.png")))
+            .canonicalFilePath());
+
+    const cv::Mat source_color = xjw::common::io::readImage(
+        views[0].imagePath, cv::IMREAD_COLOR);
+    const cv::Mat prepared_color = xjw::common::io::readImage(
+        views[0].preparedImagePath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(source_color.empty());
+    ASSERT_FALSE(prepared_color.empty());
+    EXPECT_GT(cv::norm(source_color, prepared_color, cv::NORM_INF), 0.0);
+}
+
+TEST(DepthFrameUtils,
+     StoredNativeGridRestoresPreparedRasterDomainBeforeFusionDownsample)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QDir directory(temporary_directory.path());
+
+    const QString raw_depth_path = directory.filePath(
+        QStringLiteral("depth_0.bin"));
+    const QString geometry_support_path = directory.filePath(
+        QStringLiteral("depth_0_geometry_support.bin"));
+    const QString inverse_depth_spread_path = directory.filePath(
+        QStringLiteral("depth_0_inverse_depth_spread.bin"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        raw_depth_path,
+        cv::Mat(12, 16, CV_32FC1, cv::Scalar(8.0f))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_support_path,
+        cv::Mat(12, 16, CV_16UC1, cv::Scalar(3))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        inverse_depth_spread_path,
+        cv::Mat(12, 16, CV_32FC1, cv::Scalar(0.01f))).ok);
+
+    xjw::FramePinholeCamera prepared_camera = makeBrownCamera();
+    prepared_camera.setDistortion(xjw::FramePinholeCamera::Distortion{});
+    const xjw::FramePinholeCamera grid_camera =
+        prepared_camera.scaledIntrinsics(0.25, 0.25);
+
+    xjw::core::project::StoredDepthFrameRecord stored;
+    stored.sceneProfile = QStringLiteral("aerial_terrain");
+    stored.refIndex = 0;
+    stored.refImage = directory.filePath(QStringLiteral("source.png"));
+    stored.preparedImage = directory.filePath(
+        QStringLiteral("prepared.png"));
+    touchFile(stored.preparedImage);
+    stored.preparedCameraModel = cameraJson(prepared_camera);
+    stored.cameraModel = cameraJson(grid_camera);
+    stored.rawDepthPath = raw_depth_path;
+    stored.rawGeometrySupportPath = geometry_support_path;
+    stored.rawInverseDepthSpreadPath = inverse_depth_spread_path;
+    stored.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
+    stored.effectiveNativeFinalDepthGrid = true;
+    stored.gridWidth = 16;
+    stored.gridHeight = 12;
+    stored.pixelDomainDiagnostics = QJsonObject{
+        {QStringLiteral("effective_native_final_depth_grid"), true},
+        {QStringLiteral("raster_width"), 64},
+        {QStringLiteral("raster_height"), 48},
+        {QStringLiteral("grid_width"), 16},
+        {QStringLiteral("grid_height"), 12}};
+
+    xjw::mvs::FusionConfig fusion_config;
+    fusion_config.confidenceThresh = 0.0f;
+    fusion_config.enableAdaptiveConfidenceFilter = false;
+    fusion_config.enableLocalDepthOutlierFilter = false;
+    fusion_config.enableSpeckleFilter = false;
+
+    const auto result = xjw::core::project::buildStoredFusionFrame(
+        stored,
+        makeBrownCamera(),
+        fusion_config,
+        3,
+        8);
+    ASSERT_TRUE(result.status.ok) << result.status.errorMessage.toStdString();
+    ASSERT_TRUE(result.frame.sourceCamera.imageSize().has_value());
+    EXPECT_EQ(result.frame.sourceCamera.imageSize()->samples, 64);
+    EXPECT_EQ(result.frame.sourceCamera.imageSize()->lines, 48);
+    EXPECT_EQ(result.frame.depthMap.size(), cv::Size(8, 6));
+    ASSERT_TRUE(result.frame.cameraModel.imageSize().has_value());
+    EXPECT_EQ(result.frame.cameraModel.imageSize()->samples, 8);
+    EXPECT_EQ(result.frame.cameraModel.imageSize()->lines, 6);
+
+    xjw::core::project::StoredDepthFrameRecord missing_diagnostics = stored;
+    missing_diagnostics.pixelDomainDiagnostics = QJsonObject{};
+    const auto missing_result = xjw::core::project::buildStoredFusionFrame(
+        missing_diagnostics,
+        makeBrownCamera(),
+        fusion_config,
+        3,
+        8);
+    EXPECT_FALSE(missing_result.status.ok);
+    EXPECT_TRUE(missing_result.status.errorMessage.contains(
+        QStringLiteral("pixel_domain_diagnostics")));
+
+    xjw::core::project::StoredDepthFrameRecord contradictory_grid = stored;
+    contradictory_grid.pixelDomainDiagnostics.insert(
+        QStringLiteral("grid_width"), 15);
+    const auto contradictory_result =
+        xjw::core::project::buildStoredFusionFrame(
+            contradictory_grid,
+            makeBrownCamera(),
+            fusion_config,
+            3,
+            8);
+    EXPECT_FALSE(contradictory_result.status.ok);
+    EXPECT_TRUE(contradictory_result.status.errorMessage.contains(
+        QStringLiteral("互相矛盾")));
+}
+
+TEST(MvsWorkspaceReplay,
+     RejectsIncompleteOrMismatchedPreparedRasterTriplet)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("prepared-triplet-validation"));
+    MvsDepthFrameRecord prepared_record;
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString source_path = QDir(temporary_directory.path()).filePath(
+            QStringLiteral("source_%1.png").arg(index));
+        ASSERT_TRUE(xjw::common::io::writeImage(
+            source_path,
+            cv::Mat(48, 64, CV_8UC3, cv::Scalar(20 + index, 40, 80))));
+        MvsDepthFrameRecord record = makeRecord(
+            index, source_path, QStringLiteral("completed"));
+        if (index == 0)
+        {
+            const QString prepared_path = QDir(
+                temporary_directory.path()).filePath(
+                    QStringLiteral("prepared.png"));
+            ASSERT_TRUE(xjw::common::io::writeImage(
+                prepared_path,
+                cv::Mat(48, 64, CV_8UC3, cv::Scalar(30, 50, 90))));
+            record.preparedImage = prepared_path;
+            record.preparedCameraModel = cameraJson(makeBrownCamera());
+            prepared_record = record;
+        }
+        manifest.markCompleted(record);
+    }
+
+    const QString manifest_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("mvs_manifest.json"));
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifest_path, &error))
+        << error.toStdString();
+
+    std::vector<xjw::mvs::CameraView> views;
+    EXPECT_FALSE(xjw::mvs::loadMvsReplayViews(
+        manifest_path, QString(), &views, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("不完整")))
+        << error.toStdString();
+
+    prepared_record.preparedValidMaskPath = QDir(
+        temporary_directory.path()).filePath(
+            QStringLiteral("prepared_valid.png"));
+    ASSERT_TRUE(xjw::common::io::writeImage(
+        prepared_record.preparedValidMaskPath,
+        cv::Mat(24, 32, CV_8UC1, cv::Scalar(255))));
+    manifest.markCompleted(prepared_record);
+    ASSERT_TRUE(manifest.saveAtomic(manifest_path, &error))
+        << error.toStdString();
+    EXPECT_FALSE(xjw::mvs::loadMvsReplayViews(
+        manifest_path, QString(), &views, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("尺寸不一致")))
+        << error.toStdString();
 }
 
 TEST(MvsWorkspaceManifest, UpdatesPoseCandidateWithoutChangingFrameStatus)
@@ -646,7 +1456,7 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
         {QStringLiteral("valid_within_mask_ratio"), 0.875},
         {QStringLiteral("output_filter_retention_ratio"), 0.91}
     };
-    record.sceneProfile = QStringLiteral("orbital_object");
+    record.sceneProfile = QStringLiteral(" Orbital_Object ");
     record.filterMode = QStringLiteral("mild");
     record.acceptance = QStringLiteral("accepted");
     record.maskSource = QStringLiteral("project");
@@ -830,6 +1640,7 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
         QStringLiteral("depth_004_geometry_source_mask.bin"));
     record.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_provenance.png"));
+    attachPreparedArtifactFiles(tempDir, &record);
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
     touchFile(record.depthProvenancePath);
@@ -849,9 +1660,29 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
     record.geometrySourceIndices.clear();
     manifest.upsertFrame(record);
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
-        << "A revision-37 frame without the exact source ordinal table must "
-           "not be reused";
+        << "A source mask path without its exact ordinal table must not be reused";
 
+    const QString geometry_source_mask_path =
+        record.rawGeometrySourceMaskPath;
+    record.rawGeometrySourceMaskPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A current frame may explicitly omit both the all-zero source mask "
+           "and its empty ordinal table";
+    const QString zero_source_manifest_path = QDir(tempDir.path()).filePath(
+        QStringLiteral("zero_source_manifest.json"));
+    QString manifest_error;
+    ASSERT_TRUE(manifest.saveAtomic(
+        zero_source_manifest_path, &manifest_error))
+        << manifest_error.toStdString();
+    MvsWorkspaceManifest reloaded_zero_source_manifest;
+    ASSERT_TRUE(reloaded_zero_source_manifest.load(
+        zero_source_manifest_path, &manifest_error))
+        << manifest_error.toStdString();
+    EXPECT_TRUE(reloaded_zero_source_manifest.hasReusableCompletedFrame(
+        4, QStringLiteral("cfg-a")));
+
+    record.rawGeometrySourceMaskPath = geometry_source_mask_path;
     record.geometrySourceIndices = {7, 7};
     manifest.upsertFrame(record);
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
@@ -889,6 +1720,7 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
         QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
     record.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_provenance.png"));
+    attachPreparedArtifactFiles(tempDir, &record);
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
     touchFile(record.rawGeometrySupportPath);
@@ -931,6 +1763,7 @@ TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
         QStringLiteral("depth_004_adaptive_geometry_conflict_ratio.bin"));
     record.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_provenance.png"));
+    attachPreparedArtifactFiles(tempDir, &record);
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
     touchFile(record.rawGeometrySupportPath);
@@ -987,6 +1820,10 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.openClDeviceIndex = 1;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.preserveNativeFinalDepthGrid =
+            !changed.preserveNativeFinalDepthGrid;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.enableAdaptiveConfidenceFilter =

@@ -56,6 +56,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
+        "--resample-baseline-to-candidate-grid",
+        action="store_true",
+        help=(
+            "Allow different depth shapes only after verifying the native-grid "
+            "manifest camera contract, then sample the baseline with INTER_NEAREST."
+        ),
+    )
+    parser.add_argument(
         "--max-coverage-decline-pp",
         type=nonnegative_float,
         help="Maximum aggregate candidate coverage decline in percentage points.",
@@ -95,6 +103,9 @@ def main() -> int:
         args.baseline_manifest,
         args.candidate_manifest,
         quantile_sample_limit=args.quantile_sample_limit,
+        resample_baseline_to_candidate_grid=(
+            args.resample_baseline_to_candidate_grid
+        ),
     )
     report["quality_gate"] = evaluate_gates(
         report,

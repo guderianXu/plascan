@@ -10,13 +10,14 @@ add_library(camera STATIC
 	CameraBaseline.cpp
 	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
+	ColmapImageUndistorter.cpp
 	ProjectCameraIO.cpp
 )
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(camera PUBLIC cxx_std_20)
 target_link_libraries(camera
 	PUBLIC plascan_common_io
-	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET}
+	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET} ${OpenCV_LIBS}
 )
 
 # 始终构建的手工投影诊断工具；它读取用户指定的 Tsai 和世界点，不属于 CTest。
@@ -87,7 +88,10 @@ if(BUILD_TESTS)
 		gtest_discover_tests(test_camera_tsai)
 
 		# 四种外部格式的合成数据集转换与输出契约测试。
-		add_executable(test_camera_format_converter test/CameraFormatConverter_tests.cpp)
+		add_executable(test_camera_format_converter
+			test/CameraFormatConverter_tests.cpp
+			test/ColmapImageUndistorter_tests.cpp
+		)
 		target_link_libraries(test_camera_format_converter PRIVATE
 			camera
 			GTest::gtest_main

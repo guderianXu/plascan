@@ -421,7 +421,7 @@ QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &dec
     sparse_residual_object.insert(QStringLiteral("rejection_threshold"),
                                   kSparseDepthResidualRejectionThreshold);
     sparse_residual_object.insert(QStringLiteral("neighborhood_radius_pixels"),
-                                  1);
+                                  sparse_residual.neighborhoodRadiusPixels);
     object.insert(QStringLiteral("sparse_absolute_depth_residual"),
                   sparse_residual_object);
 

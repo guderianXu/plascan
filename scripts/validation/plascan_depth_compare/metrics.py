@@ -18,6 +18,21 @@ from .fast_matrix import CV_16UC1, CV_32FC1, read_fast_matrix
 CHUNK_PIXEL_COUNT = 1_000_000
 
 
+def resize_nearest(values: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Match OpenCV INTER_NEAREST raster-to-grid sampling without cv2."""
+    if values.shape == shape:
+        return values
+    rows = np.minimum(
+        (np.arange(shape[0], dtype=np.int64) * values.shape[0]) // shape[0],
+        values.shape[0] - 1,
+    )
+    columns = np.minimum(
+        (np.arange(shape[1], dtype=np.int64) * values.shape[1]) // shape[1],
+        values.shape[1] - 1,
+    )
+    return values[np.ix_(rows, columns)]
+
+
 def depth_metrics(depth: np.ndarray) -> tuple[dict[str, Any], np.ndarray]:
     finite = np.isfinite(depth)
     valid = finite & (depth > 0.0)
@@ -93,10 +108,14 @@ def support_metrics(
     sample_limit: int,
     aggregate: SupportAggregate,
     seed: int,
+    resample_source_to_depth_shape: bool = False,
 ) -> dict[str, Any]:
     if path is None:
         return empty_support_metrics(valid_depth, sample_limit, seed)
     support = read_fast_matrix(path, CV_16UC1)
+    source_shape = support.shape
+    if support.shape != depth_shape and resample_source_to_depth_shape:
+        support = resize_nearest(support, depth_shape)
     if support.shape != depth_shape:
         raise ValueError(
             f"Geometry support shape mismatch: support={support.shape}, "
@@ -126,6 +145,8 @@ def support_metrics(
     return {
         "available": True,
         "artifact_path": str(path),
+        "source_shape": {"rows": source_shape[0], "columns": source_shape[1]},
+        "nearest_resampled_to_depth_grid": source_shape != depth_shape,
         "scope": "valid_depth_pixels",
         "scope_valid_pixel_count": scoped_count,
         "distribution": local.summary(),
@@ -155,10 +176,14 @@ def spread_metrics(
     sample_limit: int,
     aggregate: SpreadAggregate,
     seed: int,
+    resample_source_to_depth_shape: bool = False,
 ) -> dict[str, Any]:
     if path is None:
         return empty_spread_metrics(valid_depth, sample_limit, seed)
     spread = read_fast_matrix(path, CV_32FC1)
+    source_shape = spread.shape
+    if spread.shape != depth_shape and resample_source_to_depth_shape:
+        spread = resize_nearest(spread, depth_shape)
     if spread.shape != depth_shape:
         raise ValueError(
             f"Inverse-depth-spread shape mismatch: spread={spread.shape}, "
@@ -190,6 +215,8 @@ def spread_metrics(
     return {
         "available": True,
         "artifact_path": str(path),
+        "source_shape": {"rows": source_shape[0], "columns": source_shape[1]},
+        "nearest_resampled_to_depth_grid": source_shape != depth_shape,
         "scope": "valid_depth_pixels",
         "scope_valid_pixel_count": scoped_count,
         "nonfinite_count": nonfinite_count,

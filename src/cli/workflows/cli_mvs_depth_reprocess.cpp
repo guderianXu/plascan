@@ -1,4 +1,5 @@
 #include "cli_common.h"
+#include "CliJsonIO.h"
 
 #include "DepthMapGenerator.h"
 #include "MvsSourcePlanner.h"
@@ -11,6 +12,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,6 +21,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -258,14 +261,21 @@ int main(int argc, char **argv)
     std::string sceneProfile = "orbital_object";
     std::string depthFilter = "mild";
     std::string device = "auto";
+    double sourceMaximumAngleDeg = 0.0;
+    double sourceAngleSoftRankingStrength = 0.0;
     int sourceViews = 4;
     int threads = 0;
     int gpuFrameWorkers = 2;
     int cpuFrameWorkers = 0;
     int openClDeviceIndex = -1;
     bool saveLevels = false;
+    bool nativeDepthGrid = false;
+    bool completeVisibilityCandidatePool = false;
     bool depthPoseCandidates = false;
     bool disableTargetedGapRecovery = false;
+    std::vector<int> stageSnapshotRefs;
+    int stageSnapshotMaximumLongEdge = 1024;
+    int stageSnapshotBudgetMiB = 128;
 
     app.add_option("--input-manifest", inputManifest,
                    "现有 mvs_manifest.json，用于读取影像顺序和相机")
@@ -286,8 +296,9 @@ int main(int argc, char **argv)
     app.add_option("--quality", quality, "深度质量：highest/high/medium/low/lowest")
         ->check(CLI::IsMember({"highest", "high", "medium", "low", "lowest"}));
     app.add_option("--scene-profile", sceneProfile,
-                   "场景：auto/orbital_object/aerial_terrain")
-        ->check(CLI::IsMember({"auto", "orbital_object", "aerial_terrain"}));
+                   "场景：auto/general/custom/orbital_object/aerial_terrain")
+        ->check(CLI::IsMember(
+            {"auto", "general", "custom", "orbital_object", "aerial_terrain"}));
     app.add_option("--depth-filter", depthFilter,
                    "过滤：auto/mild/moderate/aggressive")
         ->check(CLI::IsMember({"auto", "mild", "moderate", "aggressive"}));
@@ -295,6 +306,24 @@ int main(int argc, char **argv)
         ->check(CLI::IsMember({"auto", "cuda", "opencl", "cpu"}));
     app.add_option("--source-views", sourceViews, "请求源视图数")
         ->check(CLI::Range(1, 16));
+    app.add_option(
+        "--source-max-angle-deg",
+        sourceMaximumAngleDeg,
+        "实验：PatchMatch 源计划的共同可见稀疏点三角化角中位数上限 "
+        "[0,90]；0=禁用，只收紧场景推导值")
+        ->check(CLI::Range(0.0, 90.0));
+    app.add_flag(
+        "--source-complete-visibility-pool",
+        completeVisibilityCandidatePool,
+        "默认关闭的专家实验：评估 visibility graph 中完整的共视/required 候选池；"
+        "超过 32 视图时 graph 仍为确定性有界集合");
+    app.add_option(
+        "--source-angle-soft-ranking-strength",
+        sourceAngleSoftRankingStrength,
+        "内部诊断：完整 visibility 候选池内同权限层软角度排序强度 [0,4]；"
+        "不作为普通用户质量策略；"
+        "0=保留 legacy score，预注册处理值为 1")
+        ->check(CLI::Range(0.0, 4.0));
     app.add_option("--threads", threads, "CPU 线程预算；0=逻辑线程数减 2")
         ->check(CLI::Range(0, 64));
     app.add_option(
@@ -311,6 +340,10 @@ int main(int argc, char **argv)
         ->check(CLI::Range(-1, 63));
     app.add_flag("--save-levels", saveLevels, "保存中间深度金字塔层");
     app.add_flag(
+        "--native-depth-grid",
+        nativeDepthGrid,
+        "实验：仅通用、未极线校正帧保留最终 PatchMatch 工作网格");
+    app.add_flag(
         "--depth-pose-candidates",
         depthPoseCandidates,
         "实验：输出深度约束派生相机候选与安全门诊断；不覆盖项目相机或重算深度");
@@ -318,7 +351,38 @@ int main(int argc, char **argv)
         "--disable-targeted-gap-recovery",
         disableTargetedGapRecovery,
         "诊断：关闭缺口定向 PatchMatch 恢复，用于同输入 A/B 对比");
+    app.add_option(
+        "--stage-snapshot-refs",
+        stageSnapshotRefs,
+        "诊断：保存指定 ref_index 的 PatchMatch/一致性/confidence/最终准入快照；"
+        "逗号分隔，例如 2,6,22")
+        ->delimiter(',')
+        ->check(CLI::Range(0, 65535));
+    app.add_option(
+        "--stage-snapshot-max-long-edge",
+        stageSnapshotMaximumLongEdge,
+        "阶段快照最大长边像素；仅在 --stage-snapshot-refs 非空时生效")
+        ->check(CLI::Range(64, 4096));
+    app.add_option(
+        "--stage-snapshot-budget-mib",
+        stageSnapshotBudgetMiB,
+        "阶段快照 payload 总预算 MiB；不足时整阶段跳过，不影响主流程")
+        ->check(CLI::Range(16, 4096));
     CLI11_PARSE(app, argc, argv);
+
+    std::string sourceRankingError;
+    if (!xjw::mvs::validateMvsSourceRankingConfiguration(
+            completeVisibilityCandidatePool,
+            static_cast<float>(sourceAngleSoftRankingStrength),
+            static_cast<float>(sourceMaximumAngleDeg),
+            &sourceRankingError))
+    {
+        std::fprintf(
+            stderr,
+            "MVS 源视图软排序参数无效：%s\n",
+            sourceRankingError.c_str());
+        return cli::EXIT_ARG_ERR;
+    }
 
     const QString manifestPath = QFileInfo(
         QString::fromUtf8(inputManifest.c_str())).absoluteFilePath();
@@ -346,6 +410,23 @@ int main(int argc, char **argv)
     {
         std::fprintf(stderr, "%s\n", error.toUtf8().constData());
         return cli::EXIT_IO_ERR;
+    }
+    std::sort(stageSnapshotRefs.begin(), stageSnapshotRefs.end());
+    stageSnapshotRefs.erase(
+        std::unique(stageSnapshotRefs.begin(), stageSnapshotRefs.end()),
+        stageSnapshotRefs.end());
+    if (std::any_of(
+            stageSnapshotRefs.begin(), stageSnapshotRefs.end(),
+            [&views](int reference_index)
+            {
+                return reference_index < 0 ||
+                       reference_index >= static_cast<int>(views.size());
+            }))
+    {
+        std::fprintf(stderr,
+                     "阶段快照 ref_index 超出当前视图范围 [0,%d]\n",
+                     static_cast<int>(views.size()) - 1);
+        return cli::EXIT_ARG_ERR;
     }
 
     std::vector<xjw::mvs::MvsSourcePairQuality> pairQualities;
@@ -460,8 +541,23 @@ int main(int argc, char **argv)
         xjw::core::project::buildDepthGenConfig(
             settings, static_cast<int>(views.size()));
     config.runFusion = false;
+    config.sourceMaximumAngleDegCap =
+        static_cast<float>(sourceMaximumAngleDeg);
+    config.evaluateCompleteVisibilityCandidatePool =
+        completeVisibilityCandidatePool;
+    config.sourceAngleSoftRankingStrength =
+        static_cast<float>(sourceAngleSoftRankingStrength);
+    config.preserveNativeFinalDepthGrid = nativeDepthGrid;
     config.saveIntermediateDepthMaps = true;
     config.intermediateDir = xjw::common::io::toUtf8Path(outputDir);
+    config.stageSnapshotReferenceIndices = stageSnapshotRefs;
+    config.stageSnapshotMaximumLongEdge = stageSnapshotMaximumLongEdge;
+    config.stageSnapshotBudgetBytes =
+        static_cast<std::uint64_t>(stageSnapshotBudgetMiB) * 1024ull * 1024ull;
+    config.stageSnapshotDirectory = stageSnapshotRefs.empty()
+        ? std::string()
+        : xjw::common::io::toUtf8Path(
+              QDir(outputDir).filePath(QStringLiteral("stage_snapshots")));
     config.inputSignature =
         QStringLiteral("mvs-replay:%1:%2:%3")
             .arg(QFileInfo(manifestPath).lastModified().toMSecsSinceEpoch())
@@ -479,12 +575,18 @@ int main(int argc, char **argv)
     std::fprintf(stdout,
                  "views=%zu verified_pairs=%d failed_pairs=%d "
                  "missing_stats_pairs=%d requested_sources=%d "
+                 "source_max_angle_cap_deg=%.3f "
+                 "source_complete_visibility_pool=%s "
+                 "source_angle_soft_ranking_strength=%.3f "
                  "pair_evidence_provenance=%s\n",
                  views.size(),
                  verifiedCurrentPairs,
                  pairSummary.failedPairCount,
                  pairSummary.missingStatisticsPairCount,
                  sourceViews,
+                 sourceMaximumAngleDeg,
+                 completeVisibilityCandidatePool ? "true" : "false",
+                 sourceAngleSoftRankingStrength,
                  pairEvidenceProvenance.toUtf8().constData());
     std::fflush(stdout);
 
@@ -497,7 +599,7 @@ int main(int argc, char **argv)
     QEventLoop loop;
     bool success = false;
     QString generatorError;
-    QJsonArray artifacts;
+    QJsonArray depthArtifactEvents;
     int lastProgress = -1;
     QObject::connect(
         &generator,
@@ -530,9 +632,9 @@ int main(int argc, char **argv)
         &generator,
         &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved,
         &loop,
-        [&artifacts](const QJsonObject &artifact)
+        [&depthArtifactEvents](const QJsonObject &artifact)
         {
-            artifacts.append(artifact);
+            depthArtifactEvents.append(artifact);
         });
     QObject::connect(
         &generator,
@@ -546,7 +648,10 @@ int main(int argc, char **argv)
     QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
     loop.exec();
 
-    const QJsonObject report{
+    const QJsonArray artifacts =
+        xjw::cli::latestJsonObjectsByNonNegativeIntegerKey(
+            depthArtifactEvents, QStringLiteral("ref_index"));
+    QJsonObject report{
         {QStringLiteral("schema"), QStringLiteral("plascan_mvs_depth_replay_v1")},
         {QStringLiteral("status"),
          success ? QStringLiteral("ok") : QStringLiteral("failed")},
@@ -563,10 +668,18 @@ int main(int argc, char **argv)
         {QStringLiteral("missing_statistics_pair_count"),
          pairSummary.missingStatisticsPairCount},
         {QStringLiteral("requested_source_view_count"), sourceViews},
+        {QStringLiteral("source_maximum_angle_deg_cap"),
+         sourceMaximumAngleDeg},
+        {QStringLiteral("source_maximum_angle_policy"),
+         QStringLiteral("min_scene_maximum_and_configured_cap")},
+        {QStringLiteral("source_maximum_angle_scope"),
+         QStringLiteral("patchmatch_source_plan")},
         {QStringLiteral("quality"), QString::fromStdString(quality)},
         {QStringLiteral("scene_profile"), QString::fromStdString(sceneProfile)},
         {QStringLiteral("depth_filter"), QString::fromStdString(depthFilter)},
         {QStringLiteral("opencl_device_index"), openClDeviceIndex},
+        {QStringLiteral("preserve_native_final_depth_grid"),
+         config.preserveNativeFinalDepthGrid},
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("targeted_gap_recovery"),
          !disableTargetedGapRecovery},
@@ -582,6 +695,51 @@ int main(int argc, char **argv)
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}
     };
+    if (completeVisibilityCandidatePool)
+    {
+        report.insert(
+            QStringLiteral("evaluate_complete_visibility_candidate_pool"),
+            true);
+        report.insert(
+            QStringLiteral("source_candidate_pool_policy"),
+            QStringLiteral(
+                "complete_evaluated_visibility_candidate_pool"));
+    }
+    if (sourceAngleSoftRankingStrength > 0.0)
+    {
+        report.insert(
+            QStringLiteral("source_angle_soft_ranking_strength"),
+            sourceAngleSoftRankingStrength);
+        report.insert(
+            QStringLiteral("source_angle_soft_ranking_policy"),
+            QStringLiteral("legacy_score*exp(-strength*t)"));
+    }
+    if (!stageSnapshotRefs.empty())
+    {
+        QJsonArray refs;
+        for (int reference_index : stageSnapshotRefs) refs.append(reference_index);
+        const QString snapshotManifestPath = QDir(outputDir).filePath(
+            QStringLiteral("stage_snapshots/manifest.json"));
+        report.insert(QStringLiteral("stage_snapshot_ref_indices"), refs);
+        report.insert(QStringLiteral("stage_snapshot_maximum_long_edge"),
+                      stageSnapshotMaximumLongEdge);
+        report.insert(QStringLiteral("stage_snapshot_budget_bytes"),
+                      static_cast<double>(config.stageSnapshotBudgetBytes));
+        report.insert(QStringLiteral("stage_snapshot_manifest"),
+                      snapshotManifestPath);
+        QFile snapshotManifest(snapshotManifestPath);
+        if (snapshotManifest.open(QIODevice::ReadOnly))
+        {
+            const QJsonDocument snapshotDocument = QJsonDocument::fromJson(
+                snapshotManifest.readAll());
+            if (snapshotDocument.isObject())
+            {
+                report.insert(QStringLiteral("stage_snapshot_status"),
+                              snapshotDocument.object().value(
+                                  QStringLiteral("status")));
+            }
+        }
+    }
     const QString reportPath =
         QDir(outputDir).filePath(QStringLiteral("mvs_replay_report.json"));
     if (!writeReplayReport(reportPath, report, &error))

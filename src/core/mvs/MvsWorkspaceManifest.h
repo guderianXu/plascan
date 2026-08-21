@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DepthFrameQualificationPolicy.h"
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -15,6 +17,8 @@ struct MvsDepthFrameQualification
 {
     QString acceptance;
     bool fusionEligible = false;
+    bool fusionEligibilityKnown = false;
+    DepthFrameRole role = DepthFrameRole::Excluded;
     /// The frame qualified through its final hard multi-view core because the
     /// continuous adaptive residual was not calibrated for this capture.  TSDF
     /// must then consume the discrete support/spread maps, not the conflicting
@@ -24,7 +28,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 38;
+inline constexpr int kMvsDepthAlgorithmRevision = 43;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -43,11 +47,37 @@ inline constexpr int kMvsDiscreteGeometryCoreRatioRevision = 35;
 inline constexpr int kMvsSparseAbsoluteDepthResidualRevision = 36;
 inline constexpr int kMvsGeometrySourceOrdinalRevision = 37;
 inline constexpr int kMvsRobustPhotometricAndLearnedCandidateRevision = 38;
+/// Revision 39 persists the exact full-resolution raster and camera used by
+/// MVS.  Earlier manifests paired a distorted ref_image with a zero-distortion
+/// working camera, so replay and mesh texturing could sample the wrong pixels.
+inline constexpr int kMvsPreparedRasterProvenanceRevision = 39;
+/// Revision 40 makes automatic scene classification fail closed to the
+/// general/custom profile unless the camera layout passes an explicit orbital
+/// ring gate. It also freezes consistency source plans before frame acceptance
+/// updates and normalizes an all-zero/no-source geometry mask by omitting both
+/// the mask path and its empty ordinal table.
+inline constexpr int kMvsGeneralSceneAndStableSourcePlanRevision = 40;
+/// Revision 41 makes Custom acceptance fail closed when neither sparse
+/// absolute-depth evidence nor a strong discrete multi-view core is present.
+/// It also distinguishes semantic project support masks from content and
+/// prepared-raster validity masks before applying normalized coverage gates.
+inline constexpr int kMvsCustomGeometryQualityGateRevision = 41;
+/// Revision 42 records the initial admission decision and distinguishes an
+/// actual complete-pool source-plan replacement from indirect cross-frame
+/// effects before granting or removing a Primary role.
+inline constexpr int kMvsCompletePoolAdmissionRevision = 42;
+/// Revision 43 evaluates reduced-grid zero-radius consistency over the bounded
+/// nearest subpixel footprint and preserves one audited boundary shell without
+/// expanding the protection band to a full reduced-grid pixel.
+inline constexpr int kMvsNativeGridQualityRevision = 43;
 
 struct MvsDepthFrameRecord
 {
     int refIndex = -1;
     QString refImage;
+    QString preparedImage;
+    QString preparedValidMaskPath;
+    QJsonObject preparedCameraModel;
     QStringList sourceImages;
     QVector<int> sourceIndices;
     QVector<int> geometrySourceIndices;
@@ -90,6 +120,7 @@ struct MvsDepthFrameRecord
     QString acceptance;
     bool fusionEligible = false;
     bool fusionEligibilityKnown = false;
+    DepthFrameRole role = DepthFrameRole::Excluded;
     QJsonObject depthPostprocess;
     QJsonObject cameraModel;
     QString status;
@@ -112,6 +143,8 @@ struct MvsDepthFrameRecord
     QString supportMaskPath;
     QString missingReasonPath;
     QString missingReasonPreviewPath;
+    bool effectiveNativeFinalDepthGrid = false;
+    QJsonObject pixelDomainDiagnostics;
     int gridWidth = 0;
     int gridHeight = 0;
     qint64 elapsedMs = 0;

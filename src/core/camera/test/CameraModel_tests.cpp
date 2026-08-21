@@ -87,6 +87,8 @@ TEST(CameraModel, FrameModelPreservesAndScalesMetadataWithValueSemantics)
     EXPECT_EQ(scaled.worldFrameName(), "LOCAL_TEST_FRAME");
     EXPECT_DOUBLE_EQ(scaled.focalX(), 400.0);
     EXPECT_DOUBLE_EQ(scaled.focalY(), 212.5);
+    EXPECT_DOUBLE_EQ(scaled.principalX(), 159.75);
+    EXPECT_DOUBLE_EQ(scaled.principalY(), 59.625);
 
     const xjw::FramePinholeCamera copied = scaled;
     ASSERT_TRUE(copied.imageSize().has_value());

@@ -6,6 +6,7 @@
 #include "DepthMapFusion.h"
 #include "MvsWorkspaceManifest.h"
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -23,7 +24,11 @@ namespace xjw::core::project
 
 struct StoredDepthFrameRecord
 {
+    int refIndex = -1;
     QString refImage;
+    QString preparedImage;
+    QString preparedValidMaskPath;
+    QJsonObject preparedCameraModel;
     QString depthPng;
     QString rawDepthPath;
     QString rawConfidencePath;
@@ -39,10 +44,14 @@ struct StoredDepthFrameRecord
     QString reconstructionGenerationId;
     QJsonObject cameraModel;
     QString sceneProfile;
+    QString status;
     QString acceptance;
     bool fusionEligible = false;
     bool fusionEligibilityKnown = false;
+    xjw::mvs::DepthFrameRole role = xjw::mvs::DepthFrameRole::Excluded;
     bool useDiscreteGeometryFallback = false;
+    bool effectiveNativeFinalDepthGrid = false;
+    QJsonObject pixelDomainDiagnostics;
     int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;
@@ -85,6 +94,9 @@ bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = f
 bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
+StoredDepthFramesResult collectStoredDepthFramesForDirectory(
+    const QJsonArray &depthResults,
+    const QString &batchDirectory);
 StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
                                                              const QString &batchDirectory);
 StoredDepthFramesResult selectFusionEligibleStoredDepthFrames(

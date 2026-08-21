@@ -2888,7 +2888,9 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
                   depth_source,
                   settings.value(QStringLiteral("at_index")).toInt(-1),
                   settings.value(QStringLiteral("sceneProfile")).toString(),
-                  allow_sparse_scaffold_fallback)
+                  allow_sparse_scaffold_fallback,
+                  xjw::gui::project::depthBatchRequirementsForModelSettings(
+                      settings))
             : xjw::gui::project::StoredDepthBatchCompatibility{};
     const bool stored_depth_batch_incompatible =
         !depth_source.isEmpty() && !stored_depth_compatibility.compatible;

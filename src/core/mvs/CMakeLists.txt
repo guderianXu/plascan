@@ -42,6 +42,7 @@ set(MVS_CXX_SOURCES
     DepthPoseAlignmentRefiner.cpp
     DepthPoseRefinementStage.cpp
     DepthMapFusion.cpp
+    MvsStageSnapshot.cpp
     DepthFrameQualityGate.cpp
     DepthPyramidPolicy.cpp
     DepthPyramidEstimator.cpp
@@ -104,6 +105,7 @@ set(MVS_HEADERS
     MvsWorkspaceReplay.h
     PatchMatchCUDA.h
     DepthMapFusion.h
+    MvsStageSnapshot.h
     DepthFrameQualityGate.h
     DepthFrameQualificationPolicy.h
     DepthPyramidPolicy.h
@@ -286,6 +288,24 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_depth_completeness)
+
+        add_executable(test_mvs_stage_snapshot
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_stage_snapshot.cpp
+        )
+        set_target_properties(test_mvs_stage_snapshot PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_stage_snapshot PRIVATE
+            mvs
+            GTest::gtest_main
+            Qt6::Core
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_stage_snapshot PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+            ${CMAKE_SOURCE_DIR}/src/core/camera
+        )
+        gtest_discover_tests(test_mvs_stage_snapshot)
 
         add_executable(test_mvs_depth_gap_targeted_recovery
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_gap_targeted_recovery.cpp

@@ -231,6 +231,79 @@ class ComparePlascanDepthRunsTest(unittest.TestCase):
         self.assertEqual(report["pairing"]["baseline_frame_count"], 1)
         self.assertEqual(report["frames"][0]["baseline"]["status"], "completed")
 
+    def test_native_grid_comparison_requires_and_verifies_camera_contract(
+        self,
+    ) -> None:
+        baseline_manifest = write_run(
+            self.temp_path / "baseline",
+            np.arange(1, 17, dtype=np.float32).reshape(4, 4),
+            np.arange(16, dtype=np.uint16).reshape(4, 4),
+            np.ones((4, 4), dtype=np.float32),
+            "accepted",
+        )
+        candidate_manifest = write_run(
+            self.temp_path / "candidate",
+            np.asarray([[1.0, 3.0], [9.0, 11.0]], dtype=np.float32),
+            np.asarray([[0, 2], [8, 10]], dtype=np.uint16),
+            np.ones((2, 2), dtype=np.float32),
+            "accepted",
+        )
+        camera = {
+            "fx": 8.0,
+            "fy": 10.0,
+            "cx": 1.5,
+            "cy": 2.5,
+            "rotation_world_to_camera": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            "translation_world_to_camera": [0.0, 0.0, 0.0],
+            "camera_center": [0.0, 0.0, 0.0],
+        }
+        baseline_document = json.loads(baseline_manifest.read_text(encoding="utf-8"))
+        baseline_frame = baseline_document["frames"][0]
+        baseline_frame["camera_model"] = camera
+        baseline_frame["pixel_domain_diagnostics"] = {
+            "raster_width": 4,
+            "raster_height": 4,
+            "grid_width": 4,
+            "grid_height": 4,
+            "grid_matches_raster": True,
+        }
+        baseline_manifest.write_text(json.dumps(baseline_document), encoding="utf-8")
+        candidate_document = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+        candidate_frame = candidate_document["frames"][0]
+        candidate_frame["prepared_camera_model"] = camera
+        candidate_frame["camera_model"] = {
+            **camera,
+            "fx": 4.0,
+            "fy": 5.0,
+            "cx": 0.5,
+            "cy": 1.0,
+        }
+        candidate_frame["pixel_domain_diagnostics"] = {
+            "raster_width": 4,
+            "raster_height": 4,
+            "grid_width": 2,
+            "grid_height": 2,
+            "grid_matches_raster": False,
+            "effective_native_final_depth_grid": True,
+        }
+        candidate_manifest.write_text(json.dumps(candidate_document), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "Depth shape mismatch"):
+            comparison.compare_depth_runs(baseline_manifest, candidate_manifest)
+        report = comparison.compare_depth_runs(
+            baseline_manifest,
+            candidate_manifest,
+            resample_baseline_to_candidate_grid=True,
+        )
+        self.assertEqual(report["grid_comparison"]["transformed_frame_count"], 1)
+        self.assertEqual(report["aggregate"]["comparison"]["mask_iou"], 1.0)
+        self.assertEqual(
+            report["frames"][0]["baseline"]["geometry_support"][
+                "nearest_resampled_to_depth_grid"
+            ],
+            True,
+        )
+
     def test_distribution_reservoir_is_bounded_deterministic_and_exact_for_totals(
         self,
     ) -> None:

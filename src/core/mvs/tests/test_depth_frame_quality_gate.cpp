@@ -30,6 +30,28 @@ xjw::mvs::DepthFrameQualityInput reliableOrbitalInput()
     return input;
 }
 
+xjw::mvs::DepthFrameQualityInput reliableCustomInput()
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::Custom;
+    input.sourceViewCount = 4;
+    input.validCoverage = 0.21f;
+    input.largestComponentRatio = 0.38f;
+    input.meanConfidence = 0.65f;
+    input.multiViewConsistency = 0.65f;
+    input.depthAtSearchBoundaryRatio = 0.03f;
+    input.outputFilterRetentionRatio = 1.0f;
+    input.consistencyRetentionRatio = 0.65f;
+    input.fusionPostprocessRetentionRatio = 0.62f;
+    input.sparseDepthResidual.available = true;
+    input.sparseDepthResidual.projectedSampleCount = 2700;
+    input.sparseDepthResidual.validSampleCount = 1900;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.0029f;
+    input.discreteGeometryCoreAvailable = true;
+    input.discreteGeometryCoreRatio = 0.94f;
+    return input;
+}
+
 } // namespace
 
 TEST(DepthFrameQualityGateTest,
@@ -72,6 +94,254 @@ TEST(DepthFrameQualityGateTest,
 }
 
 TEST(DepthFrameQualityGateTest,
+     KeepsVerifiedCustomCoreForValidationAfterFusionReduction)
+{
+    const auto input = reliableCustomInput();
+
+    EXPECT_TRUE(xjw::mvs::hasReliableCustomFusionCore(input));
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_EQ(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("destructive_fusion_postprocess_collapse")),
+              decision.reasons.end());
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("custom_fusion_fallback_to_verified_core")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     RejectsCustomFrameWhenVerifiedCoreRetentionActuallyCollapses)
+{
+    auto input = reliableCustomInput();
+    input.fusionPostprocessRetentionRatio = 0.39f;
+    input.sparseDepthResidual = {};
+
+    EXPECT_FALSE(xjw::mvs::hasReliableCustomFusionCore(input));
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("destructive_fusion_postprocess_collapse")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     CompletePoolCannotIndirectlyPromoteAnUnchangedProvisionalPlan)
+{
+    auto input = reliableCustomInput();
+    input.multiViewConsistency = 0.95f;
+    input.consistencyRetentionRatio = 0.95f;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.completeVisibilityCandidatePoolEnabled = true;
+    input.completePoolChangedLegacyPlan = false;
+    input.initialAcceptanceAvailable = true;
+    input.initialAcceptance =
+        xjw::mvs::DepthFrameAcceptance::ValidationOnly;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string(
+                      "complete_pool_indirect_promotion_not_admitted")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     ChangedCompletePoolPlanUsesJointVerifiedCoreInsteadOfRawRetentionAlone)
+{
+    auto input = reliableCustomInput();
+    input.meanConfidence = 0.78f;
+    input.multiViewConsistency = 0.894f;
+    input.consistencyRetentionRatio = 0.894f;
+    input.fusionPostprocessRetentionRatio = 0.944f;
+    input.completeVisibilityCandidatePoolEnabled = true;
+    input.completePoolChangedLegacyPlan = true;
+    input.initialAcceptanceAvailable = true;
+    input.initialAcceptance = xjw::mvs::DepthFrameAcceptance::Accepted;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_EQ(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("depth_consistency_coverage_loss")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     SparseAnchoredCustomSurfaceWithoutDiscreteCoreRemainsAuxiliary)
+{
+    auto input = reliableCustomInput();
+    input.validCoverage = 0.074f;
+    input.largestComponentRatio = 0.649f;
+    input.meanConfidence = 0.741f;
+    input.multiViewConsistency = 0.992f;
+    input.consistencyRetentionRatio = 0.992f;
+    input.fusionPostprocessRetentionRatio = 0.288f;
+    input.discreteGeometryCoreAvailable = true;
+    input.discreteGeometryCoreRatio = 0.0f;
+
+    EXPECT_TRUE(
+        xjw::mvs::hasReliableCustomSparseAnchoredSurface(input));
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("custom_sparse_anchored_surface_only")),
+              decision.reasons.end());
+    EXPECT_EQ(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("destructive_fusion_postprocess_collapse")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     RejectsLowConfidenceCustomFrameWithoutObservableGeometryCore)
+{
+    auto input = reliableCustomInput();
+    input.validCoverage = 0.173f;
+    input.largestComponentRatio = 0.957f;
+    input.meanConfidence = 0.346f;
+    input.multiViewConsistency = 0.943f;
+    input.depthAtSearchBoundaryRatio = 0.058f;
+    input.consistencyRetentionRatio = 0.943f;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.sparseDepthResidual.available = false;
+    input.sparseDepthResidual.projectedSampleCount = 729;
+    input.sparseDepthResidual.validSampleCount = 19;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.00546f;
+    input.discreteGeometryCoreRatio = 0.00092f;
+
+    EXPECT_FALSE(xjw::mvs::hasReliableCustomFusionCore(input));
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("insufficient_custom_geometry_evidence")),
+              decision.reasons.end());
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("low_confidence_unverified_custom_depth")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     KeepsUnverifiedButOtherwiseStableCustomFrameValidationOnly)
+{
+    auto input = reliableCustomInput();
+    input.meanConfidence = 0.70f;
+    input.multiViewConsistency = 0.95f;
+    input.consistencyRetentionRatio = 0.95f;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.sparseDepthResidual = {};
+    input.discreteGeometryCoreAvailable = true;
+    input.discreteGeometryCoreRatio = 0.20f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("insufficient_custom_geometry_evidence")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     MissingSparseEvidenceKeepsStrongCustomCoreValidationOnly)
+{
+    auto input = reliableCustomInput();
+    input.multiViewConsistency = 0.95f;
+    input.consistencyRetentionRatio = 0.95f;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.sparseDepthResidual = {};
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("insufficient_custom_geometry_evidence")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     MissingDiscreteCoreKeepsAccurateSparseCustomFrameValidationOnly)
+{
+    auto input = reliableCustomInput();
+    input.multiViewConsistency = 0.95f;
+    input.consistencyRetentionRatio = 0.95f;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.discreteGeometryCoreAvailable = true;
+    input.discreteGeometryCoreRatio = 0.20f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("insufficient_custom_geometry_evidence")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
+     KeepsPreGeometryCustomFrameProvisionalWithoutFailingOpen)
+{
+    auto input = reliableCustomInput();
+    input.meanConfidence = 0.34f;
+    input.multiViewConsistencyAvailable = false;
+    input.multiViewConsistency = 0.0f;
+    input.consistencyRetentionRatio = -1.0f;
+    input.fusionPostprocessRetentionRatio = -1.0f;
+    input.sparseDepthResidual = {};
+    input.discreteGeometryCoreAvailable = false;
+    input.discreteGeometryCoreRatio = -1.0f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("insufficient_custom_geometry_evidence")),
+              decision.reasons.end());
+    EXPECT_EQ(std::find(
+                  decision.reasons.begin(),
+                  decision.reasons.end(),
+                  std::string("low_confidence_unverified_custom_depth")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest,
      SparseAbsoluteDepthResidualUsesValidThreeByThreeMedian)
 {
     cv::Mat depth(30, 30, CV_32FC1, cv::Scalar(10.0f));
@@ -97,6 +367,26 @@ TEST(DepthFrameQualityGateTest,
     EXPECT_EQ(summary.projectedSampleCount, 25);
     EXPECT_EQ(summary.validSampleCount, 25);
     EXPECT_NEAR(summary.medianAbsoluteLogError, 0.0f, 1e-7f);
+}
+
+TEST(DepthFrameQualityGateTest,
+     SparseAbsoluteDepthResidualCanUseScaledZeroRadius)
+{
+    cv::Mat depth(10, 10, CV_32FC1, cv::Scalar(0.0f));
+    depth.at<float>(5, 6) = 10.0f;
+    const std::vector<xjw::mvs::ProjectedSparseDepthSample> samples = {
+        {0.5f, 0.5f, 10.0f}};
+
+    const auto full_radius = xjw::mvs::summarizeSparseDepthResidual(
+        depth, samples, 1);
+    const auto scaled_radius = xjw::mvs::summarizeSparseDepthResidual(
+        depth, samples, 0);
+
+    EXPECT_EQ(full_radius.neighborhoodRadiusPixels, 1);
+    EXPECT_EQ(full_radius.validSampleCount, 1);
+    EXPECT_EQ(scaled_radius.neighborhoodRadiusPixels, 0);
+    EXPECT_EQ(scaled_radius.projectedSampleCount, 1);
+    EXPECT_EQ(scaled_radius.validSampleCount, 0);
 }
 
 TEST(DepthFrameQualityGateTest,

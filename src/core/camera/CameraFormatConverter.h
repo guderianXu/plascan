@@ -46,6 +46,8 @@ struct CameraConversionOptions
     std::string datasetId;
     /// 是否允许通过同级暂存和备份替换已存在的非空输出目录。
     bool overwrite = false;
+    /// COLMAP 输入是否在导入边界生成无畸变、全有效的 PNG 针孔栅格。
+    bool preUndistortColmapImages = false;
     /// 可选的提交前同步回调；在暂存完成、源影像身份复检前调用。
     /// 主要用于调用方协调取消/测试，回调抛出的异常会使转换安全回滚。
     std::function<void()> beforeCommitHook;
@@ -84,6 +86,10 @@ struct CameraConversionResult
     std::vector<std::filesystem::path> writtenCameraFiles;
     /// 新输出成功安装但旧备份清理不完整时，给出可人工检查的残留路径。
     std::filesystem::path retainedBackupPath;
+    /// 实际生成的预去畸变影像数量；未启用时为零。
+    int preUndistortedImageCount = 0;
+    /// 启用预去畸变时写出的原图/针孔图/valid mask 映射清单。
+    std::filesystem::path preUndistortManifestPath;
 };
 
 /// 返回 CLI 接受的规范格式名，顺序与帮助文本保持稳定。

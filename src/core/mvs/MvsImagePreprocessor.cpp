@@ -1,10 +1,18 @@
 #include "MvsImagePreprocessor.h"
 
+#include "io/PathIO.h"
+
+#include <QByteArray>
+#include <QDir>
+#include <QString>
+
 #include <opencv2/calib3d.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace xjw
 {
@@ -30,6 +38,53 @@ bool hasDistortion(const FramePinholeCamera::Distortion &distortion) noexcept
         || std::fabs(distortion.radialK3) > epsilon
         || std::fabs(distortion.tangentialP1) > epsilon
         || std::fabs(distortion.tangentialP2) > epsilon;
+}
+
+bool writePngAtomic(const QString &path,
+                    const cv::Mat &image,
+                    std::string *errorMessage)
+{
+    std::vector<std::uint8_t> encoded;
+    try
+    {
+        if (!cv::imencode(".png", image, encoded) || encoded.empty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = "无法编码 MVS prepared PNG: " +
+                    xjw::common::io::toUtf8Path(path);
+            }
+            return false;
+        }
+    }
+    catch (const cv::Exception &exception)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = std::string("编码 MVS prepared PNG 失败: ") +
+                exception.what();
+        }
+        return false;
+    }
+
+    const QByteArray payload(
+        reinterpret_cast<const char *>(encoded.data()),
+        static_cast<qsizetype>(encoded.size()));
+    QString write_error;
+    if (!xjw::common::io::writeFileBytesAtomic(path, payload, &write_error))
+    {
+        if (errorMessage)
+        {
+            const QByteArray write_error_utf8 = write_error.toUtf8();
+            *errorMessage = "无法原子写入 MVS prepared PNG: " +
+                xjw::common::io::toUtf8Path(path) + " (" +
+                std::string(write_error_utf8.constData(),
+                            static_cast<std::size_t>(write_error_utf8.size())) +
+                ")";
+        }
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -225,6 +280,115 @@ bool prepareMvsImageAndMask(const cv::Mat &source,
     normalized.setDistortion(FramePinholeCamera::Distortion{});
     *preparedCamera = normalized;
     if (errorMessage) errorMessage->clear();
+    return true;
+}
+
+bool saveMvsPreparedRasterArtifact(
+    const std::string &inputRasterPath,
+    const FramePinholeCamera &inputCamera,
+    const cv::Mat &preparedValidMask,
+    const std::string &workspaceDirectory,
+    int frameIndex,
+    MvsPreparedRasterArtifact *artifact,
+    std::string *errorMessage)
+{
+    if (!artifact || frameIndex < 0 || workspaceDirectory.empty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "MVS prepared raster 输出参数、workspace 或帧下标无效";
+        }
+        return false;
+    }
+
+    const cv::Mat source_color = xjw::common::io::readImage(
+        inputRasterPath, cv::IMREAD_COLOR);
+    if (source_color.empty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "无法读取 MVS prepared raster 输入彩色影像: " +
+                inputRasterPath;
+        }
+        return false;
+    }
+
+    cv::Mat prepared_color;
+    FramePinholeCamera prepared_camera;
+    std::string preparation_error;
+    if (!prepareMvsImage(source_color,
+                         inputCamera,
+                         &prepared_color,
+                         &prepared_camera,
+                         &preparation_error))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "准备 MVS workspace 彩色栅格失败: " +
+                preparation_error;
+        }
+        return false;
+    }
+
+    cv::Mat valid_mask;
+    if (preparedValidMask.empty())
+    {
+        valid_mask = cv::Mat(
+            prepared_color.size(), CV_8UC1, cv::Scalar(255));
+    }
+    else
+    {
+        if (preparedValidMask.type() != CV_8UC1 ||
+            preparedValidMask.size() != prepared_color.size())
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    "MVS prepared valid mask 必须与彩色工作栅格同尺寸且为 CV_8UC1";
+            }
+            return false;
+        }
+        cv::threshold(
+            preparedValidMask, valid_mask, 0.0, 255.0, cv::THRESH_BINARY);
+    }
+
+    QDir workspace_directory(
+        xjw::common::io::fromUtf8Path(workspaceDirectory));
+    const QString prepared_directory_name = QStringLiteral("prepared_images");
+    if (!workspace_directory.mkpath(prepared_directory_name))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "无法创建 MVS prepared raster 目录: " +
+                xjw::common::io::toUtf8Path(
+                    workspace_directory.filePath(prepared_directory_name));
+        }
+        return false;
+    }
+    const QDir prepared_directory(
+        workspace_directory.filePath(prepared_directory_name));
+    const QString stem = QStringLiteral("frame_%1").arg(
+        frameIndex, 6, 10, QLatin1Char('0'));
+    const QString image_path = prepared_directory.filePath(
+        stem + QStringLiteral(".png"));
+    const QString valid_mask_path = prepared_directory.filePath(
+        stem + QStringLiteral("_valid.png"));
+    if (!writePngAtomic(image_path, prepared_color, errorMessage) ||
+        !writePngAtomic(valid_mask_path, valid_mask, errorMessage))
+    {
+        return false;
+    }
+
+    prepared_camera.setImageSize(CameraImageSize{
+        prepared_color.cols,
+        prepared_color.rows});
+    artifact->imagePath = xjw::common::io::toUtf8Path(image_path);
+    artifact->validMaskPath = xjw::common::io::toUtf8Path(valid_mask_path);
+    artifact->camera = prepared_camera;
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
     return true;
 }
 

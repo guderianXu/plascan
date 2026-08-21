@@ -29,6 +29,7 @@
 #include "TextureMapper.h"
 #include "TextureAtlasPacker.h"
 #include "TextureAtlasSampling.h"
+#include "TextureMappingV4Internal.h"
 #include "TriangleDistanceIndex.h"
 #include "VisualHullReconstructor.h"
 #include "VisualHullFieldEvaluator.h"
@@ -476,13 +477,13 @@ TEST(DepthTsdfSurfaceBuilderTest, UsesLargestComponentRelativeCleanupByDefault)
     EXPECT_EQ(options.depthValidBoundaryErosionPixels, 0);
     EXPECT_FALSE(options.enableConsistentIsoSurfaceExtraction);
     EXPECT_FALSE(options.enableMc33IsoSurfaceExtraction);
-    EXPECT_FALSE(options.enableOpenMeshSimplification);
-    EXPECT_FLOAT_EQ(options.openMeshMaximumNormalDeviationDegrees, 180.0f);
-    EXPECT_FLOAT_EQ(options.openMeshMaximumNormalFlippingDegrees, 75.0f);
-    EXPECT_EQ(options.openMeshSmoothingIterations, 2);
+    EXPECT_FALSE(options.enableTopologySafeSimplification);
+    EXPECT_FLOAT_EQ(options.topologySafeMaximumNormalDeviationDegrees, 180.0f);
+    EXPECT_FLOAT_EQ(options.topologySafeMaximumNormalFlippingDegrees, 75.0f);
+    EXPECT_EQ(options.topologySafeSmoothingIterations, 2);
     EXPECT_FLOAT_EQ(
-        options.openMeshSmoothingMaximumDisplacementVoxels, 0.40f);
-    EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 120.0f);
+        options.topologySafeSmoothingMaximumDisplacementVoxels, 0.40f);
+    EXPECT_FLOAT_EQ(options.topologySafeSmoothingFeatureAngleDegrees, 120.0f);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -1432,6 +1433,56 @@ TEST(MeshQuadricSimplifierTest, StopsInsidePassWhenCancellationIsRequested)
     EXPECT_EQ(statistics.collapsedEdgeCount, 0);
 }
 
+TEST(MeshQuadricSimplifierTest, CancellationAfterCompletedPassIsTransactional)
+{
+    constexpr int side = 16;
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(side * side);
+    for (int row = 0; row < side; ++row)
+    {
+        for (int column = 0; column < side; ++column)
+        {
+            auto &vertex = mesh.vertices[static_cast<std::size_t>(
+                row * side + column)];
+            vertex.x = static_cast<float>(column);
+            vertex.y = static_cast<float>(row);
+            vertex.nz = 1.0f;
+        }
+    }
+    for (int row = 0; row + 1 < side; ++row)
+    {
+        for (int column = 0; column + 1 < side; ++column)
+        {
+            const int first = row * side + column;
+            const int second = first + 1;
+            const int third = first + side;
+            const int fourth = third + 1;
+            mesh.faces.push_back(xjw::mesh::Triangle{{first, second, third}});
+            mesh.faces.push_back(xjw::mesh::Triangle{{second, fourth, third}});
+        }
+    }
+    const int input_vertex_count = mesh.vertexCount();
+    const int input_face_count = mesh.faceCount();
+    bool cancelled = false;
+    xjw::mesh::QuadricSimplifyOptions options;
+    options.targetFaceCount = 100;
+    options.progress = [&cancelled](int, int)
+    {
+        cancelled = true;
+    };
+    options.isCancelled = [&cancelled]()
+    {
+        return cancelled;
+    };
+
+    const auto statistics = xjw::mesh::simplifyMeshQuadric(&mesh, options);
+
+    EXPECT_TRUE(statistics.cancelled);
+    EXPECT_EQ(mesh.vertexCount(), input_vertex_count);
+    EXPECT_EQ(mesh.faceCount(), input_face_count);
+    EXPECT_EQ(statistics.collapsedEdgeCount, 0);
+}
+
 TEST(DepthTsdfSurfaceBuilderTest, StrongSingleObservationHasExplicitSupportPath)
 {
     xjw::mesh::DepthTsdfOptions options;
@@ -1769,6 +1820,27 @@ TEST(VisualHullDepthRefinerTest,
     for (const xjw::mesh::MeshVertex &vertex : mesh.vertices)
     {
         EXPECT_NEAR(vertex.z, 1.02f, 1.0e-4f);
+    }
+
+    for (xjw::mesh::MeshVertex &vertex : mesh.vertices)
+    {
+        vertex.z = 1.0f;
+    }
+    for (int index = 0; index < frames.size(); ++index)
+    {
+        frames[index].frameQualityWeight = 1.0f;
+        frames[index].auxiliarySurfaceOnly = index != 0;
+    }
+    const auto auxiliary_statistics =
+        xjw::mesh::VisualHullDepthRefiner::refine(
+            &mesh, frames, options);
+
+    EXPECT_TRUE(auxiliary_statistics.applied);
+    EXPECT_EQ(auxiliary_statistics.anchoredVertexCount, 4U);
+    for (const xjw::mesh::MeshVertex &vertex : mesh.vertices)
+    {
+        EXPECT_NEAR(vertex.z, 1.02f, 1.0e-4f)
+            << "Coverage auxiliaries must not outvote the primary frame";
     }
 }
 
@@ -2529,6 +2601,12 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
             : (index == 4 ? QStringLiteral("rejected")
                           : QStringLiteral("accepted"));
         artifact.fusionEligible = index < 3;
+        artifact.fusionEligibilityKnown = true;
+        artifact.role = xjw::mvs::qualifyDepthFrameRole(
+            artifact.acceptance,
+            artifact.fusionEligibilityKnown,
+            artifact.fusionEligible,
+            artifact.status);
         artifact.sceneProfile = QStringLiteral("orbital_object");
         artifact.validCoverage = 0.08;
         artifact.validWithinMaskRatio = 0.62;
@@ -2572,11 +2650,65 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         artifacts.push_back(artifact);
     }
 
+    QVector<xjw::mesh::DepthFrameArtifact> mixed_scene_artifacts =
+        artifacts.mid(0, 3);
+    mixed_scene_artifacts[1].sceneProfile =
+        QStringLiteral(" aerial_terrain ");
+    const auto mixed_scene_load =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            mixed_scene_artifacts, 1);
+    EXPECT_FALSE(mixed_scene_load.ok);
+    EXPECT_TRUE(mixed_scene_load.frames.isEmpty());
+    EXPECT_TRUE(mixed_scene_load.errorMessage.contains(
+        QStringLiteral("inconsistent with the batch")));
+
+    const auto two_frame_load =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            artifacts.mid(0, 2), 1);
+    EXPECT_FALSE(two_frame_load.ok);
+    EXPECT_EQ(two_frame_load.frames.size(), 2);
+    EXPECT_EQ(two_frame_load.primaryFrameCount, 2);
+    EXPECT_TRUE(two_frame_load.errorMessage.contains(
+        QStringLiteral("at least 3 usable")));
+
+    const QVector<xjw::mesh::DepthFrameArtifact> three_records_two_usable{
+        artifacts.at(0), artifacts.at(1), artifacts.at(4)
+    };
+    const auto excluded_third_load =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            three_records_two_usable, 1);
+    EXPECT_FALSE(excluded_third_load.ok);
+    EXPECT_EQ(excluded_third_load.discoveredArtifactCount, 3);
+    EXPECT_EQ(excluded_third_load.frames.size(), 2);
+    EXPECT_EQ(excluded_third_load.primaryFrameCount, 2);
+
+    xjw::mesh::DepthFrameArtifact second_auxiliary = artifacts.at(3);
+    second_auxiliary.refIndex = 30;
+    const QVector<xjw::mesh::DepthFrameArtifact> primary_with_auxiliaries{
+        artifacts.at(0), artifacts.at(3), second_auxiliary
+    };
+    const auto primary_with_auxiliaries_load =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            primary_with_auxiliaries, 1);
+    ASSERT_TRUE(primary_with_auxiliaries_load.ok)
+        << primary_with_auxiliaries_load.errorMessage.toStdString();
+    EXPECT_EQ(primary_with_auxiliaries_load.frames.size(), 3);
+    EXPECT_EQ(primary_with_auxiliaries_load.primaryFrameCount, 1);
+    EXPECT_EQ(primary_with_auxiliaries_load.auxiliaryFrameCount, 2);
+
+    const auto three_frame_load =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+            artifacts.mid(0, 3), 1);
+    ASSERT_TRUE(three_frame_load.ok)
+        << three_frame_load.errorMessage.toStdString();
+    EXPECT_EQ(three_frame_load.frames.size(), 3);
+    EXPECT_EQ(three_frame_load.primaryFrameCount, 3);
+
     const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts, 4);
     ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
-    ASSERT_EQ(loaded.frames.size(), 5);
+    ASSERT_EQ(loaded.frames.size(), 4);
     EXPECT_EQ(loaded.discoveredArtifactCount, artifacts.size());
-    EXPECT_EQ(loaded.primaryFrameCount, 4);
+    EXPECT_EQ(loaded.primaryFrameCount, 3);
     EXPECT_EQ(loaded.auxiliaryFrameCount, 1);
     EXPECT_GE(loaded.effectiveWorkerCount, 1);
     EXPECT_LE(loaded.effectiveWorkerCount, 4);
@@ -2598,8 +2730,28 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
                   0.0);
     }
     EXPECT_FALSE(loaded.frames.front().auxiliarySurfaceOnly);
-    EXPECT_FALSE(loaded.frames.at(3).auxiliarySurfaceOnly);
     EXPECT_TRUE(loaded.frames.back().auxiliarySurfaceOnly);
+    EXPECT_EQ(loaded.frames.back().refIndex, 3);
+    const float primary_texture_weight =
+        xjw::mesh::workflow::depthFrameTextureQualityWeight(
+            loaded.frames.front().frameQualityWeight,
+            loaded.frames.front().auxiliarySurfaceOnly);
+    const float auxiliary_texture_weight =
+        xjw::mesh::workflow::depthFrameTextureQualityWeight(
+            loaded.frames.back().frameQualityWeight,
+            loaded.frames.back().auxiliarySurfaceOnly);
+    EXPECT_GT(primary_texture_weight, auxiliary_texture_weight);
+    EXPECT_FLOAT_EQ(
+        auxiliary_texture_weight,
+        loaded.frames.back().frameQualityWeight *
+            xjw::mvs::kCoverageAuxiliaryWeightMultiplier);
+    EXPECT_TRUE(std::none_of(
+        loaded.frames.cbegin(),
+        loaded.frames.cend(),
+        [](const xjw::mesh::DepthTsdfFrame &frame)
+        {
+            return frame.refIndex == 4;
+        }));
 
     auto memory_limited_artifacts = artifacts;
     for (auto &artifact : memory_limited_artifacts)
@@ -2628,6 +2780,11 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     {
         artifact.acceptance = QStringLiteral("validation_only");
         artifact.fusionEligible = false;
+        artifact.role = xjw::mvs::qualifyDepthFrameRole(
+            artifact.acceptance,
+            artifact.fusionEligibilityKnown,
+            artifact.fusionEligible,
+            artifact.status);
         artifact.validWithinMaskRatio = 0.62;
         artifact.consistencyRetentionRatio = 0.55;
         artifact.qualityReasons = {
@@ -2704,6 +2861,120 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_TRUE(auxiliary_mesh.errorMessage.contains(
         QStringLiteral("没有可用的主融合深度帧")));
     EXPECT_TRUE(mesh_progress_stages.isEmpty());
+
+    const std::filesystem::path texture_mesh = writeTextureTestTriangle(
+        std::filesystem::path(directory.path().toStdString()));
+    xjw::mesh::workflow::TextureBuildRequest texture_request;
+    texture_request.meshPath = QString::fromStdString(texture_mesh.string());
+    texture_request.outputDir = directory.filePath(
+        QStringLiteral("texture_auxiliary_only"));
+    texture_request.depthMapSourcePath = directory.path();
+    const auto auxiliary_texture =
+        xjw::mesh::workflow::buildTextureOnly(texture_request);
+    EXPECT_FALSE(auxiliary_texture.ok);
+    EXPECT_TRUE(auxiliary_texture.errorMessage.contains(
+        QStringLiteral("辅助验证帧不能独立发布纹理结果")));
+
+    const QString adaptive_support_path = directory.filePath(
+        QStringLiteral("adaptive_support.bin"));
+    const QString adaptive_view_count_path = directory.filePath(
+        QStringLiteral("adaptive_view_count.bin"));
+    const QString adaptive_conflict_path = directory.filePath(
+        QStringLiteral("adaptive_conflict.bin"));
+    const QString depth_provenance_path = directory.filePath(
+        QStringLiteral("depth_provenance.png"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_support_path,
+        cv::Mat(24, 32, CV_32FC1, cv::Scalar(0.9f))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_view_count_path,
+        cv::Mat(24, 32, CV_32FC1, cv::Scalar(3.0f))).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_conflict_path,
+        cv::Mat(24, 32, CV_32FC1, cv::Scalar(0.0f))).ok);
+    ASSERT_TRUE(cv::imwrite(
+        depth_provenance_path.toStdString(),
+        cv::Mat(24, 32, CV_8UC1, cv::Scalar(1))));
+
+    QJsonArray orbital_frames_json;
+    const std::array<int, 3> orbital_artifact_indices{{0, 1, 3}};
+    for (int frame_index = 0; frame_index < 3; ++frame_index)
+    {
+        const auto &artifact = artifacts.at(
+            orbital_artifact_indices[static_cast<std::size_t>(frame_index)]);
+        orbital_frames_json.append(QJsonObject{
+            {QStringLiteral("ref_index"), artifact.refIndex},
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("acceptance"),
+             frame_index < 2 ? QStringLiteral("accepted")
+                             : QStringLiteral("validation_only")},
+            {QStringLiteral("fusion_eligible"), frame_index < 2},
+            {QStringLiteral("scene_profile"),
+             QStringLiteral(" Orbital_Object ")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision},
+            {QStringLiteral("raw_depth_path"), artifact.depthPath},
+            {QStringLiteral("raw_confidence_path"), artifact.confidencePath},
+            {QStringLiteral("raw_geometry_support_path"),
+             artifact.geometrySupportPath},
+            {QStringLiteral("raw_inverse_depth_mean_path"),
+             artifact.inverseDepthMeanPath},
+            {QStringLiteral("raw_inverse_depth_spread_path"),
+             artifact.inverseDepthSpreadPath},
+            {QStringLiteral("raw_adaptive_geometry_support_weight_path"),
+             adaptive_support_path},
+            {QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
+             adaptive_view_count_path},
+            {QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
+             adaptive_conflict_path},
+            {QStringLiteral("cross_view_repaired_mask_path"),
+             artifact.crossViewRepairedMaskPath},
+            {QStringLiteral("depth_provenance_path"), depth_provenance_path},
+            {QStringLiteral("valid_mask_path"), artifact.validMaskPath},
+            {QStringLiteral("support_mask_path"), artifact.supportMaskPath},
+            {QStringLiteral("grid_width"), 32},
+            {QStringLiteral("grid_height"), 24},
+            {QStringLiteral("camera_model"), QJsonObject{
+                {QStringLiteral("fx"), 30.0},
+                {QStringLiteral("fy"), 30.0},
+                {QStringLiteral("cx"), 16.0},
+                {QStringLiteral("cy"), 12.0},
+                {QStringLiteral("rotation_world_to_camera"),
+                 QJsonArray{1.0, 0.0, 0.0,
+                            0.0, 1.0, 0.0,
+                            0.0, 0.0, 1.0}},
+                {QStringLiteral("translation_world_to_camera"),
+                 QJsonArray{0.0, 0.0, 0.0}},
+                {QStringLiteral("camera_center"),
+                 QJsonArray{0.05 * artifact.refIndex, 0.0, 0.0}}}}
+        });
+    }
+    std::ofstream orbital_manifest(
+        manifest_path.toStdString(), std::ios::binary | std::ios::trunc);
+    orbital_manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("algorithm_revision"),
+         xjw::mvs::kMvsDepthAlgorithmRevision},
+        {QStringLiteral("frames"), orbital_frames_json}
+    }).toJson(QJsonDocument::Compact).toStdString();
+    orbital_manifest.close();
+
+    mesh_request.outputRoot = directory.filePath(
+        QStringLiteral("orbital_model"));
+    const auto orbital_quorum_model =
+        xjw::mesh::workflow::buildMeshFromDepthMaps(mesh_request);
+    EXPECT_FALSE(orbital_quorum_model.ok);
+    EXPECT_EQ(orbital_quorum_model.payload.value(
+                  QStringLiteral("loaded_primary_depth_frame_count"))
+                  .toInt(),
+              2);
+    EXPECT_EQ(orbital_quorum_model.payload.value(
+                  QStringLiteral(
+                      "minimum_orbital_primary_depth_frame_count"))
+                  .toInt(),
+              3);
+    EXPECT_TRUE(orbital_quorum_model.errorMessage.contains(
+        QStringLiteral("环拍 TSDF 实际载入的主融合深度帧不足")));
+
     EXPECT_EQ(loaded.frames.front().depth.type(), CV_32FC1);
     EXPECT_EQ(loaded.frames.front().confidence.type(), CV_32FC1);
     EXPECT_EQ(loaded.frames.front().geometrySupportCount.type(), CV_16UC1);
@@ -2731,6 +3002,119 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
     EXPECT_LT(bounds.minimum[2], 2.0f);
     EXPECT_GT(bounds.maximum[2], 2.0f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     CurrentFrameKeepsExplicitZeroGeometrySourceState)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    const QString depth_path = directory.filePath(QStringLiteral("depth.bin"));
+    const QString source_mask_path = directory.filePath(
+        QStringLiteral("geometry_source_mask.bin"));
+    const cv::Mat depth(3, 4, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat zero_source_mask(3, 4, CV_16UC1, cv::Scalar(0));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        depth_path, depth).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        source_mask_path, zero_source_mask).ok);
+
+    QVector<xjw::mesh::DepthFrameArtifact> artifacts;
+    for (int index = 0; index < 3; ++index)
+    {
+        xjw::mesh::DepthFrameArtifact artifact;
+        artifact.refIndex = index;
+        artifact.status = QStringLiteral("completed");
+        artifact.acceptance = QStringLiteral("accepted");
+        artifact.fusionEligible = true;
+        artifact.fusionEligibilityKnown = true;
+        artifact.role = xjw::mvs::qualifyDepthFrameRole(
+            artifact.acceptance,
+            artifact.fusionEligibilityKnown,
+            artifact.fusionEligible,
+            artifact.status);
+        artifact.sceneProfile = QStringLiteral("aerial_terrain");
+        artifact.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
+        artifact.depthPath = depth_path;
+        artifact.sourceIndices = {
+            (index + 1) % 3,
+            (index + 2) % 3};
+        artifact.cameraModel.setIntrinsics(20.0, 20.0, 1.5, 1.0);
+        artifact.cameraModel.setPose(
+            std::array<double, 9>{1.0, 0.0, 0.0,
+                                  0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0},
+            std::array<double, 3>{0.1 * index, 0.0, 0.0});
+        artifact.hasCameraModel = true;
+        artifacts.push_back(std::move(artifact));
+    }
+
+    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+        artifacts, 1);
+    ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
+    ASSERT_EQ(loaded.frames.size(), 3);
+    for (const xjw::mesh::DepthTsdfFrame &frame : loaded.frames)
+    {
+        EXPECT_TRUE(frame.geometrySourceIndices.empty());
+        EXPECT_EQ(cv::countNonZero(frame.geometrySourceMask), 0);
+    }
+
+    artifacts.front().geometrySourceMaskPath = source_mask_path;
+    const auto mismatched = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
+        artifacts, 1);
+    EXPECT_FALSE(mismatched.ok);
+    EXPECT_TRUE(mismatched.errorMessage.contains(
+        QStringLiteral("must either both be present or both be omitted")));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     BoundsUseOnlyPrimaryFramesWhenAuxiliaryDepthIsExtreme)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames;
+    for (int frame_index = 0; frame_index < 3; ++frame_index)
+    {
+        xjw::mesh::DepthTsdfFrame frame;
+        frame.refIndex = frame_index;
+        frame.camera.setIntrinsics(40.0, 40.0, 16.0, 16.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.depth = cv::Mat(
+            32,
+            32,
+            CV_32FC1,
+            cv::Scalar(frame_index == 0 ? 2.0f : 20.0f * frame_index));
+        frame.depthValidMask = cv::Mat(
+            frame.depth.size(), CV_8UC1, cv::Scalar(255));
+        frame.supportMask = cv::Mat(
+            frame.depth.size(), CV_8UC1, cv::Scalar(255));
+        frame.auxiliarySurfaceOnly = frame_index != 0;
+        frames.push_back(std::move(frame));
+    }
+
+    const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(
+        frames, false);
+
+    ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
+    EXPECT_EQ(bounds.candidateSampleCount, 1024u);
+    EXPECT_LT(bounds.minimum[2], 2.0f);
+    EXPECT_GT(bounds.maximum[2], 2.0f);
+    EXPECT_LT(bounds.maximum[2], 3.0f)
+        << "Coverage auxiliaries must not expand the primary TSDF domain";
+
+    for (xjw::mesh::DepthTsdfFrame &frame : frames)
+    {
+        frame.auxiliarySurfaceOnly = true;
+    }
+    const auto auxiliary_only_bounds =
+        xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames, false);
+    EXPECT_FALSE(auxiliary_only_bounds.ok);
+    EXPECT_TRUE(auxiliary_only_bounds.errorMessage.contains(
+        QStringLiteral("primary depth frame")));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -2975,6 +3359,12 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.status = QStringLiteral("completed");
         artifact.acceptance = QStringLiteral("accepted");
         artifact.fusionEligible = true;
+        artifact.fusionEligibilityKnown = true;
+        artifact.role = xjw::mvs::qualifyDepthFrameRole(
+            artifact.acceptance,
+            artifact.fusionEligibilityKnown,
+            artifact.fusionEligible,
+            artifact.status);
         artifact.sceneProfile = QStringLiteral("orbital_object");
         artifact.algorithmRevision = 14;
         artifact.depthPath = depth_path;
@@ -3790,7 +4180,14 @@ TEST(DepthTsdfSurfaceBuilderTest,
     artifact.refIndex = 0;
     artifact.status = QStringLiteral("completed");
     artifact.acceptance = QStringLiteral("validation_only");
-    artifact.sceneProfile = QStringLiteral("orbital_object");
+    artifact.fusionEligible = false;
+    artifact.fusionEligibilityKnown = true;
+    artifact.role = xjw::mvs::qualifyDepthFrameRole(
+        artifact.acceptance,
+        artifact.fusionEligibilityKnown,
+        artifact.fusionEligible,
+        artifact.status);
+    artifact.sceneProfile = QStringLiteral(" Orbital_Object ");
     artifact.algorithmRevision = 11;
     artifact.depthPath = depth_path;
     artifact.cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
@@ -7532,7 +7929,7 @@ TEST(MeshWorkflowSettingsTest,
      DepthTsdfDefaultsToSharedVertexIsoSurfaceExtraction)
 {
     const QJsonObject settings{
-        {QStringLiteral("tsdfOpenMeshSimplification"), false}};
+        {QStringLiteral("tsdfTopologySafeSimplification"), false}};
     const auto defaults =
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
 
@@ -7709,6 +8106,43 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_EQ(result.statistics.excludedAuxiliarySurfaceOnlyFrameCount, 1);
 }
 
+TEST(DepthTsdfSurfaceBuilderTest,
+     AuxiliaryFrameCannotVoteInVisibilityOccupancyTopology)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    xjw::mesh::DepthTsdfFrame auxiliary = frames.front();
+    auxiliary.refIndex = 99;
+    auxiliary.auxiliarySurfaceOnly = true;
+    frames.push_back(std::move(auxiliary));
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+    options.enableVisibilityOccupancyCompletion = true;
+    options.visibilityOccupancyResolution = 24;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(
+        frames, options);
+
+    // A three-view open plane is intentionally not a valid global occupancy
+    // body and may therefore end in the expected empty-mesh rejection. This
+    // focused regression only audits which frames reached the topology stage.
+    EXPECT_TRUE(result.ok || result.errorMessage.contains(
+        QStringLiteral("empty mesh")))
+        << result.errorMessage.toStdString();
+    EXPECT_EQ(result.statistics.inputFrameCount, 4);
+    EXPECT_EQ(result.statistics.auxiliarySurfaceOnlyFrameCount, 1);
+    EXPECT_EQ(result.statistics.visibilityOccupancyInputFrameCount, 3);
+    EXPECT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::statisticsToJson(result)
+            .value(QStringLiteral("visibility_occupancy_input_frame_count"))
+            .toInt(),
+        3);
+}
+
 TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)
 {
     const QJsonObject settings{
@@ -7843,14 +8277,13 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
         {QStringLiteral(
              "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSeedCount"),
          640},
-        {QStringLiteral("tsdfOpenMeshSimplification"), true},
-        {QStringLiteral("tsdfOpenMeshMaximumNormalDeviationDegrees"), 42.0},
-        {QStringLiteral("tsdfOpenMeshMaximumNormalFlippingDegrees"), 75.0},
-        {QStringLiteral("tsdfOpenMeshSmoothingIterations"), 3},
+        {QStringLiteral("tsdfTopologySafeSimplification"), true},
+        {QStringLiteral("tsdfTopologySafeMaximumNormalDeviationDegrees"), 42.0},
+        {QStringLiteral("tsdfTopologySafeMaximumNormalFlippingDegrees"), 75.0},
+        {QStringLiteral("tsdfTopologySafeSmoothingIterations"), 3},
         {QStringLiteral(
-             "tsdfOpenMeshSmoothingMaximumDisplacementVoxels"), 0.35},
-        {QStringLiteral("tsdfOpenMeshSmoothingFeatureAngleDegrees"), 110.0},
-        {QStringLiteral("tsdfOpenMeshNotificationInterval"), 2048},
+             "tsdfTopologySafeSmoothingMaximumDisplacementVoxels"), 0.35},
+        {QStringLiteral("tsdfTopologySafeSmoothingFeatureAngleDegrees"), 110.0},
         {QStringLiteral("tsdfContourBandZeroCrossingSupport"), true},
         {QStringLiteral("tsdfCrossViewAnchoredSurfaceRecovery"), true},
         {QStringLiteral(
@@ -7916,14 +8349,13 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
     EXPECT_EQ(
         options.visibilityOccupancyMaximumHandleRepairSubsetSeedCount,
         640);
-    EXPECT_TRUE(options.enableOpenMeshSimplification);
-    EXPECT_FLOAT_EQ(options.openMeshMaximumNormalDeviationDegrees, 42.0f);
-    EXPECT_FLOAT_EQ(options.openMeshMaximumNormalFlippingDegrees, 75.0f);
-    EXPECT_EQ(options.openMeshSmoothingIterations, 3);
+    EXPECT_TRUE(options.enableTopologySafeSimplification);
+    EXPECT_FLOAT_EQ(options.topologySafeMaximumNormalDeviationDegrees, 42.0f);
+    EXPECT_FLOAT_EQ(options.topologySafeMaximumNormalFlippingDegrees, 75.0f);
+    EXPECT_EQ(options.topologySafeSmoothingIterations, 3);
     EXPECT_FLOAT_EQ(
-        options.openMeshSmoothingMaximumDisplacementVoxels, 0.35f);
-    EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 110.0f);
-    EXPECT_EQ(options.openMeshNotificationInterval, 2048);
+        options.topologySafeSmoothingMaximumDisplacementVoxels, 0.35f);
+    EXPECT_FLOAT_EQ(options.topologySafeSmoothingFeatureAngleDegrees, 110.0f);
     EXPECT_TRUE(options.enableContourBandZeroCrossingSupport);
     EXPECT_TRUE(options.enableCrossViewAnchoredSurfaceRecovery);
     EXPECT_FLOAT_EQ(
@@ -7998,7 +8430,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfExposureCompensationIsExplicitOptIn)
     EXPECT_TRUE(options.compensateColorExposure);
 }
 
-TEST(MeshWorkflowSettingsTest, DepthTsdfFaceTargetUsesTopologySafeOpenMeshProfile)
+TEST(MeshWorkflowSettingsTest, DepthTsdfFaceTargetUsesNativeTopologySafeProfile)
 {
     const QJsonObject settings{
         {QStringLiteral("simplifyTargetFaces"), 240000}};
@@ -8006,12 +8438,12 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfFaceTargetUsesTopologySafeOpenMeshProfil
     const auto options = xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
 
     EXPECT_TRUE(options.enableQuadricSimplification);
-    EXPECT_TRUE(options.enableOpenMeshSimplification);
+    EXPECT_TRUE(options.enableTopologySafeSimplification);
     EXPECT_TRUE(options.enableVoxelFallbackQemPolish);
     EXPECT_EQ(options.simplifyTargetFaces, 240000);
-    EXPECT_EQ(options.openMeshSmoothingIterations, 12);
-    EXPECT_FLOAT_EQ(options.openMeshSmoothingMaximumDisplacementVoxels, 1.60f);
-    EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 175.0f);
+    EXPECT_EQ(options.topologySafeSmoothingIterations, 12);
+    EXPECT_FLOAT_EQ(options.topologySafeSmoothingMaximumDisplacementVoxels, 1.60f);
+    EXPECT_FLOAT_EQ(options.topologySafeSmoothingFeatureAngleDegrees, 175.0f);
     EXPECT_EQ(options.surfaceDenoisingIterations, 8);
     EXPECT_FLOAT_EQ(options.surfaceDenoisingLambda, 0.50f);
     EXPECT_FLOAT_EQ(options.surfaceDenoisingMu, -0.53f);
@@ -8033,17 +8465,17 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfFaceTargetUsesTopologySafeOpenMeshProfil
     EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
 }
 
-TEST(MeshWorkflowSettingsTest, DepthTsdfOpenMeshProfileCanBeDisabledExplicitly)
+TEST(MeshWorkflowSettingsTest, DepthTsdfTopologySafeProfileCanBeDisabledExplicitly)
 {
     const QJsonObject settings{
         {QStringLiteral("simplifyTargetFaces"), 240000},
-        {QStringLiteral("tsdfOpenMeshSimplification"), false}
+        {QStringLiteral("tsdfTopologySafeSimplification"), false}
     };
 
     const auto options =
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
 
-    EXPECT_FALSE(options.enableOpenMeshSimplification);
+    EXPECT_FALSE(options.enableTopologySafeSimplification);
     EXPECT_FALSE(options.enableMc33IsoSurfaceExtraction);
     EXPECT_FALSE(options.enableSurfacePatchSupport);
     EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
@@ -8518,7 +8950,7 @@ TEST(MeshWorkflowSettingsTest,
     auto options =
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
 
-    EXPECT_TRUE(options.enableOpenMeshSimplification);
+    EXPECT_TRUE(options.enableTopologySafeSimplification);
     EXPECT_EQ(options.enableMc33IsoSurfaceExtraction,
               xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable());
 
@@ -8718,7 +9150,7 @@ TEST(MeshWorkflowSettingsTest,
     xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
         settings, &options, 256);
 
-    EXPECT_TRUE(options.enableOpenMeshSimplification);
+    EXPECT_TRUE(options.enableTopologySafeSimplification);
     EXPECT_EQ(options.resolution, 256);
     EXPECT_EQ(options.simplifyTargetFaces, 170000);
     EXPECT_FALSE(options.enableSurfacePatchSupport);
@@ -8966,6 +9398,58 @@ TEST(DepthMapMeshBuilderTest, DiscoversDepthFramesFromOutputDirectory)
     EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.bin")));
 }
 
+TEST(DepthMapMeshBuilderTest,
+     ManifestDiscoveryUsesSharedNormalizedRoleQualification)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    for (int index = 0; index < 3; ++index)
+    {
+        std::ofstream(
+            directory.filePath(QStringLiteral("depth_%1.bin").arg(index))
+                .toStdString(),
+            std::ios::binary)
+            .put('\0');
+    }
+
+    const QJsonArray frames_json{
+        QJsonObject{
+            {QStringLiteral("ref_index"), 0},
+            {QStringLiteral("status"), QStringLiteral(" Completed ")},
+            {QStringLiteral("acceptance"), QStringLiteral(" accepted ")},
+            {QStringLiteral("fusion_eligible"), true},
+            {QStringLiteral("raw_depth_path"), QStringLiteral("depth_0.bin")}},
+        QJsonObject{
+            {QStringLiteral("ref_index"), 1},
+            {QStringLiteral("status"), QStringLiteral("RUNNING")},
+            {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+            {QStringLiteral("fusion_eligible"), true},
+            {QStringLiteral("raw_depth_path"), QStringLiteral("depth_1.bin")}},
+        QJsonObject{
+            {QStringLiteral("ref_index"), 2},
+            {QStringLiteral("status"), QStringLiteral(" completed ")},
+            {QStringLiteral("acceptance"), QStringLiteral("VALIDATION_ONLY")},
+            {QStringLiteral("fusion_eligible"), false},
+            {QStringLiteral("raw_depth_path"), QStringLiteral("depth_2.bin")}}
+    };
+    std::ofstream manifest(
+        directory.filePath(QStringLiteral("mvs_manifest.json")).toStdString(),
+        std::ios::binary);
+    manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("frames"), frames_json}
+    }).toJson(QJsonDocument::Compact).toStdString();
+    manifest.close();
+
+    const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
+        directory.path());
+
+    ASSERT_EQ(frames.size(), 3);
+    EXPECT_EQ(frames.at(0).role, xjw::mvs::DepthFrameRole::Primary);
+    EXPECT_EQ(frames.at(1).role, xjw::mvs::DepthFrameRole::Excluded);
+    EXPECT_EQ(frames.at(2).role,
+              xjw::mvs::DepthFrameRole::CoverageAuxiliary);
+}
+
 TEST(DepthMapMeshBuilderTest, IgnoresPyramidArtifactsWithoutManifest)
 {
     namespace fs = std::filesystem;
@@ -9040,7 +9524,8 @@ TEST(DepthMapMeshBuilderTest, FallsBackToHighestResolutionManifestPyramidArtifac
     EXPECT_EQ(frames.front().gridHeight, 240);
     ASSERT_TRUE(frames.front().hasCameraModel);
     EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 600.0);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 120.0);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalX(), 159.75);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 119.75);
     EXPECT_TRUE(frames.front().pyramidFallback);
     EXPECT_TRUE(frames.front().geometrySupportPath.endsWith(
         QStringLiteral("depth_4_geometry_support.bin")));
@@ -9163,15 +9648,38 @@ TEST(MeshWorkflowSettingsTest, OrbitalFusionRequiresBroadPrimaryFrameCoverage)
 TEST(MeshWorkflowSettingsTest, PrimaryFusionFrameRequiresBothQualifications)
 {
     EXPECT_TRUE(xjw::mvs::isPrimaryFusionFrame(
-        QStringLiteral("accepted"), true));
+        xjw::mvs::qualifyDepthFrameRole(
+            QStringLiteral("accepted"), true, true,
+            QStringLiteral("completed"))));
     EXPECT_TRUE(xjw::mvs::isPrimaryFusionFrame(
-        QStringLiteral(" ACCEPTED "), true));
+        xjw::mvs::qualifyDepthFrameRole(
+            QStringLiteral(" ACCEPTED "), true, true,
+            QStringLiteral("completed"))));
     EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
-        QStringLiteral("accepted"), false));
+        xjw::mvs::qualifyDepthFrameRole(
+            QStringLiteral("accepted"), true, false,
+            QStringLiteral("completed"))));
     EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
-        QStringLiteral("validation_only"), true));
+        xjw::mvs::qualifyDepthFrameRole(
+            QStringLiteral("validation_only"), true, true,
+            QStringLiteral("completed"))));
     EXPECT_FALSE(xjw::mvs::isPrimaryFusionFrame(
-        QStringLiteral("rejected"), true));
+        xjw::mvs::qualifyDepthFrameRole(
+            QStringLiteral("rejected"), true, true,
+            QStringLiteral("completed"))));
+}
+
+TEST(MeshWorkflowSettingsTest, AuxiliaryTextureViewsKeepConservativeWeight)
+{
+    constexpr float kPrimaryWeight = 0.8f;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::workflow::depthFrameTextureQualityWeight(
+            kPrimaryWeight, false),
+        kPrimaryWeight);
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::workflow::depthFrameTextureQualityWeight(
+            kPrimaryWeight, true),
+        kPrimaryWeight * xjw::mvs::kCoverageAuxiliaryWeightMultiplier);
 }
 
 TEST(DepthMapMeshBuilderTest, VisualHullDefaultsUseBoundedSurfaceSmoothing)
@@ -9198,6 +9706,7 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
             "fusion_eligible": false,
             "scene_profile": "orbital_object",
             "ref_image": "frame.png",
+            "prepared_image": "prepared_images/frame_000000.png",
             "raw_depth_path": "depth_0.bin",
             "raw_geometry_source_mask_path": "depth_0_geometry_source_mask.bin",
             "raw_inverse_depth_mean_path": "depth_0_inverse_depth_mean.bin",
@@ -9240,6 +9749,10 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
         xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
 
     ASSERT_EQ(frames.size(), 1);
+    EXPECT_TRUE(frames.front().sourceImage.endsWith(
+        QStringLiteral("frame.png")));
+    EXPECT_TRUE(frames.front().refImage.endsWith(
+        QStringLiteral("prepared_images/frame_000000.png")));
     EXPECT_TRUE(frames.front().hasCameraModel);
     EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 250.0);
     EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 120.0);
@@ -9248,6 +9761,8 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
     EXPECT_EQ(frames.front().sceneProfile, QStringLiteral("orbital_object"));
     EXPECT_EQ(frames.front().acceptance, QStringLiteral("rejected"));
     EXPECT_FALSE(frames.front().fusionEligible);
+    EXPECT_TRUE(frames.front().fusionEligibilityKnown);
+    EXPECT_EQ(frames.front().role, xjw::mvs::DepthFrameRole::Excluded);
     EXPECT_DOUBLE_EQ(frames.front().validCoverage, 0.08);
     EXPECT_DOUBLE_EQ(frames.front().validWithinMaskRatio, 0.62);
     EXPECT_DOUBLE_EQ(frames.front().consistencyRetentionRatio, 0.55);
@@ -9339,7 +9854,11 @@ TEST(DepthMapMeshBuilderTest, DoesNotTreatFullFrameAerialImagesAsStudioSilhouett
             manifest << ',';
         }
         manifest << "{\"ref_index\":" << index
-                 << ",\"status\":\"completed\",\"ref_image\":\"" << image_name
+                 << ",\"status\":\"completed\","
+                    "\"acceptance\":\"accepted\","
+                    "\"fusion_eligible\":true,"
+                    "\"scene_profile\":\"aerial_terrain\","
+                    "\"ref_image\":\"" << image_name
                  << "\",\"raw_depth_path\":\"" << depth_name
                  << "\",\"grid_width\":64,\"grid_height\":48,\"camera_model\":{"
                     "\"fx\":50,\"fy\":50,\"cx\":32,\"cy\":24,"
@@ -9375,7 +9894,7 @@ TEST(DepthMapMeshBuilderTest, VisualHullPreflightAcceptsStudioSilhouettes)
     fs::create_directories(root);
     std::ofstream manifest(root / "mvs_manifest.json");
     manifest << "{\"frames\":[";
-    for (int index = 0; index < 8; ++index)
+    for (int index = 0; index < 10; ++index)
     {
         const std::string image_name =
             "studio_" + std::to_string(index) + ".png";
@@ -9397,8 +9916,28 @@ TEST(DepthMapMeshBuilderTest, VisualHullPreflightAcceptsStudioSilhouettes)
         {
             manifest << ',';
         }
-        manifest << "{\"ref_index\":" << index
-                 << ",\"status\":\"completed\",\"ref_image\":\"" << image_name
+        manifest << "{\"ref_index\":" << index;
+        if (index != 9)
+        {
+            manifest << ",\"status\":\"completed\"";
+        }
+        if (index < 8)
+        {
+            manifest << ",\"acceptance\":\"accepted\","
+                        "\"fusion_eligible\":true";
+        }
+        else if (index == 8)
+        {
+            manifest << ",\"acceptance\":\"rejected\","
+                        "\"fusion_eligible\":false";
+        }
+        else
+        {
+            manifest << ",\"acceptance\":\"accepted\","
+                        "\"fusion_eligible\":true";
+        }
+        manifest << ",\"scene_profile\":\"custom\","
+                    "\"ref_image\":\"" << image_name
                  << "\",\"raw_depth_path\":\"" << depth_name
                  << "\",\"grid_width\":128,\"grid_height\":96,\"camera_model\":{"
                     "\"fx\":90,\"fy\":90,\"cx\":64,\"cy\":48,"
@@ -9417,6 +9956,50 @@ TEST(DepthMapMeshBuilderTest, VisualHullPreflightAcceptsStudioSilhouettes)
     EXPECT_EQ(preflight.candidateFrameCount, 8);
     EXPECT_EQ(preflight.inspectedFrameCount, 6);
     EXPECT_EQ(preflight.usableViewCount, 6);
+
+    const auto result = xjw::mesh::DepthMapMeshBuilder::buildVisualHull(
+        QString::fromStdString(root.string()), 96);
+    EXPECT_TRUE(result.applicable);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.usableViewCount, 8);
+    EXPECT_EQ(result.depthViewCount, 0);
+    EXPECT_TRUE(result.message.contains(QStringLiteral("无法从深度图估计")));
+
+    QFile manifest_file(QString::fromStdString(
+        (root / "mvs_manifest.json").string()));
+    ASSERT_TRUE(manifest_file.open(QIODevice::ReadOnly));
+    QJsonObject manifest_object =
+        QJsonDocument::fromJson(manifest_file.readAll()).object();
+    manifest_file.close();
+    QJsonArray mixed_frames =
+        manifest_object.value(QStringLiteral("frames")).toArray();
+    ASSERT_GE(mixed_frames.size(), 2);
+    QJsonObject mixed_frame = mixed_frames.at(1).toObject();
+    mixed_frame[QStringLiteral("scene_profile")] =
+        QStringLiteral(" Orbital_Object ");
+    mixed_frames[1] = mixed_frame;
+    manifest_object[QStringLiteral("frames")] = mixed_frames;
+    ASSERT_TRUE(manifest_file.open(
+        QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray mixed_manifest_bytes =
+        QJsonDocument(manifest_object).toJson();
+    ASSERT_EQ(
+        manifest_file.write(mixed_manifest_bytes),
+        mixed_manifest_bytes.size());
+    manifest_file.close();
+
+    const auto mixed_preflight =
+        xjw::mesh::DepthMapMeshBuilder::inspectVisualHullApplicability(
+            QString::fromStdString(root.string()));
+    EXPECT_FALSE(mixed_preflight.applicable);
+    EXPECT_EQ(mixed_preflight.candidateFrameCount, 0);
+    const auto mixed_result =
+        xjw::mesh::DepthMapMeshBuilder::buildVisualHull(
+            QString::fromStdString(root.string()), 96);
+    EXPECT_FALSE(mixed_result.applicable);
+    EXPECT_FALSE(mixed_result.ok);
+    EXPECT_TRUE(mixed_result.message.contains(
+        QStringLiteral("scene_profile")));
     fs::remove_all(root);
 }
 
@@ -9438,6 +10021,126 @@ TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)
     EXPECT_TRUE(resolved.endsWith(QStringLiteral("dense_cloud.ply")));
 }
 
+TEST(DepthMapMeshBuilderTest,
+     PoissonLegacyRejectsManifestlessDepthFramesDespiteReusableDenseCloud)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path root(directory.path().toStdString());
+    const std::filesystem::path generated_dense =
+        writeDenseGridPointCloud(root);
+    const std::filesystem::path reusable_dense = root / "dense_cloud.ply";
+    std::filesystem::rename(generated_dense, reusable_dense);
+    std::ofstream(root / "depth_0.bin", std::ios::binary).put('\0');
+
+    xjw::mesh::workflow::DepthMapMeshBuildRequest request;
+    request.depthMapSourcePath = directory.path();
+    request.reusableDenseCloudPath = QString::fromStdString(
+        reusable_dense.string());
+    request.outputRoot = directory.filePath(QStringLiteral("model"));
+    request.settings[QStringLiteral("reconstruction_mode")] =
+        QStringLiteral("poisson_legacy");
+
+    const auto result =
+        xjw::mesh::workflow::buildMeshFromDepthMaps(request);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(
+                  QStringLiteral("qualified_primary_depth_frame_count"))
+                  .toInt(),
+              0);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("主融合深度帧")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("无清单")));
+}
+
+TEST(DepthMapMeshBuilderTest,
+     PoissonLegacyRejectsAuxiliaryOnlyManifestDespiteReusableDenseCloud)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path root(directory.path().toStdString());
+    const std::filesystem::path generated_dense =
+        writeDenseGridPointCloud(root);
+    const std::filesystem::path reusable_dense = root / "dense_cloud.ply";
+    std::filesystem::rename(generated_dense, reusable_dense);
+
+    QJsonArray frame_records;
+    for (int index = 0; index < 3; ++index)
+    {
+        const QString depth_name = QStringLiteral("depth_%1.bin").arg(index);
+        std::ofstream(root / depth_name.toStdString(), std::ios::binary)
+            .put('\0');
+        frame_records.append(QJsonObject{
+            {QStringLiteral("ref_index"), index},
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("acceptance"), QStringLiteral("validation_only")},
+            {QStringLiteral("fusion_eligible"), false},
+            {QStringLiteral("scene_profile"), QStringLiteral("aerial_terrain")},
+            {QStringLiteral("raw_depth_path"), depth_name}
+        });
+    }
+    std::ofstream manifest(
+        root / "mvs_manifest.json", std::ios::binary);
+    manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("frames"), frame_records}
+    }).toJson(QJsonDocument::Compact).toStdString();
+    manifest.close();
+
+    xjw::mesh::workflow::DepthMapMeshBuildRequest request;
+    request.depthMapSourcePath = directory.path();
+    request.reusableDenseCloudPath = QString::fromStdString(
+        reusable_dense.string());
+    request.outputRoot = directory.filePath(QStringLiteral("model"));
+    request.settings[QStringLiteral("reconstruction_mode")] =
+        QStringLiteral("poisson_legacy");
+
+    const auto result =
+        xjw::mesh::workflow::buildMeshFromDepthMaps(request);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(
+                  QStringLiteral("discovered_depth_frame_count"))
+                  .toInt(),
+              3);
+    EXPECT_EQ(result.payload.value(
+                  QStringLiteral("qualified_primary_depth_frame_count"))
+                  .toInt(),
+              0);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("仅辅助验证")));
+
+    QJsonObject aerial_primary = frame_records.at(0).toObject();
+    aerial_primary[QStringLiteral("acceptance")] =
+        QStringLiteral("accepted");
+    aerial_primary[QStringLiteral("fusion_eligible")] = true;
+    frame_records[0] = aerial_primary;
+    QJsonObject orbital_primary = frame_records.at(1).toObject();
+    orbital_primary[QStringLiteral("acceptance")] =
+        QStringLiteral("accepted");
+    orbital_primary[QStringLiteral("fusion_eligible")] = true;
+    orbital_primary[QStringLiteral("scene_profile")] =
+        QStringLiteral(" Orbital_Object ");
+    frame_records[1] = orbital_primary;
+    std::ofstream mixed_manifest(
+        root / "mvs_manifest.json", std::ios::binary | std::ios::trunc);
+    mixed_manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("frames"), frame_records}
+    }).toJson(QJsonDocument::Compact).toStdString();
+    mixed_manifest.close();
+
+    request.outputRoot = directory.filePath(QStringLiteral("mixed_model"));
+    const auto mixed_result =
+        xjw::mesh::workflow::buildMeshFromDepthMaps(request);
+    EXPECT_FALSE(mixed_result.ok);
+    EXPECT_EQ(mixed_result.payload.value(
+                  QStringLiteral("qualified_primary_depth_frame_count"))
+                  .toInt(),
+              2);
+    EXPECT_TRUE(mixed_result.errorMessage.contains(
+        QStringLiteral("scene_profile")));
+    EXPECT_TRUE(mixed_result.errorMessage.contains(
+        QStringLiteral("批次不一致")));
+}
+
 TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFrameMetadataIsMissing)
 {
     namespace fs = std::filesystem;
@@ -9456,8 +10159,12 @@ TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFrameMetadataIsMiss
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.payload.value(QStringLiteral("actual_mesh_algorithm")).toString(),
               QStringLiteral("depth_tsdf"));
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("camera is invalid")));
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("depth_001.bin")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("loaded=0")));
+    const QVector<xjw::mesh::DepthFrameArtifact> frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
+            request.depthMapSourcePath);
+    ASSERT_EQ(frames.size(), 1);
+    EXPECT_EQ(frames.front().role, xjw::mvs::DepthFrameRole::Excluded);
     EXPECT_FALSE(result.payload.contains(QStringLiteral("source_point_cloud_path")));
 }
 
@@ -9842,6 +10549,7 @@ TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)
     settings[QStringLiteral("ghostFilter")] = false;
     settings[QStringLiteral("outOfFocusFilter")] = true;
     settings[QStringLiteral("colorCorrection")] = true;
+    settings[QStringLiteral("finalMeshVisibility")] = false;
     settings[QStringLiteral("sharpeningStrength")] = 0.35;
     settings[QStringLiteral("padding")] = 12;
 
@@ -9854,6 +10562,7 @@ TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)
     EXPECT_FALSE(config.enableGhostFilter);
     EXPECT_TRUE(config.enableOutOfFocusFilter);
     EXPECT_TRUE(config.enableColorCorrection);
+    EXPECT_FALSE(config.enableFinalMeshVisibility);
     EXPECT_FLOAT_EQ(config.sharpeningStrength, 0.35f);
     EXPECT_EQ(config.padding, 12);
 }
@@ -9921,6 +10630,196 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     EXPECT_NE(obj_buffer.str().find("usemtl material0"), std::string::npos);
 }
 
+TEST(TextureMapperTest, FinalMeshVisibilityRejectsOccludedOverlappingFace)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_final_mesh_visibility_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = root / "overlapping_faces.ply";
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(6, 3);
+    for (int layer = 0; layer < 2; ++layer)
+    {
+        const int offset = layer * 3;
+        const float depth = layer == 0 ? 2.0f : 2.05f;
+        points(offset, 0) = -0.4f;
+        points(offset, 1) = -0.3f;
+        points(offset, 2) = depth;
+        points(offset + 1, 0) = 0.4f;
+        points(offset + 1, 1) = -0.3f;
+        points(offset + 1, 2) = depth;
+        points(offset + 2, 0) = -0.4f;
+        points(offset + 2, 1) = 0.3f;
+        points(offset + 2, 2) = depth;
+    }
+    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(
+        std::move(points));
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    for (int face_index = 0; face_index < 2; ++face_index)
+    {
+        const int offset = face_index * 3;
+        faces(face_index, 0) = offset;
+        faces(face_index, 1) = offset + 1;
+        faces(face_index, 2) = offset + 2;
+    }
+    mesh.setFaces(std::move(faces));
+    plapoint::io::writePly<float>(
+        mesh_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+
+    const QVector<xjw::mesh::MeshColorView> views{
+        makeTextureTestView(cv::Scalar(20, 80, 220))};
+    xjw::mesh::TextureMappingConfig legacy_config;
+    legacy_config.textureSize = 1024;
+    legacy_config.enableFinalMeshVisibility = false;
+    xjw::mesh::TextureMappingResult legacy_result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            (root / "without_visibility").string(),
+            legacy_config,
+            views,
+            &legacy_result,
+            &error)) << error;
+    ASSERT_EQ(legacy_result.mappedFaceCount, 2);
+
+    xjw::mesh::TextureMappingConfig visibility_config = legacy_config;
+    visibility_config.enableFinalMeshVisibility = true;
+    xjw::mesh::TextureMappingResult visibility_result;
+    error.clear();
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            (root / "with_visibility").string(),
+            visibility_config,
+            views,
+            &visibility_result,
+            &error)) << error;
+
+    EXPECT_EQ(visibility_result.mappedFaceCount, 1);
+    EXPECT_EQ(visibility_result.unmappedFaceCount, 1);
+    EXPECT_GT(visibility_result.rejectedVisibilityCount, 0U);
+    EXPECT_GT(visibility_result.visibilityRasterizedPixelCount, 0U);
+}
+
+TEST(TextureMapperTest, FinalMeshVisibilityUsesColorRasterResolution)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_visibility_color_resolution_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    xjw::mesh::MeshColorView view =
+        makeTextureTestView(cv::Scalar(20, 80, 220));
+    view.camera.setIntrinsics(10.0, 10.0, 6.0, 4.0);
+    view.depth = cv::Mat(9, 12, CV_32FC1, cv::Scalar(2.0f));
+    view.confidence = cv::Mat(9, 12, CV_32FC1, cv::Scalar(0.9f));
+    view.depthValidMask = cv::Mat(9, 12, CV_8UC1, cv::Scalar(255));
+    view.supportMask = cv::Mat(9, 12, CV_8UC1, cv::Scalar(255));
+    view.colorCamera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
+    view.colorCamera.setPose(
+        std::array<double, 9>{1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0},
+        std::array<double, 3>{0.0, 0.0, 0.0});
+
+    xjw::mesh::TextureMappingConfig config;
+    config.imageDownscale = 1;
+    xjw::mesh::texture_v4::PipelineData data;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::mesh::texture_v4::prepareInputs(
+        mesh_path.string(),
+        QVector<xjw::mesh::MeshColorView>{view},
+        config,
+        &data,
+        &result,
+        &error)) << error;
+    ASSERT_TRUE(xjw::mesh::texture_v4::buildFinalMeshVisibility(
+        config, &data, &result, &error)) << error;
+    ASSERT_EQ(data.views.size(), 1);
+    EXPECT_EQ(data.views.front().finalMeshFaceIds.size(), view.colorBgr.size());
+    EXPECT_NE(data.views.front().finalMeshFaceIds.size(), view.depth.size());
+    EXPECT_GT(result.visibilityRasterizedPixelCount, 0U);
+}
+
+TEST(TextureMapperTest, FinalMeshVisibilityDoesNotLeakAcrossNeighborPixels)
+{
+    xjw::mesh::texture_v4::PreparedView view;
+    view.colorCamera.setIntrinsics(1.0, 1.0, 1.0, 1.0);
+    view.colorCamera.setPose(
+        std::array<double, 9>{1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0},
+        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.finalMeshFaceIds = cv::Mat(3, 3, CV_32SC1, cv::Scalar(-1));
+    view.finalMeshFaceIds.at<int>(1, 1) = 7;
+    view.finalMeshFaceIds.at<int>(1, 2) = 8;
+    const std::array<double, 3> center_world{{0.0, 0.0, 1.0}};
+
+    EXPECT_TRUE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(
+        view, 7, center_world));
+    EXPECT_FALSE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(
+        view, 8, center_world));
+}
+
+TEST(TextureMapperTest, FinalMeshVisibilitySafelyRejectsExtremeProjection)
+{
+    xjw::mesh::texture_v4::PreparedView view;
+    view.colorCamera.setIntrinsics(40.0, 40.0, 2.0, 2.0);
+    view.colorCamera.setPose(
+        std::array<double, 9>{1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0},
+        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.colorBgr = cv::Mat(4, 4, CV_8UC3, cv::Scalar(0, 0, 0));
+    view.supportDistance = cv::Mat(4, 4, CV_32FC1, cv::Scalar(1.0f));
+    xjw::mesh::texture_v4::PipelineData data;
+    data.views.push_back(std::move(view));
+    xjw::mesh::texture_v4::FaceGeometry face;
+    face.vertices = {{{{1.0e300, 0.0, 1.0}},
+                      {{1.0e300, 1.0, 1.0}},
+                      {{1.0e300, 0.0, 2.0}}}};
+    data.geometry.push_back(face);
+    xjw::mesh::TextureMappingConfig config;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+
+    ASSERT_TRUE(xjw::mesh::texture_v4::buildFinalMeshVisibility(
+        config, &data, &result, &error)) << error;
+    EXPECT_EQ(result.visibilityRasterizedPixelCount, 0U);
+    EXPECT_EQ(cv::countNonZero(data.views.front().finalMeshFaceIds + 1), 0);
+}
+
+TEST(TextureMapperTest, CameraAtlasRejectsNonzeroDistortion)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_distorted_camera_rejection_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    xjw::mesh::MeshColorView view =
+        makeTextureTestView(cv::Scalar(20, 80, 220));
+    view.camera.setDistortion(0.1, 0.0, 0.0, 0.0, 0.0);
+    xjw::mesh::TextureMappingConfig config;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+
+    EXPECT_FALSE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            root.string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{view},
+            &result,
+            &error));
+    EXPECT_NE(error.find("预去畸变"), std::string::npos);
+}
+
 TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
 {
     namespace fs = std::filesystem;
@@ -9964,6 +10863,69 @@ TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
     EXPECT_EQ(result.mappedFaceCount, 1);
     EXPECT_EQ(result.unmappedFaceCount, 0);
     EXPECT_EQ(result.rejectedResolutionCount, 0U);
+    EXPECT_EQ(result.noTexelFaceCount, 1U);
+    EXPECT_EQ(result.centerRecoveredFaceCount, 1U);
+    EXPECT_EQ(result.unresolvedBakeFaceCount, 0U);
+    const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(atlas.empty());
+    cv::Mat source_color_mask;
+    cv::inRange(
+        atlas,
+        cv::Scalar(20, 80, 220),
+        cv::Scalar(20, 80, 220),
+        source_color_mask);
+    EXPECT_GT(cv::countNonZero(source_color_mask), 0);
+
+    const auto textured_mesh =
+        plapoint::io::readObj<float>(result.modelObjPath);
+    ASSERT_TRUE(textured_mesh != nullptr);
+    ASSERT_TRUE(textured_mesh->hasTextureCoords());
+    ASSERT_TRUE(textured_mesh->hasFaceTextureIndices());
+    std::array<cv::Point2f, 3> uv{};
+    for (int corner = 0; corner < 3; ++corner)
+    {
+        const int texture_index =
+            textured_mesh->faceTextureIndices()->getValue(0, corner);
+        uv[corner] = cv::Point2f(
+            textured_mesh->textureCoords()->getValue(texture_index, 0),
+            textured_mesh->textureCoords()->getValue(texture_index, 1));
+    }
+    const auto sample_atlas = [&atlas](const cv::Point2f &coordinate)
+    {
+        const float x = std::clamp(
+            coordinate.x * atlas.cols - 0.5f,
+            0.0f,
+            static_cast<float>(atlas.cols - 1));
+        const float y = std::clamp(
+            (1.0f - coordinate.y) * atlas.rows - 0.5f,
+            0.0f,
+            static_cast<float>(atlas.rows - 1));
+        const int left = static_cast<int>(std::floor(x));
+        const int top = static_cast<int>(std::floor(y));
+        const int right = std::min(left + 1, atlas.cols - 1);
+        const int bottom = std::min(top + 1, atlas.rows - 1);
+        const float fx = x - left;
+        const float fy = y - top;
+        const cv::Vec3f color =
+            cv::Vec3f(atlas.at<cv::Vec3b>(top, left)) *
+                ((1.0f - fx) * (1.0f - fy)) +
+            cv::Vec3f(atlas.at<cv::Vec3b>(top, right)) *
+                (fx * (1.0f - fy)) +
+            cv::Vec3f(atlas.at<cv::Vec3b>(bottom, left)) *
+                ((1.0f - fx) * fy) +
+            cv::Vec3f(atlas.at<cv::Vec3b>(bottom, right)) * (fx * fy);
+        return cv::Vec3b(
+            cv::saturate_cast<std::uint8_t>(color[0]),
+            cv::saturate_cast<std::uint8_t>(color[1]),
+            cv::saturate_cast<std::uint8_t>(color[2]));
+    };
+    for (const cv::Point2f &coordinate : uv)
+    {
+        EXPECT_EQ(sample_atlas(coordinate), cv::Vec3b(20, 80, 220));
+    }
+    EXPECT_EQ(
+        sample_atlas((uv[0] + uv[1] + uv[2]) * (1.0f / 3.0f)),
+        cv::Vec3b(20, 80, 220));
 }
 
 TEST(TextureMapperTest, CameraAtlasExtrudesEdgesWhenHoleFillIsDisabled)
@@ -10017,6 +10979,27 @@ TEST(TextureMapperTest, AtlasUvUsesHardwareTexelCenterConvention)
     EXPECT_FLOAT_EQ(
         xjw::mesh::texture_v4::atlasCoordinateToNormalizedUv(1024.0, 1024),
         1.0f);
+}
+
+TEST(TextureMapperTest, AtlasBakeUsesPerspectiveCorrectWorldInterpolation)
+{
+    const std::array<double, 3> affine_weights{{0.5, 0.5, 0.0}};
+    const std::array<double, 3> camera_depths{{1.0, 2.0, 4.0}};
+    std::array<double, 3> corrected_weights{};
+
+    ASSERT_TRUE(
+        xjw::mesh::texture_v4::perspectiveCorrectBarycentricWeights(
+            affine_weights,
+            camera_depths,
+            &corrected_weights));
+
+    EXPECT_NEAR(corrected_weights[0], 2.0 / 3.0, 1.0e-12);
+    EXPECT_NEAR(corrected_weights[1], 1.0 / 3.0, 1.0e-12);
+    EXPECT_NEAR(corrected_weights[2], 0.0, 1.0e-12);
+    EXPECT_NEAR(
+        corrected_weights[0] + corrected_weights[1] + corrected_weights[2],
+        1.0,
+        1.0e-12);
 }
 
 TEST(TextureMapperTest, NaturalBlendKeepsAnObservedColorAsRobustCenter)

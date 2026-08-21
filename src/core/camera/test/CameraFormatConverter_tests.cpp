@@ -177,7 +177,8 @@ TEST(CameraFormatConverterTest, EpflCameraConvertsWithSkewWarning)
 
 TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCameraList)
 {
-    // 从 dataset/sparse 自动定位同级 images，并验证两种 COLMAP 内参模型和位姿转换。
+    // 从 dataset/sparse 自动定位同级 images，并验证两类 COLMAP 内参布局。
+    // COLMAP 首像素中心为 (0.5, 0.5)，输出 Tsai 的 PlaScan 栅格索引中心为 (0, 0)。
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "plascan_camera_convert_colmap_text_test";
     std::filesystem::remove_all(root);
@@ -211,6 +212,9 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
     EXPECT_EQ(result.inputFormat, xjw::camera::CameraFormat::ColmapText);
     EXPECT_EQ(result.cameraCount, 2);
     EXPECT_TRUE(std::filesystem::exists(result.imageCameraList));
+    ASSERT_EQ(result.warnings.size(), 1);
+    EXPECT_NE(result.warnings.front().find("P1180141.JPG: COLMAP SIMPLE_RADIAL distortion terms"),
+              std::string::npos);
 
     const std::string lis = readText(result.imageCameraList);
     EXPECT_NE(lis.find("../south-building/images/P1180141.JPG cameras/P1180141.tsai"), std::string::npos);
@@ -220,8 +224,8 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
     ASSERT_TRUE(first.loadFromFile((options.outputDir / "cameras" / "P1180141.tsai").string()));
     EXPECT_DOUBLE_EQ(first.focalX(), 2559.68);
     EXPECT_DOUBLE_EQ(first.focalY(), 2559.68);
-    EXPECT_DOUBLE_EQ(first.principalX(), 1536.0);
-    EXPECT_DOUBLE_EQ(first.principalY(), 1152.0);
+    EXPECT_DOUBLE_EQ(first.principalX(), 1535.5);
+    EXPECT_DOUBLE_EQ(first.principalY(), 1151.5);
 
     const auto firstCenter = first.cameraCenter();
     EXPECT_DOUBLE_EQ(firstCenter[0], -10.0);
@@ -232,8 +236,8 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
     ASSERT_TRUE(second.loadFromFile((options.outputDir / "cameras" / "P1180142.tsai").string()));
     EXPECT_DOUBLE_EQ(second.focalX(), 2600.0);
     EXPECT_DOUBLE_EQ(second.focalY(), 2610.0);
-    EXPECT_DOUBLE_EQ(second.principalX(), 1530.0);
-    EXPECT_DOUBLE_EQ(second.principalY(), 1150.0);
+    EXPECT_DOUBLE_EQ(second.principalX(), 1529.5);
+    EXPECT_DOUBLE_EQ(second.principalY(), 1149.5);
 
     const auto secondCenter = second.cameraCenter();
     EXPECT_DOUBLE_EQ(secondCenter[0], 1.0);
@@ -242,6 +246,8 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
 
     const std::string summary = readText(result.summaryPath);
     EXPECT_NE(summary.find("\"input_format\": \"colmap-text\""), std::string::npos);
+    EXPECT_NE(summary.find("COLMAP SIMPLE_RADIAL distortion terms are not exported"),
+              std::string::npos);
 
     std::filesystem::remove_all(root);
 }

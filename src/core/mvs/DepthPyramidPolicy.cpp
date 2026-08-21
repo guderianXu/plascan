@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <sstream>
 #include <vector>
 
@@ -127,6 +128,94 @@ DepthPyramidConfig makeDepthPyramidConfig(const PatchMatchConfig &base_config,
         result.degradedReason = message.str();
     }
     return result;
+}
+
+bool shouldPreserveNativeFinalDepthGrid(bool requested,
+                                        MvsSceneProfile scene_profile,
+                                        bool epipolar_rectified) noexcept
+{
+    return requested &&
+           scene_profile == MvsSceneProfile::Custom &&
+           !epipolar_rectified;
+}
+
+FramePinholeCamera cameraForDepthGrid(const FramePinholeCamera &raster_camera,
+                                      const cv::Size &raster_size,
+                                      const cv::Size &depth_grid_size)
+{
+    if (raster_size.width <= 0 || raster_size.height <= 0 ||
+        depth_grid_size.width <= 0 || depth_grid_size.height <= 0 ||
+        depth_grid_size == raster_size)
+    {
+        return raster_camera;
+    }
+
+    return raster_camera.scaledIntrinsics(
+        static_cast<double>(depth_grid_size.width) / raster_size.width,
+        static_cast<double>(depth_grid_size.height) / raster_size.height);
+}
+
+DepthPixelDomainScale depthPixelDomainScale(const cv::Size &raster_size,
+                                             const cv::Size &depth_grid_size) noexcept
+{
+    DepthPixelDomainScale result;
+    result.rasterSize = raster_size;
+    result.gridSize = depth_grid_size;
+    if (raster_size.width <= 0 || raster_size.height <= 0 ||
+        depth_grid_size.width <= 0 || depth_grid_size.height <= 0)
+    {
+        return result;
+    }
+
+    result.scaleX = static_cast<double>(depth_grid_size.width) /
+                    static_cast<double>(raster_size.width);
+    result.scaleY = static_cast<double>(depth_grid_size.height) /
+                    static_cast<double>(raster_size.height);
+    result.areaScale = result.scaleX * result.scaleY;
+    result.linearScale = std::sqrt(result.areaScale);
+    return result;
+}
+
+int scaleDepthPixelRadius(int raster_radius,
+                          const DepthPixelDomainScale &scale) noexcept
+{
+    return std::max(0, static_cast<int>(std::lround(
+        static_cast<double>(std::max(0, raster_radius)) * scale.linearScale)));
+}
+
+float scaleDepthPixelDistance(float raster_distance,
+                              const DepthPixelDomainScale &scale) noexcept
+{
+    if (!std::isfinite(raster_distance) || raster_distance <= 0.0f)
+    {
+        return 0.0f;
+    }
+    return static_cast<float>(
+        static_cast<double>(raster_distance) * scale.linearScale);
+}
+
+int scaleDepthPixelArea(int raster_area,
+                        const DepthPixelDomainScale &scale) noexcept
+{
+    if (raster_area <= 0)
+    {
+        return 0;
+    }
+    return std::max(1, static_cast<int>(std::lround(
+        static_cast<double>(raster_area) * scale.areaScale)));
+}
+
+int scaleDepthLocalOutlierKernel(
+    int raster_kernel_size,
+    const DepthPixelDomainScale &scale) noexcept
+{
+    if (raster_kernel_size < 3)
+    {
+        return 1;
+    }
+    const int normalized_kernel = std::clamp(raster_kernel_size | 1, 3, 5);
+    const int raster_radius = (normalized_kernel - 1) / 2;
+    return scaleDepthPixelRadius(raster_radius, scale) * 2 + 1;
 }
 
 } // namespace mvs

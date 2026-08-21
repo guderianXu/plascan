@@ -125,6 +125,72 @@ xjw::mvs::SparseCloud makePlanarSparseCloud()
     return sparse;
 }
 
+xjw::mvs::SparseCloud makeVolumetricSparseCloud()
+{
+    xjw::mvs::SparseCloud sparse;
+    for (int z = -2; z <= 2; ++z)
+    {
+        for (int y = -2; y <= 2; ++y)
+        {
+            for (int x = -2; x <= 2; ++x)
+            {
+                sparse.points.push_back({static_cast<float>(x),
+                                         static_cast<float>(y),
+                                         static_cast<float>(z)});
+            }
+        }
+    }
+    return sparse;
+}
+
+xjw::mvs::CameraView makeViewWithForward(const cv::Vec3d &center,
+                                         const cv::Vec3d &forward_direction)
+{
+    const cv::Vec3d forward = forward_direction / cv::norm(forward_direction);
+    cv::Vec3d reference_up(0.0, 0.0, 1.0);
+    if (std::abs(forward.dot(reference_up)) > 0.95)
+    {
+        reference_up = cv::Vec3d(0.0, 1.0, 0.0);
+    }
+    const cv::Vec3d right = reference_up.cross(forward) /
+                            cv::norm(reference_up.cross(forward));
+    const cv::Vec3d camera_up = forward.cross(right);
+
+    xjw::mvs::CameraView view;
+    view.imageWidth = 640;
+    view.imageHeight = 480;
+    view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
+    view.camera.setPose(
+        std::array<double, 9>{right[0], camera_up[0], forward[0],
+                              right[1], camera_up[1], forward[1],
+                              right[2], camera_up[2], forward[2]},
+        std::array<double, 3>{center[0], center[1], center[2]});
+    view.camera.setAxisDirections(1, 1);
+    view.camera.setDepthAxisFlipped(false);
+    return view;
+}
+
+xjw::mvs::CameraView makeLookAtView(const cv::Vec3d &center,
+                                    const cv::Vec3d &target)
+{
+    return makeViewWithForward(center, target - center);
+}
+
+std::vector<xjw::mvs::CameraView> makeOrbitalRingViews(int count)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    views.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index)
+    {
+        const double angle = 2.0 * CV_PI * static_cast<double>(index) /
+                             static_cast<double>(count);
+        views.push_back(makeLookAtView(
+            cv::Vec3d(10.0 * std::cos(angle), 10.0 * std::sin(angle), 2.0),
+            cv::Vec3d(0.0, 0.0, 0.0)));
+    }
+    return views;
+}
+
 class RecordingPatchMatchBackend final : public xjw::mvs::IPatchMatchBackend
 {
 public:
@@ -327,6 +393,79 @@ TEST(DepthPyramidPolicyTest, UsesNativeWorkingResolutionForStoredIntermediateLev
     EXPECT_EQ(xjw::mvs::depthPyramidWorkingSize(6000, 4000, 0), cv::Size(6000, 4000));
 }
 
+TEST(DepthPyramidPolicyTest, NativeFinalGridFailsClosedOutsideUnrectifiedCustomScenes)
+{
+    EXPECT_FALSE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        false, xjw::mvs::MvsSceneProfile::Custom, false));
+    EXPECT_TRUE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        true, xjw::mvs::MvsSceneProfile::Custom, false));
+    EXPECT_FALSE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        true, xjw::mvs::MvsSceneProfile::Custom, true));
+    EXPECT_FALSE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        true, xjw::mvs::MvsSceneProfile::OrbitalObject, false));
+    EXPECT_FALSE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        true, xjw::mvs::MvsSceneProfile::AerialTerrain, false));
+    EXPECT_FALSE(xjw::mvs::shouldPreserveNativeFinalDepthGrid(
+        true, xjw::mvs::MvsSceneProfile::Auto, false));
+}
+
+TEST(DepthPyramidPolicyTest, ScalesCameraToOddNativeDepthGridWithPixelCenterConvention)
+{
+    const double identity[9] = {1.0, 0.0, 0.0,
+                                0.0, 1.0, 0.0,
+                                0.0, 0.0, 1.0};
+    const double center[3] = {0.0, 0.0, 0.0};
+    xjw::FramePinholeCamera raster_camera = makeMvsCamera(
+        3536.75872, 3533.741148, 3217.170232, 2125.808664,
+        identity, center);
+    raster_camera.setImageSize(xjw::CameraImageSize{6221, 4146});
+
+    const cv::Size raster_size(6221, 4146);
+    const cv::Size grid_size = xjw::mvs::depthPyramidWorkingSize(
+        raster_size.width, raster_size.height, 4);
+    ASSERT_EQ(grid_size, cv::Size(1555, 1036));
+
+    const xjw::FramePinholeCamera grid_camera =
+        xjw::mvs::cameraForDepthGrid(raster_camera, raster_size, grid_size);
+    const double scale_x = static_cast<double>(grid_size.width) / raster_size.width;
+    const double scale_y = static_cast<double>(grid_size.height) / raster_size.height;
+    EXPECT_DOUBLE_EQ(grid_camera.focalX(), raster_camera.focalX() * scale_x);
+    EXPECT_DOUBLE_EQ(grid_camera.focalY(), raster_camera.focalY() * scale_y);
+    EXPECT_DOUBLE_EQ(
+        grid_camera.principalX(),
+        (raster_camera.principalX() + 0.5) * scale_x - 0.5);
+    EXPECT_DOUBLE_EQ(
+        grid_camera.principalY(),
+        (raster_camera.principalY() + 0.5) * scale_y - 0.5);
+    ASSERT_TRUE(grid_camera.imageSize().has_value());
+    EXPECT_EQ(grid_camera.imageSize()->samples, grid_size.width);
+    EXPECT_EQ(grid_camera.imageSize()->lines, grid_size.height);
+}
+
+TEST(DepthPyramidPolicyTest, ScalesFullRasterPixelParametersToOddNativeGrid)
+{
+    const cv::Size raster_size(6221, 4146);
+    const cv::Size grid_size(1555, 1036);
+    const xjw::mvs::DepthPixelDomainScale scale =
+        xjw::mvs::depthPixelDomainScale(raster_size, grid_size);
+
+    EXPECT_DOUBLE_EQ(scale.scaleX, 1555.0 / 6221.0);
+    EXPECT_DOUBLE_EQ(scale.scaleY, 1036.0 / 4146.0);
+    EXPECT_NEAR(scale.linearScale, 0.25, 1.0e-3);
+    EXPECT_NEAR(scale.areaScale, 1.0 / 16.0, 5.0e-4);
+    EXPECT_EQ(xjw::mvs::scaleDepthPixelRadius(1, scale), 0);
+    EXPECT_EQ(xjw::mvs::scaleDepthLocalOutlierKernel(3, scale), 1);
+    EXPECT_EQ(xjw::mvs::scaleDepthPixelArea(64, scale), 4);
+    EXPECT_NEAR(
+        xjw::mvs::scaleDepthPixelDistance(3.0f, scale), 0.75f, 0.01f);
+
+    const auto identity_scale = xjw::mvs::depthPixelDomainScale(
+        raster_size, raster_size);
+    EXPECT_EQ(xjw::mvs::scaleDepthPixelRadius(1, identity_scale), 1);
+    EXPECT_EQ(xjw::mvs::scaleDepthLocalOutlierKernel(3, identity_scale), 3);
+    EXPECT_EQ(xjw::mvs::scaleDepthPixelArea(64, identity_scale), 64);
+}
+
 TEST(MvsSceneClassifierTest, DetectsAerialCameraLayout)
 {
     const std::vector<xjw::mvs::CameraView> views = makeDownLookingGridViews(3, 3);
@@ -380,7 +519,7 @@ TEST(MvsSceneClassifierTest, DetectsLongAerialStripWithoutGlobalCenterConvergenc
     EXPECT_LE(classification.planeThicknessRatio, 0.20f);
 }
 
-TEST(MvsSceneClassifierTest, KeepsTwoSidedPlanarCaptureOrbital)
+TEST(MvsSceneClassifierTest, KeepsTwoSidedPlanarCaptureGeneral)
 {
     std::vector<xjw::mvs::CameraView> views;
     for (int index = 0; index < 8; ++index)
@@ -409,12 +548,13 @@ TEST(MvsSceneClassifierTest, KeepsTwoSidedPlanarCaptureOrbital)
     const xjw::mvs::MvsSceneClassification classification =
         xjw::mvs::classifyMvsScene(views, makePlanarSparseCloud());
 
-    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
     EXPECT_GE(classification.downLookingConsistency, 0.75f);
     EXPECT_LE(classification.planeThicknessRatio, 0.20f);
 }
 
-TEST(MvsSceneClassifierTest, FallsBackToOrbitalForNonPlanarCloud)
+TEST(MvsSceneClassifierTest, KeepsNonPlanarTerrainCaptureGeneral)
 {
     const std::vector<xjw::mvs::CameraView> views = makeDownLookingGridViews(3, 3);
     xjw::mvs::SparseCloud sparse;
@@ -434,13 +574,189 @@ TEST(MvsSceneClassifierTest, FallsBackToOrbitalForNonPlanarCloud)
     const xjw::mvs::MvsSceneClassification classification =
         xjw::mvs::classifyMvsScene(views, sparse);
 
-    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
     EXPECT_GT(classification.planeThicknessRatio, 0.20f);
+}
+
+TEST(MvsSceneClassifierTest, DetectsConvergentPlanarObjectRing)
+{
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(
+            makeOrbitalRingViews(12), makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    EXPECT_TRUE(classification.orbitalGatePassed);
+    EXPECT_EQ(classification.distinctCameraCenterCount, 12);
+    EXPECT_GE(classification.cameraCenterInPlaneBalance, 0.95f);
+    EXPECT_LE(classification.cameraCenterNonPlanarity, 1.0e-5f);
+    EXPECT_LE(classification.orbitalProjectedRadiusMadRatio, 1.0e-5f);
+    EXPECT_LE(classification.orbitalProjectedCenterOffsetRatio, 1.0e-5f);
+    EXPECT_NEAR(classification.orbitalMaximumAngularGapDegrees, 30.0f, 1.0e-3f);
+    EXPECT_LE(classification.orbitalOpticalAxisMedianErrorDegrees, 1.0e-4f);
+    EXPECT_LE(classification.orbitalOpticalAxisP90ErrorDegrees, 1.0e-4f);
+}
+
+TEST(MvsSceneClassifierTest, RejectsOfficeStyleForwardFacingEllipse)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (int index = 0; index < 26; ++index)
+    {
+        const double angle = 2.0 * CV_PI * static_cast<double>(index) / 26.0;
+        const cv::Vec3d center(
+            10.0 * std::cos(angle), 6.0 * std::sin(angle), -5.0);
+        const cv::Vec3d direction_to_cloud = -center / cv::norm(center);
+        const cv::Vec3d tangent_raw(
+            -direction_to_cloud[1], direction_to_cloud[0], 0.0);
+        const cv::Vec3d tangent = tangent_raw / cv::norm(tangent_raw);
+        const cv::Vec3d forward = index < 12
+            ? direction_to_cloud
+            : 0.30 * direction_to_cloud + std::sqrt(1.0 - 0.30 * 0.30) * tangent;
+        views.push_back(makeViewWithForward(center, forward));
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
+    EXPECT_GE(classification.cameraCenterInPlaneBalance, 0.25f);
+    EXPECT_LE(classification.cameraCenterNonPlanarity, 1.0e-5f);
+    EXPECT_LE(classification.orbitalProjectedRadiusMadRatio, 0.30f);
+    EXPECT_LE(classification.orbitalMaximumAngularGapDegrees, 120.0f);
+    EXPECT_GT(classification.orbitalOpticalAxisMedianErrorDegrees, 30.0f);
+    EXPECT_EQ(classification.convergentCameraCount, 12);
+    EXPECT_NEAR(classification.opticalAxisConvergence, 0.6230769f, 1.0e-5f);
+    EXPECT_NE(classification.reason.find("median-axis-not-convergent"),
+              std::string::npos);
+}
+
+TEST(MvsSceneClassifierTest, RejectsCollinearCameraCenters)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (int index = -4; index <= 4; ++index)
+    {
+        views.push_back(makeLookAtView(
+            cv::Vec3d(static_cast<double>(index * 2), 0.0, -8.0),
+            cv::Vec3d(0.0, 0.0, 0.0)));
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
+    EXPECT_LT(classification.cameraCenterInPlaneBalance, 0.25f);
+    EXPECT_NE(classification.reason.find("camera-centers-collinear"),
+              std::string::npos);
+}
+
+TEST(MvsSceneClassifierTest, RejectsCoincidentCameraCenters)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (int index = 0; index < 8; ++index)
+    {
+        views.push_back(makeLookAtView(
+            cv::Vec3d(0.0, 0.0, -8.0), cv::Vec3d(0.0, 0.0, 0.0)));
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
+    EXPECT_EQ(classification.distinctCameraCenterCount, 1);
+    EXPECT_NE(classification.reason.find("fewer-than-3-distinct-cameras"),
+              std::string::npos);
+}
+
+TEST(MvsSceneClassifierTest, RejectsNonPlanarConvergentCameraGrid)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (const double z : {-8.0, 8.0})
+    {
+        for (const double y : {-8.0, 8.0})
+        {
+            for (const double x : {-8.0, 8.0})
+            {
+                views.push_back(makeLookAtView(
+                    cv::Vec3d(x, y, z), cv::Vec3d(0.0, 0.0, 0.0)));
+            }
+        }
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
+    EXPECT_GT(classification.cameraCenterNonPlanarity, 0.20f);
+    EXPECT_NE(classification.reason.find("camera-centers-nonplanar"),
+              std::string::npos);
+}
+
+TEST(MvsSceneClassifierTest, UsesGeneralProfileForInsufficientInputs)
+{
+    std::vector<xjw::mvs::CameraView> views = makeOrbitalRingViews(2);
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makeVolumetricSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::Custom);
+    EXPECT_FALSE(classification.orbitalGatePassed);
+}
+
+TEST(MvsSceneClassifierTest, IsDeterministicAcrossInputOrdering)
+{
+    std::vector<xjw::mvs::CameraView> views = makeOrbitalRingViews(12);
+    xjw::mvs::SparseCloud sparse = makeVolumetricSparseCloud();
+    const xjw::mvs::MvsSceneClassification forward =
+        xjw::mvs::classifyMvsScene(views, sparse);
+
+    std::reverse(views.begin(), views.end());
+    std::reverse(sparse.points.begin(), sparse.points.end());
+    const xjw::mvs::MvsSceneClassification reversed =
+        xjw::mvs::classifyMvsScene(views, sparse);
+
+    EXPECT_EQ(reversed.profile, forward.profile);
+    EXPECT_EQ(reversed.validCameraCount, forward.validCameraCount);
+    EXPECT_EQ(reversed.distinctCameraCenterCount, forward.distinctCameraCenterCount);
+    EXPECT_EQ(reversed.convergentCameraCount, forward.convergentCameraCount);
+    EXPECT_FLOAT_EQ(reversed.cameraCenterLinearity, forward.cameraCenterLinearity);
+    EXPECT_FLOAT_EQ(reversed.cameraCenterInPlaneBalance,
+                    forward.cameraCenterInPlaneBalance);
+    EXPECT_FLOAT_EQ(reversed.cameraCenterNonPlanarity,
+                    forward.cameraCenterNonPlanarity);
+    EXPECT_FLOAT_EQ(reversed.opticalAxisConvergence, forward.opticalAxisConvergence);
+    EXPECT_FLOAT_EQ(reversed.orbitalOpticalAxisMedianErrorDegrees,
+                    forward.orbitalOpticalAxisMedianErrorDegrees);
+    EXPECT_FLOAT_EQ(reversed.orbitalOpticalAxisP90ErrorDegrees,
+                    forward.orbitalOpticalAxisP90ErrorDegrees);
+    EXPECT_FLOAT_EQ(reversed.orbitalProjectedRadiusMadRatio,
+                    forward.orbitalProjectedRadiusMadRatio);
+    EXPECT_FLOAT_EQ(reversed.orbitalProjectedCenterOffsetRatio,
+                    forward.orbitalProjectedCenterOffsetRatio);
+    EXPECT_FLOAT_EQ(reversed.orbitalMaximumAngularGapDegrees,
+                    forward.orbitalMaximumAngularGapDegrees);
+    EXPECT_FLOAT_EQ(reversed.planeThicknessRatio, forward.planeThicknessRatio);
+    EXPECT_FLOAT_EQ(reversed.downLookingConsistency, forward.downLookingConsistency);
+    EXPECT_EQ(reversed.orbitalGatePassed, forward.orbitalGatePassed);
+    EXPECT_EQ(reversed.reason, forward.reason);
 }
 
 TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
 {
     using xjw::mvs::MvsSceneProfile;
+
+    EXPECT_EQ(xjw::mvs::recommendedMvsDepthFilterMode(
+                  MvsSceneProfile::OrbitalObject),
+              xjw::mvs::DepthFilterMode::Mild);
+    EXPECT_EQ(xjw::mvs::recommendedMvsDepthFilterMode(
+                  MvsSceneProfile::AerialTerrain),
+              xjw::mvs::DepthFilterMode::Moderate);
+    EXPECT_EQ(xjw::mvs::recommendedMvsDepthFilterMode(
+                  MvsSceneProfile::Custom),
+              xjw::mvs::DepthFilterMode::Moderate);
     using xjw::mvs::recommendedMvsSourceViewCount;
 
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 9), 8);
@@ -454,6 +770,7 @@ TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 8, 16), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 5), 4);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 10, 16), 10);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::Custom, 2, 7, 12), 7);
 }
 
 TEST(MvsDepthConfidenceThresholdTest,
@@ -504,6 +821,7 @@ TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 4), 47.0f);
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 6), 70.0f);
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::AerialTerrain), 35.0f);
+    EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::Custom), 35.0f);
     EXPECT_NEAR(
         adaptiveMvsSourceMaximumAngleDeg(
             MvsSceneProfile::OrbitalObject,
@@ -533,6 +851,93 @@ TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
              56.0f, 56.4f, 56.8f, 64.0f, 64.4f, 64.8f}),
         20.5f,
         1.0e-4f);
+}
+
+TEST(MvsSceneClassifierTest, SourceAngleExperimentCapOnlyTightensSceneMaximum)
+{
+    using xjw::mvs::constrainMvsSourceMaximumAngleDeg;
+
+    EXPECT_FLOAT_EQ(constrainMvsSourceMaximumAngleDeg(35.0f, 0.0f),
+                    35.0f);
+    EXPECT_FLOAT_EQ(constrainMvsSourceMaximumAngleDeg(35.0f, 45.0f),
+                    35.0f);
+    EXPECT_FLOAT_EQ(constrainMvsSourceMaximumAngleDeg(35.0f, 25.0f),
+                    25.0f);
+    EXPECT_FLOAT_EQ(constrainMvsSourceMaximumAngleDeg(
+                        35.0f,
+                        std::numeric_limits<float>::quiet_NaN()),
+                    35.0f);
+
+    xjw::mvs::DepthGenConfig default_config;
+    EXPECT_FLOAT_EQ(default_config.sourceMaximumAngleDegCap, 0.0f);
+    EXPECT_FALSE(default_config.evaluateCompleteVisibilityCandidatePool);
+    EXPECT_FLOAT_EQ(default_config.sourceAngleSoftRankingStrength, 0.0f);
+    const QString default_hash =
+        xjw::mvs::makeMvsDepthConfigHash(default_config, 26);
+    xjw::mvs::DepthGenConfig explicit_default_config = default_config;
+    explicit_default_config.evaluateCompleteVisibilityCandidatePool = false;
+    explicit_default_config.sourceAngleSoftRankingStrength = 0.0f;
+    EXPECT_EQ(default_hash,
+              xjw::mvs::makeMvsDepthConfigHash(
+                  explicit_default_config, 26));
+
+    xjw::mvs::DepthGenConfig capped_config = default_config;
+    capped_config.sourceMaximumAngleDegCap = 25.0f;
+    EXPECT_NE(default_hash,
+              xjw::mvs::makeMvsDepthConfigHash(capped_config, 26));
+
+    xjw::mvs::DepthGenConfig complete_pool_config = default_config;
+    complete_pool_config.evaluateCompleteVisibilityCandidatePool = true;
+    EXPECT_NE(default_hash,
+              xjw::mvs::makeMvsDepthConfigHash(
+                  complete_pool_config, 26));
+    xjw::mvs::DepthGenConfig soft_rank_config = complete_pool_config;
+    soft_rank_config.sourceAngleSoftRankingStrength = 1.0f;
+    EXPECT_NE(
+        xjw::mvs::makeMvsDepthConfigHash(complete_pool_config, 26),
+        xjw::mvs::makeMvsDepthConfigHash(soft_rank_config, 26));
+}
+
+TEST(DepthMapGeneratorTest,
+     SourceAngleCapShortfallSafetyIsFailClosedAndIdempotent)
+{
+    xjw::mvs::DepthFrameResult result;
+    result.success = true;
+    result.sourceAngleCapEnabled = true;
+    result.requestedSourceViewCount = 4;
+    result.sourceViewShortfall = 1;
+    result.qualityDecision.acceptance =
+        xjw::mvs::DepthFrameAcceptance::Accepted;
+
+    xjw::mvs::detail::applySourceAngleCapShortfallSafety(result);
+    xjw::mvs::detail::applySourceAngleCapShortfallSafety(result);
+
+    EXPECT_EQ(result.qualityDecision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_FALSE(result.eligibleForFusion());
+    EXPECT_EQ(std::count(
+                  result.qualityDecision.reasons.cbegin(),
+                  result.qualityDecision.reasons.cend(),
+                  "source_angle_cap_source_shortfall"),
+              1);
+
+    result.qualityDecision.acceptance =
+        xjw::mvs::DepthFrameAcceptance::Rejected;
+    result.qualityDecision.reasons.clear();
+    xjw::mvs::detail::applySourceAngleCapShortfallSafety(result);
+    EXPECT_EQ(result.qualityDecision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_TRUE(result.qualityDecision.reasons.empty());
+
+    xjw::mvs::DepthFrameResult uncapped;
+    uncapped.success = true;
+    uncapped.sourceViewShortfall = 2;
+    uncapped.qualityDecision.acceptance =
+        xjw::mvs::DepthFrameAcceptance::Accepted;
+    xjw::mvs::detail::applySourceAngleCapShortfallSafety(uncapped);
+    EXPECT_EQ(uncapped.qualityDecision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_TRUE(uncapped.qualityDecision.reasons.empty());
 }
 
 TEST(DepthPyramidPropagationTest, PreservesDepthStepAndExpandsLowConfidenceRadius)
@@ -670,6 +1075,38 @@ TEST(DepthPyramidEstimatorTest, RunsCoarseMiddleFineAndReturnsFinalLevel)
     EXPECT_FLOAT_EQ(result.levelSummaries[2].depthDiscontinuityRatio, 0.0f);
 }
 
+TEST(DepthPyramidEstimatorTest, ReturnsOddNativeFinalGridOnlyWhenRequested)
+{
+    RecordingPatchMatchBackend backend;
+    xjw::mvs::DepthPyramidEstimator estimator(&backend);
+    xjw::mvs::DepthPyramidRequest request;
+    request.referenceImage = cv::Mat(667, 1001, CV_8U, cv::Scalar(128));
+    request.sourceImages = {request.referenceImage};
+    request.guideImage = request.referenceImage;
+    xjw::mvs::PatchMatchConfig base;
+    base.downsampleFactor = 4;
+    request.pyramidConfig = xjw::mvs::makeDepthPyramidConfig(base, 1001, 667);
+    request.pyramidConfig.returnNativeFinalResolution = true;
+    request.zNear = 1.0f;
+    request.zFar = 20.0f;
+
+    const xjw::mvs::DepthPyramidResult result = estimator.estimate(request);
+
+    ASSERT_TRUE(result.success) << result.errorMessage;
+    ASSERT_EQ(request.pyramidConfig.activeLevelCount, 2);
+    EXPECT_EQ(backend.downsampleCalls(), (std::vector<int>{4, 2}));
+    EXPECT_EQ(backend.nativeOutputCalls(), (std::vector<bool>{true, true}));
+    EXPECT_EQ(result.finalLevel.level, 1);
+    EXPECT_EQ(result.finalLevel.downsampleFactor, 2);
+    EXPECT_EQ(result.finalLevel.depth.size(), cv::Size(500, 333));
+    EXPECT_EQ(result.finalLevel.confidence.size(), cv::Size(500, 333));
+    EXPECT_EQ(result.finalLevel.supportCount.size(), cv::Size(500, 333));
+    EXPECT_EQ(result.finalLevel.uncertainty.size(), cv::Size(500, 333));
+    EXPECT_EQ(result.finalLevel.validMask.size(), cv::Size(500, 333));
+    ASSERT_EQ(result.levelSummaries.size(), 2U);
+    EXPECT_EQ(result.levelSummaries.back().validPixelCount, 500 * 333);
+}
+
 TEST(DepthPyramidEstimatorTest, RetainsCoarseAndMiddleLevelsOnlyWhenRequested)
 {
     RecordingPatchMatchBackend backend;
@@ -736,6 +1173,36 @@ TEST(DepthPyramidEstimatorTest, FallsBackToParentWhenFineCoverageCollapses)
     EXPECT_EQ(result.finalLevel.supportCount.size(), cv::Size(800, 640));
     EXPECT_EQ(result.finalLevel.uncertainty.size(), cv::Size(800, 640));
     EXPECT_EQ(result.finalLevel.validMask.size(), cv::Size(800, 640));
+    ASSERT_EQ(result.levelSummaries.size(), 3U);
+    EXPECT_FALSE(result.levelSummaries.back().success);
+    EXPECT_NE(result.errorMessage.find("coverage regression"), std::string::npos);
+}
+
+TEST(DepthPyramidEstimatorTest, NativeFinalModeKeepsOddParentGridOnFineFallback)
+{
+    CollapsingFinePatchMatchBackend backend;
+    xjw::mvs::DepthPyramidEstimator estimator(&backend);
+    xjw::mvs::DepthPyramidRequest request;
+    request.referenceImage = cv::Mat(641, 801, CV_8U, cv::Scalar(128));
+    request.sourceImages = {request.referenceImage};
+    request.guideImage = request.referenceImage;
+    xjw::mvs::PatchMatchConfig base;
+    base.downsampleFactor = 1;
+    request.pyramidConfig = xjw::mvs::makeDepthPyramidConfig(base, 801, 641);
+    request.pyramidConfig.returnNativeFinalResolution = true;
+    request.zNear = 1.0f;
+    request.zFar = 20.0f;
+
+    const xjw::mvs::DepthPyramidResult result = estimator.estimate(request);
+
+    ASSERT_TRUE(result.success) << result.errorMessage;
+    EXPECT_EQ(result.finalLevel.level, 2);
+    EXPECT_EQ(result.finalLevel.downsampleFactor, 2);
+    EXPECT_EQ(result.finalLevel.depth.size(), cv::Size(400, 320));
+    EXPECT_EQ(result.finalLevel.confidence.size(), cv::Size(400, 320));
+    EXPECT_EQ(result.finalLevel.supportCount.size(), cv::Size(400, 320));
+    EXPECT_EQ(result.finalLevel.uncertainty.size(), cv::Size(400, 320));
+    EXPECT_EQ(result.finalLevel.validMask.size(), cv::Size(400, 320));
     ASSERT_EQ(result.levelSummaries.size(), 3U);
     EXPECT_FALSE(result.levelSummaries.back().success);
     EXPECT_NE(result.errorMessage.find("coverage regression"), std::string::npos);
@@ -1058,6 +1525,116 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
         << "DepthMapFusion should produce at least one fused point";
 }
 
+TEST(MvsPipelineTest, FusionReprojectionThresholdUsesEachTargetFrameGridScale)
+{
+    constexpr int width = 9;
+    constexpr int height = 9;
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(2);
+    frames[0].depthMap = cv::Mat::zeros(height, width, CV_32F);
+    frames[0].depthMap.at<float>(4, 4) = 8.0f;
+    frames[0].cameraModel = makeMvsCamera(
+        20.0, 20.0, 4.0, 4.0, identity, center);
+    frames[0].sourceCamera = frames[0].cameraModel;
+    frames[0].sourceCamera.setImageSize(xjw::CameraImageSize{width, height});
+    frames[0].imgW = width;
+    frames[0].imgH = height;
+    frames[0].sourceImageIndices = {1};
+
+    frames[1].depthMap = cv::Mat(height, width, CV_32F, cv::Scalar(8.0f));
+    frames[1].cameraModel = makeMvsCamera(
+        20.0, 20.0, 4.4, 4.0, identity, center);
+    frames[1].sourceCamera = frames[1].cameraModel;
+    frames[1].sourceCamera.setImageSize(
+        xjw::CameraImageSize{width * 4, height * 4});
+    frames[1].imgW = width;
+    frames[1].imgH = height;
+
+    xjw::mvs::StereoFusionConfig config;
+    config.fuseOnlyFirstFrame = true;
+    config.minNumPixels = 2;
+    config.checkNumImages = 1;
+    config.maxReprojError = 1.0f;
+    config.maxDepthError = 0.01f;
+    config.maxLocalDepthGradient = 0.0f;
+    config.pixelParametersUsePreparedRaster = true;
+
+    xjw::mvs::DepthMapFusion native_fusion(config);
+    std::vector<xjw::mvs::FusedPoint> native_points;
+    std::string error;
+    ASSERT_TRUE(native_fusion.fuse(frames, native_points, nullptr, &error))
+        << error;
+    EXPECT_TRUE(native_points.empty())
+        << "A 0.4-grid-pixel residual must exceed the target's ds4 0.25-pixel gate.";
+
+    frames[1].sourceCamera.setImageSize(
+        xjw::CameraImageSize{width, height});
+    xjw::mvs::DepthMapFusion full_grid_fusion(config);
+    std::vector<xjw::mvs::FusedPoint> full_grid_points;
+    ASSERT_TRUE(full_grid_fusion.fuse(
+        frames, full_grid_points, nullptr, &error)) << error;
+    EXPECT_EQ(full_grid_points.size(), 1u);
+}
+
+TEST(MvsPipelineTest, FusionLocalGradientUsesEachFrameGridScale)
+{
+    constexpr int width = 9;
+    constexpr int height = 9;
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(2);
+    frames[0].depthMap = cv::Mat::zeros(height, width, CV_32F);
+    frames[0].depthMap.at<float>(4, 4) = 8.0f;
+    frames[1].depthMap = cv::Mat(height, width, CV_32F, cv::Scalar(12.0f));
+    frames[1].depthMap.at<float>(4, 4) = 8.0f;
+    for (auto &frame : frames)
+    {
+        frame.cameraModel = makeMvsCamera(
+            20.0, 20.0, 4.0, 4.0, identity, center);
+        frame.sourceCamera = frame.cameraModel;
+        frame.imgW = width;
+        frame.imgH = height;
+    }
+    frames[0].sourceCamera.setImageSize(
+        xjw::CameraImageSize{width, height});
+    frames[1].sourceCamera.setImageSize(
+        xjw::CameraImageSize{width * 4, height * 4});
+    frames[0].sourceImageIndices = {1};
+
+    xjw::mvs::StereoFusionConfig config;
+    config.fuseOnlyFirstFrame = true;
+    config.minNumPixels = 2;
+    config.checkNumImages = 1;
+    config.maxReprojError = 1.0f;
+    config.maxDepthError = 0.01f;
+    config.maxLocalDepthGradient = 0.10f;
+    config.localDepthGradientRadiusPixels = 1;
+    config.pixelParametersUsePreparedRaster = true;
+
+    xjw::mvs::DepthMapFusion native_fusion(config);
+    std::vector<xjw::mvs::FusedPoint> native_points;
+    std::string error;
+    ASSERT_TRUE(native_fusion.fuse(frames, native_points, nullptr, &error))
+        << error;
+    EXPECT_EQ(native_points.size(), 1u)
+        << "The one-full-raster-pixel gradient radius is subpixel on the ds4 target.";
+
+    frames[1].sourceCamera.setImageSize(
+        xjw::CameraImageSize{width, height});
+    xjw::mvs::DepthMapFusion full_grid_fusion(config);
+    std::vector<xjw::mvs::FusedPoint> full_grid_points;
+    ASSERT_TRUE(full_grid_fusion.fuse(
+        frames, full_grid_points, nullptr, &error)) << error;
+    EXPECT_TRUE(full_grid_points.empty());
+}
+
 TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
 {
     constexpr int W = 20;
@@ -1121,6 +1698,10 @@ TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
 TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
 {
     xjw::mvs::DepthFrameResult result;
+    result.preparedRasterSize = cv::Size(20, 16);
+    result.effectiveNativeFinalDepthGrid = true;
+    result.pixelDomainDiagnostics.insert(
+        QStringLiteral("linear_scale"), 0.25);
     result.depthMap = QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(8.0f));
     result.normalMap = QSharedPointer<cv::Mat>::create(4, 5, CV_32FC3, cv::Scalar(0.0f, 0.0f, 1.0f));
     result.supportCount = QSharedPointer<cv::Mat>::create(4, 5, CV_16U, cv::Scalar(3));
@@ -1144,6 +1725,10 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     EXPECT_TRUE(result.adaptiveGeometryConflictRatio.isNull());
     EXPECT_TRUE(result.validMask.isNull());
     EXPECT_TRUE(result.supportRegionMask.isNull());
+    EXPECT_EQ(result.preparedRasterSize, cv::Size(20, 16));
+    EXPECT_TRUE(result.effectiveNativeFinalDepthGrid);
+    EXPECT_DOUBLE_EQ(result.pixelDomainDiagnostics.value(
+        QStringLiteral("linear_scale")).toDouble(), 0.25);
 }
 
 TEST(MvsPipelineTest, StreamingPixelReleasePreservesSupportRegionMask)
@@ -1651,6 +2236,23 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
     EXPECT_GT(central_only.worldSurfaceResidual, 0.0f);
     EXPECT_GT(central_only.jointWorldPixelFootprint, 0.0f);
 
+    const auto reduced_grid_subpixel =
+        xjw::mvs::evaluateProjectedDepthConsistency(
+            reference_camera,
+            reference_pixel,
+            reference_depth,
+            source_camera,
+            source_depth,
+            0.05f,
+            0,
+            1.5f,
+            true,
+            true);
+    EXPECT_EQ(reduced_grid_subpixel.evidence,
+              xjw::mvs::DepthConsistencyEvidence::Consistent);
+    EXPECT_EQ(reduced_grid_subpixel.sourcePixel.x, consistent_column);
+    EXPECT_LE(reduced_grid_subpixel.roundTripErrorPixels, 1.5f);
+
     const auto edge_aware = xjw::mvs::evaluateProjectedDepthConsistency(
         reference_camera,
         reference_pixel,
@@ -1914,6 +2516,42 @@ TEST(DepthGeometryConsistencyTest, BuildsSourceAndInverseDepthEvidence)
     EXPECT_EQ(evidence.supportCount.at<std::uint16_t>(0, 2), 2);
 }
 
+TEST(DepthGeometryConsistencyTest,
+     AllowsZeroMaskWithoutOrdinalsButRejectsNonzeroMask)
+{
+    const cv::Mat zero_mask(2, 3, CV_16UC1, cv::Scalar(0));
+    const auto zero_contract =
+        xjw::mvs::validateGeometrySourceOrdinalContract(
+            zero_mask, {}, 5, 6, zero_mask.size());
+
+    EXPECT_TRUE(zero_contract.valid);
+    EXPECT_FALSE(zero_contract.persistMask);
+
+    cv::Mat nonzero_mask = zero_mask.clone();
+    nonzero_mask.at<std::uint16_t>(0, 1) = 1;
+    const auto invalid_contract =
+        xjw::mvs::validateGeometrySourceOrdinalContract(
+            nonzero_mask, {}, 5, 6, nonzero_mask.size());
+
+    EXPECT_FALSE(invalid_contract.valid);
+    EXPECT_FALSE(invalid_contract.errorMessage.isEmpty());
+}
+
+TEST(DepthGeometryConsistencyTest, RequiresEveryMaskBitToHaveAnOrdinal)
+{
+    const cv::Mat valid_mask(1, 2, CV_16UC1, cv::Scalar(0x0008));
+    const auto valid_contract =
+        xjw::mvs::validateGeometrySourceOrdinalContract(
+            valid_mask, {0, 2, 3, 4}, 5, 6, valid_mask.size());
+    EXPECT_TRUE(valid_contract.valid);
+    EXPECT_TRUE(valid_contract.persistMask);
+
+    const auto invalid_contract =
+        xjw::mvs::validateGeometrySourceOrdinalContract(
+            valid_mask, {0, 2, 3}, 5, 6, valid_mask.size());
+    EXPECT_FALSE(invalid_contract.valid);
+}
+
 TEST(DepthGeometryConsistencyTest, ReportsNativeRepairAndSupportBaseline)
 {
     const cv::Mat depth =
@@ -2087,7 +2725,40 @@ TEST(DepthFrameLifecycleTest,
     EXPECT_FALSE(frame.eligibleForFusion());
 }
 
-TEST(DepthFrameQualityGateTest, MakesMarginalMaskCoverageValidationOnly)
+TEST(DepthFrameLifecycleTest,
+     FrozenBatchPlanRetainsLateFrameSourcesAfterEarlierRejections)
+{
+    std::vector<xjw::mvs::DepthFrameResult> frames(5);
+    for (auto &frame : frames)
+    {
+        frame.success = true;
+        frame.qualityDecision.acceptance =
+            xjw::mvs::DepthFrameAcceptance::Accepted;
+    }
+    frames[4].sourceViewIndices = {0, 1, 2, 3};
+
+    const auto frozen_plans = xjw::mvs::freezeDepthConsistencySourcePlans(
+        frames, 5, xjw::mvs::MvsSceneProfile::OrbitalObject, 4);
+    ASSERT_EQ(frozen_plans.size(), 5U);
+    EXPECT_EQ(frozen_plans[4].geometrySourceViewIndices,
+              (std::vector<int>{0, 1, 2, 3}));
+
+    for (int source_index = 3; source_index >= 0; --source_index)
+    {
+        frames[static_cast<std::size_t>(source_index)]
+            .qualityDecision.acceptance =
+            xjw::mvs::DepthFrameAcceptance::Rejected;
+    }
+    const auto recomputed_plans =
+        xjw::mvs::freezeDepthConsistencySourcePlans(
+            frames, 5, xjw::mvs::MvsSceneProfile::OrbitalObject, 4);
+
+    EXPECT_TRUE(recomputed_plans[4].geometrySourceViewIndices.empty());
+    EXPECT_EQ(frozen_plans[4].geometrySourceViewIndices,
+              (std::vector<int>{0, 1, 2, 3}));
+}
+
+TEST(DepthFrameQualityGateTest, MakesMarginalProjectMaskCoverageValidationOnly)
 {
     xjw::mvs::DepthFrameQualityInput input;
     input.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
@@ -2096,7 +2767,7 @@ TEST(DepthFrameQualityGateTest, MakesMarginalMaskCoverageValidationOnly)
     input.largestComponentRatio = 0.90f;
     input.meanConfidence = 0.80f;
     input.multiViewConsistency = 0.80f;
-    input.hasConstrainedSupportMask = true;
+    input.hasProjectSupportMask = true;
     input.validWithinMaskRatio = 0.76f;
     input.outputFilterRetentionRatio = 0.95f;
 
@@ -2110,7 +2781,8 @@ TEST(DepthFrameQualityGateTest, MakesMarginalMaskCoverageValidationOnly)
               decision.reasons.end());
 }
 
-TEST(DepthFrameQualityGateTest, IgnoresMaskCoverageGateForFullImageAerialFrame)
+TEST(DepthFrameQualityGateTest,
+     IgnoresProjectMaskCoverageGateForTechnicalMask)
 {
     xjw::mvs::DepthFrameQualityInput input;
     input.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
@@ -2119,7 +2791,9 @@ TEST(DepthFrameQualityGateTest, IgnoresMaskCoverageGateForFullImageAerialFrame)
     input.largestComponentRatio = 0.90f;
     input.meanConfidence = 0.80f;
     input.multiViewConsistency = 0.70f;
-    input.hasConstrainedSupportMask = false;
+    // A content/undistortion validity mask defines the measurement domain but
+    // is not a semantic project support request.
+    input.hasProjectSupportMask = false;
     input.validWithinMaskRatio = 0.50f;
     input.outputFilterRetentionRatio = 1.0f;
     input.consistencyRetentionRatio = 0.58f;
@@ -2555,6 +3229,75 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
 }
 
+TEST(MvsPipelineTest, NativeGridDisablesSubpixelThreeByThreeOutlierFootprint)
+{
+    cv::Mat native_depth(7, 7, CV_32F, cv::Scalar(10.0f));
+    cv::Mat native_confidence(7, 7, CV_32F, cv::Scalar(0.9f));
+    native_depth.at<float>(3, 3) = 30.0f;
+    cv::Mat unscaled_depth = native_depth.clone();
+    cv::Mat unscaled_confidence = native_confidence.clone();
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.0f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableLocalDepthOutlierFilter = true;
+    config.localDepthOutlierKernelSize = 3;
+    config.localDepthOutlierRelThresh = 0.25f;
+    config.maxLocalDepthOutlierRemovalRatio = 0.50f;
+    config.enableSpeckleFilter = false;
+
+    const auto native_stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            native_depth,
+            native_confidence,
+            config,
+            0,
+            4,
+            nullptr,
+            nullptr,
+            cv::Size(28, 28));
+    const auto unscaled_stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            unscaled_depth, unscaled_confidence, config, 0, 4);
+
+    EXPECT_EQ(native_stats.localDepthOutlierRemoved, 0)
+        << "A full-raster radius of one is subpixel on a ds4 grid.";
+    EXPECT_FLOAT_EQ(native_depth.at<float>(3, 3), 30.0f);
+    EXPECT_EQ(unscaled_stats.localDepthOutlierRemoved, 1)
+        << "This locks the quality-changing behavior that scale awareness avoids.";
+}
+
+TEST(MvsPipelineTest, NativeGridScalesSpeckleAreaByRasterToGridArea)
+{
+    cv::Mat depth(10, 10, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(10, 10, CV_32F, cv::Scalar(1.0f));
+    depth(cv::Rect(0, 0, 2, 2)).setTo(10.0f);  // 4 grid px == 64 raster px.
+    depth(cv::Rect(7, 0, 1, 3)).setTo(10.0f);  // 3 grid px == 48 raster px.
+    depth(cv::Rect(3, 5, 4, 4)).setTo(10.0f);
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.0f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = true;
+    config.minSpeckleComponentArea = 64;
+    config.maxSpeckleRemovalRatio = 0.50f;
+
+    const auto stats = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+        depth,
+        confidence,
+        config,
+        0,
+        4,
+        nullptr,
+        nullptr,
+        cv::Size(40, 40));
+
+    EXPECT_EQ(stats.smallComponentRemoved, 3);
+    EXPECT_EQ(cv::countNonZero(depth(cv::Rect(0, 0, 2, 2)) > 0.0f), 4);
+    EXPECT_EQ(cv::countNonZero(depth(cv::Rect(7, 0, 1, 3)) > 0.0f), 0);
+}
+
 TEST(MvsPipelineTest, FusionDepthPostprocessRetainsOnlyGeometrySupportedLowConfidence)
 {
     cv::Mat depth(5, 5, CV_32F, cv::Scalar(10.0f));
@@ -2621,6 +3364,48 @@ TEST(MvsPipelineTest, FusionDepthPostprocessProtectsGeometrySupportedSilhouette)
     EXPECT_EQ(stats.boundaryGeometryRetained, 16);
     EXPECT_FLOAT_EQ(depth.at<float>(2, 4), 10.0f);
     EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 0.0f);
+}
+
+TEST(MvsPipelineTest, NativeGridPreservesOneAuditedBoundaryShell)
+{
+    cv::Mat depth(9, 9, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(9, 9, CV_32F, cv::Scalar(0.0f));
+    depth(cv::Rect(2, 2, 5, 5)).setTo(10.0f);
+    confidence(cv::Rect(2, 2, 5, 5)).setTo(0.30f);
+    confidence.at<float>(4, 4) = 0.90f;
+
+    xjw::mvs::DepthPostProcessEvidence evidence;
+    evidence.geometrySupportCount = cv::Mat(9, 9, CV_16UC1, cv::Scalar(2));
+    evidence.inverseDepthRelativeSpread =
+        cv::Mat(9, 9, CV_32FC1, cv::Scalar(0.005f));
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.60f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableGeometrySupportedLowConfidenceRetention = true;
+    config.geometrySupportedMinimumObservationCount = 3;
+    config.enableBoundaryAwareRetention = true;
+    config.boundaryProtectionRadiusPixels = 2;
+    config.boundaryMinimumConfidence = 0.25f;
+    config.boundaryMinimumObservationCount = 2;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = false;
+
+    const auto stats = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+        depth,
+        confidence,
+        config,
+        0,
+        4,
+        nullptr,
+        &evidence,
+        cv::Size(36, 36));
+
+    EXPECT_EQ(stats.boundaryGeometryRetained, 16)
+        << "A reduced grid still needs one explicit silhouette shell; "
+           "otherwise confidence filtering erases every boundary sample.";
+    EXPECT_EQ(stats.confidenceRemoved, 8);
+    EXPECT_EQ(stats.validAfterPostprocess, 17);
 }
 
 TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSupportedThinDepthLayer)

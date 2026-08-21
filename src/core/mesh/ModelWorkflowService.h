@@ -116,6 +116,8 @@ xjw::mesh::TextureMappingConfig defaultTextureConfig();
 xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &settings);
 PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
                                                   qint64 recommendedMinimum = 200);
+float depthFrameTextureQualityWeight(float frameQualityWeight,
+                                     bool auxiliarySurfaceOnly) noexcept;
 
 WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request);
 WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request);

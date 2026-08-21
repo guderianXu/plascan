@@ -1,5 +1,7 @@
 #include "TextureMappingV4Internal.h"
 
+#include "TextureOverlapExposure.h"
+
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -54,6 +56,8 @@ bool projectColorTriangle(const PreparedView &view,
         double depth = 0.0;
         if (!view.colorCamera.projectWorldPointWithDepth(
                 face.vertices[corner].data(), pixel, depth) ||
+            !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+            !std::isfinite(depth) || depth <= 1.0e-8 ||
             pixel[0] < 0.0 || pixel[1] < 0.0 ||
             pixel[0] > view.colorBgr.cols - 1.0 ||
             pixel[1] > view.colorBgr.rows - 1.0)
@@ -107,8 +111,11 @@ bool evaluateEvidence(const PreparedView &view,
 {
     int valid_depth_samples = 0;
     float accumulated_score = 0.0f;
-    for (const auto &weights : kSampleWeights)
+    for (int sample_index = 0;
+         sample_index < static_cast<int>(kSampleWeights.size());
+         ++sample_index)
     {
+        const auto &weights = kSampleWeights[static_cast<std::size_t>(sample_index)];
         double world[3]{};
         for (int axis = 0; axis < 3; ++axis)
         {
@@ -120,7 +127,12 @@ bool evaluateEvidence(const PreparedView &view,
         double pixel[2]{};
         double camera_depth = 0.0;
         if (!view.evidenceCamera.projectWorldPointWithDepth(
-                world, pixel, camera_depth))
+                world, pixel, camera_depth) ||
+            !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+            !std::isfinite(camera_depth) || camera_depth <= 0.0 ||
+            pixel[0] < 0.0 || pixel[1] < 0.0 ||
+            pixel[0] > view.supportMask->cols - 1.0 ||
+            pixel[1] > view.supportMask->rows - 1.0)
         {
             ++result->rejectedProjectionCount;
             return false;
@@ -187,6 +199,7 @@ bool evaluateEvidence(const PreparedView &view,
 
 FaceCandidate evaluateCandidate(const PreparedView &view,
                                 int view_index,
+                                int face_index,
                                 const FaceGeometry &face,
                                 const TextureMappingConfig &config,
                                 double median_edge_length,
@@ -219,6 +232,13 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
     if (config.enableOutOfFocusFilter && view.sharpnessWeight < 0.35f)
     {
         ++result->rejectedResolutionCount;
+        return {};
+    }
+    const bool require_final_mesh_visibility = area >= 1.0;
+    if (require_final_mesh_visibility &&
+        !isFinalMeshFaceVisibleSomewhere(view, face_index))
+    {
+        ++result->rejectedVisibilityCount;
         return {};
     }
 
@@ -260,7 +280,8 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
             score,
             angle_score,
             resolution_score,
-            strict};
+            strict,
+            require_final_mesh_visibility};
 }
 
 const FaceCandidate *candidateForView(const FaceAssignment &assignment, int view_index)
@@ -282,7 +303,12 @@ bool sampleProjectedColor(const PreparedView &view,
     double pixel[2]{};
     double depth = 0.0;
     if (!view.colorCamera.projectWorldPointWithDepth(
-            world.data(), pixel, depth))
+            world.data(), pixel, depth) ||
+        !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+        !std::isfinite(depth) || depth <= 0.0 ||
+        pixel[0] < 0.0 || pixel[1] < 0.0 ||
+        pixel[0] > view.colorBgr.cols - 1.0 ||
+        pixel[1] > view.colorBgr.rows - 1.0)
     {
         return false;
     }
@@ -293,7 +319,9 @@ bool sampleProjectedColor(const PreparedView &view,
     {
         return false;
     }
-    *color = view.colorBgr.at<cv::Vec3b>(row, column);
+    *color = applyLinearSrgbExposureGain(
+        cv::Vec3f(view.colorBgr.at<cv::Vec3b>(row, column)),
+        view.exposureGain);
     return true;
 }
 
@@ -482,6 +510,14 @@ bool selectTextureViews(const TextureMappingConfig &config,
     {
         return false;
     }
+    if (!buildFinalMeshVisibility(config, data, result, errorMsg))
+    {
+        return false;
+    }
+    if (!estimateOverlapExposureGains(config, data, result, errorMsg))
+    {
+        return false;
+    }
     if (config.progressFn)
     {
         config.progressFn("正在评估三角面纹理候选...", 20);
@@ -505,6 +541,7 @@ bool selectTextureViews(const TextureMappingConfig &config,
             FaceCandidate candidate = evaluateCandidate(
                 data->views[view_index],
                 view_index,
+                face_index,
                 data->geometry[face_index],
                 config,
                 data->medianEdgeLength,
@@ -535,6 +572,7 @@ bool selectTextureViews(const TextureMappingConfig &config,
                 FaceCandidate candidate = evaluateCandidate(
                     data->views[view_index],
                     view_index,
+                    face_index,
                     data->geometry[face_index],
                     config,
                     data->medianEdgeLength,

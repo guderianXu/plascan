@@ -12,6 +12,20 @@
 
 ISIS 控制网常见的左上像素中心 `(1, 1)` 不属于公共接口。导入层应先完成 ISIS/CSM/OpenCV 半像素换算，再调用对应模型，不能在 `CameraModel` 内隐式猜测来源格式。
 
+COLMAP text 内参相对影像左上角建立，其首像素中心是 `(0.5, 0.5)`。
+`CameraFormatConverter` 在导入所有支持的 COLMAP 模型时执行
+`cx_plascan = cx_colmap - 0.5` 和 `cy_plascan = cy_colmap - 0.5`，`fx/fy` 保持不变。
+该变换只是像素原点换算，不是有损转换，因此不会额外写入 `summary.json` 的 `warnings`；
+非零 COLMAP 畸变参数的现有 warning 语义保持不变。
+
+复杂 COLMAP 模型不进入 BA、PnP、MVS 或纹理核心。导入时显式使用
+`camera_convert_cli --pre-undistort-colmap-images`，转换器会在同一事务内把
+`SIMPLE_RADIAL`、`RADIAL`、`OPENCV`、`FULL_OPENCV`、各鱼眼模型和
+`THIN_PRISM_FISHEYE` 精确正向映射为零畸变针孔 PNG。目标焦距保守增大到每个输出像素都能映射回
+源图，若最终 valid mask 仍有无效像素则整批 fail-closed；不会把复杂模型截断成 Brown 参数。
+输出包含 `images/`、`valid_masks/`、更新后的 Tsai 和 `preundistort_manifest.json`，像素中心统一为
+PlaScan 的首像素中心 `(0, 0)`。
+
 项目的 `project_config.camera_model_policy` 保存当前 Chunk 的模型策略：默认值 `frame_pinhole` 保持旧项目和现有流程兼容，线阵策略使用 `isis_usgscsm_linescan`。当前阶段只建立模型类型、公共几何和项目配置边界；普通“空中三角测量”仍走既有面阵流程，后续需显式接入线阵控制网、初始化和专用 BA 后才能形成完整线阵稀疏重建流程。
 
 ## 1. 坐标系和单位约定

@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
+#include <vector>
 
 namespace
 {
@@ -82,6 +84,97 @@ TEST(StreamingDepthFusionServiceTest, RequiresGeometrySupportWhenThresholdIsEnab
     EXPECT_FALSE(xjw::mvs::fuseDepthMapsStreaming(
         2, config, loader, &result, &error));
     EXPECT_NE(error.find("几何支持计数"), std::string::npos);
+}
+
+TEST(StreamingDepthFusionServiceTest,
+     ScalesReprojectionGateForEachNativeTargetFrame)
+{
+    constexpr int kGridSize = 9;
+    constexpr int kFrameCount = 3;
+    const std::array<double, kFrameCount> principal_offsets{
+        0.0, 0.34, 0.68};
+
+    const auto make_frames = [&](int raster_scale)
+    {
+        std::vector<xjw::mvs::FusionFrameInput> frames(kFrameCount);
+        for (int index = 0; index < kFrameCount; ++index)
+        {
+            auto &frame = frames[static_cast<std::size_t>(index)];
+            frame.depthMap = cv::Mat::zeros(
+                kGridSize, kGridSize, CV_32FC1);
+            frame.depthMap.at<float>(4, 4) = 8.0f;
+            frame.geometrySupportCount = cv::Mat(
+                kGridSize, kGridSize, CV_16UC1, cv::Scalar(2));
+            frame.cameraModel.setIntrinsics(
+                20.0,
+                20.0,
+                4.0 + principal_offsets[static_cast<std::size_t>(index)],
+                4.0);
+            frame.cameraModel.setPose(
+                {1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0},
+                {0.0, 0.0, 0.0});
+            frame.cameraModel.setImageSize(
+                xjw::CameraImageSize{kGridSize, kGridSize});
+            frame.sourceCamera = frame.cameraModel.scaledIntrinsics(
+                static_cast<double>(raster_scale),
+                static_cast<double>(raster_scale));
+            frame.sourceCamera.setImageSize(xjw::CameraImageSize{
+                kGridSize * raster_scale,
+                kGridSize * raster_scale});
+            frame.imgW = kGridSize;
+            frame.imgH = kGridSize;
+            frame.viewIndex = index;
+        }
+        return frames;
+    };
+
+    xjw::mvs::StreamingDepthFusionConfig config;
+    config.minConsistentViews = 2;
+    config.depthConsistency = 1.0f;
+    config.neighborCount = 2;
+    config.workerCount = 1;
+    config.useColor = false;
+
+    std::vector<xjw::mvs::FusionFrameInput> native_frames = make_frames(4);
+    const xjw::mvs::FusionFrameLoader native_loader =
+        [&native_frames](int index,
+                         xjw::mvs::FusionFrameInput *frame,
+                         std::string *)
+        {
+            *frame = native_frames[static_cast<std::size_t>(index)];
+            return true;
+        };
+    xjw::mvs::StreamingDepthFusionResult native_result;
+    std::string error;
+    EXPECT_FALSE(xjw::mvs::fuseDepthMapsStreaming(
+        kFrameCount,
+        config,
+        native_loader,
+        &native_result,
+        &error));
+    EXPECT_TRUE(native_result.points.empty());
+
+    std::vector<xjw::mvs::FusionFrameInput> full_grid_frames = make_frames(1);
+    const xjw::mvs::FusionFrameLoader full_grid_loader =
+        [&full_grid_frames](int index,
+                            xjw::mvs::FusionFrameInput *frame,
+                            std::string *)
+        {
+            *frame = full_grid_frames[static_cast<std::size_t>(index)];
+            return true;
+        };
+    xjw::mvs::StreamingDepthFusionResult full_grid_result;
+    error.clear();
+    ASSERT_TRUE(xjw::mvs::fuseDepthMapsStreaming(
+        kFrameCount,
+        config,
+        full_grid_loader,
+        &full_grid_result,
+        &error)) << error;
+    EXPECT_EQ(full_grid_result.points.size(),
+              static_cast<std::size_t>(kFrameCount));
 }
 
 } // namespace

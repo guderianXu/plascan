@@ -206,7 +206,7 @@ enum class MvsSceneProfile
     Auto,
     OrbitalObject,
     AerialTerrain,
-    Custom
+    Custom ///< 通用/不确定捕获；不得启用仅对环拍成立的恢复策略
 };
 
 enum class DepthFilterMode
@@ -230,6 +230,7 @@ struct DepthPyramidConfig
     int activeLevelCount = 3;
     MvsSceneProfile sceneProfile = MvsSceneProfile::Auto;
     DepthFilterMode filterMode = DepthFilterMode::Moderate;
+    bool returnNativeFinalResolution = false; ///< 实验：最终层保留 PatchMatch 工作网格；默认仍返回全尺寸
     bool saveIntermediateLevels = false;
     std::string degradedReason;
 };
@@ -258,6 +259,11 @@ struct DepthGenConfig
     std::string qualityProfile = "medium"; ///< 用户请求的深度质量档位，用于产物审计
     int   numSourceViews        = 4;
     int   configuredSourceViewCount = 0; ///< 场景自适应限制前的源视角请求；0 表示与 numSourceViews 相同
+    float sourceMaximumAngleDegCap = 0.0f; ///< PatchMatch 源计划实验上限；0 禁用，正值只收紧
+    /// 默认关闭的专家实验：评估 visibility graph 内完整候选池。
+    bool  evaluateCompleteVisibilityCandidatePool = false;
+    /// 内部诊断：完整候选池内同层软角度排序强度；0 禁用且不面向普通用户。
+    float sourceAngleSoftRankingStrength = 0.0f;
     int   totalCpuThreadBudget  = 0;     ///< 独占 CPU 后处理阶段的总线程预算；0 表示由帧调度配置推导
     int   cpuWorkerCount        = 1;     ///< 每个 CPU 帧 worker 内部的像素级线程数
     int   gpuFrameWorkerCount   = 2;     ///< GPU 主机准备槽下限；默认双缓冲，设备 kernel 仍单路串行
@@ -268,7 +274,13 @@ struct DepthGenConfig
     bool  runFusion             = true;
     bool  saveIntermediateDepthMaps = false;
     bool  saveIntermediatePyramidLevels = false; ///< Debug：保存 Level 2/3 原始深度结果
+    bool  preserveNativeFinalDepthGrid = false; ///< 实验：仅通用、非极线校正帧可保留最终工作网格
     std::string intermediateDir = "";
+    /// 诊断：仅为指定参考帧保存阶段快照；默认空，不进入算法配置哈希或缓存契约。
+    std::vector<int> stageSnapshotReferenceIndices;
+    int stageSnapshotMaximumLongEdge = 1024;
+    uint64_t stageSnapshotBudgetBytes = 128ull * 1024ull * 1024ull;
+    std::string stageSnapshotDirectory;
     bool  adaptiveDepthCacheMemory = true;      ///< 根据系统内存自动决定是否常驻 full-res 深度帧
     float maxDepthCacheRamFraction = 0.60f;     ///< full-res 深度帧缓存最多使用物理内存比例
     uint64_t minFreeRamBytes = 2ull * 1024ull * 1024ull * 1024ull; ///< 运行时保留给系统/临时 Mat 的空闲内存
@@ -280,7 +292,7 @@ struct DepthGenConfig
     int minSourcePairGeometricInliers = 20;  ///< source pair 几何内点最低门槛
     MvsSceneProfile sceneProfile = MvsSceneProfile::Auto; ///< Auto 时根据相机与稀疏云几何分类
     DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
-    bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
+    bool adaptiveDepthFilterMode = true; ///< Auto 下仅已验证环拍用温和过滤，航测/通用场景用中等过滤
     bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续证据并执行投影主深度层选择
     DepthPoseRefinementOptions depthPoseRefinement; ///< 默认关闭；仅输出派生相机候选和诊断，不覆盖项目相机
     int crossViewHoleRepairSourceCount = 8; ///< 环拍内部孔洞修复使用的邻帧数，不改变 PatchMatch 源视图
@@ -319,7 +331,11 @@ struct DepthGenConfig
 // =============================================================================
 struct CameraView
 {
-    std::string imagePath;
+    std::string imagePath; ///< 原始影像逻辑身份；源计划与项目相机按此路径关联
+    std::string preparedImagePath; ///< 可选：与 camera 严格对应的工作栅格；MVS 像素读取优先使用
+    std::string preparedValidMaskPath; ///< 可选：与 preparedImagePath 同栅格的 255=有效蒙版
+    /// prepared 蒙版来源：project/content/technical；空值按 technical 处理
+    std::string preparedValidMaskSource;
     std::string validRegionMaskPath; ///< 项目蒙版路径；文件中非零=排除，MVS 内部转换为 255=有效
     int         imageWidth  = 0;
     int         imageHeight = 0;
@@ -337,11 +353,22 @@ struct SparseCloud
 
 struct MvsSceneClassification
 {
-    MvsSceneProfile profile = MvsSceneProfile::OrbitalObject;
+    MvsSceneProfile profile = MvsSceneProfile::Custom;
+    int validCameraCount = 0;
+    int distinctCameraCenterCount = 0;
+    int convergentCameraCount = 0;
     float cameraCenterLinearity = 0.0f;
+    float cameraCenterInPlaneBalance = 0.0f; ///< 相机中心 PCA lambda1/lambda0；过低表示近共线
+    float cameraCenterNonPlanarity = 1.0f; ///< 相机中心 PCA lambda2/lambda1；过高表示非平面轨迹
     float opticalAxisConvergence = 0.0f;
+    float orbitalOpticalAxisMedianErrorDegrees = 180.0f;
+    float orbitalOpticalAxisP90ErrorDegrees = 180.0f;
+    float orbitalProjectedRadiusMadRatio = 1.0f;
+    float orbitalProjectedCenterOffsetRatio = 1.0f;
+    float orbitalMaximumAngularGapDegrees = 360.0f;
     float planeThicknessRatio = 1.0f;
     float downLookingConsistency = 0.0f;
+    bool orbitalGatePassed = false;
     std::string reason;
 };
 

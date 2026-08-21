@@ -79,6 +79,19 @@ struct MvsSourcePlanEntry
     std::string verificationReason;
     float score = 0.0f;
     float sourceQualityScore = 0.0f;
+    float adjustedScore = 0.0f;
+    float normalizedSoftAnglePenalty = 0.0f;
+    float rankingSoftMaximumDegrees = 0.0f;
+    float rankingEffectiveMaximumDegrees = 0.0f;
+    int legacyRankWithinTier = -1;
+    int adjustedRankWithinTier = -1;
+    bool sourceRankingAudited = false;
+};
+
+struct MvsSourceRankingAuditEntry
+{
+    MvsSourcePlanEntry candidate;
+    bool selectedByPlan = false;
 };
 
 struct MvsSourceRejectedCandidate
@@ -119,6 +132,8 @@ struct MvsSourcePlannerOptions
     float minSourceQualityScore = 0.0f;
     bool allowWeakKnownOverlap = true;
     bool requireVerifiedPairGeometry = false;
+    float sourceAngleSoftRankingStrength = 0.0f;
+    bool auditSourceRanking = false;
 };
 
 struct MvsSourcePlan
@@ -128,6 +143,37 @@ struct MvsSourcePlan
     bool usedSequenceFallback = false;
     int requestedSourceCount = 0;
     int sourceViewShortfall = 0;
+    std::vector<MvsSourcePlanEntry> controlSelected;
+    std::vector<MvsSourcePlanEntry> treatmentSelected;
+    std::vector<MvsSourceRankingAuditEntry> controlRankingCandidates;
+    std::vector<MvsSourceRankingAuditEntry> rankingCandidates;
+    bool sourceRankingAudited = false;
+    bool sourceRankingApplied = false;
+    bool selectedCountInvariant = true;
+    std::string sourceRankingDecisionReason;
+};
+
+struct MvsSourceRankingPolicy
+{
+    bool evaluateCompleteVisibilityCandidatePool = false;
+    bool visibilityGraphCoversAllViewPairs = false;
+    int viewCount = 0;
+    int visibilityCandidateCount = 0;
+    int legacyEvaluatedCandidateCount = 0;
+    int completeEvaluatedCandidateCount = 0;
+    float softRankingStrength = 0.0f;
+    float softMaximumDegrees = 25.0f;
+    float effectiveMaximumDegrees = 35.0f;
+};
+
+struct MvsSourceAnglePolicy
+{
+    float configuredCapDegrees = 0.0f;
+    float sceneMaximumDegrees = 0.0f;
+    float effectiveMaximumDegrees = 0.0f;
+    bool capEnabled = false;
+    bool capApplied = false;
+    bool sequenceFallbackAllowed = true;
 };
 
 MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidates,
@@ -147,6 +193,18 @@ std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<std::string> &imagePaths);
 
 QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry);
+QJsonObject mvsSourceAngleDiagnosticsToJson(
+    const MvsSourceAnglePolicy &policy,
+    const MvsSourcePlan &plan);
+QJsonObject mvsSourceRankingDiagnosticsToJson(
+    const MvsSourceRankingPolicy &policy,
+    const MvsSourcePlan &plan);
+
+bool validateMvsSourceRankingConfiguration(
+    bool evaluate_complete_visibility_candidate_pool,
+    float soft_ranking_strength,
+    float source_maximum_angle_degrees_cap,
+    std::string *error_message = nullptr);
 
 } // namespace mvs
 } // namespace xjw

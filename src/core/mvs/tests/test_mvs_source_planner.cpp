@@ -1,10 +1,18 @@
 #include "MvsSourcePlanner.h"
 
+#include <QJsonArray>
+
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <set>
 
 using xjw::mvs::mvsSourcePlanEntryToJson;
 using xjw::mvs::MvsSourceCandidate;
 using xjw::mvs::MvsSourcePairQuality;
+using xjw::mvs::MvsSourcePlanEntry;
 using xjw::mvs::MvsSourcePlannerOptions;
 using xjw::mvs::MvsSourceRejectReason;
 using xjw::mvs::MvsSourceTier;
@@ -35,6 +43,39 @@ MvsSourceCandidate candidate(int viewIndex,
     c.knownOverlap = knownOverlap;
     c.sequenceDistance = std::abs(viewIndex - 4);
     return c;
+}
+
+MvsSourceCandidate verifiedCandidate(int view_index,
+                                     int shared_tracks,
+                                     int geometric_inliers,
+                                     float angle_degrees)
+{
+    MvsSourceCandidate result = candidate(
+        view_index,
+        shared_tracks,
+        geometric_inliers,
+        angle_degrees,
+        0.7f,
+        0.5f,
+        true);
+    result.verifiedPairGeometry = true;
+    result.verificationStatus = MvsSourceVerificationStatus::Verified;
+    result.pairTotalMatches = std::max(geometric_inliers, 100);
+    return result;
+}
+
+const xjw::mvs::MvsSourceRankingAuditEntry *rankingAuditForView(
+    const xjw::mvs::MvsSourcePlan &plan,
+    int view_index)
+{
+    const auto found = std::find_if(
+        plan.rankingCandidates.cbegin(),
+        plan.rankingCandidates.cend(),
+        [view_index](const auto &audit)
+        {
+            return audit.candidate.viewIndex == view_index;
+        });
+    return found == plan.rankingCandidates.cend() ? nullptr : &*found;
 }
 
 } // namespace
@@ -787,6 +828,675 @@ TEST(MvsSourcePlanner, RanksSharedTracksGeometryAndCoverageBeforeSequence)
     EXPECT_GT(plan.selected[0].score, plan.selected[1].score);
 }
 
+TEST(MvsSourcePlanner, DefaultRankingKeepsLegacyPlanAndJsonExact)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 10;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+
+    const std::vector<MvsSourceCandidate> candidates{
+        candidate(1, 300, 250, 10.0f),
+        candidate(3, 250, 150, 30.0f),
+        candidate(2, 160, 150, 20.0f)};
+    const auto legacy = planMvsSourceViews(candidates, options);
+
+    ASSERT_EQ(legacy.selected.size(), 2u);
+    EXPECT_FALSE(legacy.sourceRankingAudited);
+    EXPECT_TRUE(legacy.controlSelected.empty());
+    EXPECT_TRUE(legacy.controlRankingCandidates.empty());
+    EXPECT_TRUE(legacy.rankingCandidates.empty());
+    const QJsonObject legacy_json =
+        mvsSourcePlanEntryToJson(legacy.selected.front());
+    EXPECT_FALSE(legacy_json.contains(QStringLiteral("legacy_score")));
+    EXPECT_FALSE(legacy_json.contains(QStringLiteral("adjusted_score")));
+    EXPECT_FALSE(legacy_json.contains(
+        QStringLiteral("legacy_rank_within_tier")));
+    EXPECT_FALSE(legacy_json.contains(
+        QStringLiteral("ranking_soft_maximum_degrees")));
+    EXPECT_FALSE(legacy_json.contains(
+        QStringLiteral("ranking_effective_maximum_degrees")));
+
+    options.auditSourceRanking = true;
+    const auto audited_control = planMvsSourceViews(candidates, options);
+    ASSERT_EQ(audited_control.selected.size(), legacy.selected.size());
+    for (std::size_t index = 0; index < legacy.selected.size(); ++index)
+    {
+        EXPECT_EQ(audited_control.selected[index].viewIndex,
+                  legacy.selected[index].viewIndex);
+        EXPECT_FLOAT_EQ(audited_control.selected[index].score,
+                        legacy.selected[index].score);
+        EXPECT_FLOAT_EQ(audited_control.selected[index].sourceQualityScore,
+                        legacy.selected[index].sourceQualityScore);
+    }
+}
+
+TEST(MvsSourcePlanner, CompletePoolLetsLegacyScoreSeeEarlyStopCounterexample)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 10;
+    options.maxSources = 1;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+
+    const MvsSourceCandidate early_wide =
+        candidate(3, 200, 150, 30.0f);
+    const MvsSourceCandidate later_better =
+        candidate(2, 160, 150, 10.0f);
+    const auto legacy_pool = planMvsSourceViews({early_wide}, options);
+    options.auditSourceRanking = true;
+    const auto complete_pool = planMvsSourceViews(
+        {early_wide, later_better}, options);
+
+    ASSERT_EQ(legacy_pool.selected.size(), 1u);
+    ASSERT_EQ(complete_pool.selected.size(), 1u);
+    EXPECT_EQ(legacy_pool.selected.front().viewIndex, 3);
+    EXPECT_EQ(complete_pool.selected.front().viewIndex, 2);
+    EXPECT_GT(complete_pool.selected.front().score,
+              legacy_pool.selected.front().score);
+    EXPECT_FALSE(complete_pool.sourceRankingApplied)
+        << "B expands the pool but must still use the unmodified legacy score.";
+}
+
+TEST(MvsSourcePlanner, SoftAngleRankingUsesRegisteredFormulaAndPreservesCount)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 10;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.softMaxTriangulationAngleDeg = 25.0f;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+
+    const auto plan = planMvsSourceViews({
+        candidate(1, 300, 250, 10.0f),
+        candidate(3, 250, 150, 30.0f),
+        candidate(2, 160, 150, 20.0f),
+    }, options);
+
+    ASSERT_EQ(plan.controlSelected.size(), 2u);
+    ASSERT_EQ(plan.treatmentSelected.size(), 2u);
+    ASSERT_EQ(plan.controlRankingCandidates.size(), 3u);
+    ASSERT_EQ(plan.rankingCandidates.size(), 3u);
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.controlSelected[1].viewIndex, 3);
+    EXPECT_EQ(plan.selected[1].viewIndex, 2);
+    EXPECT_TRUE(plan.selectedCountInvariant);
+    EXPECT_TRUE(plan.sourceRankingApplied);
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
+
+    const auto *wide = rankingAuditForView(plan, 3);
+    const auto *narrow = rankingAuditForView(plan, 2);
+    const auto control_wide = std::find_if(
+        plan.controlRankingCandidates.cbegin(),
+        plan.controlRankingCandidates.cend(),
+        [](const auto &audit)
+        {
+            return audit.candidate.viewIndex == 3;
+        });
+    const auto control_narrow = std::find_if(
+        plan.controlRankingCandidates.cbegin(),
+        plan.controlRankingCandidates.cend(),
+        [](const auto &audit)
+        {
+            return audit.candidate.viewIndex == 2;
+        });
+    ASSERT_NE(wide, nullptr);
+    ASSERT_NE(narrow, nullptr);
+    ASSERT_NE(control_wide, plan.controlRankingCandidates.cend());
+    ASSERT_NE(control_narrow, plan.controlRankingCandidates.cend());
+    EXPECT_TRUE(control_wide->selectedByPlan);
+    EXPECT_FALSE(control_narrow->selectedByPlan);
+    EXPECT_FALSE(wide->selectedByPlan);
+    EXPECT_TRUE(narrow->selectedByPlan);
+    EXPECT_NEAR(wide->candidate.normalizedSoftAnglePenalty, 0.5f, 1.0e-6f);
+    EXPECT_NEAR(
+        wide->candidate.adjustedScore,
+        wide->candidate.score * std::exp(-0.5f),
+        1.0e-4f);
+    EXPECT_FLOAT_EQ(wide->candidate.rankingSoftMaximumDegrees, 25.0f);
+    EXPECT_FLOAT_EQ(wide->candidate.rankingEffectiveMaximumDegrees, 35.0f);
+    EXPECT_FLOAT_EQ(narrow->candidate.normalizedSoftAnglePenalty, 0.0f);
+    EXPECT_FLOAT_EQ(narrow->candidate.adjustedScore, narrow->candidate.score);
+}
+
+TEST(MvsSourcePlanner, SoftRankingStaysInsideVerifiedAndOrdinaryTiers)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 16;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.allowSequenceFallback = false;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+
+    const auto verified_plan = planMvsSourceViewsVerifiedFirst({
+        verifiedCandidate(1, 300, 250, 10.0f),
+        verifiedCandidate(3, 250, 150, 30.0f),
+        verifiedCandidate(2, 160, 150, 20.0f),
+        verifiedCandidate(5, 120, 100, 15.0f),
+    }, options);
+    ASSERT_EQ(verified_plan.selected.size(), 3u);
+    EXPECT_TRUE(std::all_of(
+        verified_plan.selected.cbegin(),
+        verified_plan.selected.cend(),
+        [](const auto &entry)
+        {
+            return entry.tier == MvsSourceTier::VerifiedPair;
+        }));
+    EXPECT_TRUE(verified_plan.sourceRankingApplied);
+
+    const auto ordinary_plan = planMvsSourceViewsVerifiedFirst({
+        verifiedCandidate(1, 500, 450, 10.0f),
+        candidate(0, 300, 250, 10.0f, 0.7f, 0.5f, true),
+        candidate(3, 250, 150, 30.0f, 0.7f, 0.5f, true),
+        candidate(2, 160, 150, 20.0f, 0.7f, 0.5f, true),
+    }, options);
+    ASSERT_EQ(ordinary_plan.selected.size(), 3u);
+    EXPECT_EQ(ordinary_plan.selected.front().viewIndex, 1);
+    EXPECT_EQ(ordinary_plan.selected.front().tier,
+              MvsSourceTier::VerifiedPair);
+    EXPECT_EQ(ordinary_plan.selected[1].tier,
+              MvsSourceTier::TrackGeometryBackfill);
+    EXPECT_EQ(ordinary_plan.selected[2].tier,
+              MvsSourceTier::TrackGeometryBackfill);
+    EXPECT_TRUE(ordinary_plan.sourceRankingApplied);
+}
+
+TEST(MvsSourcePlanner, SoftRankingCoversBoundedAndStrictFailedTiers)
+{
+    const auto failed_candidate = [](int view_index,
+                                     int shared_tracks,
+                                     float angle_degrees)
+    {
+        MvsSourceCandidate result = candidate(
+            view_index,
+            shared_tracks,
+            90,
+            angle_degrees,
+            0.7f,
+            0.5f);
+        result.verificationStatus = MvsSourceVerificationStatus::Failed;
+        result.pairTotalMatches = 100;
+        result.pairCoverageScore = 0.5f;
+        return result;
+    };
+
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 16;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+    const std::vector<MvsSourceCandidate> candidates{
+        verifiedCandidate(1, 500, 450, 10.0f),
+        verifiedCandidate(5, 450, 400, 12.0f),
+        failed_candidate(0, 300, 10.0f),
+        failed_candidate(3, 250, 30.0f),
+        failed_candidate(2, 160, 20.0f)};
+
+    const auto bounded = planMvsSourceViewsVerifiedFirst(candidates, options);
+    ASSERT_EQ(bounded.selected.size(), 4u);
+    EXPECT_TRUE(bounded.sourceRankingApplied);
+    EXPECT_EQ(bounded.selected[2].tier,
+              MvsSourceTier::TrackGeometryBackfill);
+    EXPECT_EQ(bounded.selected[3].tier,
+              MvsSourceTier::TrackGeometryBackfill);
+
+    options.failedPairBackfillMaximumTotalSources = 2;
+    options.allowStrictFailedPairBackfill = true;
+    const auto strict = planMvsSourceViewsVerifiedFirst(candidates, options);
+    ASSERT_EQ(strict.selected.size(), 4u);
+    EXPECT_TRUE(strict.sourceRankingApplied);
+    EXPECT_EQ(strict.selected[2].tier,
+              MvsSourceTier::StrictPairAuditBackfill);
+    EXPECT_EQ(strict.selected[3].tier,
+              MvsSourceTier::StrictPairAuditBackfill);
+}
+
+TEST(MvsSourcePlanner,
+     VerifiedFirstBuildsIndependentUniqueControlAndTreatmentPlans)
+{
+    const auto failed_candidate = [](int view_index,
+                                     int shared_tracks,
+                                     float angle_degrees)
+    {
+        MvsSourceCandidate result = candidate(
+            view_index,
+            shared_tracks,
+            90,
+            angle_degrees,
+            0.7f,
+            0.5f);
+        result.verificationStatus = MvsSourceVerificationStatus::Failed;
+        result.pairTotalMatches = 100;
+        result.pairCoverageScore = 0.5f;
+        return result;
+    };
+
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 16;
+    options.maxSources = 6;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 65.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+    options.allowStrictFailedPairBackfill = true;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+    const std::vector<MvsSourceCandidate> candidates{
+        verifiedCandidate(1, 500, 450, 10.0f),
+        verifiedCandidate(5, 450, 400, 12.0f),
+        failed_candidate(0, 300, 10.0f),
+        failed_candidate(3, 250, 55.0f),
+        failed_candidate(2, 160, 20.0f),
+        failed_candidate(6, 120, 15.0f)};
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    ASSERT_EQ(plan.controlSelected.size(), 6u);
+    ASSERT_EQ(plan.treatmentSelected.size(), 6u);
+    ASSERT_EQ(plan.selected.size(), 6u);
+    EXPECT_TRUE(plan.selectedCountInvariant);
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
+    EXPECT_TRUE(plan.sourceRankingApplied);
+
+    const auto assert_unique_tiers = [](const auto &selected)
+    {
+        std::set<int> views;
+        for (std::size_t index = 0; index < selected.size(); ++index)
+        {
+            EXPECT_TRUE(views.insert(selected[index].viewIndex).second);
+            if (index < 2)
+            {
+                EXPECT_EQ(selected[index].tier,
+                          MvsSourceTier::VerifiedPair);
+            }
+            else if (index < 4)
+            {
+                EXPECT_EQ(selected[index].tier,
+                          MvsSourceTier::TrackGeometryBackfill);
+            }
+            else
+            {
+                EXPECT_EQ(selected[index].tier,
+                          MvsSourceTier::StrictPairAuditBackfill);
+            }
+        }
+        EXPECT_EQ(views.size(), selected.size());
+    };
+    assert_unique_tiers(plan.controlSelected);
+    assert_unique_tiers(plan.treatmentSelected);
+    assert_unique_tiers(plan.selected);
+
+    const auto control_wide = std::find_if(
+        plan.controlSelected.cbegin(),
+        plan.controlSelected.cend(),
+        [](const MvsSourcePlanEntry &entry)
+        {
+            return entry.viewIndex == 3;
+        });
+    const auto treatment_wide = std::find_if(
+        plan.treatmentSelected.cbegin(),
+        plan.treatmentSelected.cend(),
+        [](const MvsSourcePlanEntry &entry)
+        {
+            return entry.viewIndex == 3;
+        });
+    ASSERT_NE(control_wide, plan.controlSelected.cend());
+    ASSERT_NE(treatment_wide, plan.treatmentSelected.cend());
+    EXPECT_EQ(control_wide->tier, MvsSourceTier::TrackGeometryBackfill);
+    EXPECT_EQ(treatment_wide->tier,
+              MvsSourceTier::StrictPairAuditBackfill);
+    EXPECT_FLOAT_EQ(control_wide->adjustedScore, control_wide->score);
+    EXPECT_LT(treatment_wide->adjustedScore, treatment_wide->score);
+    EXPECT_FLOAT_EQ(control_wide->rankingEffectiveMaximumDegrees, 65.0f);
+    EXPECT_FLOAT_EQ(treatment_wide->rankingEffectiveMaximumDegrees, 55.0f);
+
+    const QJsonObject diagnostics =
+        xjw::mvs::mvsSourceRankingDiagnosticsToJson(
+            xjw::mvs::MvsSourceRankingPolicy{
+                true, true, 16, 6, 6, 6, 1.0f, 25.0f, 65.0f},
+            plan);
+    EXPECT_TRUE(diagnostics.value(
+                    QStringLiteral("count_invariant")).toBool());
+    EXPECT_FALSE(diagnostics.value(
+                     QStringLiteral("selected_view_set_changed")).toBool());
+    EXPECT_TRUE(diagnostics.value(
+                    QStringLiteral("selection_changed")).toBool());
+    EXPECT_DOUBLE_EQ(diagnostics.value(
+                         QStringLiteral("soft_maximum_degrees")).toDouble(),
+                     25.0);
+    EXPECT_DOUBLE_EQ(diagnostics.value(
+                         QStringLiteral("effective_maximum_degrees")).toDouble(),
+                     65.0);
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("control_qualified_candidate_count")).toInt(),
+              6);
+    EXPECT_GT(diagnostics.value(
+                  QStringLiteral("control_qualified_tier_entry_count")).toInt(),
+              6);
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("treatment_qualified_candidate_count")).toInt(),
+              6);
+    EXPECT_GT(diagnostics.value(
+                  QStringLiteral("treatment_qualified_tier_entry_count")).toInt(),
+              6);
+
+    const QJsonArray control_candidates = diagnostics.value(
+        QStringLiteral("control_candidate_ranking")).toArray();
+    int control_bounded_entry_count = 0;
+    for (const QJsonValue &value : control_candidates)
+    {
+        const QJsonObject candidate_json = value.toObject();
+        if (candidate_json.value(QStringLiteral("view_index")).toInt() != 3)
+        {
+            continue;
+        }
+        ++control_bounded_entry_count;
+        EXPECT_EQ(candidate_json.value(
+                      QStringLiteral("source_tier")).toString(),
+                  QStringLiteral("track_geometry_backfill"));
+        EXPECT_TRUE(candidate_json.value(
+                        QStringLiteral("selected_by_plan")).toBool());
+        EXPECT_DOUBLE_EQ(
+            candidate_json.value(QStringLiteral(
+                                     "ranking_effective_maximum_degrees"))
+                .toDouble(),
+            65.0);
+    }
+    EXPECT_EQ(control_bounded_entry_count, 1);
+
+    const QJsonArray treatment_candidates = diagnostics.value(
+        QStringLiteral("treatment_candidate_ranking")).toArray();
+    int treatment_bounded_entry_count = 0;
+    int treatment_strict_entry_count = 0;
+    for (const QJsonValue &value : treatment_candidates)
+    {
+        const QJsonObject candidate_json = value.toObject();
+        if (candidate_json.value(QStringLiteral("view_index")).toInt() != 3)
+        {
+            continue;
+        }
+        const QString tier = candidate_json.value(
+            QStringLiteral("source_tier")).toString();
+        if (tier == QStringLiteral("track_geometry_backfill"))
+        {
+            ++treatment_bounded_entry_count;
+            EXPECT_FALSE(candidate_json.value(
+                             QStringLiteral("selected_by_plan")).toBool());
+            EXPECT_DOUBLE_EQ(
+                candidate_json.value(QStringLiteral(
+                                         "ranking_effective_maximum_degrees"))
+                    .toDouble(),
+                65.0);
+        }
+        else if (tier == QStringLiteral("strict_pair_audit_backfill"))
+        {
+            ++treatment_strict_entry_count;
+            EXPECT_TRUE(candidate_json.value(
+                            QStringLiteral("selected_by_plan")).toBool());
+            EXPECT_DOUBLE_EQ(
+                candidate_json.value(QStringLiteral(
+                                         "ranking_effective_maximum_degrees"))
+                    .toDouble(),
+                55.0);
+        }
+    }
+    EXPECT_EQ(treatment_bounded_entry_count, 1);
+    EXPECT_EQ(treatment_strict_entry_count, 1);
+}
+
+TEST(MvsSourcePlanner,
+     VerifiedFirstSoftRankingFallsBackToIncompleteControlPlan)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.allowSequenceFallback = false;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+
+    const auto plan = planMvsSourceViewsVerifiedFirst({
+        verifiedCandidate(3, 250, 150, 30.0f),
+    }, options);
+
+    ASSERT_EQ(plan.controlSelected.size(), 1u);
+    ASSERT_EQ(plan.treatmentSelected.size(), 1u);
+    ASSERT_EQ(plan.selected.size(), 1u);
+    EXPECT_TRUE(plan.selectedCountInvariant);
+    EXPECT_FALSE(plan.sourceRankingApplied);
+    EXPECT_EQ(plan.sourceRankingDecisionReason,
+              "control_source_shortfall");
+    EXPECT_EQ(plan.sourceViewShortfall, 2);
+    EXPECT_EQ(plan.selected.front().viewIndex,
+              plan.controlSelected.front().viewIndex);
+    EXPECT_EQ(plan.selected.front().tier,
+              plan.controlSelected.front().tier);
+    EXPECT_FLOAT_EQ(plan.selected.front().adjustedScore,
+                    plan.controlSelected.front().adjustedScore);
+    EXPECT_EQ(mvsSourcePlanEntryToJson(plan.selected.front()),
+              mvsSourcePlanEntryToJson(plan.controlSelected.front()));
+    EXPECT_FLOAT_EQ(plan.controlSelected.front().adjustedScore,
+                    plan.controlSelected.front().score);
+    EXPECT_FLOAT_EQ(plan.treatmentSelected.front().adjustedScore,
+                    plan.treatmentSelected.front().score);
+    const auto *treatment_candidate = rankingAuditForView(plan, 3);
+    ASSERT_NE(treatment_candidate, nullptr);
+    EXPECT_LT(treatment_candidate->candidate.adjustedScore,
+              treatment_candidate->candidate.score);
+
+    const std::set<int> control_views{
+        plan.controlSelected.front().viewIndex};
+    const std::set<int> treatment_views{
+        plan.treatmentSelected.front().viewIndex};
+    const std::set<int> selected_views{plan.selected.front().viewIndex};
+    EXPECT_EQ(control_views.size(), plan.controlSelected.size());
+    EXPECT_EQ(treatment_views.size(), plan.treatmentSelected.size());
+    EXPECT_EQ(selected_views.size(), plan.selected.size());
+}
+
+TEST(MvsSourcePlanner,
+     VerifiedFirstCountMismatchFallsBackToCompleteUniqueControlPlan)
+{
+    const auto failed_candidate = [](int view_index,
+                                     int shared_tracks,
+                                     int geometric_inliers,
+                                     float angle_degrees)
+    {
+        MvsSourceCandidate result = candidate(
+            view_index,
+            shared_tracks,
+            geometric_inliers,
+            angle_degrees,
+            0.7f,
+            0.5f);
+        result.verificationStatus = MvsSourceVerificationStatus::Failed;
+        result.pairTotalMatches = 100;
+        result.pairCoverageScore = 0.5f;
+        return result;
+    };
+
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 16;
+    options.maxSources = 6;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+    options.allowStrictFailedPairBackfill = true;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+    const std::vector<MvsSourceCandidate> candidates{
+        verifiedCandidate(1, 500, 450, 10.0f),
+        verifiedCandidate(5, 450, 400, 12.0f),
+        failed_candidate(0, 300, 90, 10.0f),
+        // This pair passes bounded backfill (Wilson > 0.50) but fails
+        // the strict tier (Wilson < 0.65).
+        failed_candidate(3, 250, 70, 30.0f),
+        failed_candidate(2, 160, 90, 20.0f),
+        failed_candidate(6, 120, 90, 15.0f)};
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    ASSERT_EQ(plan.controlSelected.size(), 6u);
+    ASSERT_EQ(plan.treatmentSelected.size(), 5u);
+    ASSERT_EQ(plan.selected.size(), 6u);
+    EXPECT_FALSE(plan.selectedCountInvariant);
+    EXPECT_FALSE(plan.sourceRankingApplied);
+    EXPECT_EQ(plan.sourceRankingDecisionReason,
+              "selected_count_mismatch_fallback");
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
+
+    std::set<int> control_views;
+    std::set<int> treatment_views;
+    std::set<int> selected_views;
+    for (std::size_t index = 0; index < plan.controlSelected.size(); ++index)
+    {
+        control_views.insert(plan.controlSelected[index].viewIndex);
+        selected_views.insert(plan.selected[index].viewIndex);
+        EXPECT_EQ(plan.selected[index].viewIndex,
+                  plan.controlSelected[index].viewIndex);
+        EXPECT_EQ(plan.selected[index].tier,
+                  plan.controlSelected[index].tier);
+        EXPECT_EQ(mvsSourcePlanEntryToJson(plan.selected[index]),
+                  mvsSourcePlanEntryToJson(
+                      plan.controlSelected[index]));
+    }
+    for (const MvsSourcePlanEntry &entry : plan.treatmentSelected)
+    {
+        treatment_views.insert(entry.viewIndex);
+    }
+    EXPECT_EQ(control_views.size(), plan.controlSelected.size());
+    EXPECT_EQ(treatment_views.size(), plan.treatmentSelected.size());
+    EXPECT_EQ(selected_views.size(), plan.selected.size());
+}
+
+TEST(MvsSourcePlanner, DuplicateIdentityAndUnknownAngleStayLegacy)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 10;
+    options.maxSources = 1;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+
+    const auto duplicate_plan = planMvsSourceViews({
+        candidate(3, 250, 150, 30.0f),
+        candidate(3, 100, 90, 10.0f),
+        candidate(2, 160, 150, 20.0f),
+    }, options);
+    const auto *duplicate = rankingAuditForView(duplicate_plan, 3);
+    ASSERT_NE(duplicate, nullptr);
+    EXPECT_FLOAT_EQ(duplicate->candidate.medianTriangulationAngleDeg, 30.0f)
+        << "Same-view deduplication must remain a legacy evidence decision.";
+
+    const auto unknown_plan = planMvsSourceViews({
+        candidate(3, 300, 200, std::numeric_limits<float>::quiet_NaN()),
+        candidate(2, 160, 150, 20.0f),
+    }, options);
+    const auto *unknown = rankingAuditForView(unknown_plan, 3);
+    ASSERT_NE(unknown, nullptr);
+    EXPECT_FLOAT_EQ(unknown->candidate.normalizedSoftAnglePenalty, 0.0f);
+    EXPECT_FLOAT_EQ(unknown->candidate.adjustedScore,
+                    unknown->candidate.score);
+}
+
+TEST(MvsSourcePlanner, AdjustedRankingIsDeterministicAcrossInputOrder)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 35.0f;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+    std::vector<MvsSourceCandidate> candidates{
+        candidate(1, 300, 250, 10.0f),
+        candidate(3, 250, 150, 30.0f),
+        candidate(2, 160, 150, 20.0f),
+        candidate(6, 120, 100, 15.0f)};
+
+    const auto first = planMvsSourceViews(candidates, options);
+    std::reverse(candidates.begin(), candidates.end());
+    const auto second = planMvsSourceViews(candidates, options);
+
+    ASSERT_EQ(first.selected.size(), second.selected.size());
+    for (std::size_t index = 0; index < first.selected.size(); ++index)
+    {
+        EXPECT_EQ(first.selected[index].viewIndex,
+                  second.selected[index].viewIndex);
+    }
+    const xjw::mvs::MvsSourceRankingPolicy policy{
+        true, true, 12, 4, 2, 4, 1.0f, 25.0f, 35.0f};
+    EXPECT_EQ(
+        xjw::mvs::mvsSourceRankingDiagnosticsToJson(policy, first),
+        xjw::mvs::mvsSourceRankingDiagnosticsToJson(policy, second));
+}
+
+TEST(MvsSourcePlanner, SourceRankingConfigurationRejectsUnsafeCombinations)
+{
+    using xjw::mvs::validateMvsSourceRankingConfiguration;
+    std::string error;
+
+    EXPECT_TRUE(validateMvsSourceRankingConfiguration(
+        false, 0.0f, 0.0f, &error));
+    EXPECT_TRUE(validateMvsSourceRankingConfiguration(
+        true, 0.0f, 25.0f, &error));
+    EXPECT_TRUE(validateMvsSourceRankingConfiguration(
+        true, 1.0f, 0.0f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        false, 1.0f, 0.0f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, 1.0f, 25.0f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, -0.1f, 0.0f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, 4.1f, 0.0f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, 0.0f, -0.1f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, 0.0f, 90.1f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true,
+        0.0f,
+        std::numeric_limits<float>::quiet_NaN(),
+        &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true, 1.0f, -0.1f, &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true,
+        1.0f,
+        std::numeric_limits<float>::quiet_NaN(),
+        &error));
+    EXPECT_FALSE(validateMvsSourceRankingConfiguration(
+        true,
+        std::numeric_limits<float>::quiet_NaN(),
+        0.0f,
+        &error));
+}
+
 TEST(MvsSourcePlanner, RejectsTriangulationAngleOutliersWhenRequested)
 {
     MvsSourcePlannerOptions options;
@@ -827,6 +1537,134 @@ TEST(MvsSourcePlanner, FallsBackToNearestSequenceWhenNoGeometryExists)
     EXPECT_EQ(plan.selected[2].viewIndex, 2);
     EXPECT_EQ(plan.selected[3].viewIndex, 6);
     EXPECT_TRUE(plan.usedSequenceFallback);
+}
+
+TEST(MvsSourcePlanner, AuditedSequenceFallbackKeepsLegacyRankingFields)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 4;
+    options.sourceAngleSoftRankingStrength = 1.0f;
+    options.auditSourceRanking = true;
+
+    const auto plan = planMvsSourceViews({}, options);
+
+    ASSERT_EQ(plan.selected.size(), 4u);
+    ASSERT_EQ(plan.controlSelected.size(), plan.selected.size());
+    ASSERT_EQ(plan.treatmentSelected.size(), plan.selected.size());
+    EXPECT_FALSE(plan.sourceRankingApplied);
+    EXPECT_TRUE(plan.selectedCountInvariant);
+    EXPECT_EQ(plan.sourceRankingDecisionReason,
+              "sequence_fallback_unchanged");
+    for (std::size_t index = 0; index < plan.selected.size(); ++index)
+    {
+        const MvsSourcePlanEntry &entry = plan.selected[index];
+        EXPECT_TRUE(entry.sourceRankingAudited);
+        EXPECT_FLOAT_EQ(entry.adjustedScore, entry.score);
+        EXPECT_FLOAT_EQ(entry.normalizedSoftAnglePenalty, 0.0f);
+        EXPECT_FLOAT_EQ(entry.rankingSoftMaximumDegrees, 25.0f);
+        EXPECT_FLOAT_EQ(entry.rankingEffectiveMaximumDegrees, 35.0f);
+        EXPECT_EQ(entry.legacyRankWithinTier, static_cast<int>(index));
+        EXPECT_EQ(entry.adjustedRankWithinTier, static_cast<int>(index));
+
+        const QJsonObject json = mvsSourcePlanEntryToJson(entry);
+        EXPECT_TRUE(json.contains(QStringLiteral("legacy_score")));
+        EXPECT_TRUE(json.contains(QStringLiteral("adjusted_score")));
+        EXPECT_TRUE(json.contains(
+            QStringLiteral("legacy_rank_within_tier")));
+        EXPECT_TRUE(json.contains(
+            QStringLiteral("adjusted_rank_within_tier")));
+        EXPECT_TRUE(json.contains(
+            QStringLiteral("ranking_soft_maximum_degrees")));
+        EXPECT_TRUE(json.contains(
+            QStringLiteral("ranking_effective_maximum_degrees")));
+    }
+}
+
+TEST(MvsSourcePlanner,
+     ExplicitAngleCapDoesNotBackfillRejectedCandidatesFromSequence)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 20.0f;
+    // DepthMapGenerator disables an unmeasured sequence fallback whenever an
+    // explicit source-angle cap is enabled.
+    options.allowSequenceFallback = false;
+
+    const auto plan = planMvsSourceViews({
+        candidate(3, 160, 150, 24.0f),
+        candidate(5, 180, 170, 31.0f),
+    }, options);
+
+    EXPECT_TRUE(plan.selected.empty());
+    EXPECT_FALSE(plan.usedSequenceFallback);
+    EXPECT_EQ(plan.sourceViewShortfall, 2);
+    ASSERT_EQ(plan.rejected.size(), 2u);
+    EXPECT_TRUE(std::all_of(
+        plan.rejected.cbegin(),
+        plan.rejected.cend(),
+        [](const auto &rejected)
+        {
+            return rejected.reason ==
+                MvsSourceRejectReason::TriangulationAngle;
+        }));
+
+    const QJsonObject diagnostics =
+        xjw::mvs::mvsSourceAngleDiagnosticsToJson(
+            xjw::mvs::MvsSourceAnglePolicy{
+                20.0f, 35.0f, 20.0f, true, true, false},
+            plan);
+    EXPECT_EQ(diagnostics.value(QStringLiteral("scope")).toString(),
+              QStringLiteral("patchmatch_source_plan"));
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("selected_source_count")).toInt(),
+              0);
+    EXPECT_DOUBLE_EQ(diagnostics.value(
+                         QStringLiteral("selected_maximum_degrees"))
+                         .toDouble(),
+                     0.0);
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("angle_rejected_candidate_count")).toInt(),
+              2);
+    EXPECT_FALSE(diagnostics.value(
+                     QStringLiteral("sequence_fallback_allowed")).toBool());
+}
+
+TEST(MvsSourcePlanner,
+     SourceAngleDiagnosticsReportSelectedMaximumAndRejectedCount)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 20.0f;
+    options.allowSequenceFallback = false;
+
+    const auto plan = planMvsSourceViews({
+        candidate(3, 160, 150, 18.0f),
+        candidate(5, 180, 170, 24.0f),
+    }, options);
+    const QJsonObject diagnostics =
+        xjw::mvs::mvsSourceAngleDiagnosticsToJson(
+            xjw::mvs::MvsSourceAnglePolicy{
+                20.0f, 35.0f, 20.0f, true, true, false},
+            plan);
+
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("selected_source_count")).toInt(),
+              1);
+    EXPECT_DOUBLE_EQ(diagnostics.value(
+                         QStringLiteral("selected_maximum_degrees"))
+                         .toDouble(),
+                     18.0);
+    EXPECT_EQ(diagnostics.value(
+                  QStringLiteral("angle_rejected_candidate_count")).toInt(),
+              1);
 }
 
 TEST(MvsSourcePlanner, DeduplicatesCandidatesAndKeepsBestScore)

@@ -7,6 +7,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
@@ -48,6 +49,35 @@ TEST(CliSupportTest, ProtectsNonEmptyOutputDirectoriesUnlessForced)
     EXPECT_FALSE(xjw::cli::validateOutputDirectory(directory.path(), false, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("拒绝覆盖")));
     EXPECT_TRUE(xjw::cli::validateOutputDirectory(directory.path(), true, &error));
+}
+
+TEST(CliSupportTest, KeepsLatestJsonObjectForEachNonNegativeIntegerKey)
+{
+    const QJsonArray events{
+        QJsonObject{{QStringLiteral("ref_index"), 2},
+                    {QStringLiteral("stage"), QStringLiteral("initial")}},
+        QJsonObject{{QStringLiteral("ref_index"), 0},
+                    {QStringLiteral("stage"), QStringLiteral("initial")}},
+        QJsonObject{{QStringLiteral("ref_index"), 2},
+                    {QStringLiteral("stage"), QStringLiteral("filtered")}},
+        QJsonObject{{QStringLiteral("status"), QStringLiteral("unkeyed")}},
+        QJsonObject{{QStringLiteral("ref_index"), -1},
+                    {QStringLiteral("status"), QStringLiteral("invalid")}}
+    };
+
+    const QJsonArray latest =
+        xjw::cli::latestJsonObjectsByNonNegativeIntegerKey(
+            events, QStringLiteral("ref_index"));
+
+    ASSERT_EQ(latest.size(), 4);
+    EXPECT_EQ(latest.at(0).toObject().value(QStringLiteral("ref_index")).toInt(), 0);
+    EXPECT_EQ(latest.at(1).toObject().value(QStringLiteral("ref_index")).toInt(), 2);
+    EXPECT_EQ(latest.at(1).toObject().value(QStringLiteral("stage")).toString(),
+              QStringLiteral("filtered"));
+    EXPECT_EQ(latest.at(2).toObject().value(QStringLiteral("status")).toString(),
+              QStringLiteral("unkeyed"));
+    EXPECT_EQ(latest.at(3).toObject().value(QStringLiteral("status")).toString(),
+              QStringLiteral("invalid"));
 }
 
 } // namespace

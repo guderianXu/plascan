@@ -31,6 +31,9 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     // still select x2/x4 explicitly for memory-constrained projects.
     _imageDownscaleCombo->setCurrentIndex(0);
     _colorCorrCheck->setChecked(false);
+    _colorCorrCheck->setToolTip(tr(
+        "仅用共同可见的同一三维点估计曝光；样本不足、离散度过高或视图不连通时不校正，"
+        "每张影像增益限制为 0.90–1.10。"));
     _seamsMarginSpin->setValue(0.35);
 
     for (QComboBox *combo_box : {_texSizeCombo, _blendCombo, _imageDownscaleCombo})

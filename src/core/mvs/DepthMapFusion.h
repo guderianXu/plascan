@@ -31,7 +31,7 @@ struct StereoFusionConfig
 {
     int   minNumPixels       = 3;      ///< 融合到一个 3D 点的最少像素数
     int   maxNumPixels       = 10000;  ///< 防止过度融合（退化情况保护）
-    float maxReprojError     = 2.0f;   ///< 最大重投影误差（像素）
+    float maxReprojError     = 2.0f;   ///< 最大重投影误差；像素域由 pixelParametersUsePreparedRaster 决定
     float maxDepthError      = 0.01f;  ///< 最大相对深度误差（|d_meas - d_expect| / d_expect）
     float maxNormalError     = 10.0f;  ///< 最大法线角度差（度）
     int   checkNumImages     = 50;     ///< 传递检查的重叠图像数目
@@ -41,6 +41,8 @@ struct StereoFusionConfig
     bool  requireValidMask   = false;  ///< 要求每帧提供尺寸一致的权威有效蒙版
     int   minGeometryObservationCount = 0; ///< 几何一致总观测数下限（含参考帧）；0 表示不检查
     float maxLocalDepthGradient = 0.20f; ///< 局部相对深度突变上限；<=0 表示不检查
+    int   localDepthGradientRadiusPixels = 1; ///< 局部梯度邻域半径；像素域同下，0 表示禁用
+    bool  pixelParametersUsePreparedRaster = false; ///< false=实际网格；true=prepared raster，运行时按目标帧缩放
     bool  fuseOnlyFirstFrame = false;  ///< 流式窗口模式：只从窗口首帧产生点
     bool  enableLowYieldFallback = false; ///< 显式预览/低产出模式才允许降到双视一致
     float lowYieldFallbackMinRatio = 0.01f; ///< 严格融合点数 / 首帧有效深度低于该比例时触发 fallback
@@ -121,6 +123,8 @@ private:
         FramePinholeCamera cameraModel;
         int W = 0;
         int H = 0;
+        float maxReprojectionErrorSquared = 0.0f;
+        int localDepthGradientRadiusPixels = 0;
     };
 
     /// 预计算每帧的投影几何
@@ -141,7 +145,10 @@ private:
                    std::vector<std::vector<char>> &fusedMask,
                    FusedPoint &outPoint);
 
-    bool isPixelEligible(const FusionFrameInput &frame, int row, int col);
+    bool isPixelEligible(const FusionFrameInput &frame,
+                         const FrameGeometry &geometry,
+                         int row,
+                         int col);
     void resetRejectionStats();
 
     /// 两视图 minNumPixels<=1 场景的并行快速融合路径

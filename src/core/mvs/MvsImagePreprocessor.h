@@ -12,6 +12,13 @@ namespace xjw
 namespace mvs
 {
 
+struct MvsPreparedRasterArtifact
+{
+    std::string imagePath;
+    std::string validMaskPath;
+    FramePinholeCamera camera;
+};
+
 /// Returns true when MVS preparation must allocate a distinct undistorted image.
 /// The result depends only on camera metadata and is safe to use before decoding.
 bool mvsImagePreparationRequiresDistinctPixels(const FramePinholeCamera &camera) noexcept;
@@ -54,6 +61,22 @@ bool prepareMvsImageAndMask(const cv::Mat &source,
                             cv::Mat *preparedValidMask,
                             FramePinholeCamera *preparedCamera,
                             std::string *errorMessage = nullptr);
+
+/**
+ * @brief 将 MVS 实际使用的全分辨率彩色工作栅格和有效蒙版持久化到 workspace。
+ *
+ * inputRasterPath 与 inputCamera 必须严格对应。preparedValidMask 已位于
+ * prepareMvsImage 产出的工作栅格中，非零表示有效；为空时保存全有效蒙版。
+ * 输出使用无损 PNG，并返回与输出彩色栅格严格对应的零畸变相机。
+ */
+bool saveMvsPreparedRasterArtifact(
+    const std::string &inputRasterPath,
+    const FramePinholeCamera &inputCamera,
+    const cv::Mat &preparedValidMask,
+    const std::string &workspaceDirectory,
+    int frameIndex,
+    MvsPreparedRasterArtifact *artifact,
+    std::string *errorMessage = nullptr);
 
 } // namespace mvs
 } // namespace xjw

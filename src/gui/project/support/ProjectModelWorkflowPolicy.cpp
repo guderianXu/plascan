@@ -12,7 +12,6 @@
 #include <QtGlobal>
 
 #include <algorithm>
-#include <set>
 
 namespace xjw::gui::project
 {
@@ -382,21 +381,15 @@ int expectedDepthFrameCount(const QJsonObject &project_metadata,
     return qMax(expected_count, available_frame_count);
 }
 
-QString normalizedSceneProfile(const QString &profile)
-{
-    return profile.trimmed().toLower();
-}
-
 bool isExplicitSceneProfile(const QString &profile)
 {
-    const QString normalized = normalizedSceneProfile(profile);
-    return normalized == QStringLiteral("aerial_terrain") ||
-        normalized == QStringLiteral("orbital_object");
+    return xjw::mvs::isKnownDepthSceneProfile(profile);
 }
 
 QString sceneProfileDisplayName(const QString &profile)
 {
-    const QString normalized = normalizedSceneProfile(profile);
+    const QString normalized =
+        xjw::mvs::canonicalDepthSceneProfile(profile);
     if (normalized == QStringLiteral("aerial_terrain"))
     {
         return QStringLiteral("航拍地形");
@@ -405,6 +398,10 @@ QString sceneProfileDisplayName(const QString &profile)
     {
         return QStringLiteral("环拍目标");
     }
+    if (normalized == QStringLiteral("custom"))
+    {
+        return QStringLiteral("通用场景");
+    }
     return normalized.isEmpty() ? QStringLiteral("未记录") : normalized;
 }
 
@@ -412,39 +409,25 @@ QString depthBatchSceneCompatibilityReason(
     const xjw::core::project::StoredDepthFramesResult &stored_frames,
     const QString &expected_scene_profile)
 {
-    std::set<QString> stored_profiles;
-    int missing_profile_count = 0;
+    QString stored_profile;
     for (const auto &frame : stored_frames.frames)
     {
-        const QString profile = normalizedSceneProfile(frame.sceneProfile);
-        if (profile.isEmpty())
+        if (frame.role == xjw::mvs::DepthFrameRole::Excluded)
         {
-            ++missing_profile_count;
+            continue;
         }
-        else
+        if (!xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+                frame.sceneProfile, &stored_profile))
         {
-            stored_profiles.insert(profile);
+            return QStringLiteral(
+                "所选深度图批次的场景类型缺失、无法识别或记录不一致，"
+                "不能安全复用。请按当前场景重新估计完整深度图批次。");
         }
     }
 
-    if (stored_profiles.size() > 1 ||
-        (!stored_profiles.empty() && missing_profile_count > 0))
-    {
-        return QStringLiteral(
-            "所选深度图批次的场景类型记录不一致，不能安全复用。"
-            "请按当前场景重新估计完整深度图批次。");
-    }
-    if (!stored_profiles.empty() &&
-        !isExplicitSceneProfile(*stored_profiles.begin()))
-    {
-        return QStringLiteral(
-            "所选深度图批次记录了无法识别的场景类型“%1”，不能安全复用。"
-            "请重新估计深度图后再生成模型。")
-            .arg(*stored_profiles.begin());
-    }
-
-    const QString expected_profile = normalizedSceneProfile(expected_scene_profile);
-    if (stored_profiles.empty())
+    const QString expected_profile =
+        xjw::mvs::canonicalDepthSceneProfile(expected_scene_profile);
+    if (stored_profile.isEmpty())
     {
         if (isExplicitSceneProfile(expected_profile))
         {
@@ -462,7 +445,6 @@ QString depthBatchSceneCompatibilityReason(
         return QString();
     }
 
-    const QString stored_profile = *stored_profiles.begin();
     if (stored_profile != expected_profile)
     {
         return QStringLiteral(
@@ -476,20 +458,23 @@ QString depthBatchSceneCompatibilityReason(
 
 QString depthBatchFusionEligibilityReason(
     const xjw::core::project::StoredDepthFramesResult &stored_frames,
-    bool allow_orbital_sparse_scaffold_fallback)
+    bool allow_orbital_sparse_scaffold_fallback,
+    int required_primary_frame_count)
 {
     const bool orbital_batch = std::all_of(
         stored_frames.frames.cbegin(),
         stored_frames.frames.cend(),
         [](const xjw::core::project::StoredDepthFrameRecord &frame)
         {
-            return normalizedSceneProfile(frame.sceneProfile) ==
-                QStringLiteral("orbital_object");
+            return xjw::mvs::isOrbitalDepthSceneProfile(
+                frame.sceneProfile);
         });
     const int minimum_primary_frame_count = orbital_batch
-        ? xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(
-              static_cast<int>(stored_frames.frames.size()))
-        : 1;
+        ? std::max(
+              required_primary_frame_count,
+              xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(
+                  static_cast<int>(stored_frames.frames.size())))
+        : required_primary_frame_count;
 
     int accepted_count = 0;
     int validation_only_count = 0;
@@ -500,6 +485,8 @@ QString depthBatchFusionEligibilityReason(
     {
         const QString acceptance = frame.acceptance.trimmed().toLower();
         has_complete_quality_metadata = has_complete_quality_metadata &&
+            frame.status.trimmed().compare(
+                QStringLiteral("completed"), Qt::CaseInsensitive) == 0 &&
             !acceptance.isEmpty() && frame.fusionEligibilityKnown;
         if (acceptance == QStringLiteral("accepted"))
         {
@@ -509,12 +496,11 @@ QString depthBatchFusionEligibilityReason(
         {
             ++validation_only_count;
         }
-        if (frame.fusionEligible)
+        if (frame.fusionEligibilityKnown && frame.fusionEligible)
         {
             ++fusion_eligible_count;
         }
-        if (xjw::mvs::isPrimaryFusionFrame(
-                frame.acceptance, frame.fusionEligible))
+        if (xjw::mvs::isPrimaryFusionFrame(frame.role))
         {
             ++primary_frame_count;
         }
@@ -523,7 +509,8 @@ QString depthBatchFusionEligibilityReason(
     if (!has_complete_quality_metadata)
     {
         return QStringLiteral(
-            "所选深度图批次缺少完整的帧质量资格记录（acceptance/fusion_eligible），"
+            "所选深度图批次缺少完整的帧质量资格记录"
+            "（status/acceptance/fusion_eligible），"
             "无法确认它能安全进入多视融合。请重新估计深度图后再生成模型。");
     }
     const bool sparse_scaffold_can_carry_global_shape =
@@ -555,6 +542,31 @@ QString projectDepthInputSignature(const QJsonObject &project_metadata,
         aerial_triangulation_result_index);
 }
 
+StoredDepthBatchRequirements depthBatchRequirementsForModelSettings(
+    const QJsonObject &settings)
+{
+    QString mode = settings.value(QStringLiteral("reconstruction_mode"))
+                       .toString()
+                       .trimmed()
+                       .toLower();
+    if (mode.isEmpty())
+    {
+        mode = settings.value(QStringLiteral("surface_type")).toString() ==
+                QStringLiteral("height_field")
+            ? QStringLiteral("poisson_legacy")
+            : QStringLiteral("depth_tsdf");
+    }
+    if (mode == QStringLiteral("depth_tsdf"))
+    {
+        return kDepthTsdfDepthBatchRequirements;
+    }
+    if (mode == QStringLiteral("visual_hull"))
+    {
+        return kVisualHullDepthBatchRequirements;
+    }
+    return StoredDepthBatchRequirements{1, 2};
+}
+
 SparseScaffoldSource resolveSparseScaffoldSource(
     const QJsonObject &project_metadata,
     const QString &depth_map_source_path)
@@ -582,7 +594,8 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QString &depth_map_source_path,
     int aerial_triangulation_result_index,
     const QString &expected_scene_profile,
-    bool allow_orbital_sparse_scaffold_fallback)
+    bool allow_orbital_sparse_scaffold_fallback,
+    StoredDepthBatchRequirements requirements)
 {
     StoredDepthBatchCompatibility result;
     const auto stored_frames = depth_map_source_path.trimmed().isEmpty()
@@ -597,17 +610,39 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
                             .arg(stored_frames.status.errorMessage);
         return result;
     }
-    if (stored_frames.frames.size() < 2)
+    result.usableFrameCount = static_cast<int>(std::count_if(
+        stored_frames.frames.cbegin(),
+        stored_frames.frames.cend(),
+        [](const xjw::core::project::StoredDepthFrameRecord &frame)
+        {
+            return frame.role != xjw::mvs::DepthFrameRole::Excluded;
+        }));
+    result.primaryFrameCount = static_cast<int>(std::count_if(
+        stored_frames.frames.cbegin(),
+        stored_frames.frames.cend(),
+        [](const xjw::core::project::StoredDepthFrameRecord &frame)
+        {
+            return xjw::mvs::isPrimaryFusionFrame(frame.role);
+        }));
+    const int minimum_usable_frame_count = std::max(
+        1, requirements.minimumUsableFrameCount);
+    const int minimum_primary_frame_count = std::max(
+        1, requirements.minimumPrimaryFrameCount);
+    if (result.usableFrameCount < minimum_usable_frame_count)
     {
-        result.reason = QStringLiteral("可用深度图数量不足（至少需要 2 张）。");
+        result.reason = QStringLiteral(
+            "可用深度图数量不足（可用于融合 %1/%2 帧，至少需要 %3 张）。")
+                            .arg(result.usableFrameCount)
+                            .arg(result.frameCount)
+                            .arg(minimum_usable_frame_count);
         return result;
     }
 
     const QJsonObject selected_at_result = selectedAerialTriangulationResult(
         project_metadata,
         aerial_triangulation_result_index);
-    const QString effective_expected_scene_profile = normalizedSceneProfile(
-        expected_scene_profile);
+    const QString effective_expected_scene_profile =
+        xjw::mvs::canonicalDepthSceneProfile(expected_scene_profile);
     const int expected_frame_count = qMax(
         expectedDepthFrameCount(project_metadata,
                                 stored_frames.batchDir,
@@ -653,7 +688,8 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
 
     const QString fusion_eligibility_reason = depthBatchFusionEligibilityReason(
         stored_frames,
-        allow_orbital_sparse_scaffold_fallback);
+        allow_orbital_sparse_scaffold_fallback,
+        minimum_primary_frame_count);
     if (!fusion_eligibility_reason.isEmpty())
     {
         result.reason = fusion_eligibility_reason;

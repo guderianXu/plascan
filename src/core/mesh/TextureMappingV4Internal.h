@@ -13,6 +13,7 @@
 #include <opencv2/core/mat.hpp>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -34,6 +35,8 @@ struct PreparedView
     cv::Mat colorBgr;
     cv::Mat gray;
     cv::Mat supportDistance;
+    cv::Mat finalMeshFaceIds;
+    std::vector<std::uint8_t> finalMeshVisibleFaces;
     float qualityWeight = 1.0f;
     float sharpnessWeight = 1.0f;
     float exposureGain = 1.0f;
@@ -61,6 +64,7 @@ struct FaceCandidate
     float angleScore = 0.0f;
     float resolutionScore = 0.0f;
     bool strict = false;
+    bool finalMeshVisibilityRequired = false;
 };
 
 struct FaceAssignment
@@ -109,6 +113,23 @@ bool selectTextureViews(const TextureMappingConfig &config,
                         PipelineData *data,
                         TextureMappingResult *result,
                         std::string *errorMsg);
+
+bool buildFinalMeshVisibility(const TextureMappingConfig &config,
+                              PipelineData *data,
+                              TextureMappingResult *result,
+                              std::string *errorMsg);
+
+bool isFinalMeshFaceVisible(const PreparedView &view,
+                            int face_index,
+                            const std::array<double, 3> &world);
+
+bool isFinalMeshFaceVisibleSomewhere(const PreparedView &view,
+                                     int face_index);
+
+bool perspectiveCorrectBarycentricWeights(
+    const std::array<double, 3> &affine_weights,
+    const std::array<double, 3> &camera_depths,
+    std::array<double, 3> *corrected_weights);
 
 bool buildAndPackCharts(const TextureMappingConfig &config,
                         PipelineData *data,

@@ -237,6 +237,287 @@ bool sourceEntryLess(const MvsSourcePlanEntry &lhs,
     return lhs.viewIndex < rhs.viewIndex;
 }
 
+bool sourceSoftRankingEnabled(const MvsSourcePlannerOptions &options)
+{
+    return std::isfinite(options.sourceAngleSoftRankingStrength) &&
+        options.sourceAngleSoftRankingStrength > 0.0f;
+}
+
+float normalizedSoftAnglePenalty(
+    const MvsSourcePlanEntry &entry,
+    const MvsSourcePlannerOptions &options)
+{
+    const float angle = entry.medianTriangulationAngleDeg;
+    const float soft_maximum = options.softMaxTriangulationAngleDeg;
+    const float maximum = options.maxTriangulationAngleDeg;
+    if (!std::isfinite(angle) || !std::isfinite(soft_maximum) ||
+        !std::isfinite(maximum) || angle <= soft_maximum ||
+        maximum <= soft_maximum)
+    {
+        return 0.0f;
+    }
+
+    return std::clamp(
+        (angle - soft_maximum) / (maximum - soft_maximum),
+        0.0f,
+        1.0f);
+}
+
+float adjustedSourceScore(const MvsSourcePlanEntry &entry,
+                          const MvsSourcePlannerOptions &options,
+                          float normalized_penalty)
+{
+    if (!sourceSoftRankingEnabled(options) || normalized_penalty <= 0.0f)
+    {
+        return entry.score;
+    }
+
+    return entry.score * std::exp(
+        -options.sourceAngleSoftRankingStrength * normalized_penalty);
+}
+
+bool adjustedSourceEntryLess(const MvsSourcePlanEntry &lhs,
+                             const MvsSourcePlanEntry &rhs)
+{
+    if (lhs.adjustedScore != rhs.adjustedScore)
+    {
+        return lhs.adjustedScore > rhs.adjustedScore;
+    }
+    return sourceEntryLess(lhs, rhs);
+}
+
+bool sameSourceSelection(const std::vector<MvsSourcePlanEntry> &lhs,
+                         const std::vector<MvsSourcePlanEntry> &rhs)
+{
+    if (lhs.size() != rhs.size())
+    {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index)
+    {
+        if (lhs[index].viewIndex != rhs[index].viewIndex ||
+            lhs[index].tier != rhs[index].tier)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameSelectedViewSet(const std::vector<MvsSourcePlanEntry> &lhs,
+                         const std::vector<MvsSourcePlanEntry> &rhs)
+{
+    std::vector<int> lhs_views;
+    std::vector<int> rhs_views;
+    lhs_views.reserve(lhs.size());
+    rhs_views.reserve(rhs.size());
+    for (const MvsSourcePlanEntry &entry : lhs)
+    {
+        lhs_views.push_back(entry.viewIndex);
+    }
+    for (const MvsSourcePlanEntry &entry : rhs)
+    {
+        rhs_views.push_back(entry.viewIndex);
+    }
+    std::sort(lhs_views.begin(), lhs_views.end());
+    std::sort(rhs_views.begin(), rhs_views.end());
+    return lhs_views == rhs_views;
+}
+
+bool sameSelectedViewOrder(const std::vector<MvsSourcePlanEntry> &lhs,
+                           const std::vector<MvsSourcePlanEntry> &rhs)
+{
+    if (lhs.size() != rhs.size())
+    {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index)
+    {
+        if (lhs[index].viewIndex != rhs[index].viewIndex)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool containsSourceIdentity(const std::vector<MvsSourcePlanEntry> &entries,
+                            int view_index,
+                            MvsSourceTier tier)
+{
+    return std::any_of(
+        entries.cbegin(),
+        entries.cend(),
+        [view_index, tier](const MvsSourcePlanEntry &entry)
+        {
+            return entry.viewIndex == view_index && entry.tier == tier;
+        });
+}
+
+void annotateSourceRanking(
+    std::vector<MvsSourcePlanEntry> &legacy_order,
+    std::vector<MvsSourcePlanEntry> &adjusted_order,
+    const MvsSourcePlannerOptions &options)
+{
+    struct RankValues
+    {
+        float adjustedScore = 0.0f;
+        float normalizedPenalty = 0.0f;
+        int legacyRank = -1;
+        int adjustedRank = -1;
+    };
+
+    std::unordered_map<int, RankValues> values_by_view;
+    values_by_view.reserve(legacy_order.size());
+    for (std::size_t index = 0; index < legacy_order.size(); ++index)
+    {
+        const float penalty = normalizedSoftAnglePenalty(
+            legacy_order[index], options);
+        values_by_view.emplace(
+            legacy_order[index].viewIndex,
+            RankValues{
+                adjustedSourceScore(legacy_order[index], options, penalty),
+                penalty,
+                static_cast<int>(index),
+                -1});
+    }
+
+    adjusted_order = legacy_order;
+    for (MvsSourcePlanEntry &entry : adjusted_order)
+    {
+        const RankValues &values = values_by_view.at(entry.viewIndex);
+        entry.adjustedScore = values.adjustedScore;
+        entry.normalizedSoftAnglePenalty = values.normalizedPenalty;
+        entry.rankingSoftMaximumDegrees =
+            options.softMaxTriangulationAngleDeg;
+        entry.rankingEffectiveMaximumDegrees =
+            options.maxTriangulationAngleDeg;
+        entry.legacyRankWithinTier = values.legacyRank;
+        entry.sourceRankingAudited = true;
+    }
+    std::sort(
+        adjusted_order.begin(),
+        adjusted_order.end(),
+        adjustedSourceEntryLess);
+    for (std::size_t index = 0; index < adjusted_order.size(); ++index)
+    {
+        values_by_view.at(adjusted_order[index].viewIndex).adjustedRank =
+            static_cast<int>(index);
+    }
+
+    const auto apply_values = [&values_by_view, &options](
+                                  MvsSourcePlanEntry &entry)
+    {
+        const RankValues &values = values_by_view.at(entry.viewIndex);
+        entry.adjustedScore = values.adjustedScore;
+        entry.normalizedSoftAnglePenalty = values.normalizedPenalty;
+        entry.rankingSoftMaximumDegrees =
+            options.softMaxTriangulationAngleDeg;
+        entry.rankingEffectiveMaximumDegrees =
+            options.maxTriangulationAngleDeg;
+        entry.legacyRankWithinTier = values.legacyRank;
+        entry.adjustedRankWithinTier = values.adjustedRank;
+        entry.sourceRankingAudited = true;
+    };
+    for (MvsSourcePlanEntry &entry : legacy_order)
+    {
+        apply_values(entry);
+    }
+    for (MvsSourcePlanEntry &entry : adjusted_order)
+    {
+        apply_values(entry);
+    }
+}
+
+void finalizeAuditedSourceSelection(
+    MvsSourcePlan &plan,
+    std::vector<MvsSourcePlanEntry> legacy_order,
+    const MvsSourcePlannerOptions &options)
+{
+    std::sort(legacy_order.begin(), legacy_order.end(), sourceEntryLess);
+    std::vector<MvsSourcePlanEntry> control_order = legacy_order;
+    std::vector<MvsSourcePlanEntry> unused_control_adjusted_order;
+    MvsSourcePlannerOptions control_options = options;
+    control_options.sourceAngleSoftRankingStrength = 0.0f;
+    annotateSourceRanking(
+        control_order, unused_control_adjusted_order, control_options);
+
+    std::vector<MvsSourcePlanEntry> treatment_legacy_order = legacy_order;
+    std::vector<MvsSourcePlanEntry> adjusted_order;
+    annotateSourceRanking(treatment_legacy_order, adjusted_order, options);
+
+    const std::size_t selection_count = std::min(
+        control_order.size(),
+        static_cast<std::size_t>(std::max(0, options.maxSources)));
+    plan.controlSelected.assign(
+        control_order.cbegin(), control_order.cbegin() + selection_count);
+
+    const bool has_alternative =
+        control_order.size() > static_cast<std::size_t>(options.maxSources);
+    if (!sourceSoftRankingEnabled(options) || !has_alternative)
+    {
+        adjusted_order = treatment_legacy_order;
+    }
+    plan.treatmentSelected.assign(
+        adjusted_order.cbegin(), adjusted_order.cbegin() + selection_count);
+    plan.selectedCountInvariant =
+        plan.controlSelected.size() == plan.treatmentSelected.size();
+
+    const bool control_is_complete =
+        static_cast<int>(plan.controlSelected.size()) == plan.requestedSourceCount;
+    if (!plan.selectedCountInvariant)
+    {
+        plan.selected = plan.controlSelected;
+        plan.sourceRankingDecisionReason =
+            "selected_count_mismatch_fallback";
+    }
+    else if (sourceSoftRankingEnabled(options) && !control_is_complete)
+    {
+        plan.selected = plan.controlSelected;
+        plan.sourceRankingDecisionReason = "control_source_shortfall";
+    }
+    else
+    {
+        plan.selected = plan.treatmentSelected;
+        plan.sourceRankingApplied = sourceSoftRankingEnabled(options) &&
+            !sameSourceSelection(plan.controlSelected, plan.treatmentSelected);
+        if (!sourceSoftRankingEnabled(options))
+        {
+            plan.sourceRankingDecisionReason = "legacy_score_control";
+        }
+        else if (!has_alternative)
+        {
+            plan.sourceRankingDecisionReason = "insufficient_alternatives";
+        }
+        else if (plan.sourceRankingApplied)
+        {
+            plan.sourceRankingDecisionReason = "selection_changed";
+        }
+        else
+        {
+            plan.sourceRankingDecisionReason = "ranking_unchanged";
+        }
+    }
+
+    plan.sourceRankingAudited = true;
+    plan.controlRankingCandidates.reserve(control_order.size());
+    for (const MvsSourcePlanEntry &entry : control_order)
+    {
+        plan.controlRankingCandidates.push_back({
+            entry,
+            containsSourceIdentity(
+                plan.controlSelected, entry.viewIndex, entry.tier)});
+    }
+    plan.rankingCandidates.reserve(treatment_legacy_order.size());
+    for (const MvsSourcePlanEntry &entry : treatment_legacy_order)
+    {
+        plan.rankingCandidates.push_back({
+            entry,
+            containsSourceIdentity(
+                plan.treatmentSelected, entry.viewIndex, entry.tier)});
+    }
+}
+
 std::vector<MvsSourcePlanEntry> sequenceFallbackEntries(const MvsSourcePlannerOptions &options)
 {
     std::vector<MvsSourcePlanEntry> entries;
@@ -407,21 +688,61 @@ MvsSourcePlan planMvsSourceViewsImpl(
         }
     }
 
-    plan.selected.reserve(bestByView.size());
-    for (const auto &item : bestByView)
+    const bool audit_source_ranking = options.auditSourceRanking ||
+        sourceSoftRankingEnabled(options);
+    if (audit_source_ranking)
     {
-        plan.selected.push_back(item.second);
+        std::vector<MvsSourcePlanEntry> qualified_entries;
+        qualified_entries.reserve(bestByView.size());
+        for (const auto &item : bestByView)
+        {
+            qualified_entries.push_back(item.second);
+        }
+        finalizeAuditedSourceSelection(
+            plan, std::move(qualified_entries), options);
     }
-    std::sort(plan.selected.begin(), plan.selected.end(), sourceEntryLess);
-    if (static_cast<int>(plan.selected.size()) > options.maxSources)
+    else
     {
-        plan.selected.resize(static_cast<size_t>(options.maxSources));
+        // Keep the default-off path byte-for-byte equivalent to the legacy
+        // planner: the experiment must not perturb ordering arithmetic, JSON,
+        // or cache hashes unless explicitly enabled.
+        plan.selected.reserve(bestByView.size());
+        for (const auto &item : bestByView)
+        {
+            plan.selected.push_back(item.second);
+        }
+        std::sort(plan.selected.begin(), plan.selected.end(), sourceEntryLess);
+        if (static_cast<int>(plan.selected.size()) > options.maxSources)
+        {
+            plan.selected.resize(static_cast<size_t>(options.maxSources));
+        }
     }
 
     if (plan.selected.empty())
     {
         plan.selected = sequenceFallbackEntries(options);
         plan.usedSequenceFallback = !plan.selected.empty();
+        if (audit_source_ranking)
+        {
+            for (std::size_t index = 0; index < plan.selected.size(); ++index)
+            {
+                MvsSourcePlanEntry &entry = plan.selected[index];
+                entry.adjustedScore = entry.score;
+                entry.normalizedSoftAnglePenalty = 0.0f;
+                entry.rankingSoftMaximumDegrees =
+                    options.softMaxTriangulationAngleDeg;
+                entry.rankingEffectiveMaximumDegrees =
+                    options.maxTriangulationAngleDeg;
+                entry.legacyRankWithinTier = static_cast<int>(index);
+                entry.adjustedRankWithinTier = static_cast<int>(index);
+                entry.sourceRankingAudited = true;
+            }
+            plan.controlSelected = plan.selected;
+            plan.treatmentSelected = plan.selected;
+            plan.selectedCountInvariant = true;
+            plan.sourceRankingApplied = false;
+            plan.sourceRankingDecisionReason = "sequence_fallback_unchanged";
+        }
     }
 
     plan.sourceViewShortfall = std::max(
@@ -429,6 +750,68 @@ MvsSourcePlan planMvsSourceViewsImpl(
         plan.requestedSourceCount - static_cast<int>(plan.selected.size()));
 
     return plan;
+}
+
+void setAuditedPlanTier(MvsSourcePlan &plan, MvsSourceTier tier)
+{
+    for (MvsSourcePlanEntry &entry : plan.controlSelected)
+    {
+        entry.tier = tier;
+    }
+    for (MvsSourcePlanEntry &entry : plan.treatmentSelected)
+    {
+        entry.tier = tier;
+    }
+    for (MvsSourceRankingAuditEntry &audit : plan.rankingCandidates)
+    {
+        audit.candidate.tier = tier;
+    }
+    for (MvsSourceRankingAuditEntry &audit : plan.controlRankingCandidates)
+    {
+        audit.candidate.tier = tier;
+    }
+}
+
+void appendAuditedPlan(
+    MvsSourcePlan &destination,
+    MvsSourcePlan &source,
+    MvsSourceTier tier)
+{
+    if (!source.sourceRankingAudited)
+    {
+        return;
+    }
+
+    setAuditedPlanTier(source, tier);
+    destination.sourceRankingAudited = true;
+    destination.controlRankingCandidates.insert(
+        destination.controlRankingCandidates.end(),
+        std::make_move_iterator(source.controlRankingCandidates.begin()),
+        std::make_move_iterator(source.controlRankingCandidates.end()));
+    destination.rankingCandidates.insert(
+        destination.rankingCandidates.end(),
+        std::make_move_iterator(source.rankingCandidates.begin()),
+        std::make_move_iterator(source.rankingCandidates.end()));
+}
+
+void finalizeSinglePassRankingPlan(
+    MvsSourcePlan &plan,
+    const MvsSourcePlannerOptions &options)
+{
+    if (!plan.sourceRankingAudited && !options.auditSourceRanking &&
+        !sourceSoftRankingEnabled(options))
+    {
+        return;
+    }
+
+    plan.sourceRankingAudited = true;
+    plan.controlSelected = plan.selected;
+    plan.treatmentSelected = plan.selected;
+    plan.selectedCountInvariant = true;
+    plan.sourceRankingApplied = false;
+    plan.sourceRankingDecisionReason = sourceSoftRankingEnabled(options)
+        ? "single_pass_treatment"
+        : "legacy_score_control";
 }
 
 } // namespace
@@ -439,7 +822,7 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
     return planMvsSourceViewsImpl(candidates, options, false);
 }
 
-MvsSourcePlan planMvsSourceViewsVerifiedFirst(
+static MvsSourcePlan planMvsSourceViewsVerifiedFirstSinglePass(
     const std::vector<MvsSourceCandidate> &candidates,
     const MvsSourcePlannerOptions &options)
 {
@@ -452,10 +835,12 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     {
         entry.tier = MvsSourceTier::VerifiedPair;
     }
+    setAuditedPlanTier(result, MvsSourceTier::VerifiedPair);
 
     if (static_cast<int>(result.selected.size()) >= result.requestedSourceCount)
     {
         result.sourceViewShortfall = 0;
+        finalizeSinglePassRankingPlan(result, options);
         return result;
     }
 
@@ -527,6 +912,10 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
         result.selected.push_back(entry);
         selectedViews.insert(entry.viewIndex);
     }
+    appendAuditedPlan(
+        result,
+        ordinary_backfill,
+        MvsSourceTier::TrackGeometryBackfill);
     result.rejected.insert(
         result.rejected.end(),
         std::make_move_iterator(ordinary_backfill.rejected.begin()),
@@ -555,6 +944,10 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
             result.selected.push_back(entry);
             selectedViews.insert(entry.viewIndex);
         }
+        appendAuditedPlan(
+            result,
+            failed_backfill,
+            MvsSourceTier::TrackGeometryBackfill);
         result.rejected.insert(
             result.rejected.end(),
             std::make_move_iterator(failed_backfill.rejected.begin()),
@@ -614,12 +1007,90 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
                 : ";strict_pair_audit_backfill";
             result.selected.push_back(entry);
         }
+        appendAuditedPlan(
+            result,
+            strict_backfill,
+            MvsSourceTier::StrictPairAuditBackfill);
         result.rejected.insert(
             result.rejected.end(),
             std::make_move_iterator(strict_backfill.rejected.begin()),
             std::make_move_iterator(strict_backfill.rejected.end()));
     }
     result.usedSequenceFallback = false;
+    result.sourceViewShortfall = std::max(
+        0,
+        result.requestedSourceCount - static_cast<int>(result.selected.size()));
+    finalizeSinglePassRankingPlan(result, options);
+    return result;
+}
+
+MvsSourcePlan planMvsSourceViewsVerifiedFirst(
+    const std::vector<MvsSourceCandidate> &candidates,
+    const MvsSourcePlannerOptions &options)
+{
+    if (!sourceSoftRankingEnabled(options))
+    {
+        return planMvsSourceViewsVerifiedFirstSinglePass(
+            candidates, options);
+    }
+
+    MvsSourcePlannerOptions control_options = options;
+    control_options.sourceAngleSoftRankingStrength = 0.0f;
+    control_options.auditSourceRanking = true;
+    MvsSourcePlan control = planMvsSourceViewsVerifiedFirstSinglePass(
+        candidates, control_options);
+    MvsSourcePlan treatment = planMvsSourceViewsVerifiedFirstSinglePass(
+        candidates, options);
+
+    MvsSourcePlan result = std::move(treatment);
+    result.controlSelected = control.selected;
+    result.treatmentSelected = result.selected;
+    result.controlRankingCandidates = std::move(control.rankingCandidates);
+    result.selectedCountInvariant =
+        result.controlSelected.size() == result.treatmentSelected.size();
+    const bool control_is_complete =
+        static_cast<int>(result.controlSelected.size()) ==
+        result.requestedSourceCount;
+
+    for (MvsSourceRankingAuditEntry &audit :
+         result.controlRankingCandidates)
+    {
+        audit.selectedByPlan = containsSourceIdentity(
+            result.controlSelected,
+            audit.candidate.viewIndex,
+            audit.candidate.tier);
+    }
+    for (MvsSourceRankingAuditEntry &audit : result.rankingCandidates)
+    {
+        audit.selectedByPlan = containsSourceIdentity(
+            result.treatmentSelected,
+            audit.candidate.viewIndex,
+            audit.candidate.tier);
+    }
+
+    if (!result.selectedCountInvariant)
+    {
+        result.selected = result.controlSelected;
+        result.sourceRankingApplied = false;
+        result.sourceRankingDecisionReason =
+            "selected_count_mismatch_fallback";
+    }
+    else if (!control_is_complete)
+    {
+        result.selected = result.controlSelected;
+        result.sourceRankingApplied = false;
+        result.sourceRankingDecisionReason = "control_source_shortfall";
+    }
+    else
+    {
+        result.selected = result.treatmentSelected;
+        result.sourceRankingApplied = !sameSourceSelection(
+            result.controlSelected, result.treatmentSelected);
+        result.sourceRankingDecisionReason = result.sourceRankingApplied
+            ? "selection_changed"
+            : "ranking_unchanged";
+    }
+    result.sourceRankingAudited = true;
     result.sourceViewShortfall = std::max(
         0,
         result.requestedSourceCount - static_cast<int>(result.selected.size()));
@@ -838,7 +1309,224 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     object.insert(QStringLiteral("source_tier"), sourceTier);
     object.insert(QStringLiteral("score"), entry.score);
     object.insert(QStringLiteral("source_quality_score"), entry.sourceQualityScore);
+    if (entry.sourceRankingAudited)
+    {
+        object.insert(QStringLiteral("legacy_score"), entry.score);
+        object.insert(QStringLiteral("adjusted_score"), entry.adjustedScore);
+        object.insert(
+            QStringLiteral("normalized_soft_angle_penalty"),
+            entry.normalizedSoftAnglePenalty);
+        object.insert(
+            QStringLiteral("ranking_soft_maximum_degrees"),
+            entry.rankingSoftMaximumDegrees);
+        object.insert(
+            QStringLiteral("ranking_effective_maximum_degrees"),
+            entry.rankingEffectiveMaximumDegrees);
+        object.insert(
+            QStringLiteral("legacy_rank_within_tier"),
+            entry.legacyRankWithinTier);
+        object.insert(
+            QStringLiteral("adjusted_rank_within_tier"),
+            entry.adjustedRankWithinTier);
+    }
     return object;
+}
+
+QJsonObject mvsSourceAngleDiagnosticsToJson(
+    const MvsSourceAnglePolicy &policy,
+    const MvsSourcePlan &plan)
+{
+    float selected_maximum_degrees = 0.0f;
+    for (const MvsSourcePlanEntry &entry : plan.selected)
+    {
+        if (std::isfinite(entry.medianTriangulationAngleDeg) &&
+            entry.medianTriangulationAngleDeg > 0.0f)
+        {
+            selected_maximum_degrees = std::max(
+                selected_maximum_degrees,
+                entry.medianTriangulationAngleDeg);
+        }
+    }
+
+    const int angle_rejected_candidate_count = static_cast<int>(
+        std::count_if(
+            plan.rejected.cbegin(),
+            plan.rejected.cend(),
+            [](const MvsSourceRejectedCandidate &rejected)
+            {
+                return rejected.reason ==
+                    MvsSourceRejectReason::TriangulationAngle;
+            }));
+
+    return QJsonObject{
+        {QStringLiteral("scope"),
+         QStringLiteral("patchmatch_source_plan")},
+        {QStringLiteral("configured_cap_degrees"),
+         policy.configuredCapDegrees},
+        {QStringLiteral("scene_maximum_degrees"),
+         policy.sceneMaximumDegrees},
+        {QStringLiteral("effective_maximum_degrees"),
+         policy.effectiveMaximumDegrees},
+        {QStringLiteral("cap_enabled"), policy.capEnabled},
+        {QStringLiteral("cap_applied"), policy.capApplied},
+        {QStringLiteral("only_tightens_scene_maximum"), true},
+        {QStringLiteral("sequence_fallback_allowed"),
+         policy.sequenceFallbackAllowed},
+        {QStringLiteral("sequence_fallback_disabled_reason"),
+         policy.capEnabled
+             ? QStringLiteral("explicit_source_angle_cap")
+             : QString()},
+        {QStringLiteral("selected_source_count"),
+         static_cast<int>(plan.selected.size())},
+        {QStringLiteral("selected_maximum_degrees"),
+         selected_maximum_degrees},
+        {QStringLiteral("angle_rejected_candidate_count"),
+         angle_rejected_candidate_count},
+        {QStringLiteral("policy"),
+         QStringLiteral("min_scene_maximum_and_configured_cap")}};
+}
+
+QJsonObject mvsSourceRankingDiagnosticsToJson(
+    const MvsSourceRankingPolicy &policy,
+    const MvsSourcePlan &plan)
+{
+    const auto entries_to_json = [](const auto &entries)
+    {
+        QJsonArray result;
+        for (const auto &entry : entries)
+        {
+            result.append(mvsSourcePlanEntryToJson(entry));
+        }
+        return result;
+    };
+
+    const auto candidates_to_json = [](const auto &audit_entries)
+    {
+        QJsonArray result;
+        for (const MvsSourceRankingAuditEntry &audit : audit_entries)
+        {
+            QJsonObject candidate = mvsSourcePlanEntryToJson(audit.candidate);
+            candidate.insert(
+                QStringLiteral("selected_by_plan"),
+                audit.selectedByPlan);
+            result.append(candidate);
+        }
+        return result;
+    };
+    const auto unique_qualified_view_count = [](const auto &audit_entries)
+    {
+        std::set<int> qualified_views;
+        for (const MvsSourceRankingAuditEntry &audit : audit_entries)
+        {
+            qualified_views.insert(audit.candidate.viewIndex);
+        }
+        return static_cast<int>(qualified_views.size());
+    };
+
+    return QJsonObject{
+        {QStringLiteral("scope"), QStringLiteral("patchmatch_source_plan")},
+        {QStringLiteral("enabled"),
+         policy.evaluateCompleteVisibilityCandidatePool},
+        {QStringLiteral("candidate_pool_policy"),
+         QStringLiteral("complete_evaluated_visibility_candidate_pool")},
+        {QStringLiteral("visibility_graph_scope"),
+         policy.visibilityGraphCoversAllViewPairs
+             ? QStringLiteral("all_co_visible_or_required_pairs")
+             : QStringLiteral("deterministic_bounded_graph")},
+        {QStringLiteral("view_count"), policy.viewCount},
+        {QStringLiteral("visibility_candidate_count"),
+         policy.visibilityCandidateCount},
+        {QStringLiteral("legacy_evaluated_candidate_count"),
+         policy.legacyEvaluatedCandidateCount},
+        {QStringLiteral("complete_evaluated_candidate_count"),
+         policy.completeEvaluatedCandidateCount},
+        {QStringLiteral("control_qualified_candidate_count"),
+         unique_qualified_view_count(plan.controlRankingCandidates)},
+        {QStringLiteral("control_qualified_tier_entry_count"),
+         static_cast<int>(plan.controlRankingCandidates.size())},
+        {QStringLiteral("treatment_qualified_candidate_count"),
+         unique_qualified_view_count(plan.rankingCandidates)},
+        {QStringLiteral("treatment_qualified_tier_entry_count"),
+         static_cast<int>(plan.rankingCandidates.size())},
+        {QStringLiteral("soft_ranking_strength"),
+         policy.softRankingStrength},
+        {QStringLiteral("soft_maximum_degrees"),
+         policy.softMaximumDegrees},
+        {QStringLiteral("effective_maximum_degrees"),
+         policy.effectiveMaximumDegrees},
+        {QStringLiteral("soft_ranking_formula"),
+         QStringLiteral("legacy_score*exp(-strength*t)")},
+        {QStringLiteral("control_selected_count"),
+         static_cast<int>(plan.controlSelected.size())},
+        {QStringLiteral("treatment_selected_count"),
+         static_cast<int>(plan.treatmentSelected.size())},
+        {QStringLiteral("requested_source_count"),
+         plan.requestedSourceCount},
+        {QStringLiteral("count_invariant"),
+         plan.selectedCountInvariant},
+        {QStringLiteral("selection_changed"),
+         !sameSourceSelection(
+             plan.controlSelected, plan.treatmentSelected)},
+        {QStringLiteral("selected_view_set_changed"),
+         !sameSelectedViewSet(
+             plan.controlSelected, plan.treatmentSelected)},
+        {QStringLiteral("selected_order_changed"),
+         !sameSelectedViewOrder(
+             plan.controlSelected, plan.treatmentSelected)},
+        {QStringLiteral("applied"), plan.sourceRankingApplied},
+        {QStringLiteral("decision_reason"),
+         QString::fromStdString(plan.sourceRankingDecisionReason)},
+        {QStringLiteral("control_selected"),
+         entries_to_json(plan.controlSelected)},
+        {QStringLiteral("treatment_selected"),
+         entries_to_json(plan.treatmentSelected)},
+        {QStringLiteral("control_candidate_ranking"),
+         candidates_to_json(plan.controlRankingCandidates)},
+        {QStringLiteral("treatment_candidate_ranking"),
+         candidates_to_json(plan.rankingCandidates)}};
+}
+
+bool validateMvsSourceRankingConfiguration(
+    bool evaluate_complete_visibility_candidate_pool,
+    float soft_ranking_strength,
+    float source_maximum_angle_degrees_cap,
+    std::string *error_message)
+{
+    const auto fail = [error_message](const char *message)
+    {
+        if (error_message)
+        {
+            *error_message = message;
+        }
+        return false;
+    };
+
+    if (!std::isfinite(soft_ranking_strength) ||
+        soft_ranking_strength < 0.0f || soft_ranking_strength > 4.0f)
+    {
+        return fail("source angle soft ranking strength must be finite and within [0,4]");
+    }
+    if (!std::isfinite(source_maximum_angle_degrees_cap) ||
+        source_maximum_angle_degrees_cap < 0.0f ||
+        source_maximum_angle_degrees_cap > 90.0f)
+    {
+        return fail("hard source angle cap must be finite and within [0,90]");
+    }
+    if (soft_ranking_strength > 0.0f &&
+        !evaluate_complete_visibility_candidate_pool)
+    {
+        return fail("source angle soft ranking requires the complete visibility candidate pool");
+    }
+    if (soft_ranking_strength > 0.0f &&
+        source_maximum_angle_degrees_cap != 0.0f)
+    {
+        return fail("source angle soft ranking cannot be combined with a hard source angle cap");
+    }
+    if (error_message)
+    {
+        error_message->clear();
+    }
+    return true;
 }
 
 } // namespace mvs

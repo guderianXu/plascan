@@ -23,7 +23,8 @@ struct MvsImageFrame
     cv::Mat preparedGray;
     FramePinholeCamera preparedCamera;
     cv::Mat validMask;
-    bool projectMaskLoaded = false;
+    /// project is semantic; content/technical only delimit valid raster data.
+    std::string validMaskSource;
 
     std::uint64_t residentBytes() const noexcept;
 };

@@ -111,6 +111,15 @@ QString resolvedSceneProfile(const QJsonObject &settings,
         }
         return configured_profile;
     }
+    if (configured_profile == QStringLiteral("custom") ||
+        configured_profile == QStringLiteral("general"))
+    {
+        if (resolution_source)
+        {
+            *resolution_source = QStringLiteral("explicit");
+        }
+        return QStringLiteral("custom");
+    }
 
     if (resolution_source)
     {
@@ -267,6 +276,16 @@ void clearDepthWorkspace(ProjectData *projectData, const QString &outputDir)
     {
         QFile::remove(artifact.absoluteFilePath());
     }
+    QDir prepared_directory(
+        directory.filePath(QStringLiteral("prepared_images")));
+    const QFileInfoList prepared_artifacts = prepared_directory.entryInfoList(
+        QStringList{QStringLiteral("frame_*.png")},
+        QDir::Files | QDir::Hidden);
+    for (const QFileInfo &artifact : prepared_artifacts)
+    {
+        QFile::remove(artifact.absoluteFilePath());
+    }
+    directory.rmdir(QStringLiteral("prepared_images"));
 
     if (!projectData)
     {

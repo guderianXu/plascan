@@ -10,6 +10,7 @@
 // ============================================================
 
 #include "CameraFormatConverter.h"
+#include "ColmapImageUndistorter.h"
 #include "io/PathIO.h"
 #include "string_utils/StringTransform.h"
 
@@ -39,6 +40,7 @@
 #endif
 
 #include <QFileInfo>
+#include <opencv2/imgcodecs.hpp>
 #include <zip.h>
 
 namespace xjw::camera
@@ -54,7 +56,8 @@ namespace
 /**
  * @brief 一张影像及其相机参数的规范化记录。
  *
- * `k` 是行优先 3×3 像素内参矩阵；`distortion` 顺序固定为
+ * `k` 是行优先 3×3 像素内参矩阵，u/v 使用 PlaScan/OpenCV 零基栅格索引，
+ * 即首像素中心为 `(0, 0)`；`distortion` 顺序固定为
  * `[k1, k2, k3, p1, p2]`。外参统一为 camera-to-world 旋转和世界系
  * 相机中心，使所有输入格式最终都能直接映射到 PlaScan Tsai 语义。
  */
@@ -72,6 +75,8 @@ struct CameraRecord
                                                  0.0, 1.0, 0.0,
                                                  0.0, 0.0, 1.0}};
     std::array<double, 3> center{{0.0, 0.0, 0.0}};
+    ColmapRasterModel colmapRasterModel;
+    bool hasColmapRasterModel = false;
     /// 该记录在有损转换中无法表达的信息，最终会加上影像名前缀汇总。
     std::vector<std::string> warnings;
 };
@@ -82,6 +87,7 @@ struct ColmapCameraModel
     std::array<double, 9> k{{0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0,
                              0.0, 0.0, 1.0}};
+    ColmapRasterModel rasterModel;
     std::vector<std::string> warnings;
 };
 
@@ -624,6 +630,20 @@ void warnIfColmapDistortion(const std::string &model,
     }
 }
 
+std::array<double, 9> colmapIntrinsicsToRasterIndex(double focal_x,
+                                                     double focal_y,
+                                                     double principal_x,
+                                                     double principal_y)
+{
+    // COLMAP 内参相对影像左上角建立，首像素中心为 (0.5, 0.5)；
+    // PlaScan/OpenCV 运行态坐标以首像素中心为 (0, 0)。焦距同为像素单位，
+    // 因此只平移主点，不改变 fx/fy 或现有畸变告警语义。
+    constexpr double colmap_first_pixel_center = 0.5;
+    return std::array<double, 9>{{focal_x, 0.0, principal_x - colmap_first_pixel_center,
+                                  0.0, focal_y, principal_y - colmap_first_pixel_center,
+                                  0.0, 0.0, 1.0}};
+}
+
 ColmapCameraModel parseColmapCameraLine(const std::string &line)
 {
     // cameras.txt 行格式：CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]。
@@ -646,6 +666,10 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
     }
 
     ColmapCameraModel camera;
+    camera.rasterModel.model = model;
+    camera.rasterModel.width = width;
+    camera.rasterModel.height = height;
+    camera.rasterModel.params = params;
     // 每个分支按 COLMAP 官方参数顺序提取 fx/fy/cx/cy；简单模型共享单焦距。
     if (model == "SIMPLE_PINHOLE")
     {
@@ -653,7 +677,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP SIMPLE_PINHOLE 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[0], params[1], params[2]);
     }
     else if (model == "PINHOLE")
     {
@@ -661,7 +685,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP PINHOLE 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[1], params[2], params[3]);
     }
     else if (model == "SIMPLE_RADIAL" || model == "SIMPLE_RADIAL_FISHEYE")
     {
@@ -669,7 +693,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[0], params[1], params[2]);
         warnIfColmapDistortion(model, params, 3, &camera.warnings);
     }
     else if (model == "RADIAL" || model == "RADIAL_FISHEYE")
@@ -678,7 +702,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[0], params[1], params[2]);
         warnIfColmapDistortion(model, params, 3, &camera.warnings);
     }
     else if (model == "OPENCV" || model == "OPENCV_FISHEYE")
@@ -687,7 +711,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[1], params[2], params[3]);
         warnIfColmapDistortion(model, params, 4, &camera.warnings);
     }
     else if (model == "FULL_OPENCV")
@@ -696,7 +720,18 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
         {
             throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
         }
-        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+        camera.k = colmapIntrinsicsToRasterIndex(params[0], params[1], params[2], params[3]);
+        warnIfColmapDistortion(model, params, 4, &camera.warnings);
+    }
+    else if (model == "THIN_PRISM_FISHEYE")
+    {
+        if (params.size() != 12)
+        {
+            throw std::runtime_error(
+                "COLMAP THIN_PRISM_FISHEYE 参数数量错误: " + line);
+        }
+        camera.k = colmapIntrinsicsToRasterIndex(
+            params[0], params[1], params[2], params[3]);
         warnIfColmapDistortion(model, params, 4, &camera.warnings);
     }
     else
@@ -765,6 +800,8 @@ CameraRecord parseColmapImageLine(const std::string &line,
     CameraRecord record;
     record.imageName = imageName;
     record.k = cameraIt->second.k;
+    record.colmapRasterModel = cameraIt->second.rasterModel;
+    record.hasColmapRasterModel = true;
     record.warnings = cameraIt->second.warnings;
 
     // COLMAP 位姿满足 Xc = R_wc*Xw+t_wc；PlaScan 需要 R_cw 和 C，故：
@@ -1569,6 +1606,8 @@ std::string relativeToken(const std::filesystem::path &path,
     return rel.generic_string();
 }
 
+std::string pathForMessage(const std::filesystem::path &path);
+
 void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
 {
     std::ofstream out = xjw::common::io::openOutputFile(path, std::ios::out | std::ios::trunc);
@@ -1621,6 +1660,86 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
     }
 }
 
+cv::Mat readImageWithoutNarrowPathAssumption(const std::filesystem::path &path)
+{
+    std::ifstream input = xjw::common::io::openInputFile(path, std::ios::binary);
+    if (!input)
+    {
+        throw std::runtime_error("无法读取待预去畸变影像: " + pathForMessage(path));
+    }
+    const std::vector<unsigned char> encoded{
+        std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    cv::Mat image = cv::imdecode(encoded, cv::IMREAD_COLOR);
+    if (image.empty())
+    {
+        throw std::runtime_error("无法解码待预去畸变影像: " + pathForMessage(path));
+    }
+    return image;
+}
+
+void writePngWithoutNarrowPathAssumption(
+    const std::filesystem::path &path,
+    const cv::Mat &image)
+{
+    std::vector<unsigned char> encoded;
+    if (!cv::imencode(".png", image, encoded))
+    {
+        throw std::runtime_error("无法编码预去畸变 PNG: " + pathForMessage(path));
+    }
+    std::ofstream output = xjw::common::io::openOutputFile(
+        path, std::ios::binary | std::ios::trunc);
+    output.write(
+        reinterpret_cast<const char *>(encoded.data()),
+        static_cast<std::streamsize>(encoded.size()));
+    output.close();
+    if (!output)
+    {
+        throw std::runtime_error("无法写入预去畸变 PNG: " + pathForMessage(path));
+    }
+}
+
+struct PreUndistortManifestEntry
+{
+    std::string sourceImage;
+    std::string preparedImage;
+    std::string validMask;
+    std::string sourceModel;
+    double focalScale = 1.0;
+};
+
+void writePreUndistortManifest(
+    const std::filesystem::path &path,
+    const std::vector<PreUndistortManifestEntry> &entries)
+{
+    std::ofstream out = xjw::common::io::openOutputFile(
+        path, std::ios::out | std::ios::trunc);
+    if (!out)
+    {
+        throw std::runtime_error(
+            "无法写入预去畸变 manifest: " + pathForMessage(path));
+    }
+    out << "{\n  \"schema\": \"plascan.colmap_preundistort.v1\",\n"
+        << "  \"pixel_center_convention\": \"first_pixel_center_0_0\",\n"
+        << "  \"frames\": [";
+    for (std::size_t index = 0; index < entries.size(); ++index)
+    {
+        const PreUndistortManifestEntry &entry = entries[index];
+        out << (index == 0 ? "\n" : ",\n")
+            << "    {\"source_image\": \"" << jsonEscape(entry.sourceImage)
+            << "\", \"prepared_image\": \"" << jsonEscape(entry.preparedImage)
+            << "\", \"valid_mask\": \"" << jsonEscape(entry.validMask)
+            << "\", \"source_model\": \"" << jsonEscape(entry.sourceModel)
+            << "\", \"focal_scale\": " << formatNumber(entry.focalScale) << "}";
+    }
+    out << (entries.empty() ? "" : "\n") << "  ]\n}\n";
+    out.close();
+    if (!out)
+    {
+        throw std::runtime_error(
+            "无法完整写入预去畸变 manifest: " + pathForMessage(path));
+    }
+}
+
 void writeSummary(const std::filesystem::path &summaryPath,
                   const CameraConversionResult &result)
 {
@@ -1640,6 +1759,14 @@ void writeSummary(const std::filesystem::path &summaryPath,
     out << "  \"image_camera_list\": \""
         << jsonEscape(xjw::common::io::toUtf8Path(std::filesystem::absolute(result.imageCameraList))) << "\",\n";
     out << "  \"camera_count\": " << result.cameraCount << ",\n";
+    out << "  \"pre_undistorted_image_count\": "
+        << result.preUndistortedImageCount << ",\n";
+    out << "  \"pre_undistort_manifest\": \""
+        << jsonEscape(result.preUndistortManifestPath.empty()
+               ? std::string()
+               : xjw::common::io::toUtf8Path(
+                     std::filesystem::absolute(result.preUndistortManifestPath)))
+        << "\",\n";
     out << "  \"warnings\": [";
     if (!result.warnings.empty())
     {
@@ -2370,6 +2497,25 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
         {
             throw std::runtime_error("没有可转换的相机记录");
         }
+        if (options.preUndistortColmapImages &&
+            result.inputFormat != CameraFormat::ColmapText)
+        {
+            throw std::runtime_error(
+                "--pre-undistort-colmap-images 仅适用于 COLMAP text 输入");
+        }
+        if (options.preUndistortColmapImages)
+        {
+            for (const CameraRecord &record : records)
+            {
+                if (!record.hasColmapRasterModel ||
+                    !isSupportedColmapPreUndistortModel(record.colmapRasterModel))
+                {
+                    throw std::runtime_error(
+                        "无法在导入边界预去畸变 COLMAP 模型: " +
+                        record.imageName);
+                }
+            }
+        }
 
         if (result.datasetId.empty())
         {
@@ -2393,12 +2539,22 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
         result.outputDir = normalized_output;
         result.imageCameraList = normalized_output / "image_camera.lis";
         result.summaryPath = normalized_output / "summary.json";
+        result.preUndistortManifestPath = options.preUndistortColmapImages
+            ? normalized_output / "preundistort_manifest.json"
+            : std::filesystem::path();
         validateCameraOutputNames(records);
 
         // 全部产物先写同一文件系统上的同级暂存目录；只有完整写入后才以
         // rename 切换到目标目录。已有输出先改名备份，安装前失败由析构回滚。
         OutputDirectoryTransaction transaction(normalized_output, options.overwrite);
         const std::filesystem::path staging_dir = transaction.stagingDir();
+        const std::filesystem::path staged_images_dir = staging_dir / "images";
+        const std::filesystem::path staged_masks_dir = staging_dir / "valid_masks";
+        if (options.preUndistortColmapImages)
+        {
+            std::filesystem::create_directory(staged_images_dir);
+            std::filesystem::create_directory(staged_masks_dir);
+        }
 
         std::ofstream listFile = xjw::common::io::openOutputFile(staging_dir / "image_camera.lis",
                                                                  std::ios::out | std::ios::trunc);
@@ -2410,11 +2566,46 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
         const std::filesystem::path staged_cameras_dir = staging_dir / "cameras";
         std::vector<std::filesystem::path> final_camera_files;
         final_camera_files.reserve(records.size());
+        std::vector<PreUndistortManifestEntry> preundistort_entries;
+        preundistort_entries.reserve(records.size());
         for (size_t index = 0; index < records.size(); ++index)
         {
-            const CameraRecord &record = records[index];
-            const std::filesystem::path &image_path =
+            CameraRecord &record = records[index];
+            const std::filesystem::path &source_image_path =
                 image_identities[index].sourcePath;
+            std::filesystem::path image_path = source_image_path;
+            if (options.preUndistortColmapImages)
+            {
+                const cv::Mat source =
+                    readImageWithoutNarrowPathAssumption(source_image_path);
+                const ColmapUndistortedRaster prepared =
+                    undistortColmapRaster(source, record.colmapRasterModel);
+                record.k = prepared.rasterIndexIntrinsics;
+                record.distortion.fill(0.0);
+                std::erase_if(record.warnings, [](const std::string &warning) {
+                    return warning.find("distortion terms are not exported") !=
+                        std::string::npos;
+                });
+                const std::string output_stem =
+                    std::filesystem::path(record.cameraFileName).stem().string();
+                const std::filesystem::path relative_image =
+                    std::filesystem::path("images") / (output_stem + ".png");
+                const std::filesystem::path relative_mask =
+                    std::filesystem::path("valid_masks") /
+                    (output_stem + "_valid.png");
+                writePngWithoutNarrowPathAssumption(
+                    staging_dir / relative_image, prepared.image);
+                writePngWithoutNarrowPathAssumption(
+                    staging_dir / relative_mask, prepared.validMask);
+                image_path = normalized_output / relative_image;
+                preundistort_entries.push_back({
+                    pathForMessage(source_image_path),
+                    relative_image.generic_string(),
+                    relative_mask.generic_string(),
+                    record.colmapRasterModel.model,
+                    prepared.focalScale});
+                ++result.preUndistortedImageCount;
+            }
             const std::filesystem::path final_tsai_path = normalized_output / "cameras"
                 / record.cameraFileName;
             const std::filesystem::path staged_tsai_path = staged_cameras_dir / record.cameraFileName;
@@ -2443,6 +2634,13 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
         {
             throw std::runtime_error("无法关闭 image_camera.lis: "
                                      + pathForMessage(result.imageCameraList));
+        }
+
+        if (options.preUndistortColmapImages)
+        {
+            writePreUndistortManifest(
+                staging_dir / "preundistort_manifest.json",
+                preundistort_entries);
         }
 
         result.cameraCount = static_cast<int>(records.size());

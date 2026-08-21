@@ -1,8 +1,16 @@
 #include "MvsImagePreprocessor.h"
 
+#include "io/PathIO.h"
+
 #include <gtest/gtest.h>
+
+#include <QDir>
+#include <QFileInfo>
+#include <QTemporaryDir>
+
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <cstdint>
@@ -181,4 +189,73 @@ TEST(MvsImagePreprocessor, BrownDistortionUsesOneMapForImageAndValidMask)
     EXPECT_EQ(prepared_valid_mask.at<std::uint8_t>(
                   prepared_valid_mask.rows - 1, prepared_valid_mask.cols - 1),
               0);
+}
+
+TEST(MvsImagePreprocessor,
+     PersistsLosslessColorRasterAndPreparedMaskForBrownCamera)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+
+    xjw::FramePinholeCamera source_camera = makeCamera();
+    source_camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
+    cv::Mat source_color;
+    cv::cvtColor(makeGradientImage(), source_color, cv::COLOR_GRAY2BGR);
+    source_color.at<cv::Vec3b>(18, 27) = cv::Vec3b(17, 103, 241);
+    const QString source_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("distorted source.png"));
+    ASSERT_TRUE(xjw::common::io::writeImage(source_path, source_color));
+
+    cv::Mat expected_color;
+    xjw::FramePinholeCamera expected_camera;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::prepareMvsImage(
+        source_color,
+        source_camera,
+        &expected_color,
+        &expected_camera,
+        &error)) << error;
+    cv::Mat source_valid_mask(
+        source_color.size(), CV_8UC1, cv::Scalar(255));
+    cv::rectangle(
+        source_valid_mask, cv::Rect(20, 14, 18, 16), cv::Scalar(0), cv::FILLED);
+    cv::Mat unused_gray;
+    cv::Mat prepared_valid_mask;
+    ASSERT_TRUE(xjw::mvs::prepareMvsImageAndMask(
+        makeGradientImage(),
+        source_valid_mask,
+        source_camera,
+        &unused_gray,
+        &prepared_valid_mask,
+        &expected_camera,
+        &error)) << error;
+
+    xjw::mvs::MvsPreparedRasterArtifact artifact;
+    ASSERT_TRUE(xjw::mvs::saveMvsPreparedRasterArtifact(
+        xjw::common::io::toUtf8Path(source_path),
+        source_camera,
+        prepared_valid_mask,
+        xjw::common::io::toUtf8Path(temporary_directory.path()),
+        7,
+        &artifact,
+        &error)) << error;
+
+    EXPECT_TRUE(QFileInfo::exists(
+        xjw::common::io::fromUtf8Path(artifact.imagePath)));
+    EXPECT_TRUE(QFileInfo::exists(
+        xjw::common::io::fromUtf8Path(artifact.validMaskPath)));
+    const cv::Mat stored_color = xjw::common::io::readImage(
+        artifact.imagePath, cv::IMREAD_COLOR);
+    const cv::Mat stored_mask = xjw::common::io::readImage(
+        artifact.validMaskPath, cv::IMREAD_GRAYSCALE);
+    ASSERT_FALSE(stored_color.empty());
+    ASSERT_FALSE(stored_mask.empty());
+    EXPECT_EQ(cv::norm(stored_color, expected_color, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::norm(stored_mask, prepared_valid_mask, cv::NORM_INF), 0.0);
+    EXPECT_GT(cv::norm(stored_color, source_color, cv::NORM_INF), 0.0);
+    EXPECT_DOUBLE_EQ(artifact.camera.distortion().radialK1, 0.0);
+    EXPECT_DOUBLE_EQ(artifact.camera.distortion().tangentialP2, 0.0);
+    ASSERT_TRUE(artifact.camera.imageSize().has_value());
+    EXPECT_EQ(artifact.camera.imageSize()->samples, source_color.cols);
+    EXPECT_EQ(artifact.camera.imageSize()->lines, source_color.rows);
 }

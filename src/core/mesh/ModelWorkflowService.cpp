@@ -12,7 +12,7 @@
 #include "MeshIsotropicRemesher.h"
 #include "MeshQuadricSimplifier.h"
 #include "MeshTopologyQuality.h"
-#include "OpenMeshSimplifier.h"
+#include "NativeMeshSimplifier.h"
 #include "OrbitalSparseScaffoldSurfaceBuilder.h"
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
@@ -48,8 +48,52 @@ static_assert(
         sizeof(DepthGeometrySourceMask) == 4 * sizeof(std::uint64_t),
     "Depth TSDF workflow requires the collision-free 256-bit source encoding");
 
+float depthFrameTextureQualityWeight(
+    float frame_quality_weight,
+    bool auxiliary_surface_only) noexcept
+{
+    return frame_quality_weight *
+        (auxiliary_surface_only
+             ? xjw::mvs::kCoverageAuxiliaryWeightMultiplier
+             : 1.0f);
+}
+
 namespace
 {
+
+bool validateUsableDepthSceneProfileBatch(
+    const QVector<DepthFrameArtifact> &artifacts,
+    QString *canonical_scene_profile,
+    int *invalid_ref_index,
+    QString *invalid_scene_profile)
+{
+    QString canonical;
+    for (const DepthFrameArtifact &artifact : artifacts)
+    {
+        if (artifact.role == xjw::mvs::DepthFrameRole::Excluded)
+        {
+            continue;
+        }
+        if (!xjw::mvs::extendCanonicalDepthSceneProfileBatch(
+                artifact.sceneProfile, &canonical))
+        {
+            if (invalid_ref_index != nullptr)
+            {
+                *invalid_ref_index = artifact.refIndex;
+            }
+            if (invalid_scene_profile != nullptr)
+            {
+                *invalid_scene_profile = artifact.sceneProfile;
+            }
+            return false;
+        }
+    }
+    if (canonical_scene_profile != nullptr)
+    {
+        *canonical_scene_profile = canonical;
+    }
+    return true;
+}
 
 bool cancellationRequested(const std::function<bool()> &isCancelled)
 {
@@ -468,17 +512,61 @@ QJsonObject textureResultToJson(
         static_cast<qint64>(result.rejectedMaskCount);
     object[QStringLiteral("texture_rejected_depth_count")] =
         static_cast<qint64>(result.rejectedDepthCount);
+    object[QStringLiteral("texture_rejected_visibility_count")] =
+        static_cast<qint64>(result.rejectedVisibilityCount);
     object[QStringLiteral("texture_rejected_angle_count")] =
         static_cast<qint64>(result.rejectedAngleCount);
     object[QStringLiteral("texture_rejected_resolution_count")] =
         static_cast<qint64>(result.rejectedResolutionCount);
     object[QStringLiteral("texture_rejected_color_outlier_count")] =
         static_cast<qint64>(result.rejectedColorOutlierCount);
+    object[QStringLiteral("texture_visibility_rasterized_pixel_count")] =
+        static_cast<qint64>(result.visibilityRasterizedPixelCount);
+    object[QStringLiteral("texture_no_texel_face_count")] =
+        static_cast<qint64>(result.noTexelFaceCount);
+    object[QStringLiteral("texture_center_recovered_face_count")] =
+        static_cast<qint64>(result.centerRecoveredFaceCount);
+    object[QStringLiteral("texture_unresolved_bake_face_count")] =
+        static_cast<qint64>(result.unresolvedBakeFaceCount);
+    object[QStringLiteral("texture_exposure_correction_status")] =
+        QString::fromStdString(result.exposureCorrectionStatus);
+    object[QStringLiteral("texture_exposure_correction_applied")] =
+        result.exposureCorrectionApplied;
+    object[QStringLiteral("texture_exposure_correction_graph_connected")] =
+        result.exposureCorrectionGraphConnected;
+    object[QStringLiteral("texture_exposure_correction_observation_count")] =
+        static_cast<qint64>(result.exposureCorrectionObservationCount);
+    object[QStringLiteral("texture_exposure_correction_candidate_pair_count")] =
+        static_cast<qint64>(result.exposureCorrectionCandidatePairCount);
+    object[QStringLiteral("texture_exposure_correction_accepted_pair_count")] =
+        static_cast<qint64>(result.exposureCorrectionAcceptedPairCount);
+    object[QStringLiteral(
+        "texture_exposure_correction_rejected_insufficient_pair_count")] =
+        static_cast<qint64>(
+            result.exposureCorrectionRejectedInsufficientPairCount);
+    object[QStringLiteral(
+        "texture_exposure_correction_rejected_high_mad_pair_count")] =
+        static_cast<qint64>(result.exposureCorrectionRejectedHighMadPairCount);
+    object[QStringLiteral(
+        "texture_exposure_correction_maximum_accepted_log_mad")] =
+        result.exposureCorrectionMaximumAcceptedLogMad;
+    object[QStringLiteral("texture_exposure_correction_minimum_gain")] =
+        result.exposureCorrectionMinimumGain;
+    object[QStringLiteral("texture_exposure_correction_maximum_gain")] =
+        result.exposureCorrectionMaximumGain;
     object[QStringLiteral("texture_atlas_occupancy")] = result.atlasOccupancy;
     object[QStringLiteral("texture_median_texel_density")] =
         result.medianTexelDensity;
     object[QStringLiteral("texture_seam_color_difference")] =
         result.seamColorDifference;
+    object[QStringLiteral("texture_seam_constraint_count")] =
+        result.seamConstraintCount;
+    object[QStringLiteral("texture_seam_adjusted_chart_count")] =
+        result.seamAdjustedChartCount;
+    object[QStringLiteral("texture_seam_adjusted_pixel_count")] =
+        result.seamAdjustedPixelCount;
+    object[QStringLiteral("texture_seam_maximum_applied_linear_correction")] =
+        result.seamMaximumAppliedLinearCorrection;
     object[QStringLiteral("texture_peak_memory_estimate_mib")] =
         result.peakMemoryEstimateMiB;
     if (config)
@@ -487,6 +575,14 @@ QJsonObject textureResultToJson(
             std::clamp(config->imageDownscale, 1, 8);
         object[QStringLiteral("effective_texture_padding")] =
             std::clamp(config->padding, 2, 64);
+        object[QStringLiteral("effective_texture_seam_leveling")] =
+            config->enableSeamLeveling;
+        object[QStringLiteral("effective_texture_seam_border_blend_radius_pixels")] =
+            std::clamp(config->seamBorderBlendRadiusPixels, 1, 64);
+        object[QStringLiteral("effective_texture_seam_maximum_linear_correction")] =
+            std::clamp(config->seamMaximumLinearCorrection, 0.0f, 0.25f);
+        object[QStringLiteral("effective_texture_final_mesh_visibility")] =
+            config->enableFinalMeshVisibility;
         object[QStringLiteral("effective_texture_ghost_filter")] =
             config->enableGhostFilter;
         object[QStringLiteral("effective_texture_out_of_focus_filter")] =
@@ -509,7 +605,9 @@ MeshColorView textureViewFromFrame(const DepthTsdfFrame &frame)
     view.confidence = frame.confidence;
     view.depthValidMask = frame.depthValidMask;
     view.supportMask = frame.supportMask;
-    view.qualityWeight = frame.frameQualityWeight;
+    view.qualityWeight = depthFrameTextureQualityWeight(
+        frame.frameQualityWeight,
+        frame.auxiliarySurfaceOnly);
 
     if (!frame.refImage.isEmpty() && QFileInfo::exists(frame.refImage))
     {
@@ -821,53 +919,47 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("surface_type"))
                 .toString(QStringLiteral("arbitrary_3d")) ==
             QStringLiteral("arbitrary_3d");
-    const bool automatic_openmesh_simplification =
-        openMeshSimplifierAvailable() &&
+    const bool automatic_topology_safe_simplification =
         options.resolution >= 320 &&
         options.simplifyTargetFaces > 0 &&
         options.simplifyTargetFaces <= 240000 &&
         arbitrary_surface;
-    options.enableOpenMeshSimplification = settings.value(
-        QStringLiteral("tsdfOpenMeshSimplification")).toBool(
-            automatic_openmesh_simplification);
-    options.openMeshMaximumNormalDeviationDegrees = std::clamp(
+    options.enableTopologySafeSimplification = settings.value(
+        QStringLiteral("tsdfTopologySafeSimplification")).toBool(
+            automatic_topology_safe_simplification);
+    options.topologySafeMaximumNormalDeviationDegrees = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
-            "tsdfOpenMeshMaximumNormalDeviationDegrees")).toDouble(180.0)),
+            "tsdfTopologySafeMaximumNormalDeviationDegrees")).toDouble(180.0)),
         1.0f,
         180.0f);
-    options.openMeshMaximumNormalFlippingDegrees = std::clamp(
+    options.topologySafeMaximumNormalFlippingDegrees = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
-            "tsdfOpenMeshMaximumNormalFlippingDegrees")).toDouble(75.0)),
+            "tsdfTopologySafeMaximumNormalFlippingDegrees")).toDouble(75.0)),
         1.0f,
         180.0f);
-    options.openMeshSmoothingIterations = qBound(
+    options.topologySafeSmoothingIterations = qBound(
         0,
-        settings.value(QStringLiteral("tsdfOpenMeshSmoothingIterations"))
-            .toInt(options.enableOpenMeshSimplification ? 12 : 2),
+        settings.value(QStringLiteral("tsdfTopologySafeSmoothingIterations"))
+            .toInt(options.enableTopologySafeSimplification ? 12 : 2),
         20);
-    options.openMeshSmoothingMaximumDisplacementVoxels = std::clamp(
+    options.topologySafeSmoothingMaximumDisplacementVoxels = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
-            "tsdfOpenMeshSmoothingMaximumDisplacementVoxels"))
+            "tsdfTopologySafeSmoothingMaximumDisplacementVoxels"))
                                .toDouble(
-                                   options.enableOpenMeshSimplification
+                                   options.enableTopologySafeSimplification
                                        ? 1.60
                                        : 0.40)),
         0.0f,
         2.0f);
-    options.openMeshSmoothingFeatureAngleDegrees = std::clamp(
+    options.topologySafeSmoothingFeatureAngleDegrees = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
-            "tsdfOpenMeshSmoothingFeatureAngleDegrees"))
+            "tsdfTopologySafeSmoothingFeatureAngleDegrees"))
                                .toDouble(
-                                   options.enableOpenMeshSimplification
+                                   options.enableTopologySafeSimplification
                                        ? 175.0
                                        : 120.0)),
         1.0f,
         180.0f);
-    options.openMeshNotificationInterval = qBound(
-        1,
-        settings.value(QStringLiteral("tsdfOpenMeshNotificationInterval"))
-            .toInt(4096),
-        1000000);
     options.enableVoxelFallbackSimplification = settings.value(
         QStringLiteral("tsdfVoxelFallbackSimplification")).toBool(true);
     const bool automatic_voxel_fallback_qem_polish =
@@ -1536,7 +1628,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
     const bool automatic_surface_patch_support = options.resolution >= 384 &&
         options.simplifyTargetFaces > 0 &&
         (options.simplifyTargetFaces <= 120000 ||
-         (options.enableOpenMeshSimplification &&
+         (options.enableTopologySafeSimplification &&
           options.simplifyTargetFaces <= 240000));
     options.enableSurfacePatchSupport = settings.value(
         QStringLiteral("tsdfSurfacePatchSupport")).toBool(
@@ -1615,7 +1707,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
             .toBool(false);
     options.enableMc33IsoSurfaceExtraction = settings.value(
         QStringLiteral("tsdfMc33IsoSurfaceExtraction")).toBool(
-            options.enableOpenMeshSimplification &&
+            options.enableTopologySafeSimplification &&
             !consistent_extraction_explicitly_enabled &&
             Mc33IsoSurfaceExtractor::isAvailable());
     options.enableConsistentIsoSurfaceExtraction = settings.value(
@@ -2189,7 +2281,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
     const bool automatic_boundary_recovery = options.resolution >= 384 &&
         options.simplifyTargetFaces > 0 &&
         (options.simplifyTargetFaces <= 120000 ||
-         (options.enableOpenMeshSimplification &&
+         (options.enableTopologySafeSimplification &&
           options.simplifyTargetFaces <= 240000));
     options.enableGeometryVerifiedBoundaryRecovery = settings.value(
         QStringLiteral("tsdfGeometryVerifiedBoundaryRecovery")).toBool(
@@ -2980,7 +3072,7 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     const bool high_detail_model = options->resolution >= 384 &&
         options->simplifyTargetFaces > 0 &&
         (options->simplifyTargetFaces <= 120000 ||
-         (options->enableOpenMeshSimplification &&
+         (options->enableTopologySafeSimplification &&
           options->simplifyTargetFaces <= 240000));
     if (!high_detail_model)
     {
@@ -3785,6 +3877,9 @@ xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &set
             QStringLiteral("outOfFocusFilter")).toBool(config.enableOutOfFocusFilter);
         config.enableColorCorrection = settings.value(
             QStringLiteral("colorCorrection")).toBool(config.enableColorCorrection);
+        config.enableFinalMeshVisibility = settings.value(
+            QStringLiteral("finalMeshVisibility"))
+            .toBool(config.enableFinalMeshVisibility);
         config.sharpeningStrength = static_cast<float>(
             settings.value(QStringLiteral("sharpeningStrength"))
                 .toDouble(config.sharpeningStrength));
@@ -4031,6 +4126,23 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                       .arg(xjw::mvs::kMvsDepthAlgorithmRevision);
             return result;
         }
+        QString canonical_scene_profile;
+        int invalid_scene_ref_index = -1;
+        QString invalid_scene_profile;
+        if (!validateUsableDepthSceneProfileBatch(
+                artifacts,
+                &canonical_scene_profile,
+                &invalid_scene_ref_index,
+                &invalid_scene_profile))
+        {
+            result.errorMessage = QStringLiteral(
+                "所选深度图包含缺失、无法识别或批次不一致的 "
+                "scene_profile（ref_index=%1，值=%2），不能安全选择 "
+                "TSDF 场景策略。请重新估计完整深度图批次。")
+                                      .arg(invalid_scene_ref_index)
+                                      .arg(invalid_scene_profile);
+            return result;
+        }
         const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
             artifacts,
             request.settings.value(QStringLiteral("threads")).toInt(0));
@@ -4063,15 +4175,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             return result;
         }
 
-        const int orbital_frame_count = std::count_if(
-            artifacts.cbegin(),
-            artifacts.cend(),
-            [](const DepthFrameArtifact &artifact)
-            {
-                return artifact.sceneProfile == QStringLiteral("orbital_object");
-            });
-        const bool orbital_workspace = orbital_frame_count >=
-            std::max(3, static_cast<int>(artifacts.size() / 2));
+        const bool orbital_workspace =
+            xjw::mvs::isOrbitalDepthSceneProfile(
+                canonical_scene_profile);
         const bool sparse_scaffold_pair_provided =
             !request.sparseScaffoldPointCloudPath.trimmed().isEmpty() &&
             !request.sparseScaffoldPointsPath.trimmed().isEmpty();
@@ -4104,8 +4210,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 artifacts.cend(),
                 [](const DepthFrameArtifact &artifact)
                 {
-                    return xjw::mvs::isPrimaryFusionFrame(
-                        artifact.acceptance, artifact.fusionEligible);
+                    return xjw::mvs::isPrimaryFusionFrame(artifact.role);
                 });
             const int minimum_primary_frame_count =
                 xjw::mvs::minimumOrbitalPrimaryDepthFrameCount(
@@ -4685,30 +4790,32 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                quality_after.topologicalComplexity <=
                                    complexity_limit;
                     };
-                    OpenMeshSimplifyOptions simplify_options;
+                    NativeMeshSimplifyOptions simplify_options;
                     simplify_options.targetFaceCount =
                         options.simplifyTargetFaces;
+                    simplify_options.maximumPasses = 12;
+                    simplify_options.workerCount = options.workerCount;
                     simplify_options.maximumNormalDeviationDegrees = 35.0f;
                     simplify_options.maximumNormalFlippingDegrees = 75.0f;
-                    simplify_options.notificationInterval = 4096;
+                    simplify_options.featureAngleDegrees = 35.0f;
                     simplify_options.isCancelled = request.isCancelled;
-                    const bool prefer_quadric_simplification =
-                        request.settings.value(QStringLiteral(
-                            "tsdfOrbitalVisualHullPreferQuadricSimplification"))
-                            .toBool(false);
-                    result.payload[QStringLiteral(
-                        "configured_orbital_visual_hull_prefer_quadric_simplification")] =
-                        prefer_quadric_simplification;
-                    OpenMeshSimplifyStatistics simplify;
-                    if (!prefer_quadric_simplification)
+                    if (request.progress)
                     {
-                        simplify = simplifyMeshWithOpenMesh(
+                        simplify_options.progress =
+                            [progress = request.progress](int pass, int current_faces)
+                            {
+                                progress(
+                                    QStringLiteral(
+                                        "正在进行原生拓扑安全简化（第 %1 轮，约 %2 面）...")
+                                        .arg(pass)
+                                        .arg(current_faces),
+                                    98);
+                            };
+                    }
+                    const NativeMeshSimplifyStatistics simplify =
+                        simplifyMeshTopologySafe(
                             &orbital_completion.mesh,
                             simplify_options);
-                    }
-                    result.payload[QStringLiteral(
-                        "orbital_visual_hull_simplification_available")] =
-                        simplify.available;
                     result.payload[QStringLiteral(
                         "orbital_visual_hull_simplification_succeeded")] =
                         simplify.succeeded;
@@ -4725,7 +4832,6 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                         evaluateMeshTopologyQuality(
                             orbital_completion.mesh);
                     const bool topology_preserved =
-                        !prefer_quadric_simplification &&
                         simplify.succeeded &&
                         preserves_topology(quality_after);
                     result.payload[QStringLiteral(
@@ -4754,10 +4860,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                         orbital_completion.mesh = unsimplified_mesh;
                         result.payload[QStringLiteral(
                             "orbital_visual_hull_simplification_rejected")] =
-                            !prefer_quadric_simplification;
-                        result.payload[QStringLiteral(
-                            "orbital_visual_hull_openmesh_skipped_for_quadric")] =
-                            prefer_quadric_simplification;
+                            true;
                         QuadricSimplifyOptions quadric_options;
                         quadric_options.targetFaceCount =
                             options.simplifyTargetFaces;
@@ -4771,17 +4874,14 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                         if (request.progress)
                         {
                             quadric_options.progress =
-                                [progress = request.progress,
-                                 prefer_quadric_simplification](
-                                    int,
+                                [progress = request.progress](
+                                    int pass,
                                     int current_faces)
                                 {
                                     progress(
-                                        (prefer_quadric_simplification
-                                             ? QStringLiteral(
-                                                   "正在进行保拓扑 QEM 简化（约 %1 面）...")
-                                             : QStringLiteral(
-                                                   "OpenMesh 破坏拓扑，正在进行保拓扑 QEM 简化（约 %1 面）..."))
+                                        QStringLiteral(
+                                            "拓扑安全简化未通过质量门，正在进行 QEM 回退（第 %1 轮，约 %2 面）...")
+                                            .arg(pass)
                                             .arg(current_faces),
                                         98);
                                 };
@@ -7408,6 +7508,43 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         return result;
     }
 
+    const QVector<DepthFrameArtifact> qualified_artifacts =
+        DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
+    const int qualified_primary_frame_count = std::count_if(
+        qualified_artifacts.cbegin(),
+        qualified_artifacts.cend(),
+        [](const DepthFrameArtifact &artifact)
+        {
+            return xjw::mvs::isPrimaryFusionFrame(artifact.role);
+        });
+    result.payload[QStringLiteral("discovered_depth_frame_count")] =
+        qualified_artifacts.size();
+    result.payload[QStringLiteral("qualified_primary_depth_frame_count")] =
+        qualified_primary_frame_count;
+    if (qualified_primary_frame_count == 0)
+    {
+        result.errorMessage = QStringLiteral(
+            "深度图模型入口没有可用的主融合深度帧：发现=%1，主帧=0。"
+            "Rejected、仅辅助验证或无清单深度帧不能授权模型发布。")
+                                  .arg(qualified_artifacts.size());
+        return result;
+    }
+    int invalid_scene_ref_index = -1;
+    QString invalid_scene_profile;
+    if (!validateUsableDepthSceneProfileBatch(
+            qualified_artifacts,
+            nullptr,
+            &invalid_scene_ref_index,
+            &invalid_scene_profile))
+    {
+        result.errorMessage = QStringLiteral(
+            "深度图模型入口包含缺失、无法识别或批次不一致的 "
+            "scene_profile（ref_index=%1，值=%2），不能安全发布模型。")
+                                  .arg(invalid_scene_ref_index)
+                                  .arg(invalid_scene_profile);
+        return result;
+    }
+
     if (mode == QStringLiteral("visual_hull"))
     {
         DepthMapVisualHullOptions visual_hull_options;
@@ -7697,6 +7834,20 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
         }
         const QVector<DepthFrameArtifact> artifacts =
             DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
+        const bool has_primary_frame = std::any_of(
+            artifacts.cbegin(),
+            artifacts.cend(),
+            [](const DepthFrameArtifact &artifact)
+            {
+                return xjw::mvs::isPrimaryFusionFrame(artifact.role);
+            });
+        if (!has_primary_frame)
+        {
+            result.errorMessage = QStringLiteral(
+                "无法加载相机纹理源：没有可用的主融合深度帧；"
+                "辅助验证帧不能独立发布纹理结果。");
+            return result;
+        }
         const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
             artifacts);
         if (cancellationRequested(request.isCancelled))
@@ -7706,6 +7857,13 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
         if (!loaded.ok)
         {
             result.errorMessage = QStringLiteral("无法加载相机纹理源: %1").arg(loaded.errorMessage);
+            return result;
+        }
+        if (loaded.primaryFrameCount == 0)
+        {
+            result.errorMessage = QStringLiteral(
+                "无法加载相机纹理源：实际载入的主融合深度帧为 0；"
+                "辅助验证帧不能独立发布纹理结果。");
             return result;
         }
         QVector<MeshColorView> views;

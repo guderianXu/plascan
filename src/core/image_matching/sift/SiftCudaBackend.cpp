@@ -119,6 +119,28 @@ namespace xjw::image_matching
             return matches;
         }
 
+        bool isUsableExtractedPoint(const SiftPoint& point)
+        {
+            if (!std::isfinite(point.xpos) ||
+                !std::isfinite(point.ypos) ||
+                !std::isfinite(point.scale) ||
+                point.scale <= 0.0f)
+            {
+                return false;
+            }
+
+            double squared_norm = 0.0;
+            for (float value : point.data)
+            {
+                if (!std::isfinite(value) || value < 0.0f)
+                {
+                    return false;
+                }
+                squared_norm += static_cast<double>(value) * value;
+            }
+            return std::isfinite(squared_norm) && squared_norm > 1.0e-12;
+        }
+
     } // namespace
 
     bool isCudaSiftBackendAvailable(int deviceIndex)
@@ -171,19 +193,33 @@ namespace xjw::image_matching
 
         const int pointCount = std::clamp(siftData.get().numPts, 0, siftData.get().maxPts);
         const SiftPoint* points = siftData.hostPoints();
-        SiftRawFeatures result;
-        result.keypoints.resize(static_cast<std::size_t>(pointCount));
-        result.descriptors.create(pointCount, 128, CV_32F);
+        std::vector<int> usable_indices;
+        usable_indices.reserve(static_cast<std::size_t>(pointCount));
         for (int index = 0; index < pointCount; ++index)
         {
-            const SiftPoint& point = points[index];
-            cv::KeyPoint& keypoint = result.keypoints[static_cast<std::size_t>(index)];
-            keypoint.pt.x = std::isfinite(point.xpos) ? point.xpos : 0.0f;
-            keypoint.pt.y = std::isfinite(point.ypos) ? point.ypos : 0.0f;
-            keypoint.size = std::max(1.0f, std::isfinite(point.scale) ? point.scale : 1.0f);
+            if (isUsableExtractedPoint(points[index]))
+            {
+                usable_indices.push_back(index);
+            }
+        }
+
+        SiftRawFeatures result;
+        result.keypoints.resize(usable_indices.size());
+        result.descriptors.create(static_cast<int>(usable_indices.size()), 128, CV_32F);
+        for (int output_index = 0;
+             output_index < static_cast<int>(usable_indices.size());
+             ++output_index)
+        {
+            const SiftPoint& point = points[usable_indices[static_cast<std::size_t>(output_index)]];
+            cv::KeyPoint& keypoint = result.keypoints[static_cast<std::size_t>(output_index)];
+            keypoint.pt.x = point.xpos;
+            keypoint.pt.y = point.ypos;
+            keypoint.size = std::max(1.0f, point.scale);
             keypoint.angle = std::isfinite(point.orientation) ? point.orientation : -1.0f;
             keypoint.response = std::isfinite(point.sharpness) ? std::abs(point.sharpness) : 0.0f;
-            std::copy(point.data, point.data + 128, result.descriptors.ptr<float>(index));
+            std::copy(point.data,
+                      point.data + 128,
+                      result.descriptors.ptr<float>(output_index));
         }
         return result;
     }

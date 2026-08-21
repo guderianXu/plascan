@@ -12,6 +12,13 @@ namespace mvs
 namespace
 {
 
+constexpr float kMinimumValidCoverage = 0.02f;
+constexpr float kMinimumLargestComponentRatio = 0.15f;
+constexpr float kMinimumRetainedFusionCoreRatio = 0.40f;
+constexpr float kMinimumGeneralMultiViewConsistency = 0.45f;
+constexpr float kLowConfidenceMeanThreshold = 0.45f;
+constexpr float kMaximumSearchBoundaryRatio = 0.45f;
+
 float unitValue(float value)
 {
     return std::clamp(value, 0.0f, 1.0f);
@@ -39,6 +46,31 @@ float medianOfSortedValues(const std::vector<float> &values)
         return values[middle];
     }
     return 0.5f * (values[middle - 1] + values[middle]);
+}
+
+bool hasSufficientSparseAbsoluteDepthEvidence(
+    const DepthFrameQualityInput &input)
+{
+    const SparseDepthResidualSummary &residual = input.sparseDepthResidual;
+    return residual.available &&
+        residual.validSampleCount >= kSparseDepthResidualMinimumSampleCount &&
+        std::isfinite(residual.medianAbsoluteLogError) &&
+        residual.medianAbsoluteLogError >= 0.0f;
+}
+
+bool hasAccurateSparseAbsoluteDepthEvidence(
+    const DepthFrameQualityInput &input)
+{
+    return hasSufficientSparseAbsoluteDepthEvidence(input) &&
+        input.sparseDepthResidual.medianAbsoluteLogError <=
+            kSparseDepthResidualValidationThreshold;
+}
+
+bool hasStrongDiscreteGeometryCore(const DepthFrameQualityInput &input)
+{
+    return input.discreteGeometryCoreAvailable &&
+        std::isfinite(input.discreteGeometryCoreRatio) &&
+        input.discreteGeometryCoreRatio >= kDiscreteGeometryCoreMinimumRatio;
 }
 
 } // namespace
@@ -275,13 +307,13 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     decision.confidenceComponents = components;
     decision.calibratedConfidence = calibrateDepthConfidence(components);
 
-    if (input.depthAtSearchBoundaryRatio > 0.45f)
+    if (input.depthAtSearchBoundaryRatio > kMaximumSearchBoundaryRatio)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("depth_search_boundary_collapse");
     }
 
-    if (input.validCoverage < 0.02f)
+    if (input.validCoverage < kMinimumValidCoverage)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("insufficient_valid_coverage");
@@ -302,22 +334,46 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
 
     const bool reliable_orbital_fusion_core =
         hasReliableOrbitalFusionCore(input);
+    const bool reliable_custom_fusion_core =
+        hasReliableCustomFusionCore(input);
+    const bool reliable_custom_sparse_surface =
+        hasReliableCustomSparseAnchoredSurface(input);
+    const bool reliable_fusion_core =
+        reliable_orbital_fusion_core || reliable_custom_fusion_core;
     if (input.fusionPostprocessRetentionRatio >= 0.0f
         && input.fusionPostprocessRetentionRatio < 0.75f
-        && !reliable_orbital_fusion_core)
+        && !reliable_fusion_core
+        && !reliable_custom_sparse_surface)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("destructive_fusion_postprocess_collapse");
     }
     else if (input.fusionPostprocessRetentionRatio >= 0.0f
+             && input.fusionPostprocessRetentionRatio < 0.75f
+             && reliable_custom_sparse_surface
+             && !reliable_custom_fusion_core)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back(
+            "custom_sparse_anchored_surface_only");
+    }
+    else if (input.fusionPostprocessRetentionRatio >= 0.0f
              && input.fusionPostprocessRetentionRatio < 0.90f
-             && !reliable_orbital_fusion_core)
+             && !reliable_fusion_core)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("fusion_postprocess_coverage_loss");
     }
+    else if (input.fusionPostprocessRetentionRatio >= 0.0f
+             && input.fusionPostprocessRetentionRatio < 0.90f
+             && reliable_custom_fusion_core)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back(
+            "custom_fusion_fallback_to_verified_core");
+    }
 
-    if (input.hasConstrainedSupportMask
+    if (input.hasProjectSupportMask
         && input.validWithinMaskRatio >= 0.0f
         && input.validWithinMaskRatio < 0.80f)
     {
@@ -339,6 +395,10 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.50f : 0.55f)
         : 0.90f;
+    const bool changed_complete_pool_with_verified_core =
+        input.completeVisibilityCandidatePoolEnabled &&
+        input.completePoolChangedLegacyPlan &&
+        reliable_custom_fusion_core;
     if (input.consistencyRetentionRatio >= 0.0f
         && input.consistencyRetentionRatio < consistency_reject_threshold)
     {
@@ -346,13 +406,14 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("depth_consistency_collapse");
     }
     else if (input.consistencyRetentionRatio >= 0.0f
-             && input.consistencyRetentionRatio < consistency_validation_threshold)
+             && input.consistencyRetentionRatio < consistency_validation_threshold
+             && !changed_complete_pool_with_verified_core)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("depth_consistency_coverage_loss");
     }
 
-    if (input.largestComponentRatio < 0.15f)
+    if (input.largestComponentRatio < kMinimumLargestComponentRatio)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("fragmented_depth_support");
@@ -360,7 +421,7 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
 
     if (input.multiViewConsistencyAvailable &&
         input.validCoverage >= 0.95f &&
-        input.meanConfidence < 0.45f &&
+        input.meanConfidence < kLowConfidenceMeanThreshold &&
         input.multiViewConsistency < 0.50f)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
@@ -369,7 +430,7 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
 
     const float consistency_threshold = input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.50f : 0.55f)
-        : 0.45f;
+        : kMinimumGeneralMultiViewConsistency;
     if (input.multiViewConsistencyAvailable &&
         input.sourceViewCount >= 2 &&
         input.multiViewConsistency < consistency_threshold)
@@ -411,11 +472,7 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     const SparseDepthResidualSummary &sparse_residual =
         input.sparseDepthResidual;
     const bool has_sufficient_sparse_residual =
-        sparse_residual.available &&
-        sparse_residual.validSampleCount >=
-            kSparseDepthResidualMinimumSampleCount &&
-        std::isfinite(sparse_residual.medianAbsoluteLogError) &&
-        sparse_residual.medianAbsoluteLogError >= 0.0f;
+        hasSufficientSparseAbsoluteDepthEvidence(input);
     if (has_sufficient_sparse_residual &&
         sparse_residual.medianAbsoluteLogError >
             kSparseDepthResidualRejectionThreshold)
@@ -433,6 +490,41 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
             "sparse_absolute_depth_residual_validation_only");
     }
 
+    const bool accurate_sparse_absolute_depth =
+        hasAccurateSparseAbsoluteDepthEvidence(input);
+    const bool strong_discrete_geometry_core =
+        hasStrongDiscreteGeometryCore(input);
+    if (input.sceneProfile == MvsSceneProfile::Custom &&
+        (!accurate_sparse_absolute_depth || !strong_discrete_geometry_core))
+    {
+        decision.reasons.emplace_back(
+            "insufficient_custom_geometry_evidence");
+        if (!accurate_sparse_absolute_depth &&
+            !strong_discrete_geometry_core &&
+            input.multiViewConsistencyAvailable &&
+            input.meanConfidence < kLowConfidenceMeanThreshold)
+        {
+            lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
+            decision.reasons.emplace_back(
+                "low_confidence_unverified_custom_depth");
+        }
+        else
+        {
+            lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        }
+    }
+
+    if (input.completeVisibilityCandidatePoolEnabled &&
+        input.initialAcceptanceAvailable &&
+        input.initialAcceptance != DepthFrameAcceptance::Accepted &&
+        !input.completePoolChangedLegacyPlan &&
+        decision.acceptance == DepthFrameAcceptance::Accepted)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back(
+            "complete_pool_indirect_promotion_not_admitted");
+    }
+
     if (decision.reasons.empty())
     {
         decision.reasons.emplace_back("quality_gate_passed");
@@ -442,9 +534,12 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
 
 SparseDepthResidualSummary summarizeSparseDepthResidual(
     const cv::Mat &depth,
-    const std::vector<ProjectedSparseDepthSample> &samples)
+    const std::vector<ProjectedSparseDepthSample> &samples,
+    int neighborhoodRadiusPixels)
 {
     SparseDepthResidualSummary summary;
+    const int radius = std::clamp(neighborhoodRadiusPixels, 0, 8);
+    summary.neighborhoodRadiusPixels = radius;
     if (depth.empty() || depth.type() != CV_32FC1 || samples.empty())
     {
         return summary;
@@ -470,9 +565,10 @@ SparseDepthResidualSummary summarizeSparseDepthResidual(
         }
         ++summary.projectedSampleCount;
 
-        std::array<float, 9> neighborhood{};
-        int valid_neighborhood_count = 0;
-        for (int delta_row = -1; delta_row <= 1; ++delta_row)
+        std::vector<float> neighborhood;
+        neighborhood.reserve(static_cast<std::size_t>(
+            (radius * 2 + 1) * (radius * 2 + 1)));
+        for (int delta_row = -radius; delta_row <= radius; ++delta_row)
         {
             const int sample_row = row + delta_row;
             if (sample_row < 0 || sample_row >= depth.rows)
@@ -480,7 +576,9 @@ SparseDepthResidualSummary summarizeSparseDepthResidual(
                 continue;
             }
             const float *depth_row = depth.ptr<float>(sample_row);
-            for (int delta_column = -1; delta_column <= 1; ++delta_column)
+            for (int delta_column = -radius;
+                 delta_column <= radius;
+                 ++delta_column)
             {
                 const int sample_column = column + delta_column;
                 if (sample_column < 0 || sample_column >= depth.cols)
@@ -490,18 +588,18 @@ SparseDepthResidualSummary summarizeSparseDepthResidual(
                 const float value = depth_row[sample_column];
                 if (std::isfinite(value) && value > 0.0f)
                 {
-                    neighborhood[static_cast<std::size_t>(
-                        valid_neighborhood_count++)] = value;
+                    neighborhood.push_back(value);
                 }
             }
         }
-        if (valid_neighborhood_count <= 0)
+        if (neighborhood.empty())
         {
             continue;
         }
 
-        std::sort(neighborhood.begin(),
-                  neighborhood.begin() + valid_neighborhood_count);
+        std::sort(neighborhood.begin(), neighborhood.end());
+        const int valid_neighborhood_count =
+            static_cast<int>(neighborhood.size());
         const int middle = valid_neighborhood_count / 2;
         const float neighborhood_median =
             (valid_neighborhood_count & 1) != 0
@@ -535,22 +633,57 @@ bool hasReliableOrbitalFusionCore(const DepthFrameQualityInput &input)
     // surface is still broad, confident, multi-view consistent, and coherent.
     return input.sceneProfile == MvsSceneProfile::OrbitalObject
         && input.multiViewConsistencyAvailable
-        && input.fusionPostprocessRetentionRatio >= 0.40f
+        && input.fusionPostprocessRetentionRatio >=
+            kMinimumRetainedFusionCoreRatio
         && input.validCoverage >= 0.30f
         && input.meanConfidence >= 0.70f
-        && input.multiViewConsistency >= 0.45f
-        && input.largestComponentRatio >= 0.15f
-        && input.depthAtSearchBoundaryRatio <= 0.45f;
+        && input.multiViewConsistency >= kMinimumGeneralMultiViewConsistency
+        && input.largestComponentRatio >= kMinimumLargestComponentRatio
+        && input.depthAtSearchBoundaryRatio <= kMaximumSearchBoundaryRatio;
+}
+
+bool hasReliableCustomFusionCore(const DepthFrameQualityInput &input)
+{
+    // A generic capture has no ring prior that can justify a purely relative
+    // fallback. Require independent absolute anchors and a dense discrete
+    // multi-view core before treating low postprocess retention as removal of
+    // weak hypotheses rather than collapse of the reconstructed surface.
+    return input.sceneProfile == MvsSceneProfile::Custom &&
+        input.multiViewConsistencyAvailable &&
+        input.fusionPostprocessRetentionRatio >=
+            kMinimumRetainedFusionCoreRatio &&
+        input.validCoverage >= kMinimumValidCoverage &&
+        input.meanConfidence >= kLowConfidenceMeanThreshold &&
+        input.multiViewConsistency >= kMinimumGeneralMultiViewConsistency &&
+        input.largestComponentRatio >= kMinimumLargestComponentRatio &&
+        input.depthAtSearchBoundaryRatio <= kMaximumSearchBoundaryRatio &&
+        hasAccurateSparseAbsoluteDepthEvidence(input) &&
+        hasStrongDiscreteGeometryCore(input);
+}
+
+bool hasReliableCustomSparseAnchoredSurface(
+    const DepthFrameQualityInput &input)
+{
+    // Unlike the full Custom fusion-core exception, this path deliberately
+    // does not require a discrete three-view core.  It therefore cannot grant
+    // Primary; evaluateDepthFrame later retains it as ValidationOnly.  The
+    // remaining conditions are all absolute/product-domain safety evidence,
+    // not a relaxation of the relative postprocess-retention threshold.
+    return input.sceneProfile == MvsSceneProfile::Custom &&
+        input.multiViewConsistencyAvailable &&
+        input.validCoverage >= kMinimumValidCoverage &&
+        input.meanConfidence >= kLowConfidenceMeanThreshold &&
+        input.multiViewConsistency >= kMinimumGeneralMultiViewConsistency &&
+        input.largestComponentRatio >= kMinimumLargestComponentRatio &&
+        input.depthAtSearchBoundaryRatio <= kMaximumSearchBoundaryRatio &&
+        hasAccurateSparseAbsoluteDepthEvidence(input);
 }
 
 bool hasReliableOrbitalDiscreteGeometryCore(
     const DepthFrameQualityInput &input)
 {
     return hasReliableOrbitalFusionCore(input)
-        && input.discreteGeometryCoreAvailable
-        && std::isfinite(input.discreteGeometryCoreRatio)
-        && input.discreteGeometryCoreRatio >=
-            kDiscreteGeometryCoreMinimumRatio;
+        && hasStrongDiscreteGeometryCore(input);
 }
 
 const char *depthFrameAcceptanceId(DepthFrameAcceptance acceptance)

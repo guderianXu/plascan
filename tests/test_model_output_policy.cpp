@@ -523,6 +523,39 @@ TEST(ModelOutputPolicyTest, TextureBuildWritesCompleteIndependentRevisions)
     EXPECT_TRUE(first.payload.value(
         QStringLiteral("model_diagnostics_path")).toString().isEmpty());
 
+    EXPECT_EQ(
+        first.payload.value(
+            QStringLiteral("texture_exposure_correction_status")).toString(),
+        QStringLiteral("disabled"));
+    EXPECT_TRUE(first.payload.contains(
+        QStringLiteral("texture_exposure_correction_accepted_pair_count")));
+    EXPECT_DOUBLE_EQ(
+        first.payload.value(
+            QStringLiteral("texture_exposure_correction_minimum_gain"))
+            .toDouble(),
+        1.0);
+    EXPECT_DOUBLE_EQ(
+        first.payload.value(
+            QStringLiteral("texture_exposure_correction_maximum_gain"))
+            .toDouble(),
+        1.0);
+
+    QFile diagnosticsFile(first.payload.value(
+        QStringLiteral("texture_diagnostics_path")).toString());
+    ASSERT_TRUE(diagnosticsFile.open(QIODevice::ReadOnly));
+    const QJsonObject diagnostics = QJsonDocument::fromJson(
+        diagnosticsFile.readAll()).object();
+    EXPECT_EQ(
+        diagnostics.value(
+            QStringLiteral("texture_exposure_correction_status")).toString(),
+        QStringLiteral("disabled"));
+    EXPECT_TRUE(diagnostics.contains(
+        QStringLiteral("texture_exposure_correction_accepted_pair_count")));
+    EXPECT_TRUE(diagnostics.contains(
+        QStringLiteral("texture_exposure_correction_minimum_gain")));
+    EXPECT_TRUE(diagnostics.contains(
+        QStringLiteral("texture_exposure_correction_maximum_gain")));
+
     const QString modelDiagnostics = baseRecord.value(
         QStringLiteral("model_diagnostics_path")).toString();
     baseRecord[QStringLiteral("is_default_model")] = true;

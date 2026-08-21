@@ -51,6 +51,30 @@ live under `src/core/mvs/tests/`.
 - Revision 38 uses an exposure-robust intensity/gradient/Census photometric cost on CPU, CUDA, and OpenCL.
   It adds a stricter statistical audit tier for fifth/sixth orbital source views, geometry-calibrated confidence,
   boundary-aware postprocessing, and an optional learned-depth candidate gate. Revision-37 depth is regenerated.
+- Revision 39 persists a lossless full-resolution `prepared_image`, its prepared valid mask, and the matching
+  zero-distortion `prepared_camera_model` for every frame. Replay reads that raster while retaining `ref_image`
+  as the original project/source-plan identity; mesh, visual-hull, color, texture, and QC consumers prefer the
+  prepared raster so a distorted source image is never sampled with a zero-distortion working camera.
+- Revision 40 makes Auto classification fail closed to a general/custom profile. Orbital-only recovery and
+  adaptive evidence require a distinct, planar, centred, sufficiently complete camera ring with convergent
+  optical axes; generic captures use the moderate filter. Cross-view source plans are frozen before any frame is
+  reclassified, so processing order cannot remove sources from later frames. A frame with no measured source
+  evidence omits both the all-zero source mask and its empty ordinal table, while nonzero masks without an exact
+  table remain a hard error.
+- Revision 41 makes general/custom frame acceptance fail closed. A low-retention Custom frame can remain only a
+  validation candidate when an accurate sparse absolute-depth residual and a strong retained discrete multi-view
+  core agree; it never becomes a primary fusion seed through that exception. A high-retention Custom frame is not a
+  primary seed unless both geometry signals are present, and is rejected when both are absent and its post-geometry
+  mean confidence is also low. Semantic project support masks remain subject to normalized coverage checks, while
+  content and prepared-raster validity masks only define the technical measurement domain.
+- Downstream geometry consumers use one fail-closed frame-role contract. Only a `completed` frame with explicit
+  `acceptance=accepted` and `fusion_eligible=true` is `Primary`; a completed `validation_only` frame with explicit
+  eligibility metadata is `CoverageAuxiliary`; rejected, failed, incomplete, and manifestless frames are `Excluded`.
+  Point-cloud fusion and visual hull use only Primary frames; the visual-hull model gate requires at least six
+  Primary silhouette candidates. TSDF may use CoverageAuxiliary frames at reduced weight for local surface support,
+  but auxiliaries cannot expand bounds or vote in visibility-occupancy and hole-fill topology decisions. Depth-map
+  model and texture publication still require at least one Primary frame. Point-cloud reuse keeps its two-Primary
+  minimum, while a depth TSDF model requires at least three usable Primary-or-Auxiliary frames in total.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -67,6 +91,56 @@ live under `src/core/mvs/tests/`.
   capped by the number of available views. Aerial planning keeps the 35-degree maximum triangulation angle.
   Orbital planning derives the required angle from the actual sorted candidate angles, with 70/90-degree
   safety caps for four/six-source jobs. Logs and CLI reports record both configured and effective pool sizes.
+- `mvs_depth_reprocess_cli --source-max-angle-deg N` is a default-off experiment control (`0` disables it) scoped
+  to the PatchMatch source plan; it does not change the separate orbital geometry-repair source expansion.
+  The measured value is the median triangulation angle of at most 2048 shared sparse points that project in front
+  of both cameras, not the angle between camera optical axes. A positive value is combined as
+  `min(scene-derived maximum, N)`, so it can only remove wider-baseline
+  candidates and can never relax the scene policy. While the cap is enabled, unmeasured sequence fallback is
+  disabled rather than silently bypassing the angle boundary; any resulting source shortfall remains explicit.
+  The config hash, each fresh depth artifact's
+  `source_angle_diagnostics`, and `mvs_replay_report.json` retain the configured/effective limits, selected maximum,
+  angle-rejection count, and the explicit `patchmatch_source_plan` scope for A/B audits. A selected maximum of zero
+  means that the plan contains no selected source with a positive measured triangulation angle.
+  A cap-enabled frame with any source shortfall cannot become a primary fusion seed or be counted as a cap-induced
+  quality gain. A non-rejected decision is capped at validation-only and records
+  `source_angle_cap_source_shortfall`; an already rejected decision remains unchanged, while the source-count and
+  angle-rejection diagnostics still expose the shortfall boundary.
+- Source-pool/ranking replay is a separate default-off expert experiment. Complete-pool mode improved independent
+  depth metrics on both Office and Courtyard, but Courtyard still exposed an admission-role regression, so it remains
+  opt-in and is not guarded by `source_quality_score` (the regressed frames did not have lower source quality). A uses the legacy early-stop pool
+  (`--source-complete-visibility-pool` absent) and strength zero. B enables
+  `--source-complete-visibility-pool` with strength zero, so the planner evaluates the complete candidate set
+  represented by the existing visibility graph and still ranks with the unmodified legacy score. C uses the same
+  pool with the internal-diagnostic-only `--source-angle-soft-ranking-strength 1`; within each authoritative verified, ordinary, bounded-failed,
+  or strict-failed selection stage it ranks by
+  `adjusted = legacy * exp(-strength * t)`, where the penalty is zero through the soft maximum and
+  `t = (angle - softMax) / (max - softMax)` above it. Strength is limited to `[0,4]`. A positive strength requires
+  the complete-pool switch and an exactly zero hard angle cap; invalid or non-finite values fail closed.
+  Soft ranking is intentionally absent from ordinary reconstruction and GUI controls: its Office result was mixed and
+  its Courtyard treatment was byte-identical to the strength-zero complete-pool arm for all 38 frames.
+- Complete-pool mode does not add camera pairs to the visibility graph. With at most 32 views the graph contains
+  every co-visible pair plus explicitly required verified pairs (`all_co_visible_or_required_pairs`); larger jobs
+  retain the deterministic bounded graph. Frames outside that graph are not counted as visibility candidates.
+  Orbital adaptive maximum-angle inference always uses only candidates evaluated by the legacy early-stop pass,
+  so enabling B/C cannot change angle eligibility through feedback from newly evaluated candidates.
+- The adjusted score is ranking-only: eligibility, hard angle rejection, quality thresholds,
+  `source_quality_score`, same-view duplicate resolution, tier authority, fallback policy, and requested source
+  count all remain legacy decisions. Verified-first C constructs independent complete control and treatment plans,
+  each with its own tier backfill state. If their counts differ or the control has a shortfall, the control plan is
+  retained and diagnostics report `applied=false`; treatment never creates a silent source shortfall.
+- B/C depth artifacts record the machine-readable comparison at
+  `source_angle_diagnostics.soft_ranking` (also mirrored inside `depth_quality`). It includes visibility-graph scope,
+  legacy/complete evaluated counts, separate control/treatment candidate universes and qualified counts, complete
+  selections, and count/set/order invariants. Each candidate record carries its actual selection-stage soft/effective
+  maximum, legacy/adjusted score and rank, plus an identity-level `selected_by_plan` flag; bounded and strict records
+  for the same view therefore never claim selection on behalf of the other tier. A adds no source-ranking config,
+  plan, replay-report, or diagnostic keys, preserving the default canonical config/hash and source-plan schema.
+- Selected-frame stage snapshots are a separate, default-off diagnostic. Replay can atomically persist depth,
+  confidence, and valid-mask triplets after PatchMatch, after cross-view consistency, after confidence
+  postprocessing, and at final admission. The bounded snapshot manifest is explicitly non-authoritative and is
+  excluded from the algorithm config hash; snapshot failure never changes the production depth result. The strict
+  ETH3D evaluator binds every stage camera and pose back to the authoritative workspace frame before scoring it.
 - The selected source plan is saved with the depth frame record so depth generation and fusion use the same
   overlap assumptions.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
@@ -220,8 +294,27 @@ The implementation plan and current boundary are documented in
   per-pixel uncertainty radius; low-confidence or invalid regions retain a wider/global search instead of
   being locked to a bad coarse estimate.
 - A finer level that retains less than 60% of the parent coverage is treated as a quality collapse. The
-  estimator keeps the parent depth already resized to the final raster size and records the selected level
+  estimator normally keeps the parent depth resized to the final raster size and records the selected level
   and coverage-regression reason instead of publishing a severely incomplete fine result.
+- `--mvs-native-depth-grid` (or replay `--native-depth-grid`) is an experimental, default-off path for
+  large general/custom scenes. For a non-rectified frame it keeps the final PatchMatch grid, including a
+  coarse parent selected after fine-level collapse, instead of nearest-neighbor upscaling it to the prepared
+  raster before consistency. Orbital, aerial, rectified, and unresolved-profile paths fail closed to the
+  legacy full-size contract. The stored depth camera is scaled to the exact grid dimensions with the
+  half-pixel convention, while the full-resolution prepared raster/camera triplet remains available for
+  replay, fusion color sampling, meshing, and texturing. Pixel-domain settings continue to mean prepared
+  full-raster pixels: boundary morphology, local-outlier kernels and same-layer radii, speckle/small-hole
+  areas, sparse-residual neighborhoods, consistency search/round-trip limits, and fusion reprojection
+  limits are quantized onto the actual depth grid. Fusion applies view-count/streaming overrides in the
+  prepared-raster domain first, then independently scales the resulting threshold and local-gradient radius
+  for each target frame; the manifest labels the recorded fusion values as pre-override bases. Thus a 3x3
+  filter becomes identity when its one-pixel radius is subpixel on a ds4 grid instead of silently becoming
+  a 12-full-pixel footprint. Every frame
+  records `effective_native_final_depth_grid`, raster/grid dimensions, exact x/y, linear and area scales,
+  plus configured/effective parameter values in `pixel_domain_diagnostics`. The request participates in
+  the workspace hash. Revision 43 evaluates a zero-radius reduced-grid consistency lookup over the bounded
+  nearest subpixel footprint and preserves one audited grid boundary shell while keeping a subpixel
+  protection radius inactive; it does not silently widen every configured full-raster threshold.
 - CPU, CUDA, and OpenCL PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
 - CPU, CUDA, and OpenCL PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
@@ -260,6 +353,9 @@ reconstruct_pipeline_cli.exe image_camera.lis `
   --mvs-depth-filter auto `
   --mvs-save-levels
 ```
+
+Add `--mvs-native-depth-grid` only for an explicit general-scene A/B run; omitting it preserves the
+full-size final-depth contract.
 
 `scripts/validation/run_depth_pyramid_regression.ps1` runs the same reconstruction CLI for the Dino and UAV9
 fixtures and then invokes `model_quality_cli` when quality validation is enabled.

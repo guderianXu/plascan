@@ -47,6 +47,7 @@ struct SparseDepthResidualSummary
     bool available = false;
     int projectedSampleCount = 0;
     int validSampleCount = 0;
+    int neighborhoodRadiusPixels = 1;
     float medianAbsoluteLogError = -1.0f;
 };
 
@@ -64,7 +65,10 @@ struct DepthFrameQualityInput
     float multiViewConsistency = 0.0f;
     float depthAtSearchBoundaryRatio = 0.0f;
     SparseDepthResidualSummary sparseDepthResidual;
-    bool hasConstrainedSupportMask = false;
+    /// True only for a semantic project support mask. Technical raster-validity
+    /// and content masks still define the evaluated domain, but must not invoke
+    /// the project-mask completeness gate.
+    bool hasProjectSupportMask = false;
     float validWithinMaskRatio = -1.0f;
     float outputFilterRetentionRatio = -1.0f;
     float consistencyRetentionRatio = -1.0f;
@@ -78,6 +82,14 @@ struct DepthFrameQualityInput
     /// fusion postprocess stages have produced the retained surface core.
     bool discreteGeometryCoreAvailable = false;
     float discreteGeometryCoreRatio = -1.0f;
+    /// The complete visibility pool is an expert-only experiment.  Admission
+    /// may use it only when the reference frame's own selected plan actually
+    /// changed relative to the legacy early-stop pool; cross-frame side
+    /// effects alone must not promote a provisional frame to Primary.
+    bool completeVisibilityCandidatePoolEnabled = false;
+    bool completePoolChangedLegacyPlan = false;
+    bool initialAcceptanceAvailable = false;
+    DepthFrameAcceptance initialAcceptance = DepthFrameAcceptance::Rejected;
 };
 
 struct DepthFrameQualityDecision
@@ -130,13 +142,29 @@ DepthConsistencyEvidence classifyDepthConsistencyEvidence(float expectedDepth,
 DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input);
 
 /// Compare final positive-Z depth against projected sparse absolute-depth
-/// anchors.  Each anchor samples the median of its valid 3x3 neighborhood so
-/// isolated holes and one-pixel outliers do not dominate the frame gate.
+/// anchors. Each anchor samples the median of the requested grid-domain
+/// neighborhood. Callers scale the default full-raster radius onto reduced
+/// native depth grids so the physical footprint does not silently grow.
 SparseDepthResidualSummary summarizeSparseDepthResidual(
     const cv::Mat &depth,
-    const std::vector<ProjectedSparseDepthSample> &samples);
+    const std::vector<ProjectedSparseDepthSample> &samples,
+    int neighborhoodRadiusPixels = 1);
 
 bool hasReliableOrbitalFusionCore(const DepthFrameQualityInput &input);
+
+/// General captures may survive an aggressive fusion postprocess only when
+/// the retained surface is backed jointly by sparse absolute depth and a
+/// strong discrete multi-view core. This exception is deliberately narrower
+/// than the orbital fallback because Custom has no ring-geometry prior.
+bool hasReliableCustomFusionCore(const DepthFrameQualityInput &input);
+
+/// A Custom frame whose confidence postprocess removes a broad weak
+/// hypothesis set may still remain a coverage-only surface when the retained
+/// product has accurate independent sparse-depth anchors.  This evidence is
+/// intentionally insufficient for Primary because no discrete multi-view
+/// core survived.
+bool hasReliableCustomSparseAnchoredSurface(
+    const DepthFrameQualityInput &input);
 
 /// A continuous adaptive residual can be over-sensitive for very narrow-FOV
 /// orbital imagery.  It may only fall back to the retained discrete evidence

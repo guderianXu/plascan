@@ -1054,6 +1054,9 @@ plascan_add_python_unittest(ComparePointCloudToLidarTest test_compare_point_clou
 plascan_add_python_unittest(CompareMvsDepthToMetashapeTest test_compare_mvs_depth_to_metashape)
 plascan_add_python_unittest(ComparePlascanDepthRunsTest test_compare_plascan_depth_runs)
 plascan_add_python_unittest(MvsWorkspaceIntegrityAuditTest test_audit_mvs_workspace_integrity)
+plascan_add_python_unittest(Eth3dDepthEvalTest test_eth3d_depth_eval)
+plascan_add_python_unittest(Eth3dSurfaceEvalTest test_eth3d_surface_eval)
+plascan_add_python_unittest(TexturedModelEvaluatorTest test_textured_model_evaluator)
 plascan_add_python_unittest(DemGridToHeightPlyTest test_dem_grid_to_height_ply)
 plascan_add_python_unittest(VerifyMarkerPdfTest test_verify_marker_pdf)
 
@@ -1099,7 +1102,7 @@ add_executable(test_mesh_reconstructor
     test_consistent_isosurface_extractor.cpp
     test_mc33_isosurface_extractor.cpp
     test_mesh_face_orientation.cpp
-    test_openmesh_simplifier.cpp
+    test_native_mesh_simplifier.cpp
 )
 target_link_libraries(test_mesh_reconstructor PRIVATE
     meshing
@@ -1111,6 +1114,31 @@ target_include_directories(test_mesh_reconstructor PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mesh
 )
 gtest_discover_tests(test_mesh_reconstructor)
+
+add_executable(test_texture_overlap_exposure
+    test_texture_overlap_exposure.cpp
+)
+target_link_libraries(test_texture_overlap_exposure PRIVATE
+    meshing
+    plapoint::plapoint
+    GTest::gtest_main
+)
+target_include_directories(test_texture_overlap_exposure PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_texture_overlap_exposure)
+
+add_executable(test_texture_seam_leveling
+    test_texture_seam_leveling.cpp
+)
+target_link_libraries(test_texture_seam_leveling PRIVATE
+    meshing
+    GTest::gtest_main
+)
+target_include_directories(test_texture_seam_leveling PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_texture_seam_leveling)
 
 add_executable(test_screened_poisson_surface_builder
     test_screened_poisson_surface_builder.cpp

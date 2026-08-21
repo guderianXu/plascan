@@ -10,6 +10,6 @@
         "source_data": "depth_maps",
         "surface_type": "arbitrary_3d",
         "targetFaces": 170000,
-        "tsdfOpenMeshSmoothingIterations": 13
+        "tsdfTopologySafeSmoothingIterations": 13
     }
 }

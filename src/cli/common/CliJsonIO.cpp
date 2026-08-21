@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonParseError>
+#include <QMap>
 #include <QSaveFile>
 
 namespace xjw::cli
@@ -76,6 +77,43 @@ bool writeJsonFile(const QString &path, const QJsonObject &object, QString *erro
         return false;
     }
     return true;
+}
+
+QJsonArray latestJsonObjectsByNonNegativeIntegerKey(const QJsonArray &objects,
+                                                    const QString &key)
+{
+    QMap<int, QJsonObject> latest_by_key;
+    QJsonArray unkeyed_objects;
+    for (const QJsonValue &value : objects)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+
+        const QJsonObject object = value.toObject();
+        const QJsonValue key_value = object.value(key);
+        const int integer_key = key_value.isDouble() ? key_value.toInt(-1) : -1;
+        if (integer_key < 0)
+        {
+            unkeyed_objects.append(object);
+            continue;
+        }
+        latest_by_key.insert(integer_key, object);
+    }
+
+    QJsonArray result;
+    for (auto iterator = latest_by_key.cbegin();
+         iterator != latest_by_key.cend();
+         ++iterator)
+    {
+        result.append(iterator.value());
+    }
+    for (const QJsonValue &value : unkeyed_objects)
+    {
+        result.append(value);
+    }
+    return result;
 }
 
 void writeJson(FILE *stream, const QJsonObject &object, QJsonDocument::JsonFormat format)

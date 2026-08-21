@@ -32,7 +32,9 @@ bool projectedBounds(const PreparedView &view,
             double pixel[2]{};
             double depth = 0.0;
             if (!view.colorCamera.projectWorldPointWithDepth(
-                    vertex.data(), pixel, depth))
+                    vertex.data(), pixel, depth) ||
+                !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+                !std::isfinite(depth) || depth <= 0.0)
             {
                 return false;
             }
@@ -43,22 +45,16 @@ bool projectedBounds(const PreparedView &view,
         }
     }
 
-    const int left = std::clamp(
-        static_cast<int>(std::floor(minimum_x)),
-        0,
-        view.colorBgr.cols - 1);
-    const int top = std::clamp(
-        static_cast<int>(std::floor(minimum_y)),
-        0,
-        view.colorBgr.rows - 1);
-    const int right = std::clamp(
-        static_cast<int>(std::ceil(maximum_x)),
-        0,
-        view.colorBgr.cols - 1);
-    const int bottom = std::clamp(
-        static_cast<int>(std::ceil(maximum_y)),
-        0,
-        view.colorBgr.rows - 1);
+    const double last_column = static_cast<double>(view.colorBgr.cols - 1);
+    const double last_row = static_cast<double>(view.colorBgr.rows - 1);
+    const int left = static_cast<int>(
+        std::clamp(std::floor(minimum_x), 0.0, last_column));
+    const int top = static_cast<int>(
+        std::clamp(std::floor(minimum_y), 0.0, last_row));
+    const int right = static_cast<int>(
+        std::clamp(std::ceil(maximum_x), 0.0, last_column));
+    const int bottom = static_cast<int>(
+        std::clamp(std::ceil(maximum_y), 0.0, last_row));
     *bounds = QRect(QPoint(left, top), QPoint(right, bottom));
     return bounds->isValid() && !bounds->isEmpty();
 }
@@ -213,7 +209,12 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
     {
         if (errorMsg)
         {
-            *errorMsg = "纹理块无法装入指定大小的图集";
+            *errorMsg =
+                "纹理块无法装入 " + std::to_string(atlas_size) +
+                "x" + std::to_string(atlas_size) + " 图集（" +
+                std::to_string(items.size()) + " 个纹理块，边距 " +
+                std::to_string(padding) +
+                " px）；请提高纹理分辨率或减小边距";
         }
         return false;
     }

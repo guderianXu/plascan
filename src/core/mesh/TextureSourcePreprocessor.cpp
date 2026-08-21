@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <unordered_map>
 
 namespace xjw::mesh::texture_v4
@@ -85,30 +84,19 @@ float imageSharpness(const cv::Mat &gray)
     return static_cast<float>(deviation[0] * deviation[0]);
 }
 
-float imageLuminance(const PreparedView &view)
-{
-    cv::Mat evidence_mask;
-    if (view.supportMask && view.depthValidMask &&
-        view.supportMask->type() == CV_8UC1 &&
-        view.depthValidMask->type() == CV_8UC1)
-    {
-        cv::bitwise_and(*view.supportMask, *view.depthValidMask, evidence_mask);
-        cv::resize(evidence_mask,
-                   evidence_mask,
-                   view.gray.size(),
-                   0.0,
-                   0.0,
-                   cv::INTER_NEAREST);
-    }
-    const cv::Scalar mean = evidence_mask.empty()
-        ? cv::mean(view.gray)
-        : cv::mean(view.gray, evidence_mask);
-    return static_cast<float>(mean[0]);
-}
-
 bool cancelled(const TextureMappingConfig &config)
 {
     return config.isCancelled && config.isCancelled();
+}
+
+bool hasNonzeroDistortion(const FramePinholeCamera &camera)
+{
+    const FramePinholeCamera::Distortion distortion = camera.distortion();
+    return std::fabs(distortion.radialK1) > 1.0e-15 ||
+        std::fabs(distortion.radialK2) > 1.0e-15 ||
+        std::fabs(distortion.radialK3) > 1.0e-15 ||
+        std::fabs(distortion.tangentialP1) > 1.0e-15 ||
+        std::fabs(distortion.tangentialP2) > 1.0e-15;
 }
 
 } // namespace
@@ -175,6 +163,20 @@ bool prepareInputs(const std::string &meshPath,
             source.depth.size() != source.supportMask.size())
         {
             continue;
+        }
+
+        const FramePinholeCamera &source_color_camera =
+            source.colorCamera.isValid() ? source.colorCamera : source.camera;
+        if (hasNonzeroDistortion(source.camera) ||
+            hasNonzeroDistortion(source_color_camera))
+        {
+            if (errorMsg)
+            {
+                *errorMsg =
+                    "纹理 v4 需要预去畸变的零畸变深度与彩色相机；"
+                    "请重新生成 revision 39 或更新版本的 MVS workspace";
+            }
+            return false;
         }
 
         PreparedView prepared;
@@ -246,24 +248,6 @@ bool prepareInputs(const std::string &meshPath,
             view.sharpnessWeight / std::max(median_sharpness, 1.0f),
             0.20f,
             2.0f);
-    }
-
-    if (config.enableColorCorrection)
-    {
-        QVector<float> luminances;
-        luminances.reserve(data->views.size());
-        for (const PreparedView &view : data->views)
-        {
-            luminances.push_back(imageLuminance(view));
-        }
-        QVector<float> sorted_luminances = luminances;
-        std::sort(sorted_luminances.begin(), sorted_luminances.end());
-        const float target = sorted_luminances[sorted_luminances.size() / 2];
-        for (int index = 0; index < data->views.size(); ++index)
-        {
-            data->views[index].exposureGain = std::clamp(
-                target / std::max(luminances[index], 1.0f), 0.70f, 1.40f);
-        }
     }
 
     auto *faces = data->mesh->faces();
