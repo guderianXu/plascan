@@ -32,6 +32,7 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QDir>
 #include <QCryptographicHash>
+#include <QByteArrayView>
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
@@ -566,8 +567,10 @@ const std::string &mvsRasterPath(const CameraView &view)
 template <typename T>
 void addHashValue(QCryptographicHash *hash, const T &value)
 {
-    hash->addData(reinterpret_cast<const char *>(&value),
-                  static_cast<qsizetype>(sizeof(value)));
+    const QByteArrayView bytes(
+        reinterpret_cast<const char *>(&value),
+        static_cast<qsizetype>(sizeof(value)));
+    hash->addData(bytes);
 }
 
 QString makeMvsDepthInputHash(const DepthGenConfig &config,

@@ -102,6 +102,19 @@ add_library(meshing STATIC
     ModelWorkflowService.cpp
 )
 
+# PoissonRecon is pinned third-party code. Its templates still use
+# std::is_pod, which is deprecated in C++20 and emits diagnostics when they are
+# instantiated by this wrapper. Keep the exception scoped to the only source
+# file that instantiates those templates so project-owned meshing code retains
+# the normal deprecation warnings.
+if(MSVC)
+    set_property(SOURCE ScreenedPoissonSurfaceBuilder.cpp APPEND PROPERTY
+        COMPILE_OPTIONS /wd4996)
+else()
+    set_property(SOURCE ScreenedPoissonSurfaceBuilder.cpp APPEND PROPERTY
+        COMPILE_OPTIONS -Wno-deprecated-declarations)
+endif()
+
 set(PLASCAN_MC33_INCLUDE_DIR "" CACHE PATH
     "Optional directory containing the MIT-licensed mc33cpp.h header")
 if(PLASCAN_MC33_INCLUDE_DIR)

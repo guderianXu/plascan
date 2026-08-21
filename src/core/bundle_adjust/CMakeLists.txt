@@ -82,12 +82,14 @@ add_executable(ba_backend_benchmark
 target_link_libraries(ba_backend_benchmark PRIVATE
     bundle_adjust
     camera
+    plascan_common_io
     Qt6::Core
 )
 
 target_include_directories(ba_backend_benchmark PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 set_target_properties(ba_backend_benchmark PROPERTIES

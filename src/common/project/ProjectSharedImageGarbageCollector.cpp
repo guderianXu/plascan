@@ -5,6 +5,7 @@
 #include "project/ProjectIO.h"
 #include "project/ProjectPackageLayout.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -168,9 +169,9 @@ QString commitTokenForChunks(QList<ProjectChunkRecord> chunks)
     for (const ProjectChunkRecord &chunk : chunks)
     {
         hash.addData(chunk.id.toUtf8());
-        hash.addData("\0", 1);
+        hash.addData(QByteArrayView("\0", 1));
         hash.addData(QByteArray::number(chunk.revision));
-        hash.addData("\n", 1);
+        hash.addData(QByteArrayView("\n", 1));
     }
     return QString::fromLatin1(hash.result().toHex());
 }

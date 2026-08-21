@@ -6,10 +6,10 @@
 
 #include <QCryptographicHash>
 #include <QFile>
+#include <QFileInfo>
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -169,7 +169,7 @@ namespace xjw::mask
             {
                 throw std::runtime_error("U2Net ONNX model path is empty.");
             }
-            if (!std::filesystem::exists(std::filesystem::u8path(_config.modelPath)))
+            if (!QFileInfo::exists(QString::fromUtf8(_config.modelPath.c_str())))
             {
                 throw std::runtime_error("U2Net ONNX model does not exist: " + _config.modelPath);
             }

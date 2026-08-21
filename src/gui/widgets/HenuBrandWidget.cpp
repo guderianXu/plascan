@@ -35,7 +35,7 @@ void HenuBrandWidget::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    const QRectF contentRect = rect().adjusted(0.5, 1.5, -0.5, -1.5);
+    const QRectF contentRect = QRectF(rect()).adjusted(0.5, 1.5, -0.5, -1.5);
     painter.setPen(QPen(QColor(198, 212, 229), 1.0));
     painter.setBrush(QColor(255, 255, 255));
     painter.drawRoundedRect(contentRect, 4.0, 4.0);

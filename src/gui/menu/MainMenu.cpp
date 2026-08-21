@@ -1126,13 +1126,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _zoomInAct->setIcon(makeZoomToolbarIcon(true));
             _zoomInAct->setToolTip(tr("放大"));
-            _zoomInAct->setShortcuts({QKeySequence::ZoomIn});
+            _zoomInAct->setShortcuts(QKeySequence::ZoomIn);
         }
         if (_zoomOutAct)
         {
             _zoomOutAct->setIcon(makeZoomToolbarIcon(false));
             _zoomOutAct->setToolTip(tr("缩小"));
-            _zoomOutAct->setShortcuts({QKeySequence::ZoomOut});
+            _zoomOutAct->setShortcuts(QKeySequence::ZoomOut);
         }
         QObject *rotationActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
@@ -1767,8 +1767,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _zoomOutAct->setIcon(makeZoomToolbarIcon(false));
     _zoomInAct->setToolTip(tr("放大"));
     _zoomOutAct->setToolTip(tr("缩小"));
-    _zoomInAct->setShortcuts({QKeySequence::ZoomIn});
-    _zoomOutAct->setShortcuts({QKeySequence::ZoomOut});
+    _zoomInAct->setShortcuts(QKeySequence::ZoomIn);
+    _zoomOutAct->setShortcuts(QKeySequence::ZoomOut);
     viewMenu->addSeparator();
     // 轨迹球显示/隐藏切换
     _toggleGizmoAct = new QAction(tr("显示轨迹球"), viewMenu);

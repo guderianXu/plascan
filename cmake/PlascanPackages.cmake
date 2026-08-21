@@ -56,7 +56,7 @@ list(FIND _PLASCAN_QT_GUI_PUBLIC_FEATURES vulkan _PLASCAN_QT_GUI_VULKAN_FEATURE_
 set(PLASCAN_QT_HAS_VULKAN ON)
 if(_PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX EQUAL -1)
   set(PLASCAN_QT_HAS_VULKAN OFF)
-  message(WARNING
+  message(STATUS
     "QtGui was built without Vulkan support. PlaScan will use the platform "
     "QRhi fallback backend (D3D11 on Windows or OpenGL elsewhere).")
 endif()

@@ -4,6 +4,7 @@
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectPackageLayout.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -50,7 +51,7 @@ QString fileSha256(const QString &path, QString *errorMessage)
                      QStringLiteral("计算影像 SHA-256 失败: %1").arg(path));
             return {};
         }
-        hash.addData(buffer.constData(), count);
+        hash.addData(QByteArrayView(buffer.constData(), count));
     }
     return QString::fromLatin1(hash.result().toHex());
 }

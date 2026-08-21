@@ -6,12 +6,12 @@
 
 #include <QCryptographicHash>
 #include <QFile>
+#include <QFileInfo>
 
 #include <onnxruntime_c_api.h>
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -158,7 +158,7 @@ public:
         {
             throw std::runtime_error("BiRefNet ONNX model path is empty.");
         }
-        if (!std::filesystem::exists(std::filesystem::u8path(_config.modelPath)))
+        if (!QFileInfo::exists(QString::fromUtf8(_config.modelPath.c_str())))
         {
             throw std::runtime_error("BiRefNet ONNX model does not exist: " + _config.modelPath);
         }

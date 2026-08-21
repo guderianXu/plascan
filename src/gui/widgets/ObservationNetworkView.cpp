@@ -947,7 +947,7 @@ void ObservationNetworkView::mouseMoveEvent(QMouseEvent *event)
     if (pickedNodeIndex >= 0 && pickedNodeIndex < (int)_net.nodeNames.size())
     {
         const int degree = pickedNodeIndex < (int)_net.degrees.size() ? _net.degrees[pickedNodeIndex] : 0;
-        QToolTip::showText(event->globalPos(),
+        QToolTip::showText(event->globalPosition().toPoint(),
                            tr("%1\n度: %2")
                                .arg(QString::fromStdString(_net.nodeNames[pickedNodeIndex]))
                                .arg(degree),

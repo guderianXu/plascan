@@ -47,8 +47,10 @@ function(add_plascan_cli name)
     target_link_libraries(${name} PRIVATE plascan_cli_support ${CLI_LIBRARIES} ${OpenCV_LIBS})
     target_include_directories(${name} PRIVATE
         ${PLASCAN_CLI_ROOT}/common
-        ${PLASCAN_CLI_ROOT}/third_party
         ${CLI_INCLUDE_DIRECTORIES}
+    )
+    target_include_directories(${name} SYSTEM PRIVATE
+        ${PLASCAN_CLI_ROOT}/third_party
     )
     if(CLI_COMPILE_DEFINITIONS)
         target_compile_definitions(${name} PRIVATE ${CLI_COMPILE_DEFINITIONS})

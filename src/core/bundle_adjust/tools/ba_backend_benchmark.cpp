@@ -1,5 +1,6 @@
 #include "BaBenchmarkRealDataset.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
+#include "io/PathIO.h"
 
 #include <algorithm>
 #include <array>
@@ -416,11 +417,11 @@ RealDatasetOptions parseRealOptions(int argc, char **argv)
         };
         if (option == "--dataset-json")
         {
-            options.datasetJson = std::filesystem::u8path(value());
+            options.datasetJson = xjw::common::io::toFilesystemPath(value());
         }
         else if (option == "--camera-list")
         {
-            options.cameraList = std::filesystem::u8path(value());
+            options.cameraList = xjw::common::io::toFilesystemPath(value());
         }
         else if (option == "--backend")
         {

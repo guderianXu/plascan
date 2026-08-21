@@ -3,6 +3,7 @@
 #include "project/ProjectChunkStore.h"
 #include "project/ProjectPackageLayout.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -53,7 +54,7 @@ QString sha256ForFile(const QString &path, QString *errorMessage)
         }
         if (readCount > 0)
         {
-            hash.addData(buffer.constData(), readCount);
+            hash.addData(QByteArrayView(buffer.constData(), readCount));
         }
     }
     return QString::fromLatin1(hash.result().toHex());

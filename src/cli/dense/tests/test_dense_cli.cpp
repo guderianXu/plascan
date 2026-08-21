@@ -1,4 +1,5 @@
 #include "CliTestSupport.h"
+#include "io/PathIO.h"
 
 #include <QLockFile>
 
@@ -399,8 +400,8 @@ TEST(DenseCloudRefineCliGTest, RejectsLinkedOutputWithoutTouchingTarget)
 
     std::error_code linkError;
     std::filesystem::create_symlink(
-        std::filesystem::u8path(targetPly.toUtf8().toStdString()),
-        std::filesystem::u8path(linkedOutput.toUtf8().toStdString()),
+        xjw::common::io::toFilesystemPath(targetPly),
+        xjw::common::io::toFilesystemPath(linkedOutput),
         linkError);
     if (linkError)
     {

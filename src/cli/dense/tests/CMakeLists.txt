@@ -1,6 +1,8 @@
 add_plascan_cli_contract_test(test_dense_cli
     test_dense_cli.cpp
 )
+target_link_libraries(test_dense_cli PRIVATE plascan_common_io)
+target_include_directories(test_dense_cli PRIVATE ${CMAKE_SOURCE_DIR}/src/common)
 
 if(TARGET dense_match_cli)
     target_compile_definitions(test_dense_cli PRIVATE

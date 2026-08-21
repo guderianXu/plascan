@@ -51,6 +51,7 @@
 #include <QTextStream>
 #include <QThread>
 #include <QTimer>
+#include <QTransform>
 #include <QWidget>
 #include <algorithm>
 #include <cmath>
@@ -4176,7 +4177,8 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         texture_upload_image = image;
         if (rhi()->isYUpInNDC())
         {
-            texture_upload_image = texture_upload_image.mirrored();
+            texture_upload_image = texture_upload_image.transformed(
+                QTransform::fromScale(1.0, -1.0));
         }
     }
 
@@ -4584,7 +4586,8 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         QImage upload_image = image;
         if (rhi()->isYUpInNDC())
         {
-            upload_image = upload_image.mirrored();
+            upload_image = upload_image.transformed(
+                QTransform::fromScale(1.0, -1.0));
         }
         QRhiTextureSubresourceUploadDescription subresource(upload_image);
         subresource.setDestinationTopLeft(destination);

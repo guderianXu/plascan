@@ -1,6 +1,7 @@
 #include "BaBenchmarkRealDataset.h"
 
 #include "FramePinholeCamera.h"
+#include "io/PathIO.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -108,7 +109,7 @@ std::vector<FramePinholeCamera> loadCameras(const std::filesystem::path &listPat
             throw std::runtime_error("相机列表第 " + std::to_string(lineNumber) +
                                      " 行必须包含影像和相机两个路径");
         }
-        std::filesystem::path cameraPath = std::filesystem::u8path(tokens[1]);
+        std::filesystem::path cameraPath = xjw::common::io::toFilesystemPath(tokens[1]);
         if (cameraPath.is_relative())
         {
             cameraPath = base / cameraPath;
