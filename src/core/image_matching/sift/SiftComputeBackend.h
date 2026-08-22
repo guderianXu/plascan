@@ -34,6 +34,10 @@ namespace xjw::image_matching
 
     const char* siftBackendName(SiftComputeBackend backend);
     QString siftBackendDisplayName(SiftComputeBackend backend);
+    /// 返回运行设备的硬件名称；CPU 后端没有单独设备名，返回空字符串。
+    QString siftBackendDeviceName(SiftComputeBackend backend, int deviceIndex = 0);
+    /// 面向 UI/报告的实际运行设备，例如“CUDA · NVIDIA RTX ...”或“OpenCV CPU”。
+    QString siftBackendRuntimeDisplayName(SiftComputeBackend backend, int deviceIndex = 0);
 
     bool isSiftBackendAvailable(SiftComputeBackend backend, int deviceIndex = 0);
     SiftComputeBackend resolveSiftBackend(SiftComputeBackend requested, int deviceIndex = 0);

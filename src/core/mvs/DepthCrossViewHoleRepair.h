@@ -2,6 +2,8 @@
 
 #include "FramePinholeCamera.h"
 #include "DepthAnchoredHoleInterpolator.h"
+#include "DepthGeometryHypothesisReranker.h"
+#include "DepthLayerReliability.h"
 
 #include <QJsonObject>
 
@@ -46,6 +48,9 @@ struct CrossViewHoleRepairStats
     std::uint64_t growthRejectedSourceOverlapCount = 0;
     std::uint64_t growthRejectedNormalCount = 0;
     std::uint64_t growthRejectedImageEdgeCount = 0;
+    std::uint64_t nativeInterpolationAnchorCandidateCount = 0;
+    std::uint64_t nativeInterpolationAnchorAcceptedCount = 0;
+    std::uint64_t nativeInterpolationAnchorRejectedCount = 0;
     DepthAnchoredHoleInterpolationStats anchoredInterpolation;
 };
 
@@ -60,6 +65,16 @@ struct DominantDepthLayerSelectionOptions
     float selectedLayerConfidence = 0.72f;
     float ambiguousNativeConfidenceMultiplier = 0.45f;
     bool transferObservedDepthIntoMissingPixels = true;
+    bool enableReliabilityGuidedCorrection = false;
+    /// When true, keep all reliable and unobservable native pixels byte-exact
+    /// and evaluate projected layers only for weak native reliability classes.
+    /// This is used by non-orbital experiments so enabling the diagnostic
+    /// correction cannot activate the legacy orbital hole-transfer behavior.
+    bool restrictToReliabilityGuidedCandidates = false;
+    int reliabilityGuidedMinimumSourceCount = 3;
+    float reliabilityGuidedBlendWeight = 0.85f;
+    float reliabilityGuidedMaximumRelativeCorrection = 0.025f;
+    DepthGeometryHypothesisRerankOptions geometryRerank;
 };
 
 struct DominantDepthLayerSelectionStats
@@ -71,6 +86,25 @@ struct DominantDepthLayerSelectionStats
     std::uint64_t transferredMissingPixelCount = 0;
     std::uint64_t ambiguousNativePixelCount = 0;
     std::uint64_t unresolvedMissingPixelCount = 0;
+    std::uint64_t reliabilityGuidedCandidatePixelCount = 0;
+    std::uint64_t reliabilityGuidedStablePixelCount = 0;
+    std::uint64_t reliabilityGuidedRefinedPixelCount = 0;
+    std::uint64_t reliabilityGuidedSwitchedPixelCount = 0;
+    std::uint64_t reliabilityGuidedInsufficientSourcePixelCount = 0;
+    std::uint64_t geometryRerankEvaluatedPixelCount = 0;
+    std::uint64_t geometryRerankValidEvidencePixelCount = 0;
+    std::uint64_t geometryRerankRefinedPixelCount = 0;
+    std::uint64_t geometryRerankSwitchedPixelCount = 0;
+    std::uint64_t geometryRerankRejectedSourceCount = 0;
+    std::uint64_t geometryRerankRejectedBaselineCount = 0;
+    std::uint64_t geometryRerankRejectedWeightCount = 0;
+    std::uint64_t geometryRerankRejectedCostCount = 0;
+    double geometryRerankNativeCostSum = 0.0;
+    double geometryRerankCandidateCostSum = 0.0;
+    double geometryRerankCostAdvantageSum = 0.0;
+    double geometryRerankCorrectionSum = 0.0;
+    double geometryRerankWeakestConfidenceSum = 0.0;
+    bool reliabilityGuidedOnlyMode = false;
 };
 
 cv::Mat projectSourceDepthToReference(
@@ -102,7 +136,18 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
     cv::Mat *selectedSourceVotes = nullptr,
     int rowWorkerCount = 1,
-    const std::atomic<bool> *cancelled = nullptr);
+    const std::atomic<bool> *cancelled = nullptr,
+    /// Optional pre-selection CV_8U reliability classes. When guidance is
+    /// enabled, an incompatible map disables only the extra correction path.
+    const cv::Mat *nativeReliabilityClassMap = nullptr,
+    /// Optional CV_8U output marking only pixels whose native depth was
+    /// actually refined or switched by reliability guidance.
+    cv::Mat *reliabilityGuidedChangedMask = nullptr,
+    /// Optional measured source evidence. When reliability guidance is
+    /// enabled, a missing/incompatible vector fails closed to the legacy path.
+    const std::vector<ProjectedDepthEvidence> *projectedSourceEvidence = nullptr,
+    /// Optional per-pixel audit maps for selected diagnostic snapshots.
+    DepthGeometryHypothesisRerankMaps *geometryRerankMaps = nullptr);
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat &referenceDepth,
@@ -119,7 +164,10 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     const cv::Mat *guideGray = nullptr,
     cv::Mat *anchoredInterpolationMask = nullptr,
     int rowWorkerCount = 1,
-    const std::atomic<bool> *cancelled = nullptr);
+    const std::atomic<bool> *cancelled = nullptr,
+    /// Optional CV_8U mask for valid native-depth interpolation anchors.
+    /// A non-null incompatible mask fails closed and admits no native anchor.
+    const cv::Mat *nativeInterpolationAnchorEligibilityMask = nullptr);
 
 QJsonObject crossViewHoleRepairStatsToJson(
     const CrossViewHoleRepairStats &stats);

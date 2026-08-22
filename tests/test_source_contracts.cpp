@@ -781,9 +781,14 @@ TEST(SfmPnpObservationContractTest, RegistrationUsesOneThreeDimensionalCandidate
                                                  "bool IncrementalSfm::findRegisteredSequenceNeighbor");
 
     expectContainsAll(registration, {
-        "std::unordered_set<FeatureIdx> addedFeatures",
-        "addedFeatures.count(myFeat)",
-        "addedFeatures.insert(myFeat)",
+        "selectUniquePnpCorrespondences(proposals)",
+        "for (const PnpCorrespondenceProposal &proposal : selected_proposals)",
+    });
+    expectContainsAll(source, {
+        "std::unordered_set<FeatureIdx> used_features",
+        "used_features.count(proposal.featureIdx)",
+        "used_features.insert(proposal.featureIdx)",
+        "std::unordered_set<Point3DId> used_points",
     });
 }
 

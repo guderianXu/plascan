@@ -37,6 +37,13 @@ struct LocalSafetyProjection
     std::uint64_t frozenVertexCount = 0;
 };
 
+struct ProjectedDisplacementQuality
+{
+    bool valid = false;
+    std::uint64_t sampleCount = 0;
+    double p95Pixels = 0.0;
+};
+
 std::array<double, 3> faceCross(
     const TriMesh &mesh,
     const Triangle &face)
@@ -70,6 +77,110 @@ double vectorLength(const std::array<double, 3> &value)
 bool sameTopology(const TriMesh &first, const TriMesh &second);
 bool sameUnorientedTopology(const TriMesh &first, const TriMesh &second);
 bool validTopology(const TriMesh &mesh);
+
+ProjectedDisplacementQuality evaluateProjectedDisplacement(
+    const TriMesh &baseline,
+    const TriMesh &candidate,
+    const QVector<DepthTsdfFrame> &frames,
+    const DepthConstrainedSurfaceRefineOptions &options)
+{
+    ProjectedDisplacementQuality quality;
+    if (!sameUnorientedTopology(baseline, candidate))
+    {
+        return quality;
+    }
+
+    std::vector<double> maximum_pixel_displacements(
+        baseline.vertices.size(), -1.0);
+    for (const DepthTsdfFrame &frame : frames)
+    {
+        if ((options.depthRefine.primaryFramesOnly &&
+             frame.auxiliarySurfaceOnly) ||
+            !frame.camera.isValid() ||
+            frame.depth.empty())
+        {
+            continue;
+        }
+        const int width = frame.colorBgr.empty()
+            ? frame.depth.cols
+            : frame.colorBgr.cols;
+        const int height = frame.colorBgr.empty()
+            ? frame.depth.rows
+            : frame.colorBgr.rows;
+        FramePinholeCamera projection_camera = frame.camera;
+        if (width != frame.depth.cols || height != frame.depth.rows)
+        {
+            projection_camera = frame.camera.scaledIntrinsics(
+                static_cast<double>(width) /
+                    static_cast<double>(frame.depth.cols),
+                static_cast<double>(height) /
+                    static_cast<double>(frame.depth.rows));
+        }
+        for (std::size_t index = 0; index < baseline.vertices.size(); ++index)
+        {
+            const MeshVertex &source = baseline.vertices[index];
+            const MeshVertex &target = candidate.vertices[index];
+            const double source_world[3]{source.x, source.y, source.z};
+            const double target_world[3]{target.x, target.y, target.z};
+            double source_pixel[2]{};
+            double target_pixel[2]{};
+            double source_depth = 0.0;
+            double target_depth = 0.0;
+            if (!projection_camera.projectWorldPointWithDepth(
+                    source_world, source_pixel, source_depth) ||
+                !projection_camera.projectWorldPointWithDepth(
+                    target_world, target_pixel, target_depth) ||
+                source_pixel[0] < 0.0 ||
+                source_pixel[0] > static_cast<double>(width - 1) ||
+                source_pixel[1] < 0.0 ||
+                source_pixel[1] > static_cast<double>(height - 1) ||
+                target_pixel[0] < 0.0 ||
+                target_pixel[0] > static_cast<double>(width - 1) ||
+                target_pixel[1] < 0.0 ||
+                target_pixel[1] > static_cast<double>(height - 1))
+            {
+                continue;
+            }
+            const double delta_x = target_pixel[0] - source_pixel[0];
+            const double delta_y = target_pixel[1] - source_pixel[1];
+            const double displacement = std::hypot(delta_x, delta_y);
+            if (std::isfinite(displacement))
+            {
+                maximum_pixel_displacements[index] = std::max(
+                    maximum_pixel_displacements[index], displacement);
+            }
+        }
+    }
+
+    maximum_pixel_displacements.erase(
+        std::remove_if(
+            maximum_pixel_displacements.begin(),
+            maximum_pixel_displacements.end(),
+            [](double value)
+            {
+                return value < 0.0 || !std::isfinite(value);
+            }),
+        maximum_pixel_displacements.end());
+    quality.sampleCount = static_cast<std::uint64_t>(
+        maximum_pixel_displacements.size());
+    if (quality.sampleCount < static_cast<std::uint64_t>(
+            options.minimumProjectedDisplacementSampleCount))
+    {
+        return quality;
+    }
+    const std::size_t p95_index = std::min(
+        maximum_pixel_displacements.size() - 1,
+        static_cast<std::size_t>(std::ceil(
+            0.95 * static_cast<double>(maximum_pixel_displacements.size()))) - 1);
+    std::nth_element(
+        maximum_pixel_displacements.begin(),
+        maximum_pixel_displacements.begin() +
+            static_cast<std::ptrdiff_t>(p95_index),
+        maximum_pixel_displacements.end());
+    quality.p95Pixels = maximum_pixel_displacements[p95_index];
+    quality.valid = std::isfinite(quality.p95Pixels);
+    return quality;
+}
 
 bool faceViolatesLocalSafety(
     const TriMesh &baseline,
@@ -490,6 +601,12 @@ void accumulateRefinerStatistics(
     total->applied = total->applied || pass.applied;
     total->projectedObservationCount += pass.projectedObservationCount;
     total->acceptedObservationCount += pass.acceptedObservationCount;
+    total->rejectedAuxiliaryObservationCount +=
+        pass.rejectedAuxiliaryObservationCount;
+    total->rejectedNonMeasuredObservationCount +=
+        pass.rejectedNonMeasuredObservationCount;
+    total->nearestMeasuredObservationCount +=
+        pass.nearestMeasuredObservationCount;
     total->spreadDownweightedObservationCount +=
         pass.spreadDownweightedObservationCount;
     total->spreadVeryWeakObservationCount +=
@@ -557,7 +674,13 @@ bool validOptions(const DepthConstrainedSurfaceRefineOptions &options)
            options.minimumFaceNormalDot >= -1.0 &&
            options.minimumFaceNormalDot <= 1.0 &&
            options.minimumFaceAreaRatio > 0.0 &&
-           options.minimumFaceAreaRatio <= 1.0;
+           options.minimumFaceAreaRatio <= 1.0 &&
+           options.maximumAcceptedBlend > 0.0f &&
+           options.maximumAcceptedBlend <= 1.0f &&
+           std::isfinite(
+               options.maximumCumulativeProjectedP95DisplacementPixels) &&
+           options.maximumCumulativeProjectedP95DisplacementPixels >= 0.0f &&
+           options.minimumProjectedDisplacementSampleCount > 0;
 }
 
 } // namespace
@@ -586,8 +709,11 @@ DepthConstrainedSurfaceRefiner::refine(
         return statistics;
     }
 
+    const TriMesh initial_mesh = *mesh;
+
     const int pass_count = std::clamp(options.passes, 1, 4);
-    constexpr std::array<float, 4> blends{1.0f, 0.75f, 0.5f, 0.25f};
+    constexpr std::array<float, 6> blends{
+        1.0f, 0.75f, 0.5f, 0.25f, 0.125f, 0.0625f};
     for (int pass_index = 0; pass_index < pass_count; ++pass_index)
     {
         if (isCancelled && isCancelled())
@@ -626,6 +752,15 @@ DepthConstrainedSurfaceRefiner::refine(
         bool accepted = false;
         for (const float blend : blends)
         {
+            if (blend > options.maximumAcceptedBlend + 1.0e-6f)
+            {
+                continue;
+            }
+            if (options.maximumCumulativeProjectedP95DisplacementPixels <= 0.0f &&
+                blend < 0.25f)
+            {
+                continue;
+            }
             TriMesh candidate =
                 blendMeshes(baseline, full_refinement, blend);
             const CandidateQuality unprojected_quality = evaluateCandidate(
@@ -675,6 +810,34 @@ DepthConstrainedSurfaceRefiner::refine(
             if (!quality.accepted)
             {
                 continue;
+            }
+            if (options.maximumCumulativeProjectedP95DisplacementPixels > 0.0f)
+            {
+                const ProjectedDisplacementQuality projected =
+                    evaluateProjectedDisplacement(
+                        initial_mesh,
+                        candidate,
+                        frames,
+                        options);
+                statistics.projectedDisplacementSampleCount = std::max(
+                    statistics.projectedDisplacementSampleCount,
+                    projected.sampleCount);
+                if (projected.valid)
+                {
+                    statistics.maximumEvaluatedCumulativeProjectedP95DisplacementPixels =
+                        std::max(
+                            statistics.maximumEvaluatedCumulativeProjectedP95DisplacementPixels,
+                            projected.p95Pixels);
+                }
+                if (!projected.valid ||
+                    projected.p95Pixels >
+                        options.maximumCumulativeProjectedP95DisplacementPixels)
+                {
+                    ++statistics.projectionGuardRejectedCandidateCount;
+                    continue;
+                }
+                statistics.acceptedCumulativeProjectedP95DisplacementPixels =
+                    projected.p95Pixels;
             }
             *mesh = std::move(candidate);
             statistics.applied = true;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DepthGeometryHypothesisReranker.h"
+
 #include <QJsonObject>
 
 #include <opencv2/core/mat.hpp>
@@ -27,6 +29,9 @@ struct DepthResidualReestimationOptions
     int minimumGeometrySectorCount = 2;
     float maximumGeometryRelativeDifference = 0.025f;
     float freeSpaceConflictRelativeDifference = 0.04f;
+    bool allowValidDepthReplacement = false;
+    float minimumReplacementCostAdvantage = 0.08f;
+    float ambiguousMaximumRelativeCorrection = 0.01f;
 };
 
 struct DepthResidualReestimationTarget
@@ -67,6 +72,11 @@ struct DepthResidualReestimationStats
     int rejectedGeometrySectorPixelCount = 0;
     int rejectedFreeSpacePixelCount = 0;
     int recoveredPixelCount = 0;
+    int replacementCandidatePixelCount = 0;
+    int replacedPixelCount = 0;
+    int rejectedReplacementReliabilityPixelCount = 0;
+    int rejectedReplacementCostPixelCount = 0;
+    int rejectedReplacementCorrectionPixelCount = 0;
     int attemptedHypothesisCount = 0;
     int successfulHypothesisCount = 0;
     int failedHypothesisCount = 0;
@@ -86,6 +96,25 @@ struct DepthResidualReestimationPreflight
     QString skippedReason;
 };
 
+/// Optional authoritative evidence sinks for accepted valid-depth
+/// replacements. Source counts exclude the reference view; the caller keeps
+/// its existing reference-inclusive convention when deriving support maps.
+struct DepthResidualReestimationEvidenceOutputs
+{
+    cv::Mat *geometrySourceMask = nullptr; ///< CV_16U
+    cv::Mat *sourceInverseDepthSum = nullptr; ///< CV_32F
+    cv::Mat *sourceInverseDepthSquaredSum = nullptr; ///< CV_32F
+    cv::Mat *confirmedSourceCount = nullptr; ///< CV_16U
+    DepthGeometryHypothesisRerankMaps *rerankMaps = nullptr;
+};
+
+/// Builds two deterministic overlapping local PatchMatch source groups. Each
+/// group keeps at least three views when four or more are available; the final
+/// merge still requires independent projected-depth evidence, so overlap can
+/// improve photometric candidate availability without weakening geometry.
+std::vector<std::vector<int>> buildDepthResidualPatchMatchSourceGroups(
+    const std::vector<int> &sourceSectorIds);
+
 /**
  * @brief Cheap missing-in-support gate evaluated before source reprojection.
  *
@@ -96,6 +125,14 @@ struct DepthResidualReestimationPreflight
 DepthResidualReestimationPreflight inspectDepthResidualReestimationNeed(
     const cv::Mat &referenceDepth,
     const cv::Mat &supportMask,
+    const DepthResidualReestimationOptions &options = {});
+
+/// Builds the same bounded preflight from an explicit weak-region mask. This
+/// is used by the default-off local second-pass treatment and never expands
+/// outside the support mask.
+DepthResidualReestimationPreflight inspectDepthReestimationMask(
+    const cv::Mat &supportMask,
+    const cv::Mat &requestedMask,
     const DepthResidualReestimationOptions &options = {});
 
 DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
@@ -122,7 +159,10 @@ DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
     const std::vector<cv::Mat> &projectedSourceDepths,
     const std::vector<int> &sourceSectorIds,
     cv::Mat *recoveredMask = nullptr,
-    const DepthResidualReestimationOptions &options = {});
+    const DepthResidualReestimationOptions &options = {},
+    const cv::Mat *nativeReliabilityClassMap = nullptr,
+    const std::vector<ProjectedDepthEvidence> *projectedSourceEvidence = nullptr,
+    const DepthResidualReestimationEvidenceOutputs *evidenceOutputs = nullptr);
 
 QJsonObject depthResidualReestimationStatsToJson(
     const DepthResidualReestimationStats &stats);

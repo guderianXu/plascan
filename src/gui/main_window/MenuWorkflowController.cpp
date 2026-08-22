@@ -1397,6 +1397,24 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             }
         });
     };
+    workflowOptions.computeDeviceFn = [pmGuard, session, cancelFlag](const QString &displayName)
+    {
+        if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
+        {
+            return;
+        }
+        xjw::gui::tasks::postGuarded(
+            pmGuard,
+            [session, cancelFlag, displayName](ProjectManager *manager)
+        {
+            if (manager->ownsAtCancelFlag(cancelFlag)
+                && manager->isCurrentSession(session)
+                && !cancelFlag->load(std::memory_order_relaxed))
+            {
+                emit manager->atComputeDeviceChanged(displayName);
+            }
+        });
+    };
     workflowOptions.pairMatchedFn = [pmGuard, session, cancelFlag](const QString &img0,
                                                                   const QString &img1,
                                                                   const QString &matchPath,

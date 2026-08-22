@@ -55,6 +55,10 @@ void copySolveDiagnostics(const ExposureSolveResult &solve_result,
         solve_result.rejectedInsufficientPairCount;
     result->exposureCorrectionRejectedHighMadPairCount =
         solve_result.rejectedHighMadPairCount;
+    result->exposureCorrectionConnectedComponentCount =
+        solve_result.connectedComponentCount;
+    result->exposureCorrectionCorrectedViewCount =
+        solve_result.correctedViewCount;
     result->exposureCorrectionMaximumAcceptedLogMad =
         solve_result.maximumAcceptedLogMad;
     result->exposureCorrectionGraphConnected =

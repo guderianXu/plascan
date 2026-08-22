@@ -40,6 +40,7 @@ private slots:
     void updatePointCloud(const QString &stage, int percent);
     void finishPointCloud(bool success);
     void updateAerialTriangulation(const QString &stage, int percent);
+    void updateAerialTriangulationDevice(const QString &displayName);
     void finishAerialTriangulation(bool success);
     void updateMask(const QString &stage, int done, int total);
     void finishMask(bool success);

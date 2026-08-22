@@ -1075,6 +1075,17 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                 config.postConsistencyResidualMaximumPriorRadius);
     root.insert(QStringLiteral("two_source_cross_view_growth"),
                 config.enableTwoSourceCrossViewGrowth);
+    if (config.enableDepthLayerReliabilityAnchorGate)
+    {
+        root.insert(QStringLiteral("depth_layer_reliability_anchor_gate"),
+                    true);
+    }
+    if (config.enableDepthLayerReliabilityGuidedCorrection)
+    {
+        root.insert(
+            QStringLiteral("depth_layer_reliability_guided_correction"),
+            true);
+    }
     root.insert(QStringLiteral("two_source_growth_distance_pixels"),
                 config.twoSourceGrowthDistancePixels);
     root.insert(QStringLiteral("two_source_growth_inverse_depth_spread"),

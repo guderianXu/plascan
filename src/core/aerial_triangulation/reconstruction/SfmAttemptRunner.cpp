@@ -439,6 +439,10 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             std::min(sfmOptions.pnpOptions.relaxedMinInlierRatio, 0.05);
         sfmOptions.pnpOptions.relaxedMinNumInliers =
             std::max(sfmOptions.pnpOptions.relaxedMinNumInliers, 24);
+        sfmOptions.pnpOptions.allowStrictSmallSupportRecovery = true;
+        sfmOptions.pnpOptions.strictSmallSupportMinInliers = 8;
+        sfmOptions.pnpOptions.strictSmallSupportMinInlierRatio = 0.80;
+        sfmOptions.pnpOptions.strictSmallSupportMinGridCells = 3;
     }
 
     // 阶段 3：创建影像节点。重置对齐时工程 FramePinholeCamera 只保留内参并将外参置为单位位姿。

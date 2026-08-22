@@ -8,6 +8,7 @@
 TaskStatusWidget::TaskStatusWidget(QWidget *parent)
     : QWidget(parent)
     , _statusLabel(new QLabel(this))
+    , _detailLabel(new QLabel(this))
     , _progressBar(new QProgressBar(this))
     , _cancelButton(new QToolButton(this))
     , _cancelText(tr("取消"))
@@ -17,6 +18,11 @@ TaskStatusWidget::TaskStatusWidget(QWidget *parent)
 
     _statusLabel->setObjectName(QStringLiteral("statusLabel"));
     _statusLabel->setMinimumWidth(180);
+
+    _detailLabel->setObjectName(QStringLiteral("detailLabel"));
+    _detailLabel->setMaximumWidth(320);
+    _detailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _detailLabel->hide();
 
     _progressBar->setObjectName(QStringLiteral("progressBar"));
     _progressBar->setRange(0, 100);
@@ -32,6 +38,7 @@ TaskStatusWidget::TaskStatusWidget(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
     layout->addWidget(_statusLabel);
+    layout->addWidget(_detailLabel);
     layout->addWidget(_progressBar);
     layout->addWidget(_cancelButton);
 
@@ -57,6 +64,14 @@ void TaskStatusWidget::setCancellingText(const QString &text)
 void TaskStatusWidget::setLabelMinimumWidth(int width)
 {
     _statusLabel->setMinimumWidth(width);
+}
+
+void TaskStatusWidget::setDetailText(const QString &text)
+{
+    const QString normalized = text.trimmed();
+    _detailLabel->setText(normalized);
+    _detailLabel->setToolTip(normalized);
+    _detailLabel->setVisible(!normalized.isEmpty());
 }
 
 void TaskStatusWidget::begin(const QString &statusText, int minimum, int maximum)
@@ -96,6 +111,7 @@ void TaskStatusWidget::finish()
     _elapsedTimer.invalidate();
     _cancelButton->setEnabled(true);
     _cancelButton->setText(_cancelText);
+    setDetailText(QString());
     hide();
 }
 
@@ -112,6 +128,11 @@ bool TaskStatusWidget::isCancelling() const
 QString TaskStatusWidget::statusText() const
 {
     return _statusLabel->text();
+}
+
+QString TaskStatusWidget::detailText() const
+{
+    return _detailLabel->text();
 }
 
 int TaskStatusWidget::progressValue() const

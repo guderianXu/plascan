@@ -1,5 +1,7 @@
 #include "TextureMappingV4Internal.h"
 
+#include "StudioForegroundMask.h"
+
 #include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
@@ -215,6 +217,29 @@ bool prepareInputs(const std::string &meshPath,
                    0.0,
                    0.0,
                    cv::INTER_NEAREST);
+        const float support_coverage =
+            static_cast<float>(cv::countNonZero(color_support)) /
+            std::max(1, color_support.rows * color_support.cols);
+        if (support_coverage < 0.03f || support_coverage > 0.98f)
+        {
+            StudioForegroundMask foreground =
+                buildStudioForegroundMask(prepared.colorBgr);
+            if (foreground.isUsableForColorSampling())
+            {
+                cv::bitwise_and(color_support, foreground.mask, color_support);
+                const double image_scale = std::min(
+                    color_support.cols / 640.0,
+                    color_support.rows / 480.0);
+                const int safe_interior_radius = std::max(
+                    2,
+                    static_cast<int>(std::lround(4.0 * image_scale)));
+                const cv::Mat kernel = cv::getStructuringElement(
+                    cv::MORPH_ELLIPSE,
+                    cv::Size(safe_interior_radius * 2 + 1,
+                             safe_interior_radius * 2 + 1));
+                cv::erode(color_support, color_support, kernel);
+            }
+        }
         cv::distanceTransform(color_support,
                               prepared.supportDistance,
                               cv::DIST_L2,

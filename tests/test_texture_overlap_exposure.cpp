@@ -127,7 +127,7 @@ TEST(TextureOverlapExposureTest, NoOverlapFailsClosedToUnitGain)
     EXPECT_EQ(result.gains, std::vector<float>({1.0f, 1.0f}));
 }
 
-TEST(TextureOverlapExposureTest, DisconnectedViewGraphFailsClosedGlobally)
+TEST(TextureOverlapExposureTest, DisconnectedViewGraphSolvesSupportedComponent)
 {
     std::vector<ExposureObservation> observations =
         twoViewObservations(8, 1.02, 0.98);
@@ -141,10 +141,14 @@ TEST(TextureOverlapExposureTest, DisconnectedViewGraphFailsClosedGlobally)
             3, observations, permissiveOptions());
 
     EXPECT_FALSE(result.graphConnected);
-    EXPECT_FALSE(result.applied);
+    EXPECT_TRUE(result.applied);
     EXPECT_EQ(result.acceptedPairCount, 1U);
-    EXPECT_EQ(result.status, "disconnected_overlap_graph");
-    EXPECT_EQ(result.gains, std::vector<float>({1.0f, 1.0f, 1.0f}));
+    EXPECT_EQ(result.status, "applied_partial_components");
+    EXPECT_EQ(result.connectedComponentCount, 2);
+    EXPECT_EQ(result.correctedViewCount, 2);
+    EXPECT_LT(result.gains[0], 1.0f);
+    EXPECT_GT(result.gains[1], 1.0f);
+    EXPECT_FLOAT_EQ(result.gains[2], 1.0f);
 }
 
 TEST(TextureOverlapExposureTest, InsufficientCommonSamplesFailClosed)
@@ -276,6 +280,8 @@ TEST(TextureOverlapExposureTest, PipelineCollectsOnlySharedDepthVisiblePoints)
     EXPECT_EQ(result.exposureCorrectionStatus, "applied");
     EXPECT_EQ(result.exposureCorrectionObservationCount, 64U);
     EXPECT_EQ(result.exposureCorrectionAcceptedPairCount, 1U);
+    EXPECT_EQ(result.exposureCorrectionConnectedComponentCount, 1);
+    EXPECT_EQ(result.exposureCorrectionCorrectedViewCount, 2);
     EXPECT_FLOAT_EQ(result.exposureCorrectionMinimumGain, 0.90f);
     EXPECT_FLOAT_EQ(result.exposureCorrectionMaximumGain, 1.10f);
     EXPECT_FLOAT_EQ(data.views[0].exposureGain, 0.90f);

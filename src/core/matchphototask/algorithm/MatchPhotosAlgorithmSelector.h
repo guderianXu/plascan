@@ -18,7 +18,8 @@ public:
     static MatchPhotosAlgorithmPlan resolveExecutionBackend(
         const MatchPhotosOptions &options,
         MatchPhotosAlgorithmPlan plan,
-        image_matching::SiftComputeBackend resolvedBackend);
+        image_matching::SiftComputeBackend resolvedBackend,
+        int deviceIndex = 0);
 };
 
 } // namespace matchphotos

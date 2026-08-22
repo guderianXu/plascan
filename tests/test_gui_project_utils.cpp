@@ -3627,6 +3627,7 @@ TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
 
     const QStringList expectedMembers = {
         QStringLiteral("QLabel *_statusLabel = nullptr;"),
+        QStringLiteral("QLabel *_detailLabel = nullptr;"),
         QStringLiteral("QProgressBar *_progressBar = nullptr;"),
         QStringLiteral("QToolButton *_cancelButton = nullptr;"),
         QStringLiteral("QString _cancelText;"),
@@ -5595,6 +5596,29 @@ TEST(SparseResultQualityTest, RejectsFormalSfmWhenQualityGateBlocksMvs)
     EXPECT_TRUE(reason.contains(QStringLiteral("重投影")));
     EXPECT_TRUE(reason.contains(QStringLiteral("三角角")));
     EXPECT_TRUE(reason.contains(QStringLiteral("空间覆盖")));
+}
+
+TEST(SparseResultQualityTest, BlockingReasonReportsRegistrationAndTrackEvidence)
+{
+    QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        productionSparsePoints(),
+        8,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction,
+        QString(),
+        QString(),
+        16);
+    quality[QStringLiteral("two_view_ratio")] = 0.713;
+    quality[QStringLiteral("quality_gate")] = QJsonObject{
+        {QStringLiteral("acceptable_for_mvs"), false},
+        {QStringLiteral("warnings"),
+         QJsonArray{QStringLiteral("low_registered_image_coverage")}}};
+
+    const QString reason = xjw::gui::project::sparseResultBlockingReason(quality);
+
+    EXPECT_TRUE(reason.contains(QStringLiteral("注册 8/16 张")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("两视轨迹占比 71.3%")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("匹配图连通性")));
 }
 
 TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePreview)
@@ -10325,6 +10349,13 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 2/5"));
     EXPECT_EQ(widget.progressValue(), 2);
 
+    widget.setDetailText(QStringLiteral("计算设备：CUDA · Test GPU"));
+    EXPECT_EQ(widget.detailText(), QStringLiteral("计算设备：CUDA · Test GPU"));
+    auto *detailLabel = widget.findChild<QLabel *>(QStringLiteral("detailLabel"));
+    ASSERT_NE(detailLabel, nullptr);
+    EXPECT_FALSE(detailLabel->isHidden());
+    EXPECT_EQ(detailLabel->toolTip(), QStringLiteral("计算设备：CUDA · Test GPU"));
+
     QToolButton *cancelButton = widget.findChild<QToolButton *>(QStringLiteral("cancelButton"));
     ASSERT_NE(cancelButton, nullptr);
     ASSERT_TRUE(cancelButton->isEnabled());
@@ -10344,6 +10375,7 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_FALSE(widget.isActive());
     EXPECT_FALSE(widget.isCancelling());
     EXPECT_EQ(cancelButton->text(), QStringLiteral("取消"));
+    EXPECT_TRUE(widget.detailText().isEmpty());
 }
 
 TEST(TaskbarProgressTest, HidesProgressWhenNoTaskIsActive)
@@ -10474,6 +10506,24 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     controller.updateImageLoading(QStringLiteral("加载照片列表"), 8, 10);
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("image_import")));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
+
+    emit projectManager.atProgressChanged(QStringLiteral("空中三角测量: 特征提取"), 10);
+    emit projectManager.atComputeDeviceChanged(
+        QStringLiteral("CUDA · NVIDIA Test GPU"));
+    TaskStatusWidget *aerialStatus = nullptr;
+    for (TaskStatusWidget *status : statusBar.findChildren<TaskStatusWidget *>())
+    {
+        if (status->detailText().contains(QStringLiteral("NVIDIA Test GPU")))
+        {
+            aerialStatus = status;
+            break;
+        }
+    }
+    ASSERT_NE(aerialStatus, nullptr);
+    EXPECT_EQ(aerialStatus->detailText(),
+              QStringLiteral("计算设备：CUDA · NVIDIA Test GPU"));
+    emit projectManager.atProgressFinished(true);
+    EXPECT_TRUE(aerialStatus->detailText().isEmpty());
 
     auto *taskTable = dashboard.findChild<QTableWidget *>(
         QStringLiteral("dashboardTaskTable"));

@@ -273,6 +273,8 @@ int main(int argc, char **argv)
     bool completeVisibilityCandidatePool = false;
     bool depthPoseCandidates = false;
     bool disableTargetedGapRecovery = false;
+    bool depthLayerReliabilityAnchorGate = false;
+    bool depthLayerReliabilityGuidedCorrection = false;
     std::vector<int> stageSnapshotRefs;
     int stageSnapshotMaximumLongEdge = 1024;
     int stageSnapshotBudgetMiB = 128;
@@ -351,6 +353,16 @@ int main(int argc, char **argv)
         "--disable-targeted-gap-recovery",
         disableTargetedGapRecovery,
         "诊断：关闭缺口定向 PatchMatch 恢复，用于同输入 A/B 对比");
+    app.add_flag(
+        "--depth-layer-reliability-anchor-gate",
+        depthLayerReliabilityAnchorGate,
+        "内部实验：禁止低纹理歧义/疑似错误层的原生深度充当洞填补锚点；"
+        "不直接删除深度，默认关闭");
+    app.add_flag(
+        "--depth-layer-reliability-guided-correction",
+        depthLayerReliabilityGuidedCorrection,
+        "内部实验：低纹理弱证据层仅在至少三个独立投影来源形成稳定簇时增强纠正；"
+        "默认关闭");
     app.add_option(
         "--stage-snapshot-refs",
         stageSnapshotRefs,
@@ -570,6 +582,10 @@ int main(int argc, char **argv)
     config.requireVerifiedSourcePairs = true;
     config.depthPoseRefinement.enabled = depthPoseCandidates;
     config.enableTargetedGapRecovery = !disableTargetedGapRecovery;
+    config.enableDepthLayerReliabilityAnchorGate =
+        depthLayerReliabilityAnchorGate;
+    config.enableDepthLayerReliabilityGuidedCorrection =
+        depthLayerReliabilityGuidedCorrection;
     config.patchMatch.openClDeviceIndex = openClDeviceIndex;
 
     std::fprintf(stdout,
@@ -578,6 +594,8 @@ int main(int argc, char **argv)
                  "source_max_angle_cap_deg=%.3f "
                  "source_complete_visibility_pool=%s "
                  "source_angle_soft_ranking_strength=%.3f "
+                 "depth_layer_reliability_anchor_gate=%s "
+                 "depth_layer_reliability_guided_correction=%s "
                  "pair_evidence_provenance=%s\n",
                  views.size(),
                  verifiedCurrentPairs,
@@ -587,6 +605,8 @@ int main(int argc, char **argv)
                  sourceMaximumAngleDeg,
                  completeVisibilityCandidatePool ? "true" : "false",
                  sourceAngleSoftRankingStrength,
+                 depthLayerReliabilityAnchorGate ? "true" : "false",
+                 depthLayerReliabilityGuidedCorrection ? "true" : "false",
                  pairEvidenceProvenance.toUtf8().constData());
     std::fflush(stdout);
 
@@ -683,6 +703,10 @@ int main(int argc, char **argv)
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("targeted_gap_recovery"),
          !disableTargetedGapRecovery},
+        {QStringLiteral("depth_layer_reliability_anchor_gate"),
+         depthLayerReliabilityAnchorGate},
+        {QStringLiteral("depth_layer_reliability_guided_correction"),
+         depthLayerReliabilityGuidedCorrection},
         {QStringLiteral("targeted_gap_recovery_source_count"),
          config.targetedGapRecoverySourceCount},
         {QStringLiteral("targeted_gap_recovery_hypothesis_count"),

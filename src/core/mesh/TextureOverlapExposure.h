@@ -37,6 +37,8 @@ struct ExposureSolveResult
     std::uint64_t acceptedPairCount = 0;
     std::uint64_t rejectedInsufficientPairCount = 0;
     std::uint64_t rejectedHighMadPairCount = 0;
+    int connectedComponentCount = 0;
+    int correctedViewCount = 0;
     double maximumAcceptedLogMad = 0.0;
     bool graphConnected = false;
     bool applied = false;

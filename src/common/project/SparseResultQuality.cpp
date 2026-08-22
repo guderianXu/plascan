@@ -171,9 +171,29 @@ QString qualityGateBlockingReason(const QJsonObject &record)
     const QString warningText = warnings.isEmpty()
         ? QStringLiteral("稀疏质量指标未达到 MVS 阈值")
         : warnings.join(QStringLiteral("、"));
-    return QStringLiteral("当前 SfM 稀疏点云未通过 MVS 质量门控：%1。"
-                          "请检查匹配/SfM/BA 质量后再生成深度图。")
-        .arg(warningText);
+    const QJsonObject quality = qualityObjectFromRecord(record);
+    const int registeredCount = registeredImageCount(quality);
+    const int totalCount = inputImageCount(quality);
+    const int pointCount = quality.value(QStringLiteral("point_count")).toInt(0);
+    const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(-1.0);
+    QString detail;
+    if (totalCount > 0)
+    {
+        detail = QStringLiteral("当前注册 %1/%2 张，稀疏点 %3 个")
+                     .arg(registeredCount)
+                     .arg(totalCount)
+                     .arg(pointCount);
+        if (twoViewRatio >= 0.0)
+        {
+            detail += QStringLiteral("，两视轨迹占比 %1%").arg(twoViewRatio * 100.0, 0, 'f', 1);
+        }
+        detail += QStringLiteral("。");
+    }
+    return QStringLiteral("当前 SfM 稀疏点云未通过 MVS 质量门控：%1。%2"
+                          "请优先检查几何验证通过的像对是否覆盖全部影像、匹配图连通性、"
+                          "初始像对和相机内参。两视轨迹占比较高时，可在空三高级参数中启用"
+                          "“指导图像匹配”后重新运行 SfM/BA；不建议直接降低几何内点门槛。")
+        .arg(warningText, detail);
 }
 
 } // namespace

@@ -110,6 +110,41 @@ void addStats(DominantDepthLayerSelectionStats &target,
     target.transferredMissingPixelCount += source.transferredMissingPixelCount;
     target.ambiguousNativePixelCount += source.ambiguousNativePixelCount;
     target.unresolvedMissingPixelCount += source.unresolvedMissingPixelCount;
+    target.reliabilityGuidedCandidatePixelCount +=
+        source.reliabilityGuidedCandidatePixelCount;
+    target.reliabilityGuidedStablePixelCount +=
+        source.reliabilityGuidedStablePixelCount;
+    target.reliabilityGuidedRefinedPixelCount +=
+        source.reliabilityGuidedRefinedPixelCount;
+    target.reliabilityGuidedSwitchedPixelCount +=
+        source.reliabilityGuidedSwitchedPixelCount;
+    target.reliabilityGuidedInsufficientSourcePixelCount +=
+        source.reliabilityGuidedInsufficientSourcePixelCount;
+    target.geometryRerankEvaluatedPixelCount +=
+        source.geometryRerankEvaluatedPixelCount;
+    target.geometryRerankValidEvidencePixelCount +=
+        source.geometryRerankValidEvidencePixelCount;
+    target.geometryRerankRefinedPixelCount +=
+        source.geometryRerankRefinedPixelCount;
+    target.geometryRerankSwitchedPixelCount +=
+        source.geometryRerankSwitchedPixelCount;
+    target.geometryRerankRejectedSourceCount +=
+        source.geometryRerankRejectedSourceCount;
+    target.geometryRerankRejectedBaselineCount +=
+        source.geometryRerankRejectedBaselineCount;
+    target.geometryRerankRejectedWeightCount +=
+        source.geometryRerankRejectedWeightCount;
+    target.geometryRerankRejectedCostCount +=
+        source.geometryRerankRejectedCostCount;
+    target.geometryRerankNativeCostSum += source.geometryRerankNativeCostSum;
+    target.geometryRerankCandidateCostSum +=
+        source.geometryRerankCandidateCostSum;
+    target.geometryRerankCostAdvantageSum +=
+        source.geometryRerankCostAdvantageSum;
+    target.geometryRerankCorrectionSum +=
+        source.geometryRerankCorrectionSum;
+    target.geometryRerankWeakestConfidenceSum +=
+        source.geometryRerankWeakestConfidenceSum;
 }
 
 void addStats(CrossViewHoleRepairStats &target,
@@ -411,9 +446,15 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     cv::Mat *source_inverse_depth_squared_sum,
     cv::Mat *selected_source_votes,
     int row_worker_count,
-    const std::atomic<bool> *cancelled)
+    const std::atomic<bool> *cancelled,
+    const cv::Mat *native_reliability_class_map,
+    cv::Mat *reliability_guided_changed_mask,
+    const std::vector<ProjectedDepthEvidence> *projected_source_evidence,
+    DepthGeometryHypothesisRerankMaps *geometry_rerank_maps)
 {
     DominantDepthLayerSelectionStats result;
+    result.reliabilityGuidedOnlyMode =
+        options.restrictToReliabilityGuidedCandidates;
     if (reference_depth.type() != CV_32FC1 ||
         projected_source_depths.empty())
     {
@@ -448,6 +489,24 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     const bool update_votes = selected_source_votes &&
         selected_source_votes->type() == CV_16UC1 &&
         selected_source_votes->size() == size;
+    const bool has_reliability_classes = native_reliability_class_map &&
+        native_reliability_class_map->type() == CV_8UC1 &&
+        native_reliability_class_map->size() == size;
+    const bool update_reliability_guided_changed_mask =
+        reliability_guided_changed_mask != nullptr;
+    if (update_reliability_guided_changed_mask &&
+        (reliability_guided_changed_mask->type() != CV_8UC1 ||
+         reliability_guided_changed_mask->size() != size))
+    {
+        *reliability_guided_changed_mask = cv::Mat(
+            size, CV_8UC1, cv::Scalar(0));
+    }
+    const bool has_projected_source_evidence = projected_source_evidence &&
+        projected_source_evidence->size() == projected_source_depths.size();
+    if (geometry_rerank_maps && !geometry_rerank_maps->compatible(size))
+    {
+        geometry_rerank_maps->initialize(size);
+    }
 
     const int minimum_sources = std::max(2, options.minimumDistinctSourceCount);
     const int minimum_replacement_sources = std::max(
@@ -466,6 +525,15 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
         options.selectedLayerConfidence, 0.0f, 1.0f);
     const float ambiguous_multiplier = std::clamp(
         options.ambiguousNativeConfidenceMultiplier, 0.0f, 1.0f);
+    const int reliability_minimum_sources = std::max(
+        minimum_replacement_sources,
+        options.reliabilityGuidedMinimumSourceCount);
+    const float reliability_blend_weight = std::clamp(
+        options.reliabilityGuidedBlendWeight, blend_weight, 1.0f);
+    const float reliability_maximum_correction = std::clamp(
+        options.reliabilityGuidedMaximumRelativeCorrection,
+        maximum_correction,
+        native_agreement);
 
     std::vector<DominantDepthLayerSelectionStats> row_stats(
         static_cast<std::size_t>(reference_depth.rows));
@@ -501,6 +569,160 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
             ++stats.consideredPixelCount;
             const float native_depth = depth_row[column];
             const bool native_valid = validDepth(native_depth);
+            DepthLayerReliabilityClass reliability_class =
+                DepthLayerReliabilityClass::Unobservable;
+            if (has_reliability_classes)
+            {
+                reliability_class = static_cast<DepthLayerReliabilityClass>(
+                    native_reliability_class_map->at<std::uint8_t>(
+                        row, column));
+            }
+            const bool reliability_guided_candidate =
+                options.enableReliabilityGuidedCorrection &&
+                has_reliability_classes && native_valid &&
+                (reliability_class ==
+                     DepthLayerReliabilityClass::AmbiguousLowTexture ||
+                 reliability_class == DepthLayerReliabilityClass::RejectedLayer);
+            if (reliability_guided_candidate)
+            {
+                ++stats.reliabilityGuidedCandidatePixelCount;
+            }
+            if (options.restrictToReliabilityGuidedCandidates &&
+                !reliability_guided_candidate)
+            {
+                continue;
+            }
+            if (reliability_guided_candidate)
+            {
+                ++stats.geometryRerankEvaluatedPixelCount;
+                DepthGeometryHypothesisDecision decision;
+                if (has_projected_source_evidence)
+                {
+                    decision = rerankMeasuredDepthHypothesis(
+                        native_depth,
+                        reliability_class,
+                        row,
+                        column,
+                        *projected_source_evidence,
+                        options.geometryRerank);
+                }
+                else
+                {
+                    decision.rejectedInsufficientSources = true;
+                }
+
+                if (geometry_rerank_maps)
+                {
+                    geometry_rerank_maps->nativeCost.at<float>(row, column) =
+                        decision.nativeCost;
+                    geometry_rerank_maps->candidateCost.at<float>(row, column) =
+                        decision.candidateCost;
+                    geometry_rerank_maps->costAdvantage.at<float>(row, column) =
+                        decision.costAdvantage;
+                    geometry_rerank_maps->effectiveSourceWeight.at<float>(row, column) =
+                        decision.effectiveSourceWeight;
+                    geometry_rerank_maps->relativeCorrection.at<float>(row, column) =
+                        decision.relativeCorrection;
+                    geometry_rerank_maps->weakestSourceConfidence.at<float>(row, column) =
+                        decision.weakestSourceConfidence;
+                    geometry_rerank_maps->supportingSourceCount.at<std::uint8_t>(
+                        row, column) = static_cast<std::uint8_t>(std::clamp(
+                            decision.supportingSourceCount, 0, 255));
+                    geometry_rerank_maps->baselineSectorCount.at<std::uint8_t>(
+                        row, column) = static_cast<std::uint8_t>(std::clamp(
+                            decision.baselineSectorCount, 0, 255));
+                    geometry_rerank_maps->decisionAction.at<std::uint8_t>(
+                        row, column) = static_cast<std::uint8_t>(decision.action);
+                }
+                if (decision.validEvidence)
+                {
+                    ++stats.geometryRerankValidEvidencePixelCount;
+                    stats.geometryRerankNativeCostSum += decision.nativeCost;
+                    stats.geometryRerankCandidateCostSum += decision.candidateCost;
+                    stats.geometryRerankCostAdvantageSum += decision.costAdvantage;
+                    stats.geometryRerankCorrectionSum += decision.relativeCorrection;
+                    stats.geometryRerankWeakestConfidenceSum +=
+                        decision.weakestSourceConfidence;
+                }
+                if (decision.rejectedInsufficientSources)
+                {
+                    ++stats.geometryRerankRejectedSourceCount;
+                    ++stats.reliabilityGuidedInsufficientSourcePixelCount;
+                }
+                if (decision.rejectedInsufficientBaseline)
+                {
+                    ++stats.geometryRerankRejectedBaselineCount;
+                    ++stats.reliabilityGuidedInsufficientSourcePixelCount;
+                }
+                if (decision.rejectedInsufficientWeight)
+                {
+                    ++stats.geometryRerankRejectedWeightCount;
+                    ++stats.reliabilityGuidedInsufficientSourcePixelCount;
+                }
+                if (decision.rejectedCostAdvantage)
+                {
+                    ++stats.geometryRerankRejectedCostCount;
+                }
+
+                const bool accepted =
+                    decision.action != DepthGeometryHypothesisAction::None;
+                if (accepted)
+                {
+                    ++stats.stableLayerPixelCount;
+                    ++stats.reliabilityGuidedStablePixelCount;
+                    depth_row[column] = decision.selectedDepth;
+                    if (decision.action == DepthGeometryHypothesisAction::Refine)
+                    {
+                        ++stats.refinedNativePixelCount;
+                        ++stats.reliabilityGuidedRefinedPixelCount;
+                        ++stats.geometryRerankRefinedPixelCount;
+                    }
+                    else
+                    {
+                        ++stats.switchedNativePixelCount;
+                        ++stats.reliabilityGuidedSwitchedPixelCount;
+                        ++stats.geometryRerankSwitchedPixelCount;
+                        if (update_selection_mask)
+                        {
+                            selected_layer_mask->at<std::uint8_t>(row, column) = 255;
+                        }
+                    }
+                    if (update_reliability_guided_changed_mask)
+                    {
+                        reliability_guided_changed_mask->at<std::uint8_t>(
+                            row, column) = 255;
+                    }
+                    if (confidence_row)
+                    {
+                        const float native_confidence = std::clamp(
+                            confidence_row[column], 0.0f, 1.0f);
+                        confidence_row[column] = std::sqrt(
+                            native_confidence * decision.evidenceConfidence);
+                    }
+                    if (update_geometry)
+                    {
+                        geometry_source_mask->at<std::uint16_t>(row, column) =
+                            decision.supportingSourceMask;
+                        source_inverse_depth_sum->at<float>(row, column) =
+                            decision.supportingInverseDepthSum;
+                        source_inverse_depth_squared_sum->at<float>(row, column) =
+                            decision.supportingInverseDepthSquaredSum;
+                    }
+                    if (update_votes)
+                    {
+                        selected_source_votes->at<std::uint16_t>(row, column) =
+                            static_cast<std::uint16_t>(std::clamp(
+                                decision.supportingSourceCount, 0, 65535));
+                    }
+                }
+                else
+                {
+                    ++stats.ambiguousNativePixelCount;
+                }
+                // The experimental reliability path is fail-closed: it never
+                // falls through to the legacy count-only selector.
+                continue;
+            }
             candidates.clear();
             for (int source_ordinal = 0;
                  source_ordinal < static_cast<int>(projected_source_depths.size());
@@ -561,6 +783,10 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
 
             if (best_count < minimum_sources)
             {
+                if (reliability_guided_candidate)
+                {
+                    ++stats.reliabilityGuidedInsufficientSourcePixelCount;
+                }
                 if (native_valid)
                 {
                     ++stats.ambiguousNativePixelCount;
@@ -581,6 +807,17 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
             }
 
             ++stats.stableLayerPixelCount;
+            const bool reliability_guided_stable =
+                reliability_guided_candidate &&
+                best_count >= reliability_minimum_sources;
+            if (reliability_guided_candidate && !reliability_guided_stable)
+            {
+                ++stats.reliabilityGuidedInsufficientSourcePixelCount;
+            }
+            if (reliability_guided_stable)
+            {
+                ++stats.reliabilityGuidedStablePixelCount;
+            }
             const int median_index = best_begin + (best_count - 1) / 2;
             const float selected_depth = candidates[
                 static_cast<std::size_t>(median_index)].depth;
@@ -600,10 +837,15 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
             {
                 const float native_inverse = 1.0f / native_depth;
                 const float selected_inverse = 1.0f / selected_depth;
+                const float effective_blend_weight = reliability_guided_stable
+                    ? reliability_blend_weight : blend_weight;
+                const float effective_maximum_correction = reliability_guided_stable
+                    ? reliability_maximum_correction : maximum_correction;
                 float refined_depth = 1.0f /
-                    ((1.0f - blend_weight) * native_inverse +
-                     blend_weight * selected_inverse);
-                const float maximum_delta = native_depth * maximum_correction;
+                    ((1.0f - effective_blend_weight) * native_inverse +
+                     effective_blend_weight * selected_inverse);
+                const float maximum_delta =
+                    native_depth * effective_maximum_correction;
                 refined_depth = std::clamp(
                     refined_depth,
                     native_depth - maximum_delta,
@@ -612,16 +854,37 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
                 {
                     depth_row[column] = refined_depth;
                     ++stats.refinedNativePixelCount;
+                    if (reliability_guided_stable)
+                    {
+                        ++stats.reliabilityGuidedRefinedPixelCount;
+                        if (update_reliability_guided_changed_mask)
+                        {
+                            reliability_guided_changed_mask->at<std::uint8_t>(
+                                row, column) = 255;
+                        }
+                    }
                 }
             }
             else if (best_count >= minimum_replacement_sources &&
-                     (!has_consistent_votes || !has_contradicted_votes ||
-                      contradicted_source_votes.at<std::uint16_t>(row, column) >
-                          consistent_source_votes.at<std::uint16_t>(row, column)))
+                     ((!has_consistent_votes || !has_contradicted_votes ||
+                       contradicted_source_votes.at<std::uint16_t>(row, column) >
+                           consistent_source_votes.at<std::uint16_t>(row, column)) ||
+                      (reliability_guided_stable &&
+                       reliability_class ==
+                           DepthLayerReliabilityClass::RejectedLayer)))
             {
                 depth_row[column] = selected_depth;
                 selected_from_sources = true;
                 ++stats.switchedNativePixelCount;
+                if (reliability_guided_stable)
+                {
+                    ++stats.reliabilityGuidedSwitchedPixelCount;
+                    if (update_reliability_guided_changed_mask)
+                    {
+                        reliability_guided_changed_mask->at<std::uint8_t>(
+                            row, column) = 255;
+                    }
+                }
             }
             else
             {
@@ -706,7 +969,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     const cv::Mat *guide_gray,
     cv::Mat *anchored_interpolation_mask,
     int row_worker_count,
-    const std::atomic<bool> *cancelled)
+    const std::atomic<bool> *cancelled,
+    const cv::Mat *native_interpolation_anchor_eligibility_mask)
 {
     CrossViewHoleRepairStats stats;
     if (reference_depth.empty() || reference_depth.type() != CV_32FC1 ||
@@ -758,6 +1022,17 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
         cv::Mat interpolation_anchor_mask = strong_repaired_mask.clone();
         if (options.includeValidNativeInterpolationAnchors)
         {
+            const bool restrict_native_anchors =
+                native_interpolation_anchor_eligibility_mask != nullptr;
+            const bool compatible_native_anchor_mask =
+                restrict_native_anchors &&
+                native_interpolation_anchor_eligibility_mask->type() == CV_8UC1 &&
+                native_interpolation_anchor_eligibility_mask->size() ==
+                    reference_depth.size();
+            std::vector<std::uint64_t> candidate_counts(
+                static_cast<std::size_t>(reference_depth.rows), 0);
+            std::vector<std::uint64_t> accepted_counts(
+                static_cast<std::size_t>(reference_depth.rows), 0);
             parallelForRows(
                 reference_depth.rows,
                 row_worker_count,
@@ -765,16 +1040,42 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 [&](int row)
                 {
                 const float *depth_row = reference_depth.ptr<float>(row);
+                const std::uint8_t *eligibility_row =
+                    compatible_native_anchor_mask
+                    ? native_interpolation_anchor_eligibility_mask
+                          ->ptr<std::uint8_t>(row)
+                    : nullptr;
                 std::uint8_t *anchor_row =
                     interpolation_anchor_mask.ptr<std::uint8_t>(row);
+                std::uint64_t candidates = 0;
+                std::uint64_t accepted = 0;
                 for (int column = 0; column < reference_depth.cols; ++column)
                 {
                     if (validDepth(depth_row[column]))
                     {
-                        anchor_row[column] = 255;
+                        ++candidates;
+                        const bool eligible = !restrict_native_anchors ||
+                            (eligibility_row && eligibility_row[column] != 0);
+                        if (eligible)
+                        {
+                            anchor_row[column] = 255;
+                            ++accepted;
+                        }
                     }
                 }
+                candidate_counts[static_cast<std::size_t>(row)] = candidates;
+                accepted_counts[static_cast<std::size_t>(row)] = accepted;
             });
+            for (std::size_t row = 0; row < candidate_counts.size(); ++row)
+            {
+                stats.nativeInterpolationAnchorCandidateCount +=
+                    candidate_counts[row];
+                stats.nativeInterpolationAnchorAcceptedCount +=
+                    accepted_counts[row];
+            }
+            stats.nativeInterpolationAnchorRejectedCount =
+                stats.nativeInterpolationAnchorCandidateCount -
+                stats.nativeInterpolationAnchorAcceptedCount;
         }
         if (cancelled && cancelled->load(std::memory_order_relaxed))
         {
@@ -1371,6 +1672,15 @@ QJsonObject crossViewHoleRepairStatsToJson(
         QStringLiteral("growth_rejected_image_edge_count"),
         static_cast<double>(stats.growthRejectedImageEdgeCount));
     object.insert(
+        QStringLiteral("native_interpolation_anchor_candidate_count"),
+        static_cast<double>(stats.nativeInterpolationAnchorCandidateCount));
+    object.insert(
+        QStringLiteral("native_interpolation_anchor_accepted_count"),
+        static_cast<double>(stats.nativeInterpolationAnchorAcceptedCount));
+    object.insert(
+        QStringLiteral("native_interpolation_anchor_rejected_count"),
+        static_cast<double>(stats.nativeInterpolationAnchorRejectedCount));
+    object.insert(
         QStringLiteral("anchored_interpolation"),
         depthAnchoredHoleInterpolationStatsToJson(stats.anchoredInterpolation));
     return object;
@@ -1393,7 +1703,61 @@ QJsonObject dominantDepthLayerSelectionStatsToJson(
         {QStringLiteral("ambiguous_native_pixel_count"),
          static_cast<double>(stats.ambiguousNativePixelCount)},
         {QStringLiteral("unresolved_missing_pixel_count"),
-         static_cast<double>(stats.unresolvedMissingPixelCount)}
+         static_cast<double>(stats.unresolvedMissingPixelCount)},
+        {QStringLiteral("reliability_guided_candidate_pixel_count"),
+         static_cast<double>(stats.reliabilityGuidedCandidatePixelCount)},
+        {QStringLiteral("reliability_guided_stable_pixel_count"),
+         static_cast<double>(stats.reliabilityGuidedStablePixelCount)},
+        {QStringLiteral("reliability_guided_refined_pixel_count"),
+         static_cast<double>(stats.reliabilityGuidedRefinedPixelCount)},
+        {QStringLiteral("reliability_guided_switched_pixel_count"),
+         static_cast<double>(stats.reliabilityGuidedSwitchedPixelCount)},
+        {QStringLiteral("reliability_guided_insufficient_source_pixel_count"),
+         static_cast<double>(
+             stats.reliabilityGuidedInsufficientSourcePixelCount)},
+        {QStringLiteral("geometry_rerank_evaluated_pixel_count"),
+         static_cast<double>(stats.geometryRerankEvaluatedPixelCount)},
+        {QStringLiteral("geometry_rerank_valid_evidence_pixel_count"),
+         static_cast<double>(stats.geometryRerankValidEvidencePixelCount)},
+        {QStringLiteral("geometry_rerank_refined_pixel_count"),
+         static_cast<double>(stats.geometryRerankRefinedPixelCount)},
+        {QStringLiteral("geometry_rerank_switched_pixel_count"),
+         static_cast<double>(stats.geometryRerankSwitchedPixelCount)},
+        {QStringLiteral("geometry_rerank_rejected_source_count"),
+         static_cast<double>(stats.geometryRerankRejectedSourceCount)},
+        {QStringLiteral("geometry_rerank_rejected_baseline_count"),
+         static_cast<double>(stats.geometryRerankRejectedBaselineCount)},
+        {QStringLiteral("geometry_rerank_rejected_weight_count"),
+         static_cast<double>(stats.geometryRerankRejectedWeightCount)},
+        {QStringLiteral("geometry_rerank_rejected_cost_count"),
+         static_cast<double>(stats.geometryRerankRejectedCostCount)},
+        {QStringLiteral("geometry_rerank_mean_native_cost"),
+         stats.geometryRerankValidEvidencePixelCount > 0
+             ? stats.geometryRerankNativeCostSum /
+                   static_cast<double>(stats.geometryRerankValidEvidencePixelCount)
+             : 0.0},
+        {QStringLiteral("geometry_rerank_mean_candidate_cost"),
+         stats.geometryRerankValidEvidencePixelCount > 0
+             ? stats.geometryRerankCandidateCostSum /
+                   static_cast<double>(stats.geometryRerankValidEvidencePixelCount)
+             : 0.0},
+        {QStringLiteral("geometry_rerank_mean_cost_advantage"),
+         stats.geometryRerankValidEvidencePixelCount > 0
+             ? stats.geometryRerankCostAdvantageSum /
+                   static_cast<double>(stats.geometryRerankValidEvidencePixelCount)
+             : 0.0},
+        {QStringLiteral("geometry_rerank_mean_relative_correction"),
+         stats.geometryRerankValidEvidencePixelCount > 0
+             ? stats.geometryRerankCorrectionSum /
+                   static_cast<double>(stats.geometryRerankValidEvidencePixelCount)
+             : 0.0},
+        {QStringLiteral("geometry_rerank_mean_weakest_source_confidence"),
+         stats.geometryRerankValidEvidencePixelCount > 0
+             ? stats.geometryRerankWeakestConfidenceSum /
+                   static_cast<double>(stats.geometryRerankValidEvidencePixelCount)
+             : 0.0},
+        {QStringLiteral("reliability_guided_only_mode"),
+         stats.reliabilityGuidedOnlyMode}
     };
 }
 

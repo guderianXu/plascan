@@ -47,6 +47,25 @@ struct SimilarityTransform3d
     double rmse = 0.0; ///< 内点相机中心对齐 RMS。
 };
 
+/// PnP 中同一二维特征指向某个三维点的一条候选证据。
+struct PnpCorrespondenceProposal
+{
+    FeatureIdx featureIdx = kInvalidFeatureIdx;
+    Point3DId pointId = kInvalidPoint3DId;
+    int supportingNeighbors = 1;
+    std::size_t pointTrackLength = 0;
+    double matchScore = 0.0;
+    double pointError = 0.0;
+};
+
+/// PnP 内点在固定图像网格中的分布诊断。
+struct PnpInlierSpatialSupport
+{
+    int occupiedCells = 0;
+    int occupiedRows = 0;
+    int occupiedColumns = 0;
+};
+
 /// 小规模候选集是否值得逐一试算初始模型，而不是只采用排序第一名。
 bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &options,
                                              int totalImages,
@@ -63,6 +82,19 @@ int effectivePnpMinTrackLength(const IncrementalSfmOptions &options,
 bool pointUsableForPnp(const SfmReconstruction &reconstruction,
                        Point3DId pointId,
                        int minTrackLength);
+
+/// 合并重复投票并确定性选择一对一的二维特征/三维点对应。
+std::vector<PnpCorrespondenceProposal> selectUniquePnpCorrespondences(
+    const std::vector<PnpCorrespondenceProposal> &proposals);
+
+/// 统计 PnP 内点在图像固定网格中的覆盖，避免小样本集中在单一局部纹理。
+PnpInlierSpatialSupport measurePnpInlierSpatialSupport(
+    const std::vector<std::array<double, 2>> &imagePoints,
+    const std::vector<unsigned char> &inlierMask,
+    int imageWidth,
+    int imageHeight,
+    int gridColumns = 4,
+    int gridRows = 4);
 
 /// 两个三维点的欧氏距离。
 double distance3d(const std::array<double, 3> &a, const std::array<double, 3> &b);

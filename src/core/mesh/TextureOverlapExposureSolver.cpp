@@ -124,12 +124,10 @@ bool solveLinearSystem(std::vector<std::vector<double>> matrix,
     return true;
 }
 
-bool graphIsConnected(int view_count, const std::vector<ExposureEdge> &edges)
+std::vector<std::vector<int>> connectedComponents(
+    int view_count,
+    const std::vector<ExposureEdge> &edges)
 {
-    if (view_count <= 1)
-    {
-        return view_count == 1;
-    }
     std::vector<std::vector<int>> neighbors(
         static_cast<std::size_t>(view_count));
     for (const ExposureEdge &edge : edges)
@@ -138,26 +136,35 @@ bool graphIsConnected(int view_count, const std::vector<ExposureEdge> &edges)
         neighbors[static_cast<std::size_t>(edge.second)].push_back(edge.first);
     }
     std::vector<bool> visited(static_cast<std::size_t>(view_count), false);
-    std::queue<int> pending;
-    pending.push(0);
-    visited[0] = true;
-    while (!pending.empty())
+    std::vector<std::vector<int>> components;
+    for (int seed = 0; seed < view_count; ++seed)
     {
-        const int view = pending.front();
-        pending.pop();
-        for (const int neighbor : neighbors[static_cast<std::size_t>(view)])
+        if (visited[static_cast<std::size_t>(seed)])
         {
-            if (!visited[static_cast<std::size_t>(neighbor)])
+            continue;
+        }
+        std::queue<int> pending;
+        pending.push(seed);
+        visited[static_cast<std::size_t>(seed)] = true;
+        components.emplace_back();
+        while (!pending.empty())
+        {
+            const int view = pending.front();
+            pending.pop();
+            components.back().push_back(view);
+            for (const int neighbor :
+                 neighbors[static_cast<std::size_t>(view)])
             {
-                visited[static_cast<std::size_t>(neighbor)] = true;
-                pending.push(neighbor);
+                if (!visited[static_cast<std::size_t>(neighbor)])
+                {
+                    visited[static_cast<std::size_t>(neighbor)] = true;
+                    pending.push(neighbor);
+                }
             }
         }
+        std::sort(components.back().begin(), components.back().end());
     }
-    return std::all_of(visited.begin(), visited.end(), [](bool value)
-    {
-        return value;
-    });
+    return components;
 }
 
 } // namespace
@@ -310,14 +317,17 @@ ExposureSolveResult solveRobustOverlapExposure(
             result.maximumAcceptedLogMad, pair_mad);
     }
 
-    result.graphConnected = graphIsConnected(viewCount, edges);
-    if (!result.graphConnected)
+    const std::vector<std::vector<int>> components = connectedComponents(
+        viewCount, edges);
+    result.connectedComponentCount = static_cast<int>(components.size());
+    result.graphConnected = components.size() == 1U;
+    if (edges.empty())
     {
-        if (result.rejectedHighMadPairCount > 0 && edges.empty())
+        if (result.rejectedHighMadPairCount > 0)
         {
             result.status = "high_pair_mad";
         }
-        else if (result.rejectedInsufficientPairCount > 0 && edges.empty())
+        else if (result.rejectedInsufficientPairCount > 0)
         {
             result.status = "insufficient_overlap_samples";
         }
@@ -325,63 +335,86 @@ ExposureSolveResult solveRobustOverlapExposure(
         {
             result.status = "no_overlap";
         }
-        else
-        {
-            result.status = "disconnected_overlap_graph";
-        }
-        return result;
-    }
-
-    const int unknown_count = viewCount - 1;
-    std::vector<std::vector<double>> normal_matrix(
-        static_cast<std::size_t>(unknown_count),
-        std::vector<double>(static_cast<std::size_t>(unknown_count), 0.0));
-    std::vector<double> right_hand_side(
-        static_cast<std::size_t>(unknown_count), 0.0);
-    for (const ExposureEdge &edge : edges)
-    {
-        const int first = edge.first - 1;
-        const int second = edge.second - 1;
-        if (first >= 0)
-        {
-            normal_matrix[first][first] += edge.weight;
-            right_hand_side[first] -= edge.weight * edge.logRatio;
-        }
-        if (second >= 0)
-        {
-            normal_matrix[second][second] += edge.weight;
-            right_hand_side[second] += edge.weight * edge.logRatio;
-        }
-        if (first >= 0 && second >= 0)
-        {
-            normal_matrix[first][second] -= edge.weight;
-            normal_matrix[second][first] -= edge.weight;
-        }
-    }
-
-    std::vector<double> solved;
-    if (!solveLinearSystem(
-            std::move(normal_matrix),
-            std::move(right_hand_side),
-            &solved))
-    {
-        result.graphConnected = false;
-        result.status = "singular_overlap_graph";
         return result;
     }
     std::vector<double> log_gains(static_cast<std::size_t>(viewCount), 0.0);
-    for (int view = 1; view < viewCount; ++view)
+    int solved_component_count = 0;
+    for (const std::vector<int> &component : components)
     {
-        log_gains[static_cast<std::size_t>(view)] =
-            solved[static_cast<std::size_t>(view - 1)];
+        if (component.size() < 2U)
+        {
+            continue;
+        }
+        std::vector<int> local_index(static_cast<std::size_t>(viewCount), -1);
+        for (int index = 0; index < static_cast<int>(component.size()); ++index)
+        {
+            local_index[static_cast<std::size_t>(component[index])] = index;
+        }
+        const int unknown_count = static_cast<int>(component.size()) - 1;
+        std::vector<std::vector<double>> normal_matrix(
+            static_cast<std::size_t>(unknown_count),
+            std::vector<double>(static_cast<std::size_t>(unknown_count), 0.0));
+        std::vector<double> right_hand_side(
+            static_cast<std::size_t>(unknown_count), 0.0);
+        for (const ExposureEdge &edge : edges)
+        {
+            const int first_local =
+                local_index[static_cast<std::size_t>(edge.first)];
+            const int second_local =
+                local_index[static_cast<std::size_t>(edge.second)];
+            if (first_local < 0 || second_local < 0)
+            {
+                continue;
+            }
+            const int first = first_local - 1;
+            const int second = second_local - 1;
+            if (first >= 0)
+            {
+                normal_matrix[first][first] += edge.weight;
+                right_hand_side[first] -= edge.weight * edge.logRatio;
+            }
+            if (second >= 0)
+            {
+                normal_matrix[second][second] += edge.weight;
+                right_hand_side[second] += edge.weight * edge.logRatio;
+            }
+            if (first >= 0 && second >= 0)
+            {
+                normal_matrix[first][second] -= edge.weight;
+                normal_matrix[second][first] -= edge.weight;
+            }
+        }
+        std::vector<double> solved;
+        if (!solveLinearSystem(
+                std::move(normal_matrix),
+                std::move(right_hand_side),
+                &solved))
+        {
+            result.gains.assign(static_cast<std::size_t>(viewCount), 1.0f);
+            result.status = "singular_overlap_component";
+            return result;
+        }
+        std::vector<double> component_log_gains(component.size(), 0.0);
+        for (int index = 1; index < static_cast<int>(component.size()); ++index)
+        {
+            component_log_gains[static_cast<std::size_t>(index)] =
+                solved[static_cast<std::size_t>(index - 1)];
+        }
+        const double component_mean = std::accumulate(
+            component_log_gains.begin(), component_log_gains.end(), 0.0) /
+            static_cast<double>(component_log_gains.size());
+        for (int index = 0; index < static_cast<int>(component.size()); ++index)
+        {
+            log_gains[static_cast<std::size_t>(component[index])] =
+                component_log_gains[static_cast<std::size_t>(index)] -
+                component_mean;
+        }
+        ++solved_component_count;
     }
-    const double mean_log_gain = std::accumulate(
-        log_gains.begin(), log_gains.end(), 0.0) /
-        static_cast<double>(viewCount);
     for (int view = 0; view < viewCount; ++view)
     {
         const double gain = std::exp(
-            log_gains[static_cast<std::size_t>(view)] - mean_log_gain);
+            log_gains[static_cast<std::size_t>(view)]);
         if (!std::isfinite(gain))
         {
             result.gains.assign(static_cast<std::size_t>(viewCount), 1.0f);
@@ -399,7 +432,16 @@ ExposureSolveResult solveRobustOverlapExposure(
     {
         return std::fabs(gain - 1.0f) > 1.0e-5f;
     });
-    result.status = result.applied ? "applied" : "identity_estimate";
+    result.correctedViewCount = static_cast<int>(std::count_if(
+        result.gains.begin(), result.gains.end(), [](float gain)
+        {
+            return std::fabs(gain - 1.0f) > 1.0e-5f;
+        }));
+    result.status = result.applied
+        ? (result.graphConnected ? "applied" : "applied_partial_components")
+        : (solved_component_count > 0
+            ? "identity_estimate"
+            : "disconnected_overlap_graph");
     return result;
 }
 

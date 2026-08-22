@@ -35,6 +35,8 @@ struct MatchPhotosContext
     // 后台任务细粒度进度回调。参数依次为阶段 id、面向 UI 的阶段文本、当前计数、总计数；
     // 总计数为 0 时表示该阶段没有可信百分比，应显示忙碌状态。
     std::function<void(const QString &, const QString &, int, int)> progressCallback;
+    // Auto SIFT 解析出真实运行后端后立即通知上层；文本已包含后端和硬件名。
+    std::function<void(const QString &)> computeDeviceCallback;
 };
 
 } // namespace matchphotos

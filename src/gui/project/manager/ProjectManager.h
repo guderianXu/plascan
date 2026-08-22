@@ -134,6 +134,8 @@ signals:
 
     // 空中三角测量（AT/SFM）进度（主窗口状态栏显示）
     void atProgressChanged(const QString &stage, int percent);
+    // Auto SIFT 解析出的实际计算设备（CPU/CUDA/OpenCL/Metal + 硬件名）。
+    void atComputeDeviceChanged(const QString &displayName);
     // AT 流程结束（success=true 表示正常完成）
     void atProgressFinished(bool success);
     // 正式连接点成果生成或后处理完成，三维视图应加载这对一致的文件。

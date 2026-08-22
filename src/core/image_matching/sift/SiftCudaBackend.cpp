@@ -161,6 +161,16 @@ namespace xjw::image_matching
         return initializeStatus == cudaSuccess;
     }
 
+    QString cudaSiftDeviceName(int deviceIndex)
+    {
+        cudaDeviceProp properties{};
+        if (deviceIndex < 0 || cudaGetDeviceProperties(&properties, deviceIndex) != cudaSuccess)
+        {
+            return QString();
+        }
+        return QString::fromUtf8(properties.name).trimmed();
+    }
+
     SiftRawFeatures extractCudaSift(const SiftExtractionRequest& request)
     {
         checkCuda(cudaSetDevice(std::max(0, request.deviceIndex)), "device selection failed");

@@ -809,8 +809,7 @@ bool IncrementalSfm::registerImage(ImageId imageId,
     auto neighbors = _correspondenceGraph.connectedImages(imageId);
     const int minTrackLengthForPnp =
         effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
-    std::unordered_set<Point3DId> addedPoints;
-    std::unordered_set<FeatureIdx> addedFeatures;
+    std::vector<PnpCorrespondenceProposal> proposals;
 
     for (ImageId nid : neighbors)
     {
@@ -831,32 +830,68 @@ bool IncrementalSfm::registerImage(ImageId imageId,
             }
             const Point3DId p3dId = nimg.point3DIds[nFeat];
             if (!pointUsableForPnp(*_reconstruction, p3dId, minTrackLengthForPnp) ||
-                addedPoints.count(p3dId) != 0 || addedFeatures.count(myFeat) != 0 ||
                 myFeat >= img.keypoints.size())
             {
                 continue;
             }
-
-            addedPoints.insert(p3dId);
-            addedFeatures.insert(myFeat);
-            worldPts.push_back(_reconstruction->point3D(p3dId).xyz);
-            imagePts.push_back({static_cast<double>(img.keypoints[myFeat].x),
-                                static_cast<double>(img.keypoints[myFeat].y)});
+            const ScenePoint3D &point = _reconstruction->point3D(p3dId);
+            proposals.push_back({myFeat,
+                                 p3dId,
+                                 1,
+                                 point.track.length(),
+                                 std::isfinite(m.score) ? static_cast<double>(m.score) : 0.0,
+                                 std::isfinite(point.error)
+                                     ? point.error
+                                     : std::numeric_limits<double>::infinity()});
         }
     }
 
-    if (static_cast<int>(worldPts.size()) < _sfmOptions.pnpOptions.minNumInliers)
+    const std::vector<PnpCorrespondenceProposal> selected_proposals =
+        selectUniquePnpCorrespondences(proposals);
+    worldPts.reserve(selected_proposals.size());
+    imagePts.reserve(selected_proposals.size());
+    for (const PnpCorrespondenceProposal &proposal : selected_proposals)
+    {
+        worldPts.push_back(_reconstruction->point3D(proposal.pointId).xyz);
+        imagePts.push_back({static_cast<double>(img.keypoints[proposal.featureIdx].x),
+                            static_cast<double>(img.keypoints[proposal.featureIdx].y)});
+    }
+
+    const int configured_min_inliers = _sfmOptions.pnpOptions.minNumInliers;
+    const int strict_min_inliers = std::clamp(
+        _sfmOptions.pnpOptions.strictSmallSupportMinInliers,
+        4,
+        std::max(4, configured_min_inliers));
+    const bool strict_small_support =
+        _sfmOptions.pnpOptions.allowStrictSmallSupportRecovery &&
+        static_cast<int>(worldPts.size()) < configured_min_inliers &&
+        static_cast<int>(worldPts.size()) >= strict_min_inliers;
+    if (static_cast<int>(worldPts.size()) < configured_min_inliers &&
+        !strict_small_support)
     {
         std::ostringstream oss;
         oss << "not enough 2D-3D observations for PnP: observations=" << worldPts.size()
-            << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
+            << ", minPnPInliers=" << configured_min_inliers
+            << ", strictRecoveryMin=" << strict_min_inliers
             << ", minTrackLength=" << minTrackLengthForPnp
-            << ", connectedNeighbors=" << neighbors.size();
+            << ", connectedNeighbors=" << neighbors.size()
+            << ", rawProposals=" << proposals.size();
         _lastErrorMessage = oss.str();
         return false;
     }
 
     PnpOptions pnpOptions = _sfmOptions.pnpOptions;
+    if (strict_small_support)
+    {
+        pnpOptions.minNumInliers = strict_min_inliers;
+        pnpOptions.minInlierRatio = std::max(
+            pnpOptions.minInlierRatio,
+            std::clamp(pnpOptions.strictSmallSupportMinInlierRatio, 0.0, 1.0));
+        pnpOptions.smallSampleMinInlierRatio = std::max(
+            pnpOptions.smallSampleMinInlierRatio,
+            pnpOptions.minInlierRatio);
+        pnpOptions.allowRelaxedInlierRatio = false;
+    }
     pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
         imageId,
         static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
@@ -910,7 +945,7 @@ bool IncrementalSfm::registerImage(ImageId imageId,
                 recoveryOptions.minNumInliers,
                 sequenceMinInliers);
         }
-        if (_sfmOptions.allowBracketedSequencePnpRelaxation &&
+        if (!strict_small_support && _sfmOptions.allowBracketedSequencePnpRelaxation &&
             (isDirectlyBracketed || useOneSidedRecovery))
         {
             // 两侧紧邻位姿为当前相机提供了强序列约束。此时允许大量候选 2D-3D
@@ -948,7 +983,39 @@ bool IncrementalSfm::registerImage(ImageId imageId,
             pnpResult = solveSequenceRecovery();
         }
     }
-    if (!pnpResult.success)
+    PnpInlierSpatialSupport spatial_support;
+    bool strict_spatial_support_accepted = true;
+    if (pnpResult.success && strict_small_support)
+    {
+        const std::optional<CameraImageSize> image_size = cam.imageSize();
+        double maximum_x = std::max(0.0, cam.principalX() * 2.0 + 1.0);
+        double maximum_y = std::max(0.0, cam.principalY() * 2.0 + 1.0);
+        for (const FeatureKeypoint &keypoint : img.keypoints)
+        {
+            if (std::isfinite(keypoint.x))
+            {
+                maximum_x = std::max(maximum_x, static_cast<double>(keypoint.x) + 1.0);
+            }
+            if (std::isfinite(keypoint.y))
+            {
+                maximum_y = std::max(maximum_y, static_cast<double>(keypoint.y) + 1.0);
+            }
+        }
+        const int width = image_size && image_size->samples > 0
+            ? image_size->samples
+            : static_cast<int>(std::ceil(maximum_x));
+        const int height = image_size && image_size->lines > 0
+            ? image_size->lines
+            : static_cast<int>(std::ceil(maximum_y));
+        spatial_support = measurePnpInlierSpatialSupport(
+            imagePts, pnpResult.inlierMask, width, height);
+        strict_spatial_support_accepted =
+            spatial_support.occupiedCells >=
+                std::max(1, pnpOptions.strictSmallSupportMinGridCells) &&
+            spatial_support.occupiedRows >= 2 &&
+            spatial_support.occupiedColumns >= 2;
+    }
+    if (!pnpResult.success || !strict_spatial_support_accepted)
     {
         std::ostringstream oss;
         oss << "PnP failed: observations=" << worldPts.size()
@@ -960,6 +1027,10 @@ bool IncrementalSfm::registerImage(ImageId imageId,
             << ", sequenceRecovery=" << (usedSequenceRecovery ? "true" : "false")
             << ", posePrefilter=" << (pnpResult.usedInitialPosePrefilter ? "true" : "false")
             << ", prefilterCandidates=" << pnpResult.prefilterCandidateCount
+            << ", strictSmallSupport=" << (strict_small_support ? "true" : "false")
+            << ", gridCells=" << spatial_support.occupiedCells
+            << ", gridRows=" << spatial_support.occupiedRows
+            << ", gridColumns=" << spatial_support.occupiedColumns
             << ", maxReprojError=" << _sfmOptions.pnpOptions.maxReprojError;
         _lastErrorMessage = oss.str();
         return false;
@@ -967,7 +1038,8 @@ bool IncrementalSfm::registerImage(ImageId imageId,
 
     Logger::instance()->infof("[SFM] Image %u PnP success: observations=%zu, inliers=%d, inlierRatio=%.3f, "
                               "minTrackLength=%d, sequenceRecovery=%s, posePrefilter=%s, "
-                              "prefilterCandidates=%d",
+                              "prefilterCandidates=%d, rawProposals=%zu, strictSmallSupport=%s, "
+                              "gridCells=%d",
                               imageId,
                               worldPts.size(),
                               pnpResult.numInliers,
@@ -975,7 +1047,10 @@ bool IncrementalSfm::registerImage(ImageId imageId,
                               minTrackLengthForPnp,
                               usedSequenceRecovery ? "true" : "false",
                               pnpResult.usedInitialPosePrefilter ? "true" : "false",
-                              pnpResult.prefilterCandidateCount);
+                              pnpResult.prefilterCandidateCount,
+                              proposals.size(),
+                              strict_small_support ? "true" : "false",
+                              spatial_support.occupiedCells);
 
     // 应用 PnP 结果更新相机外参
     cam.setPose(pnpResult.R, pnpResult.C);

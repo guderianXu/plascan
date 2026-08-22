@@ -334,12 +334,90 @@ void MvsStageSnapshotRecorder::capture(
         }
         cv::Mat snapshot_mask = resizedNearest(authoritative_mask, snapshot_size);
         snapshot_mask.setTo(cv::Scalar(0), snapshot_depth <= 0.0f);
+        cv::Mat snapshot_reliability;
+        if (result.depthLayerReliabilityClass &&
+            result.depthLayerReliabilityClass->type() == CV_8UC1 &&
+            result.depthLayerReliabilityClass->size() == depth.size())
+        {
+            snapshot_reliability = resizedNearest(
+                *result.depthLayerReliabilityClass, snapshot_size);
+        }
+        cv::Mat snapshot_photometric_confidence;
+        if (result.photometricConfidence &&
+            result.photometricConfidence->type() == CV_32FC1 &&
+            result.photometricConfidence->size() == depth.size())
+        {
+            snapshot_photometric_confidence = resizedNearest(
+                *result.photometricConfidence, snapshot_size);
+        }
+        cv::Mat snapshot_geometric_confidence;
+        if (result.geometricConfidence &&
+            result.geometricConfidence->type() == CV_32FC1 &&
+            result.geometricConfidence->size() == depth.size())
+        {
+            snapshot_geometric_confidence = resizedNearest(
+                *result.geometricConfidence, snapshot_size);
+        }
+        cv::Mat snapshot_geometry_rerank;
+        if (stage == MvsStageSnapshotStage::CrossViewConsistency &&
+            result.geometryRerankMaps &&
+            result.geometryRerankMaps->compatible(depth.size()))
+        {
+            cv::Mat source_count;
+            cv::Mat baseline_count;
+            cv::Mat decision_action;
+            result.geometryRerankMaps->supportingSourceCount.convertTo(
+                source_count, CV_32FC1);
+            result.geometryRerankMaps->baselineSectorCount.convertTo(
+                baseline_count, CV_32FC1);
+            result.geometryRerankMaps->decisionAction.convertTo(
+                decision_action, CV_32FC1);
+            cv::Mat geometry_rerank;
+            cv::merge(
+                std::vector<cv::Mat>{
+                    result.geometryRerankMaps->nativeCost,
+                    result.geometryRerankMaps->candidateCost,
+                    result.geometryRerankMaps->costAdvantage,
+                    result.geometryRerankMaps->effectiveSourceWeight,
+                    result.geometryRerankMaps->relativeCorrection,
+                    result.geometryRerankMaps->weakestSourceConfidence,
+                    source_count,
+                    baseline_count,
+                    decision_action},
+                geometry_rerank);
+            snapshot_geometry_rerank = resizedNearest(
+                geometry_rerank, snapshot_size);
+        }
 
         const std::uint64_t required_bytes =
             3ull * sizeof(StageDepthMatHeader) +
             static_cast<std::uint64_t>(snapshot_depth.total() * snapshot_depth.elemSize()) +
             static_cast<std::uint64_t>(snapshot_confidence.total() * snapshot_confidence.elemSize()) +
-            static_cast<std::uint64_t>(snapshot_mask.total() * snapshot_mask.elemSize());
+            static_cast<std::uint64_t>(snapshot_mask.total() * snapshot_mask.elemSize()) +
+            (snapshot_photometric_confidence.empty()
+                 ? 0ull
+                 : sizeof(StageDepthMatHeader) +
+                       static_cast<std::uint64_t>(
+                           snapshot_photometric_confidence.total() *
+                           snapshot_photometric_confidence.elemSize())) +
+            (snapshot_geometric_confidence.empty()
+                 ? 0ull
+                 : sizeof(StageDepthMatHeader) +
+                       static_cast<std::uint64_t>(
+                           snapshot_geometric_confidence.total() *
+                           snapshot_geometric_confidence.elemSize())) +
+            (snapshot_reliability.empty()
+                 ? 0ull
+                 : sizeof(StageDepthMatHeader) +
+                       static_cast<std::uint64_t>(
+                           snapshot_reliability.total() *
+                           snapshot_reliability.elemSize())) +
+            (snapshot_geometry_rerank.empty()
+                 ? 0ull
+                 : sizeof(StageDepthMatHeader) +
+                       static_cast<std::uint64_t>(
+                           snapshot_geometry_rerank.total() *
+                           snapshot_geometry_rerank.elemSize()));
         if (required_bytes > _budgetBytes - std::min(_usedBytes, _budgetBytes))
         {
             record.insert(QStringLiteral("status"), QStringLiteral("skipped"));
@@ -362,18 +440,48 @@ void MvsStageSnapshotRecorder::capture(
         const QString prefix = QDir(frame_directory).filePath(stage_id);
         const QString depth_path = prefix + QStringLiteral("_depth.bin");
         const QString confidence_path = prefix + QStringLiteral("_confidence.bin");
+        const QString photometric_confidence_path =
+            prefix + QStringLiteral("_photometric_confidence.bin");
+        const QString geometric_confidence_path =
+            prefix + QStringLiteral("_geometric_confidence.bin");
         const QString mask_path = prefix + QStringLiteral("_valid_mask.bin");
+        const QString reliability_path =
+            prefix + QStringLiteral("_depth_layer_reliability.bin");
+        const QString geometry_rerank_path =
+            prefix + QStringLiteral("_geometry_rerank.bin");
         QString write_error;
         const bool depth_ok = writeMatrixAtomically(depth_path, snapshot_depth, &write_error);
         const bool confidence_ok = depth_ok && writeMatrixAtomically(
             confidence_path, snapshot_confidence, &write_error);
         const bool mask_ok = confidence_ok && writeMatrixAtomically(
             mask_path, snapshot_mask, &write_error);
-        if (!depth_ok || !confidence_ok || !mask_ok)
+        const bool photometric_confidence_ok = mask_ok &&
+            (snapshot_photometric_confidence.empty() || writeMatrixAtomically(
+                 photometric_confidence_path,
+                 snapshot_photometric_confidence,
+                 &write_error));
+        const bool geometric_confidence_ok = photometric_confidence_ok &&
+            (snapshot_geometric_confidence.empty() || writeMatrixAtomically(
+                 geometric_confidence_path,
+                 snapshot_geometric_confidence,
+                 &write_error));
+        const bool reliability_ok = geometric_confidence_ok &&
+            (snapshot_reliability.empty() || writeMatrixAtomically(
+                 reliability_path, snapshot_reliability, &write_error));
+        const bool geometry_rerank_ok = reliability_ok &&
+            (snapshot_geometry_rerank.empty() || writeMatrixAtomically(
+                 geometry_rerank_path, snapshot_geometry_rerank, &write_error));
+        if (!depth_ok || !confidence_ok || !mask_ok ||
+            !photometric_confidence_ok || !geometric_confidence_ok ||
+            !reliability_ok || !geometry_rerank_ok)
         {
             QFile::remove(depth_path);
             QFile::remove(confidence_path);
+            QFile::remove(photometric_confidence_path);
+            QFile::remove(geometric_confidence_path);
             QFile::remove(mask_path);
+            QFile::remove(reliability_path);
+            QFile::remove(geometry_rerank_path);
             record.insert(QStringLiteral("status"), QStringLiteral("failed"));
             record.insert(QStringLiteral("reason"), write_error);
             appendRecordLocked(record);
@@ -409,7 +517,47 @@ void MvsStageSnapshotRecorder::capture(
         record.insert(QStringLiteral("depth"), artifactToJson(depth_path, snapshot_depth));
         record.insert(QStringLiteral("confidence"),
                       artifactToJson(confidence_path, snapshot_confidence));
+        if (!snapshot_photometric_confidence.empty())
+        {
+            record.insert(
+                QStringLiteral("photometric_confidence"),
+                artifactToJson(
+                    photometric_confidence_path,
+                    snapshot_photometric_confidence));
+        }
+        if (!snapshot_geometric_confidence.empty())
+        {
+            record.insert(
+                QStringLiteral("geometric_confidence"),
+                artifactToJson(
+                    geometric_confidence_path,
+                    snapshot_geometric_confidence));
+        }
         record.insert(QStringLiteral("valid_mask"), artifactToJson(mask_path, snapshot_mask));
+        if (!snapshot_reliability.empty())
+        {
+            record.insert(
+                QStringLiteral("depth_layer_reliability"),
+                artifactToJson(reliability_path, snapshot_reliability));
+        }
+        if (!snapshot_geometry_rerank.empty())
+        {
+            QJsonObject artifact = artifactToJson(
+                geometry_rerank_path, snapshot_geometry_rerank);
+            artifact.insert(
+                QStringLiteral("channel_order"),
+                QJsonArray{
+                    QStringLiteral("native_cost"),
+                    QStringLiteral("candidate_cost"),
+                    QStringLiteral("cost_advantage"),
+                    QStringLiteral("effective_source_weight"),
+                    QStringLiteral("relative_correction"),
+                    QStringLiteral("weakest_source_confidence"),
+                    QStringLiteral("supporting_source_count"),
+                    QStringLiteral("baseline_sector_count"),
+                    QStringLiteral("decision_action")});
+            record.insert(QStringLiteral("geometry_rerank"), artifact);
+        }
         appendRecordLocked(record);
     }
     catch (const std::exception &error)

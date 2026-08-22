@@ -13,6 +13,7 @@
 #include "preparation/TiePointPreparation.h"
 #include "project/ProjectIO.h"
 #include "search/SfmSearchPolicy.h"
+#include "sift/SiftComputeBackend.h"
 #include "workflow/AerialTriangulationPipeline.h"
 
 #include <QDir>
@@ -520,6 +521,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
         .filePath(QStringLiteral("sfm_sparse/sfm_sparse_points.json"));
     tieContext.maskPaths = options.maskPaths;
     tieContext.cancelFlag = options.cancelFlag.get();
+    tieContext.computeDeviceCallback = options.computeDeviceFn;
     if (options.progressFn)
     {
         tieContext.progressCallback = [progress = options.progressFn](const QString &stageId,
@@ -534,7 +536,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
 
     // 最后独立决定“是否执行连接点任务”和“是否先清缓存”。重置对齐并不等于
     // 重匹配；用户可以重置相机后继续使用同一套匹配/连接点观测。
-    resolved.prepareTiePoints = !options.reuseExistingMatches ||
+    resolved.prepareTiePoints = options.guidedImageMatching ||
+        !options.reuseExistingMatches ||
         options.autoGenerateMissingMatches ||
         !QFileInfo::exists(canonicalTiePointPath);
     resolved.forceRebuildTiePoints = !options.reuseExistingMatches;
@@ -617,8 +620,10 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("tie_point_preparation"),
                     resolved.forceRebuildTiePoints
                         ? QStringLiteral("force_rebuild")
-                        : (resolved.prepareTiePoints ? QStringLiteral("fill_missing")
-                                                     : QStringLiteral("reuse")));
+                        : (options.guidedImageMatching
+                               ? QStringLiteral("guided_refresh")
+                               : (resolved.prepareTiePoints ? QStringLiteral("fill_missing")
+                                                            : QStringLiteral("reuse"))));
     return resolved;
 }
 
@@ -674,6 +679,21 @@ AerialTriangulationResult AerialTriangulationWorkflow::run(
         if (!result.tiePointResult.tiePointPath.trimmed().isEmpty())
         {
             result.config.pipelineInput.tiePointPath = result.tiePointResult.tiePointPath;
+        }
+        const matchphotos::MatchPhotosAlgorithmPlan &algorithmPlan =
+            result.tiePointResult.algorithmPlan;
+        if (!algorithmPlan.computeDeviceDisplayName.trimmed().isEmpty())
+        {
+            result.config.resolvedSettings.insert(
+                QStringLiteral("matching_compute_backend"),
+                QString::fromLatin1(image_matching::siftBackendName(
+                    algorithmPlan.executionBackend)));
+            result.config.resolvedSettings.insert(
+                QStringLiteral("matching_compute_device_name"),
+                algorithmPlan.computeDeviceName);
+            result.config.resolvedSettings.insert(
+                QStringLiteral("matching_compute_device_display"),
+                algorithmPlan.computeDeviceDisplayName);
         }
         for (const matchphotos::MatchPhotosMatchRecord &match :
              result.tiePointResult.matches)

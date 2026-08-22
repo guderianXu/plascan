@@ -1027,7 +1027,8 @@ bool bakeAndExport(const std::string &productsDir,
             seam_constraints,
             static_cast<int>(data->charts.size()),
             config.seamBorderBlendRadiusPixels,
-            config.seamMaximumLinearCorrection);
+            config.seamMaximumLinearCorrection,
+            config.seamGlobalCorrectionStrength);
         result->seamConstraintCount = seam_stats.constraintCount;
         result->seamAdjustedChartCount = seam_stats.adjustedChartCount;
         result->seamAdjustedPixelCount = seam_stats.adjustedPixelCount;

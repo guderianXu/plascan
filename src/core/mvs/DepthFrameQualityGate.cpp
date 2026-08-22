@@ -293,14 +293,22 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     decision.sparseDepthResidual = input.sparseDepthResidual;
 
     DepthConfidenceComponents components;
-    components.photometric = input.meanConfidence;
+    components.photometric = input.dualChannelConfidenceAvailable &&
+            std::isfinite(input.meanPhotometricConfidence) &&
+            input.meanPhotometricConfidence >= 0.0f
+        ? input.meanPhotometricConfidence
+        : input.meanConfidence;
     components.support = input.sourceViewCount > 0
         ? std::min(1.0f, static_cast<float>(input.sourceViewCount) / 4.0f)
         : 0.0f;
     components.uniqueness = 1.0f - input.depthAtSearchBoundaryRatio;
-    components.geometry = input.multiViewConsistencyAvailable
-        ? input.multiViewConsistency
-        : 1.0f;
+    components.geometry = input.dualChannelConfidenceAvailable &&
+            std::isfinite(input.meanIndependentGeometryConfidence) &&
+            input.meanIndependentGeometryConfidence >= 0.0f
+        ? input.meanIndependentGeometryConfidence
+        : input.multiViewConsistencyAvailable
+            ? input.multiViewConsistency
+            : 1.0f;
     components.texture = input.largestComponentRatio;
     components.absoluteGeometry = geometryErrorConfidence(
         input.sparseDepthResidual);
@@ -340,10 +348,13 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         hasReliableCustomSparseAnchoredSurface(input);
     const bool reliable_fusion_core =
         reliable_orbital_fusion_core || reliable_custom_fusion_core;
+    const bool reliable_causal_geometry_correction =
+        hasReliableCausalGeometryCorrection(input);
     if (input.fusionPostprocessRetentionRatio >= 0.0f
         && input.fusionPostprocessRetentionRatio < 0.75f
         && !reliable_fusion_core
-        && !reliable_custom_sparse_surface)
+        && !reliable_custom_sparse_surface
+        && !reliable_causal_geometry_correction)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("destructive_fusion_postprocess_collapse");
@@ -359,14 +370,16 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     }
     else if (input.fusionPostprocessRetentionRatio >= 0.0f
              && input.fusionPostprocessRetentionRatio < 0.90f
-             && !reliable_fusion_core)
+             && !reliable_fusion_core
+             && !reliable_causal_geometry_correction)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("fusion_postprocess_coverage_loss");
     }
     else if (input.fusionPostprocessRetentionRatio >= 0.0f
              && input.fusionPostprocessRetentionRatio < 0.90f
-             && reliable_custom_fusion_core)
+             && reliable_custom_fusion_core
+             && !reliable_causal_geometry_correction)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back(
@@ -407,7 +420,8 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     }
     else if (input.consistencyRetentionRatio >= 0.0f
              && input.consistencyRetentionRatio < consistency_validation_threshold
-             && !changed_complete_pool_with_verified_core)
+             && !changed_complete_pool_with_verified_core
+             && !reliable_causal_geometry_correction)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("depth_consistency_coverage_loss");
@@ -523,6 +537,22 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back(
             "complete_pool_indirect_promotion_not_admitted");
+    }
+
+    if (input.geometryEvidenceTreatmentEnabled &&
+        input.initialAcceptanceAvailable &&
+        input.initialAcceptance != DepthFrameAcceptance::Accepted &&
+        input.geometryCorrectedPixelCount <= 0 &&
+        decision.acceptance == DepthFrameAcceptance::Accepted)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back(
+            "geometry_treatment_indirect_promotion_not_admitted");
+    }
+    if (reliable_causal_geometry_correction)
+    {
+        decision.reasons.emplace_back(
+            "relative_retention_explained_by_causal_geometry_core");
     }
 
     if (decision.reasons.empty())
@@ -677,6 +707,23 @@ bool hasReliableCustomSparseAnchoredSurface(
         input.largestComponentRatio >= kMinimumLargestComponentRatio &&
         input.depthAtSearchBoundaryRatio <= kMaximumSearchBoundaryRatio &&
         hasAccurateSparseAbsoluteDepthEvidence(input);
+}
+
+bool hasReliableCausalGeometryCorrection(
+    const DepthFrameQualityInput &input)
+{
+    return input.geometryEvidenceTreatmentEnabled &&
+        input.geometryCorrectedPixelCount > 0 &&
+        input.dualChannelConfidenceAvailable &&
+        std::isfinite(input.correctedMeanIndependentGeometryConfidence) &&
+        input.correctedMeanIndependentGeometryConfidence >= 0.55f &&
+        std::isfinite(input.strongIndependentGeometryCoverage) &&
+        input.strongIndependentGeometryCoverage > 0.0f &&
+        input.validCoverage >= kMinimumValidCoverage &&
+        input.largestComponentRatio >= kMinimumLargestComponentRatio &&
+        input.depthAtSearchBoundaryRatio <= kMaximumSearchBoundaryRatio &&
+        hasAccurateSparseAbsoluteDepthEvidence(input) &&
+        hasStrongDiscreteGeometryCore(input);
 }
 
 bool hasReliableOrbitalDiscreteGeometryCore(

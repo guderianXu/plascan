@@ -39,10 +39,11 @@ struct TextureMappingConfig
     int textureSize = 8192;
     int imageDownscale = 1;
     int padding = 8;
-    int maximumCandidateViews = 8;
-    int maximumBlendedViews = 4;
+    int maximumCandidateViews = 16;
+    int maximumBlendedViews = 8;
     int labelOptimizationPasses = 8;
     int minimumChartFaces = 32;
+    float atlasUpscaleLimit = 4.0f;
     float minimumConfidence = 0.25f;
     float minimumViewCosine = 0.20f;
     float relativeDepthTolerance = 0.005f;
@@ -51,9 +52,10 @@ struct TextureMappingConfig
     float labelColorPenalty = 1.25f;
     float coherentReplacementRatio = 0.60f;
     float ghostColorThreshold = 36.0f;
-    float sharpeningStrength = 0.35f;
+    float sharpeningStrength = 0.0f;
     int seamBorderBlendRadiusPixels = 16;
     float seamMaximumLinearCorrection = 0.08f;
+    float seamGlobalCorrectionStrength = 0.35f;
     TextureMappingMode mappingMode = TextureMappingMode::AutoProjective;
     TextureBlendMode blendMode = TextureBlendMode::Natural;
     TextureHoleFillMode holeFillMode = TextureHoleFillMode::NeighborViewRecovery;
@@ -107,6 +109,8 @@ struct TextureMappingResult
     std::uint64_t exposureCorrectionAcceptedPairCount = 0;
     std::uint64_t exposureCorrectionRejectedInsufficientPairCount = 0;
     std::uint64_t exposureCorrectionRejectedHighMadPairCount = 0;
+    int exposureCorrectionConnectedComponentCount = 0;
+    int exposureCorrectionCorrectedViewCount = 0;
     double atlasOccupancy = 0.0;
     double medianTexelDensity = 0.0;
     double seamColorDifference = 0.0;

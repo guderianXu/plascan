@@ -363,6 +363,48 @@ TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticO
 }
 
 TEST(MvsDepthReprocessCliContractTest,
+     DepthLayerReliabilityAnchorGateIsExplicitAndDefaultOff)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+
+    expectContainsAll(source, {
+        "--depth-layer-reliability-anchor-gate",
+        "config.enableDepthLayerReliabilityAnchorGate =",
+        "depth_layer_reliability_anchor_gate",
+        "不直接删除深度，默认关闭",
+    });
+    expectContainsAll(generator, {
+        "DepthLayerReliabilityClass::Reliable",
+        "native_interpolation_anchor_eligibility",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
+     DepthLayerReliabilityCorrectionIsIndependentAndDefaultOff)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+
+    expectContainsAll(source, {
+        "--depth-layer-reliability-guided-correction",
+        "config.enableDepthLayerReliabilityGuidedCorrection =",
+        "depth_layer_reliability_guided_correction",
+        "至少三个独立投影来源",
+        "默认关闭",
+    });
+    expectContainsAll(generator, {
+        "enableReliabilityGuidedCorrection =",
+        "native_reliability_classes",
+        "depth_layer_reliability.result.classMap",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest,
      StageSnapshotsAreSelectedBoundedAndConditionallyReported)
 {
     const QString source = readSourceFile(

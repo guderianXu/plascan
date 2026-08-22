@@ -56,6 +56,19 @@ struct PnpOptions
     /// 小样本 PnP 必须达到的最低内点率，防止少量错误对应形成可接受的绝对内点数。
     double smallSampleMinInlierRatio = 0.80;
 
+    /// 是否允许在候选少于 minNumInliers 时进入严格小样本恢复。
+    /// 调用方仍必须额外检查内点空间分布；默认关闭以保持通用 PnP API 的旧行为。
+    bool allowStrictSmallSupportRecovery = false;
+
+    /// 严格小样本恢复的最低绝对内点数。
+    int strictSmallSupportMinInliers = 8;
+
+    /// 严格小样本恢复的最低内点率。
+    double strictSmallSupportMinInlierRatio = 0.80;
+
+    /// 严格小样本恢复至少占据的 4x4 图像网格数；同时还必须跨至少两行两列。
+    int strictSmallSupportMinGridCells = 3;
+
     /// 是否向 solvePnPRansac 提供外参初值。
     bool useInitialPose = false;
 

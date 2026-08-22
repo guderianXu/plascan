@@ -344,6 +344,14 @@ QWidget#taskStatusWidget QLabel#statusLabel {
     background: transparent;
 }
 
+QWidget#taskStatusWidget QLabel#detailLabel {
+    color: #245b46;
+    background: #e5f5ed;
+    border: 1px solid #9fd5be;
+    border-radius: 4px;
+    padding: 1px 6px;
+}
+
 QWidget#taskStatusWidget QToolButton#cancelButton {
     padding: 1px 8px;
     min-height: 18px;

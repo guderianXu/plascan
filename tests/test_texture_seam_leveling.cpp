@@ -73,4 +73,36 @@ TEST(TextureSeamLevelingTest, InvalidOrDisconnectedConstraintsDoNotModifyAtlas)
     EXPECT_EQ(cv::countNonZero(atlas.reshape(1) != original.reshape(1)), 0);
 }
 
+TEST(TextureSeamLevelingTest, GlobalStrengthCorrectsChartInteriors)
+{
+    cv::Mat atlas(12, 24, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat chart_index(12, 24, CV_32SC1, cv::Scalar(-1));
+    atlas(cv::Rect(1, 1, 8, 10)).setTo(cv::Scalar(80, 80, 80));
+    atlas(cv::Rect(15, 1, 8, 10)).setTo(cv::Scalar(180, 180, 180));
+    chart_index(cv::Rect(1, 1, 8, 10)).setTo(0);
+    chart_index(cv::Rect(15, 1, 8, 10)).setTo(1);
+    const cv::Vec3b first_interior_before = atlas.at<cv::Vec3b>(6, 5);
+    const cv::Vec3b second_interior_before = atlas.at<cv::Vec3b>(6, 18);
+    const float difference = srgbToLinear(180) - srgbToLinear(80);
+    const xjw::mesh::texture_v4::TextureSeamConstraint constraint{
+        0, 1, cv::Vec3f(difference, difference, difference), 9.0f};
+
+    const auto stats = xjw::mesh::texture_v4::applyTextureSeamLeveling(
+        &atlas,
+        chart_index,
+        std::vector{constraint},
+        2,
+        2,
+        0.20f,
+        0.5f);
+
+    EXPECT_EQ(stats.adjustedChartCount, 2);
+    EXPECT_NE(atlas.at<cv::Vec3b>(6, 5), first_interior_before);
+    EXPECT_NE(atlas.at<cv::Vec3b>(6, 18), second_interior_before);
+    EXPECT_LT(
+        linearDifference(
+            atlas.at<cv::Vec3b>(6, 5), atlas.at<cv::Vec3b>(6, 18)),
+        linearDifference(first_interior_before, second_interior_before));
+}
+
 } // namespace

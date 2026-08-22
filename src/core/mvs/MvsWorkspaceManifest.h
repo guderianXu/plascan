@@ -28,7 +28,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 43;
+inline constexpr int kMvsDepthAlgorithmRevision = 44;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -70,6 +70,11 @@ inline constexpr int kMvsCompletePoolAdmissionRevision = 42;
 /// nearest subpixel footprint and preserves one audited boundary shell without
 /// expanding the protection band to a full reduced-grid pixel.
 inline constexpr int kMvsNativeGridQualityRevision = 43;
+/// Revision 44 records independent photometric and geometry confidence for
+/// evidence-guided correction, requires corrected pixels to carry causal
+/// geometry evidence before relative-retention loss can be explained, and
+/// keeps one inward measured boundary shell on reduced native grids.
+inline constexpr int kMvsCausalAdmissionEvidenceRevision = 44;
 
 struct MvsDepthFrameRecord
 {

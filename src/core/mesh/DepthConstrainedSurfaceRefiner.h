@@ -22,6 +22,9 @@ struct DepthConstrainedSurfaceRefineOptions
     double maximumVolumeRatio = 1.15;
     double minimumFaceNormalDot = 0.0;
     double minimumFaceAreaRatio = 0.10;
+    float maximumAcceptedBlend = 1.0f;
+    float maximumCumulativeProjectedP95DisplacementPixels = 0.0f;
+    int minimumProjectedDisplacementSampleCount = 128;
     bool removeMedianNormalBias = false;
 };
 
@@ -48,6 +51,10 @@ struct DepthConstrainedSurfaceRefineStatistics
     // Maxima among passes that were ultimately accepted.
     std::uint64_t acceptedLocallyRejectedFaceCount = 0;
     std::uint64_t acceptedLocallyFrozenVertexCount = 0;
+    int projectionGuardRejectedCandidateCount = 0;
+    std::uint64_t projectedDisplacementSampleCount = 0;
+    double acceptedCumulativeProjectedP95DisplacementPixels = 0.0;
+    double maximumEvaluatedCumulativeProjectedP95DisplacementPixels = 0.0;
     double removedMedianNormalBias = 0.0;
     VisualHullDepthRefineStatistics refiner;
 };

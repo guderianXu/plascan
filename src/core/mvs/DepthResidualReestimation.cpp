@@ -57,6 +57,53 @@ float relativeSpread(const std::vector<float> &values, int begin, int end)
 
 } // namespace
 
+std::vector<std::vector<int>> buildDepthResidualPatchMatchSourceGroups(
+    const std::vector<int> &sourceSectorIds)
+{
+    std::vector<std::vector<int>> groups(2);
+    if (sourceSectorIds.size() < 4)
+    {
+        return groups;
+    }
+
+    const int count = static_cast<int>(sourceSectorIds.size());
+    int first_excluded = 0;
+    int second_excluded = count - 1;
+    int best_distance = -1;
+    for (int first = 0; first < count; ++first)
+    {
+        for (int second = first + 1; second < count; ++second)
+        {
+            int sector_distance = 0;
+            if (sourceSectorIds[first] >= 0 && sourceSectorIds[first] < 6 &&
+                sourceSectorIds[second] >= 0 && sourceSectorIds[second] < 6)
+            {
+                const int raw_distance = std::abs(
+                    sourceSectorIds[first] - sourceSectorIds[second]);
+                sector_distance = std::min(raw_distance, 6 - raw_distance);
+            }
+            if (sector_distance > best_distance)
+            {
+                best_distance = sector_distance;
+                first_excluded = first;
+                second_excluded = second;
+            }
+        }
+    }
+    for (int source = 0; source < count; ++source)
+    {
+        if (source != first_excluded)
+        {
+            groups[0].push_back(source);
+        }
+        if (source != second_excluded)
+        {
+            groups[1].push_back(source);
+        }
+    }
+    return groups;
+}
+
 DepthResidualReestimationPreflight inspectDepthResidualReestimationNeed(
     const cv::Mat &referenceDepth,
     const cv::Mat &supportMask,
@@ -94,6 +141,65 @@ DepthResidualReestimationPreflight inspectDepthResidualReestimationNeed(
         return preflight;
     }
 
+    preflight.shouldProjectSources = true;
+    return preflight;
+}
+
+DepthResidualReestimationPreflight inspectDepthReestimationMask(
+    const cv::Mat &support_mask,
+    const cv::Mat &requested_mask,
+    const DepthResidualReestimationOptions &options)
+{
+    DepthResidualReestimationPreflight preflight;
+    if (support_mask.empty() || support_mask.type() != CV_8UC1 ||
+        requested_mask.empty() || requested_mask.type() != CV_8UC1 ||
+        requested_mask.size() != support_mask.size())
+    {
+        preflight.skippedReason = QStringLiteral("invalid_inputs");
+        return preflight;
+    }
+    cv::compare(support_mask, 0, preflight.normalizedSupport, cv::CMP_GT);
+    cv::Mat normalized_requested;
+    cv::compare(requested_mask, 0, normalized_requested, cv::CMP_GT);
+    cv::bitwise_and(
+        normalized_requested,
+        preflight.normalizedSupport,
+        normalized_requested);
+    cv::Mat labels;
+    cv::Mat component_stats;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        normalized_requested,
+        labels,
+        component_stats,
+        centroids,
+        8,
+        CV_32S);
+    preflight.residualMask = cv::Mat(
+        requested_mask.size(), CV_8UC1, cv::Scalar(0));
+    const int minimum_component_area = std::max(
+        1, options.minimumResidualPixelCount);
+    for (int component = 1; component < component_count; ++component)
+    {
+        if (component_stats.at<int>(component, cv::CC_STAT_AREA) >=
+            minimum_component_area)
+        {
+            preflight.residualMask.setTo(255, labels == component);
+        }
+    }
+    preflight.supportPixelCount = cv::countNonZero(preflight.normalizedSupport);
+    preflight.requestedResidualPixelCount = cv::countNonZero(preflight.residualMask);
+    preflight.requestedResidualRatio = preflight.supportPixelCount > 0
+        ? static_cast<float>(preflight.requestedResidualPixelCount) /
+              static_cast<float>(preflight.supportPixelCount)
+        : 0.0f;
+    if (preflight.requestedResidualPixelCount <
+            std::max(1, options.minimumResidualPixelCount) ||
+        preflight.requestedResidualRatio < std::max(0.0f, options.minimumResidualRatio))
+    {
+        preflight.skippedReason = QStringLiteral("residual_below_threshold");
+        return preflight;
+    }
     preflight.shouldProjectSources = true;
     return preflight;
 }
@@ -342,7 +448,10 @@ DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
     const std::vector<cv::Mat> &projectedSourceDepths,
     const std::vector<int> &sourceSectorIds,
     cv::Mat *recoveredMask,
-    const DepthResidualReestimationOptions &options)
+    const DepthResidualReestimationOptions &options,
+    const cv::Mat *native_reliability_class_map,
+    const std::vector<ProjectedDepthEvidence> *projected_source_evidence,
+    const DepthResidualReestimationEvidenceOutputs *evidence_outputs)
 {
     DepthResidualReestimationStats stats;
     stats.supportPixelCount = target.supportPixelCount;
@@ -405,6 +514,16 @@ DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
     const float free_space_difference = std::max(
         maximum_geometry_difference,
         options.freeSpaceConflictRelativeDifference);
+    DepthGeometryHypothesisRerankMaps *rerank_maps =
+        evidence_outputs ? evidence_outputs->rerankMaps : nullptr;
+    if (rerank_maps && !rerank_maps->compatible(depth.size()))
+    {
+        rerank_maps->initialize(depth.size());
+    }
+    const auto compatible_output = [&depth](const cv::Mat *output, int type)
+    {
+        return output && output->type() == type && output->size() == depth.size();
+    };
     std::vector<float> inverse_depths;
     std::vector<float> candidate_confidences;
     std::vector<int> confirmed_sectors;
@@ -421,7 +540,10 @@ DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
         std::uint8_t *recovered_row = recovered.ptr<std::uint8_t>(row);
         for (int column = 0; column < depth.cols; ++column)
         {
-            if (target_row[column] == 0 || depth_row[column] > 0.0f)
+            const bool native_valid = std::isfinite(depth_row[column]) &&
+                depth_row[column] > 0.0f;
+            if (target_row[column] == 0 ||
+                (native_valid && !options.allowValidDepthReplacement))
             {
                 continue;
             }
@@ -549,10 +671,152 @@ DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
                 ++stats.rejectedGeometrySectorPixelCount;
                 continue;
             }
-            depth_row[column] = candidate_depth;
-            confidence_row[column] = std::max(
+            float accepted_confidence = std::max(
                 minimum_merged_confidence,
                 std::clamp(options.recoveredConfidence, 0.0f, 1.0f));
+            if (native_valid)
+            {
+                ++stats.replacementCandidatePixelCount;
+                const bool has_reliability = native_reliability_class_map &&
+                    native_reliability_class_map->type() == CV_8UC1 &&
+                    native_reliability_class_map->size() == depth.size();
+                const auto reliability = has_reliability
+                    ? static_cast<DepthLayerReliabilityClass>(
+                          native_reliability_class_map->at<std::uint8_t>(
+                              row, column))
+                    : DepthLayerReliabilityClass::Unobservable;
+                if (reliability != DepthLayerReliabilityClass::AmbiguousLowTexture &&
+                    reliability != DepthLayerReliabilityClass::RejectedLayer)
+                {
+                    ++stats.rejectedReplacementReliabilityPixelCount;
+                    continue;
+                }
+                if (!projected_source_evidence ||
+                    projected_source_evidence->size() != projectedSourceDepths.size())
+                {
+                    ++stats.rejectedReplacementCostPixelCount;
+                    continue;
+                }
+                DepthGeometryHypothesisRerankOptions rerank_options;
+                rerank_options.minimumLayerSwitchCostAdvantage =
+                    std::max(0.0f, options.minimumReplacementCostAdvantage);
+                rerank_options.ambiguousMaximumRelativeCorrection =
+                    std::max(0.0f, options.ambiguousMaximumRelativeCorrection);
+                const DepthGeometryHypothesisDecision native_score =
+                    scoreMeasuredDepthHypothesis(
+                        depth_row[column],
+                        row,
+                        column,
+                        *projected_source_evidence,
+                        rerank_options);
+                const DepthGeometryHypothesisDecision candidate_score =
+                    scoreMeasuredDepthHypothesis(
+                        candidate_depth,
+                        row,
+                        column,
+                        *projected_source_evidence,
+                        rerank_options);
+                const float cost_advantage =
+                    native_score.candidateCost - candidate_score.candidateCost;
+                const float relative_correction =
+                    std::fabs(candidate_depth - depth_row[column]) /
+                    std::max(depth_row[column], 1.0e-6f);
+                if (rerank_maps)
+                {
+                    rerank_maps->nativeCost.at<float>(row, column) =
+                        native_score.candidateCost;
+                    rerank_maps->candidateCost.at<float>(row, column) =
+                        candidate_score.candidateCost;
+                    rerank_maps->costAdvantage.at<float>(row, column) =
+                        cost_advantage;
+                    rerank_maps->effectiveSourceWeight.at<float>(row, column) =
+                        candidate_score.effectiveSourceWeight;
+                    rerank_maps->relativeCorrection.at<float>(row, column) =
+                        relative_correction;
+                    rerank_maps->weakestSourceConfidence.at<float>(row, column) =
+                        candidate_score.weakestSourceConfidence;
+                    rerank_maps->supportingSourceCount.at<std::uint8_t>(
+                        row, column) = static_cast<std::uint8_t>(std::clamp(
+                            candidate_score.supportingSourceCount, 0, 255));
+                    rerank_maps->baselineSectorCount.at<std::uint8_t>(
+                        row, column) = static_cast<std::uint8_t>(std::clamp(
+                            candidate_score.baselineSectorCount, 0, 255));
+                    rerank_maps->decisionAction.at<std::uint8_t>(row, column) =
+                        static_cast<std::uint8_t>(
+                            DepthGeometryHypothesisAction::None);
+                }
+                if (!candidate_score.validEvidence ||
+                    candidate_score.rejectedInsufficientSources ||
+                    candidate_score.rejectedInsufficientBaseline ||
+                    candidate_score.rejectedInsufficientWeight ||
+                    cost_advantage < options.minimumReplacementCostAdvantage)
+                {
+                    ++stats.rejectedReplacementCostPixelCount;
+                    continue;
+                }
+                if (reliability == DepthLayerReliabilityClass::AmbiguousLowTexture &&
+                    relative_correction > options.ambiguousMaximumRelativeCorrection)
+                {
+                    ++stats.rejectedReplacementCorrectionPixelCount;
+                    continue;
+                }
+                const float evidence_confidence = std::clamp(
+                    0.35f + 0.35f * std::min(1.0f, cost_advantage / 0.20f) +
+                        0.30f * candidate_score.weakestSourceConfidence,
+                    0.0f,
+                    0.90f);
+                accepted_confidence = std::sqrt(
+                    std::clamp(minimum_merged_confidence, 0.0f, 1.0f) *
+                    evidence_confidence);
+                if (rerank_maps)
+                {
+                    const bool refinement =
+                        reliability ==
+                            DepthLayerReliabilityClass::AmbiguousLowTexture ||
+                        relative_correction <= 0.025f;
+                    rerank_maps->decisionAction.at<std::uint8_t>(row, column) =
+                        static_cast<std::uint8_t>(
+                            refinement
+                                ? DepthGeometryHypothesisAction::Refine
+                                : DepthGeometryHypothesisAction::SwitchLayer);
+                }
+                if (evidence_outputs)
+                {
+                    if (compatible_output(
+                            evidence_outputs->geometrySourceMask, CV_16UC1))
+                    {
+                        evidence_outputs->geometrySourceMask->at<std::uint16_t>(
+                            row, column) = candidate_score.supportingSourceMask;
+                    }
+                    if (compatible_output(
+                            evidence_outputs->sourceInverseDepthSum, CV_32FC1))
+                    {
+                        evidence_outputs->sourceInverseDepthSum->at<float>(
+                            row, column) =
+                            candidate_score.supportingInverseDepthSum;
+                    }
+                    if (compatible_output(
+                            evidence_outputs->sourceInverseDepthSquaredSum,
+                            CV_32FC1))
+                    {
+                        evidence_outputs->sourceInverseDepthSquaredSum->at<float>(
+                            row, column) =
+                            candidate_score.supportingInverseDepthSquaredSum;
+                    }
+                    if (compatible_output(
+                            evidence_outputs->confirmedSourceCount, CV_16UC1))
+                    {
+                        evidence_outputs->confirmedSourceCount->at<std::uint16_t>(
+                            row, column) = static_cast<std::uint16_t>(std::clamp(
+                                candidate_score.supportingSourceCount,
+                                0,
+                                65535));
+                    }
+                }
+                ++stats.replacedPixelCount;
+            }
+            depth_row[column] = candidate_depth;
+            confidence_row[column] = accepted_confidence;
             recovered_row[column] = 255;
             ++stats.recoveredPixelCount;
         }
@@ -603,6 +867,15 @@ QJsonObject depthResidualReestimationStatsToJson(
         {QStringLiteral("rejected_free_space_pixel_count"),
          stats.rejectedFreeSpacePixelCount},
         {QStringLiteral("recovered_pixel_count"), stats.recoveredPixelCount},
+        {QStringLiteral("replacement_candidate_pixel_count"),
+         stats.replacementCandidatePixelCount},
+        {QStringLiteral("replaced_pixel_count"), stats.replacedPixelCount},
+        {QStringLiteral("rejected_replacement_reliability_pixel_count"),
+         stats.rejectedReplacementReliabilityPixelCount},
+        {QStringLiteral("rejected_replacement_cost_pixel_count"),
+         stats.rejectedReplacementCostPixelCount},
+        {QStringLiteral("rejected_replacement_correction_pixel_count"),
+         stats.rejectedReplacementCorrectionPixelCount},
         {QStringLiteral("attempted_hypothesis_count"),
          stats.attemptedHypothesisCount},
         {QStringLiteral("successful_hypothesis_count"),

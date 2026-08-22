@@ -128,6 +128,8 @@ struct DepthTsdfOptions
     bool enableAuxiliarySurfaceOnlyIntegration = true;
     float validationOnlyFrameWeightMultiplier =
         xjw::mvs::kCoverageAuxiliaryWeightMultiplier;
+    bool enableAuxiliaryPrimaryNeighborhoodConstraint = true;
+    int auxiliaryPrimaryNeighborhoodVoxels = 2;
     bool enableAuxiliaryBridgeOnlyIntegration = false;
     int auxiliaryBridgeMinimumGeometrySupport = 4;
     int auxiliaryBridgeMinimumSourceCount = 3;
@@ -366,6 +368,7 @@ struct DepthTsdfOptions
     std::uint64_t availableMemoryBytes = 0;
     std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
+    std::function<void(const QString &, const TriMesh &)> stageSnapshot;
 };
 
 struct DepthTsdfLayout
@@ -803,6 +806,7 @@ struct DepthTsdfStatistics
     std::uint64_t orbitalGapBoundaryRejectedFieldCount = 0;
     float effectiveOrbitalGapBoundaryMinimumObservationWeight = 0.0f;
     std::uint64_t auxiliaryOutsideSurfaceBandRejectedCount = 0;
+    std::uint64_t auxiliaryOutsidePrimaryNeighborhoodRejectedCount = 0;
     bool effectiveSurfacePatchSupport = false;
     float effectiveMinimumSurfacePatchObservationWeight = 0.0f;
     int effectiveMinimumSurfacePatchSourceCount = 0;

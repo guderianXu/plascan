@@ -456,6 +456,45 @@ namespace xjw::image_matching
         }
     }
 
+    QString openClSiftDeviceName(int deviceIndex)
+    {
+        try
+        {
+            const std::vector<cl_device_id> devices = openClGpuDevices();
+            if (deviceIndex < 0 || deviceIndex >= static_cast<int>(devices.size()))
+            {
+                return QString();
+            }
+            std::size_t size = 0;
+            if (clGetDeviceInfo(devices[static_cast<std::size_t>(deviceIndex)],
+                                CL_DEVICE_NAME,
+                                0,
+                                nullptr,
+                                &size) != CL_SUCCESS || size == 0)
+            {
+                return QString();
+            }
+            std::string name(size, '\0');
+            if (clGetDeviceInfo(devices[static_cast<std::size_t>(deviceIndex)],
+                                CL_DEVICE_NAME,
+                                name.size(),
+                                name.data(),
+                                nullptr) != CL_SUCCESS)
+            {
+                return QString();
+            }
+            if (!name.empty() && name.back() == '\0')
+            {
+                name.pop_back();
+            }
+            return QString::fromStdString(name).trimmed();
+        }
+        catch (...)
+        {
+            return QString();
+        }
+    }
+
     SiftRawFeatures extractOpenClSift(const SiftExtractionRequest& request)
     {
         if (request.image.empty() || request.image.type() != CV_8U)

@@ -17,6 +17,27 @@ xjw::FramePinholeCamera cameraAt(double x)
     return camera;
 }
 
+std::vector<xjw::mvs::ProjectedDepthEvidence> evidenceFor(
+    const std::vector<cv::Mat> &depths,
+    const std::vector<int> &sectors = {0, 1, 2})
+{
+    std::vector<xjw::mvs::ProjectedDepthEvidence> result;
+    result.reserve(depths.size());
+    for (int index = 0; index < static_cast<int>(depths.size()); ++index)
+    {
+        xjw::mvs::ProjectedDepthEvidence evidence;
+        evidence.depth = depths[static_cast<std::size_t>(index)];
+        evidence.confidence = cv::Mat(
+            evidence.depth.size(), CV_32FC1, cv::Scalar(0.9f));
+        evidence.reprojectionErrorPixels = cv::Mat(
+            evidence.depth.size(), CV_32FC1, cv::Scalar(0.1f));
+        evidence.baselineSector = sectors[static_cast<std::size_t>(
+            index % static_cast<int>(sectors.size()))];
+        result.push_back(std::move(evidence));
+    }
+    return result;
+}
+
 TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
 {
     const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
@@ -74,6 +95,50 @@ TEST(DepthCrossViewHoleRepairTest, ParallelProjectionHonorsPreexistingCancellati
 
     EXPECT_EQ(candidate_count, 0U);
     EXPECT_EQ(cv::countNonZero(projected > 0.0f), 0);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     ProjectedEvidenceIsDeterministicAcrossWorkerCounts)
+{
+    const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
+    const xjw::FramePinholeCamera source_camera = cameraAt(0.08);
+    cv::Mat source_depth(64, 96, CV_32FC1, cv::Scalar(2.0f));
+    cv::Mat source_confidence(64, 96, CV_32FC1);
+    for (int row = 0; row < source_confidence.rows; ++row)
+    {
+        float *values = source_confidence.ptr<float>(row);
+        for (int column = 0; column < source_confidence.cols; ++column)
+        {
+            values[column] = 0.2f + 0.7f * static_cast<float>(column) /
+                static_cast<float>(source_confidence.cols - 1);
+        }
+    }
+    const auto serial = xjw::mvs::projectSourceDepthEvidenceToReference(
+        source_depth,
+        source_confidence,
+        source_camera,
+        reference_camera,
+        source_depth.size(),
+        1.0f,
+        0,
+        nullptr,
+        1);
+    const auto parallel = xjw::mvs::projectSourceDepthEvidenceToReference(
+        source_depth,
+        source_confidence,
+        source_camera,
+        reference_camera,
+        source_depth.size(),
+        1.0f,
+        0,
+        nullptr,
+        6);
+
+    EXPECT_EQ(cv::norm(serial.depth, parallel.depth, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::norm(serial.confidence, parallel.confidence, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::norm(serial.reprojectionErrorPixels,
+                       parallel.reprojectionErrorPixels,
+                       cv::NORM_INF), 0.0);
 }
 
 TEST(DepthCrossViewHoleRepairTest, ParallelLayerSelectionMatchesSerialResult)
@@ -380,6 +445,388 @@ TEST(DepthCrossViewHoleRepairTest, RefinesNativeDepthTowardStableProjectedLayer)
     EXPECT_FLOAT_EQ(confidence.at<float>(0, 0), 0.9f);
 }
 
+TEST(DepthCrossViewHoleRepairTest,
+     ReliabilityGuidanceStrengthensOnlyIndependentlySupportedRefinement)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.018f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(3));
+    const cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(0));
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::AmbiguousLowTexture)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    const auto evidence = evidenceFor(projected);
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_EQ(stats.reliabilityGuidedCandidatePixelCount, 1U);
+    EXPECT_EQ(stats.reliabilityGuidedStablePixelCount, 1U);
+    EXPECT_EQ(stats.reliabilityGuidedRefinedPixelCount, 1U);
+    EXPECT_LT(reference.at<float>(0, 0), 2.01f);
+    EXPECT_GT(reference.at<float>(0, 0), 1.999f);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     ReliabilityGuidanceFailsClosedWithoutThreeSources)
+{
+    cv::Mat baseline(1, 1, CV_32FC1, cv::Scalar(2.04f));
+    cv::Mat guided = baseline.clone();
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(2));
+    const cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(0));
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::AmbiguousLowTexture)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    const auto evidence = evidenceFor(projected, {0, 1});
+
+    xjw::mvs::selectDominantProjectedDepthLayer(
+        baseline, support, projected, consistent, contradicted);
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        guided,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_FLOAT_EQ(guided.at<float>(0, 0), 2.04f);
+    EXPECT_EQ(stats.reliabilityGuidedStablePixelCount, 0U);
+    EXPECT_EQ(stats.reliabilityGuidedInsufficientSourcePixelCount, 1U);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     ReliabilityGuidanceKeepsReliableNativeDepthOnLegacyPath)
+{
+    cv::Mat baseline(1, 1, CV_32FC1, cv::Scalar(2.04f));
+    cv::Mat guided = baseline.clone();
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(3));
+    const cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(0));
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::Reliable)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    const auto evidence = evidenceFor(projected);
+
+    xjw::mvs::selectDominantProjectedDepthLayer(
+        baseline, support, projected, consistent, contradicted);
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        guided,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_FLOAT_EQ(guided.at<float>(0, 0), baseline.at<float>(0, 0));
+    EXPECT_EQ(stats.reliabilityGuidedCandidatePixelCount, 0U);
+    EXPECT_EQ(stats.reliabilityGuidedStablePixelCount, 0U);
+    EXPECT_EQ(stats.reliabilityGuidedRefinedPixelCount, 0U);
+    EXPECT_EQ(stats.reliabilityGuidedSwitchedPixelCount, 0U);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     ReliabilityGuidedOnlyModePreservesReliableAndMissingPixels)
+{
+    cv::Mat reference(1, 3, CV_32FC1);
+    reference.at<float>(0, 0) = 2.018f;
+    reference.at<float>(0, 1) = 2.04f;
+    reference.at<float>(0, 2) = 0.0f;
+    const cv::Mat original = reference.clone();
+    const cv::Mat support(1, 3, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 3, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 3, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 3, CV_32FC1, cv::Scalar(2.001f))};
+    const cv::Mat consistent(1, 3, CV_16UC1, cv::Scalar(3));
+    const cv::Mat contradicted(1, 3, CV_16UC1, cv::Scalar(0));
+    cv::Mat reliability(
+        1,
+        3,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::Reliable)));
+    reliability.at<std::uint8_t>(0, 0) = static_cast<std::uint8_t>(
+        xjw::mvs::DepthLayerReliabilityClass::AmbiguousLowTexture);
+    reliability.at<std::uint8_t>(0, 2) = static_cast<std::uint8_t>(
+        xjw::mvs::DepthLayerReliabilityClass::Unobservable);
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    options.restrictToReliabilityGuidedCandidates = true;
+    const auto evidence = evidenceFor(projected);
+    cv::Mat changed_mask;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        &changed_mask,
+        &evidence);
+
+    EXPECT_TRUE(stats.reliabilityGuidedOnlyMode);
+    EXPECT_EQ(stats.reliabilityGuidedCandidatePixelCount, 1U);
+    EXPECT_EQ(stats.reliabilityGuidedRefinedPixelCount, 1U);
+    EXPECT_LT(reference.at<float>(0, 0), original.at<float>(0, 0));
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 1), original.at<float>(0, 1));
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 2), original.at<float>(0, 2));
+    EXPECT_EQ(changed_mask.at<std::uint8_t>(0, 0), 255);
+    EXPECT_EQ(changed_mask.at<std::uint8_t>(0, 1), 0);
+    EXPECT_EQ(changed_mask.at<std::uint8_t>(0, 2), 0);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     RejectedLayerCanSwitchOnlyToThreeSourceIndependentCluster)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.10f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(3));
+    const cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(0));
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::RejectedLayer)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    const auto evidence = evidenceFor(projected);
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_EQ(stats.reliabilityGuidedSwitchedPixelCount, 1U);
+    EXPECT_EQ(stats.switchedNativePixelCount, 1U);
+    EXPECT_NEAR(reference.at<float>(0, 0), 2.0f, 1.0e-6f);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     RejectedLayerCannotSwitchWithOneBaselineDirection)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.10f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const auto evidence = evidenceFor(projected, {0});
+    const cv::Mat votes(1, 1, CV_16UC1, cv::Scalar(3));
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::RejectedLayer)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+    xjw::mvs::DepthGeometryHypothesisRerankMaps maps;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        votes,
+        cv::Mat(1, 1, CV_16UC1, cv::Scalar(0)),
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence,
+        &maps);
+
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 0), 2.10f);
+    EXPECT_EQ(stats.geometryRerankRejectedBaselineCount, 1U);
+    EXPECT_EQ(maps.supportingSourceCount.at<std::uint8_t>(0, 0), 3);
+    EXPECT_EQ(maps.baselineSectorCount.at<std::uint8_t>(0, 0), 1);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     AmbiguousLayerNeverJumpsToDistantMeasuredMode)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.10f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const auto evidence = evidenceFor(projected);
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::AmbiguousLowTexture)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        cv::Mat(1, 1, CV_16UC1, cv::Scalar(0)),
+        cv::Mat(1, 1, CV_16UC1, cv::Scalar(3)),
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 0), 2.10f);
+    EXPECT_EQ(stats.geometryRerankSwitchedPixelCount, 0U);
+    EXPECT_EQ(stats.geometryRerankRejectedCostCount, 1U);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     GeometryRerankRequiresMeasuredCostAdvantage)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(1.999f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.000f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.001f))};
+    const auto evidence = evidenceFor(projected);
+    const cv::Mat reliability(
+        1,
+        1,
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthLayerReliabilityClass::RejectedLayer)));
+    xjw::mvs::DominantDepthLayerSelectionOptions options;
+    options.enableReliabilityGuidedCorrection = true;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        cv::Mat(1, 1, CV_16UC1, cv::Scalar(3)),
+        cv::Mat(1, 1, CV_16UC1, cv::Scalar(0)),
+        options,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &reliability,
+        nullptr,
+        &evidence);
+
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 0), 2.0f);
+    EXPECT_EQ(stats.geometryRerankRejectedCostCount, 1U);
+}
+
 TEST(DepthCrossViewHoleRepairTest, SwitchesContradictedNativeDepthToDominantLayer)
 {
     cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(4.0f));
@@ -508,6 +955,51 @@ TEST(DepthCrossViewHoleRepairTest,
     EXPECT_EQ(cv::countNonZero(reference(hole) <= 0.0f), 0);
     EXPECT_NEAR(reference.at<float>(24, 24), 2.0f, 1.0e-3f);
     EXPECT_EQ(repaired_mask.at<std::uint8_t>(24, 24), 255);
+}
+
+TEST(DepthCrossViewHoleRepairTest,
+     ReliabilityGateExcludesIneligibleNativeInterpolationAnchors)
+{
+    cv::Mat reference(48, 48, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Rect hole(16, 16, 16, 16);
+    reference(hole).setTo(0.0f);
+    const cv::Mat support(48, 48, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.0f)),
+        cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.0f))};
+    cv::Mat confidence(48, 48, CV_32FC1, cv::Scalar(0.8f));
+    cv::Mat votes(48, 48, CV_16UC1, cv::Scalar(1));
+    votes(hole).setTo(0);
+    cv::Mat repaired_mask;
+    const cv::Mat eligibility(48, 48, CV_8UC1, cv::Scalar(0));
+    xjw::mvs::CrossViewHoleRepairOptions options;
+    options.includeValidNativeInterpolationAnchors = true;
+    options.anchoredInterpolation.enabled = true;
+
+    const auto stats = xjw::mvs::repairDepthHolesFromProjectedSources(
+        reference,
+        support,
+        projected,
+        options,
+        &confidence,
+        &votes,
+        &repaired_mask,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1,
+        nullptr,
+        &eligibility);
+
+    EXPECT_EQ(stats.nativeInterpolationAnchorCandidateCount, 2048U);
+    EXPECT_EQ(stats.nativeInterpolationAnchorAcceptedCount, 0U);
+    EXPECT_EQ(stats.nativeInterpolationAnchorRejectedCount, 2048U);
+    EXPECT_EQ(stats.anchoredInterpolation.anchorPixelCount, 0U);
+    EXPECT_EQ(stats.anchoredInterpolation.acceptedComponentCount, 0U);
+    EXPECT_EQ(cv::countNonZero(reference(hole) > 0.0f), 0);
 }
 
 TEST(DepthAnchoredHoleInterpolatorTest, FillsInternalComponentBetweenStrongAnchors)

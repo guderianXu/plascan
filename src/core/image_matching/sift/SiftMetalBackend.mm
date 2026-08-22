@@ -371,6 +371,26 @@ bool isMetalSiftBackendAvailable(int deviceIndex)
     }
 }
 
+QString metalSiftDeviceName(int deviceIndex)
+{
+    if (deviceIndex != 0)
+    {
+        return QString();
+    }
+    @autoreleasepool
+    {
+        try
+        {
+            NSString *name = [metalRuntime().device() name];
+            return name ? QString::fromUtf8([name UTF8String]).trimmed() : QString();
+        }
+        catch (...)
+        {
+            return QString();
+        }
+    }
+}
+
 SiftRawFeatures extractMetalSift(const SiftExtractionRequest& request)
 {
     @autoreleasepool

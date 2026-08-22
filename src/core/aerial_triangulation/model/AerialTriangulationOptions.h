@@ -99,6 +99,8 @@ struct AerialTriangulationOptions
     std::shared_ptr<std::atomic<bool>> cancelFlag; ///< 跨连接点/SfM 阶段共享取消标志。
     /// 阶段文本和整体百分比回调；由 Workflow 把连接点映射到 0-35%、SfM 映射到 35-100%。
     std::function<void(const QString &stage, int percent)> progressFn;
+    /// Auto SIFT 解析出实际 CPU/CUDA/OpenCL/Metal 设备后通知 GUI/CLI。
+    std::function<void(const QString &displayName)> computeDeviceFn;
     /// 每个 pair 落盘后通知上层更新工程索引；不得在回调中阻塞匹配 worker。
     std::function<void(const QString &img0,
                        const QString &img1,

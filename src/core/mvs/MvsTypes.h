@@ -145,6 +145,8 @@ struct FusionConfig
 // =============================================================================
 struct DepthPostProcessEvidence
 {
+    cv::Mat photometricConfidence; ///< 原始光度通道 (CV_32F)，可为空
+    cv::Mat geometricConfidence; ///< 独立几何通道 (CV_32F)，可为空
     cv::Mat geometrySupportCount; ///< 参考帧与一致来源的观测总数 (CV_16U)
     cv::Mat inverseDepthRelativeSpread; ///< 一致观测逆深度相对标准差 (CV_32F)
     cv::Mat adaptiveSupportWeight; ///< 连续跨视支持权重 (CV_32F)，可为空
@@ -161,6 +163,7 @@ struct DepthPostProcessStats
     int validAfterConfidenceFilter = 0;   ///< 置信度过滤后有效深度像素数
     int lowConfidenceCandidateCount = 0;  ///< 低于阈值、进入置信度判定的像素数
     int geometrySupportedLowConfidenceRetained = 0; ///< 因强多视几何证据而保留的低置信实测像素数
+    int independentGeometryConfidenceRetained = 0; ///< 因双通道独立几何置信度保留的像素数
     int boundaryGeometryRetained = 0; ///< 轮廓/遮挡边界因几何支持而保留的像素数
     int confidenceRemoved = 0;            ///< 置信度过滤移除像素数
     int localDepthOutlierRemoved = 0;     ///< 局部深度离群过滤移除像素数
@@ -313,6 +316,12 @@ struct DepthGenConfig
     float postConsistencyResidualMaximumLayerSpread = 0.025f;
     float postConsistencyResidualMaximumPriorRadius = 0.08f;
     bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
+    /// 实验：只让深度层可靠性诊断判定为 Reliable 的原生深度充当
+    /// anchored hole interpolation 的边界锚点；默认关闭，不直接删除深度。
+    bool enableDepthLayerReliabilityAnchorGate = false;
+    /// 内部实验：低纹理弱证据层只有在至少三个独立投影来源形成稳定簇时，
+    /// 才增强向该来源层的纠正；默认关闭，不改变普通 MVS 产品。
+    bool enableDepthLayerReliabilityGuidedCorrection = false;
     int twoSourceGrowthDistancePixels = 3;
     float twoSourceGrowthInverseDepthSpread = 0.01f;
     float twoSourceGrowthNormalAngleDegrees = 15.0f;

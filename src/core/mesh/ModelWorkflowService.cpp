@@ -22,6 +22,7 @@
 #include "VisibilityOccupancyCarrierSubdivider.h"
 #include "io/PathIO.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -60,6 +61,35 @@ float depthFrameTextureQualityWeight(
 
 namespace
 {
+
+QString sha256ForFile(const QString &path, QString *error_message)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (error_message)
+        {
+            *error_message = file.errorString();
+        }
+        return {};
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd())
+    {
+        const QByteArray chunk = file.read(1024 * 1024);
+        if (chunk.isEmpty() && file.error() != QFileDevice::NoError)
+        {
+            if (error_message)
+            {
+                *error_message = file.errorString();
+            }
+            return {};
+        }
+        hash.addData(chunk);
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
 
 bool validateUsableDepthSceneProfileBatch(
     const QVector<DepthFrameArtifact> &artifacts,
@@ -548,6 +578,12 @@ QJsonObject textureResultToJson(
         "texture_exposure_correction_rejected_high_mad_pair_count")] =
         static_cast<qint64>(result.exposureCorrectionRejectedHighMadPairCount);
     object[QStringLiteral(
+        "texture_exposure_correction_connected_component_count")] =
+        result.exposureCorrectionConnectedComponentCount;
+    object[QStringLiteral(
+        "texture_exposure_correction_corrected_view_count")] =
+        result.exposureCorrectionCorrectedViewCount;
+    object[QStringLiteral(
         "texture_exposure_correction_maximum_accepted_log_mad")] =
         result.exposureCorrectionMaximumAcceptedLogMad;
     object[QStringLiteral("texture_exposure_correction_minimum_gain")] =
@@ -573,6 +609,8 @@ QJsonObject textureResultToJson(
     {
         object[QStringLiteral("effective_texture_image_downscale")] =
             std::clamp(config->imageDownscale, 1, 8);
+        object[QStringLiteral("effective_texture_atlas_upscale_limit")] =
+            std::clamp(config->atlasUpscaleLimit, 1.0f, 4.0f);
         object[QStringLiteral("effective_texture_padding")] =
             std::clamp(config->padding, 2, 64);
         object[QStringLiteral("effective_texture_seam_leveling")] =
@@ -581,6 +619,8 @@ QJsonObject textureResultToJson(
             std::clamp(config->seamBorderBlendRadiusPixels, 1, 64);
         object[QStringLiteral("effective_texture_seam_maximum_linear_correction")] =
             std::clamp(config->seamMaximumLinearCorrection, 0.0f, 0.25f);
+        object[QStringLiteral("effective_texture_seam_global_correction_strength")] =
+            std::clamp(config->seamGlobalCorrectionStrength, 0.0f, 1.0f);
         object[QStringLiteral("effective_texture_final_mesh_visibility")] =
             config->enableFinalMeshVisibility;
         object[QStringLiteral("effective_texture_ghost_filter")] =
@@ -847,28 +887,37 @@ bool interpolationIsDisabled(const QJsonObject &settings)
 
 void enforceNoDepthInterpolationPolicy(
     const QJsonObject &settings,
-    xjw::mesh::DepthTsdfOptions *options)
+    xjw::mesh::DepthTsdfOptions *options,
+    bool preserveVisibilityTopologyCarrier = false)
 {
     if (!options || !interpolationIsDisabled(settings))
     {
         return;
     }
 
-    // “插值禁用” is an observation-only contract. Keep only depth samples that
-    // have measured support, and do not let an explicit completion setting or
-    // an orbital default re-enable an unsupported/silhouette-derived carrier.
-    // MC33 still interpolates the zero-crossing position inside a cell, but the
-    // sign-changing edge itself must be supported by measured observations.
-    options->fillSmallBoundaryHoles = false;
+    // “插值禁用” applies to depth samples, not necessarily to final mesh
+    // topology. Orbital models may retain a visibility/silhouette constrained
+    // occupancy carrier while still rejecting every synthesized depth
+    // observation and all depth-driven unsupported-surface recovery below.
+    // Generic scenes keep the stricter measured-sign-change behavior.
+    // Capping a bounded mesh boundary adds faces only; it does not create,
+    // overwrite, or extrapolate a depth-map sample. Keep this topology-only
+    // repair for orbital visibility carriers unless the user explicitly
+    // disables hole filling. Generic measured-only surfaces remain open.
+    options->fillSmallBoundaryHoles = preserveVisibilityTopologyCarrier &&
+        settings.value(QStringLiteral("holeFill")).toBool(true);
     options->enableSilhouetteAwareFinalHoleFill = false;
     options->enableVisibilityConstrainedFinalHoleFill = false;
     options->enableTinyBoundaryLoopCollapse = false;
     options->enableVisualHullSignedDistanceCompletion = false;
-    options->enableVisibilityOccupancyCompletion = false;
+    if (!preserveVisibilityTopologyCarrier)
+    {
+        options->enableVisibilityOccupancyCompletion = false;
+        options->visibilityOccupancySilhouetteFullPriorCapacity = 0;
+    }
     options->visibilityOccupancyAlignCarrierGrid = false;
     options->visibilityOccupancyNativeCarrierExtraction = false;
     options->visibilityOccupancyCellBoundaryExtraction = false;
-    options->visibilityOccupancySilhouetteFullPriorCapacity = 0;
     options->allowInvalidNearestPixelRecovery = false;
     options->excludeAnchoredInterpolationObservations = true;
     options->enableAuxiliarySurfaceOnlyIntegration = false;
@@ -884,7 +933,8 @@ void enforceNoDepthInterpolationPolicy(
     options->enableSurfacePatchSupport = false;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
-    options->mc33RequireSupportedSignChange = true;
+    options->mc33RequireSupportedSignChange =
+        !preserveVisibilityTopologyCarrier;
 }
 
 xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
@@ -2592,6 +2642,19 @@ makeVisibilityOccupancyDepthRefineOptions(
     bool orbital_workspace)
 {
     xjw::mesh::DepthConstrainedSurfaceRefineOptions options;
+    const bool measured_depth_only = interpolationIsDisabled(settings);
+    options.depthRefine.measuredDepthSamplesOnly = measured_depth_only;
+    options.depthRefine.primaryFramesOnly = measured_depth_only;
+    options.maximumAcceptedBlend = measured_depth_only ? 0.25f : 1.0f;
+    options.maximumCumulativeProjectedP95DisplacementPixels =
+        measured_depth_only
+        ? std::clamp(
+              static_cast<float>(settings.value(QStringLiteral(
+                  "tsdfVisibilityOccupancyDepthMaximumProjectedP95Pixels"))
+                                     .toDouble(0.75)),
+              0.25f,
+              4.0f)
+        : 0.0f;
     const float occupancy_step = visibilityOccupancyMedianVoxelStep(
         layout, occupancy_resolution);
     options.passes = qBound(
@@ -2980,9 +3043,33 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->enableVisibilityOccupancyCompletion = true;
     }
+    const bool high_detail_model = options->resolution >= 384 &&
+        options->simplifyTargetFaces > 0 &&
+        (options->simplifyTargetFaces <= 120000 ||
+         (options->enableTopologySafeSimplification &&
+          options->simplifyTargetFaces <= 240000));
     if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyResolution")))
     {
-        options->visibilityOccupancyResolution = 72;
+        int effective_tsdf_resolution = options->resolution;
+        if (high_detail_model &&
+            settings.value(QStringLiteral(
+                "tsdfOrbitalAdaptiveResolution")).toBool(true) &&
+            maximumReliableResolution > 0)
+        {
+            effective_tsdf_resolution = std::min(
+                effective_tsdf_resolution, maximumReliableResolution);
+        }
+        // With interpolation disabled the occupancy field is the only
+        // topology carrier, and its sign is authoritative even at directly
+        // observed high-resolution TSDF samples. A 72-cell carrier visibly
+        // quantizes thin measured silhouettes at a 320+ TSDF resolution.
+        // Keep the cheaper legacy default elsewhere and preserve an explicit
+        // user value in every mode.
+        options->visibilityOccupancyResolution =
+            interpolationIsDisabled(settings) &&
+                effective_tsdf_resolution >= 320
+            ? 96
+            : 72;
     }
     if (!settings.contains(QStringLiteral(
             "tsdfVisibilityOccupancyCellBoundaryExtraction")))
@@ -3069,17 +3156,41 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->triangleQualityIsotropicRemeshingPasses = 4;
     }
-    const bool high_detail_model = options->resolution >= 384 &&
-        options->simplifyTargetFaces > 0 &&
-        (options->simplifyTargetFaces <= 120000 ||
-         (options->enableTopologySafeSimplification &&
-          options->simplifyTargetFaces <= 240000));
+    const bool no_depth_interpolation_topology_carrier =
+        interpolationIsDisabled(settings) &&
+        settings.value(QStringLiteral("tsdfVisibilityOccupancyCompletion"))
+            .toBool(true);
+    if (no_depth_interpolation_topology_carrier)
+    {
+        options->enableVisibilityOccupancyCompletion = true;
+        options->visibilityOccupancySilhouetteFullPriorCapacity = qBound(
+            0,
+            settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancySilhouetteFullPriorCapacity"))
+                .toInt(2),
+            1000);
+        if (options->simplifyTargetFaces > 0 &&
+            !settings.contains(QStringLiteral(
+                "tsdfTriangleQualityOptimization")))
+        {
+            options->enableTriangleQualityOptimization = true;
+        }
+        if (options->enableTriangleQualityOptimization &&
+            !settings.contains(QStringLiteral(
+                "tsdfTriangleQualityIsotropicRemeshing")))
+        {
+            options->enableTriangleQualityIsotropicRemeshing = true;
+        }
+    }
     if (!high_detail_model)
     {
         // Low-resolution and large-face orbital presets return before the
         // detail-only defaults below. Re-apply the no-depth-interpolation
         // contract without disabling the visibility-constrained carrier.
-        enforceNoDepthInterpolationPolicy(settings, options);
+        enforceNoDepthInterpolationPolicy(
+            settings,
+            options,
+            no_depth_interpolation_topology_carrier);
         return;
     }
     if (!settings.contains(QStringLiteral(
@@ -3295,7 +3406,10 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
             options->visibilityHoleFillMaximumConflictViews = 0;
         }
     }
-    enforceNoDepthInterpolationPolicy(settings, options);
+    enforceNoDepthInterpolationPolicy(
+        settings,
+        options,
+        no_depth_interpolation_topology_carrier);
 }
 
 FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
@@ -3353,11 +3467,19 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
         topology_after == topology_before &&
         result.qualityAfter.validFaceCount ==
             result.qualityBefore.validFaceCount;
+    const double high_aspect_ratio_tolerance = std::max(
+        1.0e-6,
+        4.0 / std::max(1, result.qualityBefore.validFaceCount));
+    const double extreme_aspect_ratio_tolerance = std::max(
+        1.0e-6,
+        2.0 / std::max(1, result.qualityBefore.validFaceCount));
     const bool triangle_quality_not_worse =
         result.qualityAfter.highAspectFaceRatio <=
-            result.qualityBefore.highAspectFaceRatio + 1.0e-6 &&
+            result.qualityBefore.highAspectFaceRatio +
+                high_aspect_ratio_tolerance &&
         result.qualityAfter.extremeAspectFaceRatio <=
-            result.qualityBefore.extremeAspectFaceRatio + 1.0e-6;
+            result.qualityBefore.extremeAspectFaceRatio +
+                extreme_aspect_ratio_tolerance;
     const bool normal_quality_not_worse =
         result.qualityAfter.adjacentNormalAngleP90Degrees <=
             result.qualityBefore.adjacentNormalAngleP90Degrees + 1.0e-6 &&
@@ -3412,12 +3534,13 @@ FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
 bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
                                                bool orbitalWorkspace)
 {
-    if (interpolationIsDisabled(settings))
+    const bool configured = settings.value(QStringLiteral(
+        "tsdfVisibilityOccupancyDepthRefinement")).toBool(orbitalWorkspace);
+    if (!configured)
     {
         return false;
     }
-    return settings.value(QStringLiteral(
-        "tsdfVisibilityOccupancyDepthRefinement")).toBool(orbitalWorkspace);
+    return !interpolationIsDisabled(settings) || orbitalWorkspace;
 }
 
 QString orbitalRoleForDepthFrame(const QJsonArray &roles, int refIndex)
@@ -3869,7 +3992,16 @@ xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &set
         config.textureSize = settings.value(QStringLiteral("textureSize")).toInt(config.textureSize);
         config.imageDownscale =
             settings.value(QStringLiteral("imageDownscale")).toInt(config.imageDownscale);
+        config.atlasUpscaleLimit = static_cast<float>(
+            settings.value(QStringLiteral("atlasUpscaleLimit"))
+                .toDouble(config.atlasUpscaleLimit));
         config.padding = settings.value(QStringLiteral("padding")).toInt(config.padding);
+        config.maximumCandidateViews = settings.value(
+            QStringLiteral("maximumCandidateViews"))
+            .toInt(config.maximumCandidateViews);
+        config.maximumBlendedViews = settings.value(
+            QStringLiteral("maximumBlendedViews"))
+            .toInt(config.maximumBlendedViews);
         config.keepUnmapped = settings.value(QStringLiteral("keepUnmapped")).toBool(config.keepUnmapped);
         config.enableGhostFilter =
             settings.value(QStringLiteral("ghostFilter")).toBool(config.enableGhostFilter);
@@ -3880,6 +4012,18 @@ xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &set
         config.enableFinalMeshVisibility = settings.value(
             QStringLiteral("finalMeshVisibility"))
             .toBool(config.enableFinalMeshVisibility);
+        config.enableSeamLeveling = settings.value(
+            QStringLiteral("seamLeveling"))
+            .toBool(config.enableSeamLeveling);
+        config.seamBorderBlendRadiusPixels = settings.value(
+            QStringLiteral("seamBorderBlendRadiusPixels"))
+            .toInt(config.seamBorderBlendRadiusPixels);
+        config.seamMaximumLinearCorrection = static_cast<float>(
+            settings.value(QStringLiteral("seamMaximumLinearCorrection"))
+                .toDouble(config.seamMaximumLinearCorrection));
+        config.seamGlobalCorrectionStrength = static_cast<float>(
+            settings.value(QStringLiteral("seamGlobalCorrectionStrength"))
+                .toDouble(config.seamGlobalCorrectionStrength));
         config.sharpeningStrength = static_cast<float>(
             settings.value(QStringLiteral("sharpeningStrength"))
                 .toDouble(config.sharpeningStrength));
@@ -4070,6 +4214,103 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                ? depth_source_info.absoluteFilePath()
                : depth_source_info.absolutePath())
         : request.outputRoot;
+
+    const bool retain_model_stage_snapshots = request.settings.value(
+        QStringLiteral("retainModelStageSnapshots")).toBool(false);
+    QJsonArray model_stage_snapshots;
+    QString model_stage_snapshot_error;
+    const auto persist_model_stage = [
+                                         &model_stage_snapshots,
+                                         &model_stage_snapshot_error,
+                                         output_root](
+                                         const QString &attempt,
+                                         const QString &stage,
+                                         const TriMesh &mesh)
+    {
+        if (!model_stage_snapshot_error.isEmpty() || mesh.empty())
+        {
+            return;
+        }
+        const QString file_name = QStringLiteral("%1_%2.ply")
+                                      .arg(attempt, stage);
+        const QString path = QDir(
+            QDir(output_root).filePath(QStringLiteral("stage_snapshots")))
+                                 .filePath(file_name);
+        if (QFileInfo::exists(path))
+        {
+            model_stage_snapshot_error = QStringLiteral(
+                "模型阶段快照已存在，拒绝覆盖：%1").arg(path);
+            return;
+        }
+
+        std::string save_error;
+        if (!mesh.savePLY(
+                xjw::common::io::toUtf8Path(path),
+                &save_error))
+        {
+            model_stage_snapshot_error = QStringLiteral(
+                "无法保存模型阶段快照 %1：%2")
+                                             .arg(
+                                                 path,
+                                                 QString::fromStdString(
+                                                     save_error));
+            return;
+        }
+
+        QString hash_error;
+        const QString sha256 = sha256ForFile(path, &hash_error);
+        if (sha256.isEmpty())
+        {
+            model_stage_snapshot_error = QStringLiteral(
+                "无法校验模型阶段快照 %1：%2")
+                                             .arg(path, hash_error);
+            return;
+        }
+
+        const MeshTopologyQualityStatistics quality =
+            evaluateMeshTopologyQuality(mesh);
+        model_stage_snapshots.append(QJsonObject{
+            {QStringLiteral("attempt"), attempt},
+            {QStringLiteral("stage"), stage},
+            {QStringLiteral("path"), path},
+            {QStringLiteral("sha256"), sha256},
+            {QStringLiteral("size_bytes"),
+             static_cast<double>(QFileInfo(path).size())},
+            {QStringLiteral("vertex_count"), mesh.vertexCount()},
+            {QStringLiteral("face_count"), mesh.faceCount()},
+            {QStringLiteral("component_count"), quality.componentCount},
+            {QStringLiteral("boundary_edge_count"),
+             quality.boundaryEdgeCount},
+            {QStringLiteral("non_manifold_edge_count"),
+             quality.nonManifoldEdgeCount},
+            {QStringLiteral("euler_characteristic"),
+             quality.eulerCharacteristic},
+            {QStringLiteral("closed_genus_estimate"),
+             quality.closedGenusEstimate},
+            {QStringLiteral("high_aspect_face_ratio"),
+             quality.highAspectFaceRatio},
+            {QStringLiteral("extreme_aspect_face_ratio"),
+             quality.extremeAspectFaceRatio},
+            {QStringLiteral("adjacent_normal_p90_degrees"),
+             quality.adjacentNormalAngleP90Degrees}});
+    };
+    const auto make_stage_callback = [
+                                         retain_model_stage_snapshots,
+                                         &persist_model_stage](
+                                         const QString &attempt)
+    {
+        return retain_model_stage_snapshots
+            ? std::function<void(const QString &, const TriMesh &)>(
+                  [&persist_model_stage, attempt](
+                      const QString &stage,
+                      const TriMesh &mesh)
+                  {
+                      persist_model_stage(attempt, stage, mesh);
+                  })
+            : std::function<void(const QString &, const TriMesh &)>();
+    };
+    result.payload[QStringLiteral("configured_model_stage_snapshots")] =
+        retain_model_stage_snapshots;
 
     if (mode == QStringLiteral("depth_tsdf"))
     {
@@ -4368,6 +4609,32 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "configured_visibility_occupancy_completion")] =
             options.enableVisibilityOccupancyCompletion;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_resolution")] =
+            options.visibilityOccupancyResolution;
+        QString visibility_occupancy_resolution_policy =
+            QStringLiteral("generic_default");
+        if (orbital_workspace)
+        {
+            visibility_occupancy_resolution_policy =
+                QStringLiteral("orbital_default");
+            if (effective_settings.contains(QStringLiteral(
+                    "tsdfVisibilityOccupancyResolution")))
+            {
+                visibility_occupancy_resolution_policy =
+                    QStringLiteral("explicit");
+            }
+            else if (interpolationIsDisabled(effective_settings) &&
+                     options.resolution >= 320 &&
+                     options.visibilityOccupancyResolution == 96)
+            {
+                visibility_occupancy_resolution_policy =
+                    QStringLiteral("measured_depth_high_resolution");
+            }
+        }
+        result.payload[QStringLiteral(
+            "visibility_occupancy_resolution_policy")] =
+            visibility_occupancy_resolution_policy;
         result.payload[QStringLiteral("configured_interpolation")] =
             request.settings.value(QStringLiteral("interpolation"))
                 .toString(QStringLiteral("enabled"));
@@ -4395,6 +4662,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             requested_tsdf_resolution;
         result.payload[QStringLiteral("configured_tsdf_resolution")] =
             options.resolution;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_resolution")] =
+            options.visibilityOccupancyResolution;
         result.payload[QStringLiteral("requested_target_faces")] =
             requested_target_faces;
         result.payload[QStringLiteral("configured_target_faces")] =
@@ -4415,8 +4685,19 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         {
             build_options.enforceDepthCompletenessGate = false;
         }
+        build_options.stageSnapshot = make_stage_callback(
+            QStringLiteral("base"));
         if (request.progress)
         {
+            QString surface_policy = QStringLiteral("允许受约束补全");
+            if (interpolationIsDisabled(effective_settings))
+            {
+                surface_policy = options.enableVisibilityOccupancyCompletion
+                    ? QStringLiteral("实测深度（可见性拓扑闭合）")
+                    : options.enableAuxiliaryBridgeOnlyIntegration
+                    ? QStringLiteral("仅观测支持（实测桥接）")
+                    : QStringLiteral("仅观测支持");
+            }
             request.progress(
                 QStringLiteral(
                     "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4，"
@@ -4429,11 +4710,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     .arg(options.simplifyTargetFaces)
                     .arg(effective_settings.value(QStringLiteral("interpolation"))
                              .toString(QStringLiteral("enabled")))
-                    .arg(interpolationIsDisabled(effective_settings)
-                             ? (options.enableAuxiliaryBridgeOnlyIntegration
-                                    ? QStringLiteral("仅观测支持（实测桥接）")
-                                    : QStringLiteral("仅观测支持"))
-                             : QStringLiteral("允许受约束补全")),
+                    .arg(surface_policy),
                 1);
         }
         const auto tsdf_started_at = std::chrono::steady_clock::now();
@@ -4526,6 +4803,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             {
                 retry_build_options.enforceDepthCompletenessGate = false;
             }
+            retry_build_options.stageSnapshot = make_stage_callback(
+                QStringLiteral("retry"));
             DepthTsdfResult retry_tsdf = DepthTsdfSurfaceBuilder::build(
                 loaded.frames, retry_build_options);
             result.payload[QStringLiteral(
@@ -4581,6 +4860,11 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral("tsdf_resolution_z")] = tsdf.layout.cells[2];
         result.payload[QStringLiteral("tsdf_required_bytes")] =
             static_cast<double>(tsdf.layout.requiredBytes);
+        if (!model_stage_snapshot_error.isEmpty())
+        {
+            result.errorMessage = model_stage_snapshot_error;
+            return result;
+        }
         if (!tsdf.ok)
         {
             result.errorMessage = tsdf.errorMessage;
@@ -4661,23 +4945,40 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             visual_hull_preflight.usableViewCount;
         if (request.progress)
         {
-            request.progress(
-                observation_only_surface
+            QString completion_message;
+            if (observation_only_surface)
+            {
+                completion_message = options.enableVisibilityOccupancyCompletion
                     ? QStringLiteral(
-                          "插值已禁用：仅提取有测量支持的 TSDF 符号变化；"
-                          "已关闭占据/轮廓载体、外壳补全与深度细化")
-                    : orbital_visual_hull_completion_candidate &&
-                              !visual_hull_preflight.applicable
-                    ? QStringLiteral(
-                          "环拍外壳补全已跳过：抽样检查 %1 个视图，仅 %2 个具备"
-                          "清晰前景轮廓（至少需要 6 个）")
-                          .arg(visual_hull_preflight.inspectedFrameCount)
-                          .arg(visual_hull_preflight.usableViewCount)
-                    : orbital_visual_hull_completion_requested
-                    ? QStringLiteral(
-                          "基础表面不完整，正在启动环拍视觉外壳补全...")
+                          "深度插值已禁用：不生成或外推深度样本；"
+                          "使用实测深度与轮廓约束的拓扑闭合载体，"
+                          "拓扑闭合后仅用 Primary 帧实测像素做保守表面细化，"
+                          "外壳替换保持关闭")
                     : QStringLiteral(
-                          "基础表面完整性满足补全策略，跳过环拍外壳补全"),
+                          "深度插值已禁用：仅提取有测量支持的 TSDF 符号变化；"
+                          "拓扑闭合载体、外壳补全与深度细化均关闭");
+            }
+            else if (orbital_visual_hull_completion_candidate &&
+                     !visual_hull_preflight.applicable)
+            {
+                completion_message = QStringLiteral(
+                    "环拍外壳补全已跳过：抽样检查 %1 个视图，仅 %2 个具备"
+                    "清晰前景轮廓（至少需要 6 个）")
+                    .arg(visual_hull_preflight.inspectedFrameCount)
+                    .arg(visual_hull_preflight.usableViewCount);
+            }
+            else if (orbital_visual_hull_completion_requested)
+            {
+                completion_message = QStringLiteral(
+                    "基础表面不完整，正在启动环拍视觉外壳补全...");
+            }
+            else
+            {
+                completion_message = QStringLiteral(
+                    "基础表面完整性满足补全策略，跳过环拍外壳补全");
+            }
+            request.progress(
+                completion_message,
                 tsdf_progress_end);
         }
 
@@ -6655,10 +6956,23 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             }
             const DepthConstrainedSurfaceRefineOptions refine_options =
                 makeVisibilityOccupancyDepthRefineOptions(
-                    request.settings,
+                    effective_settings,
                     tsdf.layout,
                     options.visibilityOccupancyResolution,
                     orbital_workspace);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_measured_depth_samples_only")] =
+                refine_options.depthRefine.measuredDepthSamplesOnly;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_primary_frames_only")] =
+                refine_options.depthRefine.primaryFramesOnly;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_maximum_accepted_blend")] =
+                refine_options.maximumAcceptedBlend;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_maximum_projected_p95_pixels")] =
+                refine_options
+                    .maximumCumulativeProjectedP95DisplacementPixels;
             const DepthConstrainedSurfaceRefineStatistics refinement =
                 DepthConstrainedSurfaceRefiner::refine(
                     &tsdf.mesh,
@@ -6722,6 +7036,21 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 static_cast<double>(
                     refinement.acceptedLocallyFrozenVertexCount);
             result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_projection_guard_rejected_candidates")] =
+                refinement.projectionGuardRejectedCandidateCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_projected_displacement_samples")] =
+                static_cast<double>(
+                    refinement.projectedDisplacementSampleCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_accepted_projected_p95_pixels")] =
+                refinement
+                    .acceptedCumulativeProjectedP95DisplacementPixels;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_maximum_evaluated_projected_p95_pixels")] =
+                refinement
+                    .maximumEvaluatedCumulativeProjectedP95DisplacementPixels;
+            result.payload[QStringLiteral(
                 "visibility_occupancy_depth_refinement_removed_median_normal_bias")] =
                 refinement.removedMedianNormalBias;
             result.payload[QStringLiteral(
@@ -6732,6 +7061,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "visibility_occupancy_depth_refinement_accepted_observations")] =
                 static_cast<double>(
                     refinement.refiner.acceptedObservationCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_rejected_auxiliary_observations")] =
+                static_cast<double>(
+                    refinement.refiner.rejectedAuxiliaryObservationCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_rejected_non_measured_observations")] =
+                static_cast<double>(
+                    refinement.refiner.rejectedNonMeasuredObservationCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_nearest_measured_observations")] =
+                static_cast<double>(
+                    refinement.refiner.nearestMeasuredObservationCount);
             result.payload[QStringLiteral(
                 "visibility_occupancy_depth_refinement_anchored_vertices")] =
                 static_cast<double>(
@@ -6797,6 +7138,13 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             result.payload[QStringLiteral(
                 "visibility_occupancy_depth_refinement_topology_guard_reverted")] =
                 topology_guard_reverted;
+            if (retain_model_stage_snapshots)
+            {
+                persist_model_stage(
+                    QStringLiteral("selected"),
+                    QStringLiteral("06_measured_depth_refinement"),
+                    *output_mesh);
+            }
         }
 
         const int post_refinement_target_faces =
@@ -6887,6 +7235,13 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "visibility_occupancy_post_refinement_simplification_attempted")] =
                 false;
         }
+        if (retain_model_stage_snapshots && post_refinement_target_faces > 0)
+        {
+            persist_model_stage(
+                QStringLiteral("selected"),
+                QStringLiteral("07_post_refinement_simplification"),
+                *output_mesh);
+        }
 
         const bool final_surface_denoising_enabled =
             request.settings.contains(QStringLiteral(
@@ -6910,38 +7265,50 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     QStringLiteral("正在进行保存前的曲率保护表面降噪..."),
                     98);
             }
+            const bool visibility_carrier_denoising =
+                direct_visibility_occupancy_output;
             const int final_denoising_iterations = qBound(
                 0,
                 request.settings.value(QStringLiteral(
                     "tsdfVisibilityOccupancyFinalSurfaceDenoisingIterations"))
-                    .toInt(std::max(8, options.surfaceDenoisingIterations)),
+                    .toInt(visibility_carrier_denoising
+                        ? 12
+                        : std::max(8, options.surfaceDenoisingIterations)),
                 12);
             const float final_denoising_lambda = std::clamp(
                 static_cast<float>(request.settings.value(QStringLiteral(
                     "tsdfVisibilityOccupancyFinalSurfaceDenoisingLambda"))
-                    .toDouble(std::max(0.50f, options.surfaceDenoisingLambda))),
+                    .toDouble(visibility_carrier_denoising
+                        ? 0.70f
+                        : std::max(0.50f, options.surfaceDenoisingLambda))),
                 0.0f,
                 0.75f);
             const float final_denoising_mu = std::clamp(
                 static_cast<float>(request.settings.value(QStringLiteral(
                     "tsdfVisibilityOccupancyFinalSurfaceDenoisingMu"))
-                    .toDouble(options.surfaceDenoisingMu)),
+                    .toDouble(visibility_carrier_denoising
+                        ? -0.72f
+                        : options.surfaceDenoisingMu)),
                 -1.0f,
                 0.0f);
             const float final_denoising_displacement_voxels = std::clamp(
                 static_cast<float>(request.settings.value(QStringLiteral(
                     "tsdfVisibilityOccupancyFinalSurfaceDenoisingMaximumDisplacementVoxels"))
-                    .toDouble(std::max(
-                        0.75f,
-                        options.maximumSurfaceDenoisingDisplacementVoxels))),
+                    .toDouble(visibility_carrier_denoising
+                        ? 1.5f
+                        : std::max(
+                              0.75f,
+                              options.maximumSurfaceDenoisingDisplacementVoxels))),
                 0.0f,
                 1.5f);
             const float final_denoising_feature_angle = std::clamp(
                 static_cast<float>(request.settings.value(QStringLiteral(
                     "tsdfVisibilityOccupancyFinalSurfaceDenoisingFeatureAngleDegrees"))
-                    .toDouble(std::max(
-                        120.0f,
-                        options.maximumSurfaceDenoisingNormalAngleDegrees))),
+                    .toDouble(visibility_carrier_denoising
+                        ? 170.0f
+                        : std::max(
+                              120.0f,
+                              options.maximumSurfaceDenoisingNormalAngleDegrees))),
                 5.0f,
                 170.0f);
             const int final_denoising_boundary_rings = qBound(
@@ -7022,6 +7389,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "visibility_occupancy_final_surface_denoising_normal_over_30_after")] =
                 denoising.qualityAfter.adjacentNormalAngleOver30Ratio;
             result.payload[QStringLiteral(
+                "final_surface_denoising_high_aspect_ratio_before")] =
+                denoising.qualityBefore.highAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_high_aspect_ratio_after")] =
+                denoising.qualityAfter.highAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_extreme_aspect_ratio_before")] =
+                denoising.qualityBefore.extremeAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_extreme_aspect_ratio_after")] =
+                denoising.qualityAfter.extremeAspectFaceRatio;
+            result.payload[QStringLiteral(
                 "final_surface_denoising_accepted")] =
                 denoising.accepted;
             result.payload[QStringLiteral(
@@ -7057,6 +7436,21 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             result.payload[QStringLiteral(
                 "final_surface_denoising_normal_over_30_after")] =
                 denoising.qualityAfter.adjacentNormalAngleOver30Ratio;
+        }
+
+        if (retain_model_stage_snapshots)
+        {
+            persist_model_stage(
+                QStringLiteral("selected"),
+                QStringLiteral("08_workflow_final"),
+                *output_mesh);
+            result.payload[QStringLiteral("model_stage_snapshots")] =
+                model_stage_snapshots;
+            if (!model_stage_snapshot_error.isEmpty())
+            {
+                result.errorMessage = model_stage_snapshot_error;
+                return result;
+            }
         }
 
         if (options.enableDepthCompletenessDiagnostics &&

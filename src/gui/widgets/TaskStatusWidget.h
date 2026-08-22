@@ -17,6 +17,7 @@ public:
     void setCancellable(bool cancellable);
     void setCancellingText(const QString &text);
     void setLabelMinimumWidth(int width);
+    void setDetailText(const QString &text);
 
     void begin(const QString &statusText, int minimum, int maximum);
     void updateProgress(const QString &statusText, int value);
@@ -25,6 +26,7 @@ public:
     bool isActive() const;
     bool isCancelling() const;
     QString statusText() const;
+    QString detailText() const;
     int progressValue() const;
     int progressMaximum() const;
     qint64 elapsedMilliseconds() const;
@@ -36,6 +38,7 @@ private:
     void markCancelling();
 
     QLabel *_statusLabel = nullptr;
+    QLabel *_detailLabel = nullptr;
     QProgressBar *_progressBar = nullptr;
     QToolButton *_cancelButton = nullptr;
     QString _cancelText;

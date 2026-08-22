@@ -352,6 +352,9 @@ TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeep
     const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
     EXPECT_EQ(settings.value(QStringLiteral("textureType")).toString(),
               QStringLiteral("texture_mapping"));
+    EXPECT_EQ(
+        settings.value(QStringLiteral("textureMappingSettingsRevision")).toInt(),
+        2);
     EXPECT_EQ(settings.value(QStringLiteral("sourceData")).toString(),
               QStringLiteral("images"));
     EXPECT_EQ(settings.value(QStringLiteral("mappingMode")).toString(),
@@ -362,10 +365,24 @@ TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeep
     EXPECT_FALSE(settings.value(QStringLiteral("colorCorrection")).toBool());
     EXPECT_DOUBLE_EQ(
         settings.value(QStringLiteral("sharpeningStrength")).toDouble(),
-        0.35);
+        0.0);
     EXPECT_FALSE(settings.value(QStringLiteral("saveEachStep")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("useAssignedImages")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("transferTexture")).toBool());
+
+    TextureMappingDialog legacy_dialog;
+    auto *legacy_sharpening = legacy_dialog.findChild<QDoubleSpinBox *>(
+        QStringLiteral("m_seamsMarginSpin"));
+    ASSERT_NE(legacy_sharpening, nullptr);
+    legacy_dialog.applySettings(QJsonObject{
+        {QStringLiteral("sharpeningStrength"), 0.35}
+    });
+    EXPECT_DOUBLE_EQ(legacy_sharpening->value(), 0.0);
+    legacy_dialog.applySettings(QJsonObject{
+        {QStringLiteral("textureMappingSettingsRevision"), 2},
+        {QStringLiteral("sharpeningStrength"), 0.35}
+    });
+    EXPECT_DOUBLE_EQ(legacy_sharpening->value(), 0.35);
 }
 
 TEST(WorkflowParameterDialogStyleTest, TiePointAndAerialDialogsReuseStableControlsAndButtons)

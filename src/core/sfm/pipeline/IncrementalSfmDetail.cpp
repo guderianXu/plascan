@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numeric>
+#include <unordered_set>
 
 namespace xjw::incremental_sfm_detail
 {
@@ -78,6 +80,124 @@ bool pointUsableForPnp(const SfmReconstruction &reconstruction,
     }
     const ScenePoint3D &point = reconstruction.point3D(pointId);
     return point.track.length() >= static_cast<std::size_t>(std::max(2, minTrackLength));
+}
+
+std::vector<PnpCorrespondenceProposal> selectUniquePnpCorrespondences(
+    const std::vector<PnpCorrespondenceProposal> &proposals)
+{
+    using ProposalKey = std::pair<FeatureIdx, Point3DId>;
+    std::map<ProposalKey, PnpCorrespondenceProposal> merged;
+    for (const PnpCorrespondenceProposal &proposal : proposals)
+    {
+        if (proposal.featureIdx == kInvalidFeatureIdx ||
+            proposal.pointId == kInvalidPoint3DId)
+        {
+            continue;
+        }
+        PnpCorrespondenceProposal &entry = merged[{proposal.featureIdx, proposal.pointId}];
+        if (entry.featureIdx == kInvalidFeatureIdx)
+        {
+            entry = proposal;
+            entry.supportingNeighbors = std::max(1, proposal.supportingNeighbors);
+            continue;
+        }
+        entry.supportingNeighbors += std::max(1, proposal.supportingNeighbors);
+        entry.pointTrackLength = std::max(entry.pointTrackLength, proposal.pointTrackLength);
+        entry.matchScore = std::max(entry.matchScore, proposal.matchScore);
+        entry.pointError = std::min(entry.pointError, proposal.pointError);
+    }
+
+    std::vector<PnpCorrespondenceProposal> ranked;
+    ranked.reserve(merged.size());
+    for (const auto &[key, proposal] : merged)
+    {
+        (void)key;
+        ranked.push_back(proposal);
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const auto &left, const auto &right)
+    {
+        if (left.supportingNeighbors != right.supportingNeighbors)
+        {
+            return left.supportingNeighbors > right.supportingNeighbors;
+        }
+        if (left.pointTrackLength != right.pointTrackLength)
+        {
+            return left.pointTrackLength > right.pointTrackLength;
+        }
+        if (left.matchScore != right.matchScore)
+        {
+            return left.matchScore > right.matchScore;
+        }
+        if (left.pointError != right.pointError)
+        {
+            return left.pointError < right.pointError;
+        }
+        if (left.featureIdx != right.featureIdx)
+        {
+            return left.featureIdx < right.featureIdx;
+        }
+        return left.pointId < right.pointId;
+    });
+
+    std::unordered_set<FeatureIdx> used_features;
+    std::unordered_set<Point3DId> used_points;
+    std::vector<PnpCorrespondenceProposal> selected;
+    selected.reserve(ranked.size());
+    for (const PnpCorrespondenceProposal &proposal : ranked)
+    {
+        if (used_features.count(proposal.featureIdx) != 0 ||
+            used_points.count(proposal.pointId) != 0)
+        {
+            continue;
+        }
+        used_features.insert(proposal.featureIdx);
+        used_points.insert(proposal.pointId);
+        selected.push_back(proposal);
+    }
+    return selected;
+}
+
+PnpInlierSpatialSupport measurePnpInlierSpatialSupport(
+    const std::vector<std::array<double, 2>> &imagePoints,
+    const std::vector<unsigned char> &inlierMask,
+    int imageWidth,
+    int imageHeight,
+    int gridColumns,
+    int gridRows)
+{
+    PnpInlierSpatialSupport support;
+    if (imagePoints.size() != inlierMask.size() || imageWidth <= 0 || imageHeight <= 0 ||
+        gridColumns <= 0 || gridRows <= 0)
+    {
+        return support;
+    }
+    std::vector<unsigned char> occupied(
+        static_cast<std::size_t>(gridColumns * gridRows), 0);
+    std::vector<unsigned char> occupied_rows(static_cast<std::size_t>(gridRows), 0);
+    std::vector<unsigned char> occupied_columns(static_cast<std::size_t>(gridColumns), 0);
+    for (std::size_t index = 0; index < imagePoints.size(); ++index)
+    {
+        if (inlierMask[index] == 0 || !std::isfinite(imagePoints[index][0]) ||
+            !std::isfinite(imagePoints[index][1]))
+        {
+            continue;
+        }
+        const int column = std::clamp(
+            static_cast<int>(imagePoints[index][0] * gridColumns / imageWidth),
+            0,
+            gridColumns - 1);
+        const int row = std::clamp(
+            static_cast<int>(imagePoints[index][1] * gridRows / imageHeight),
+            0,
+            gridRows - 1);
+        occupied[static_cast<std::size_t>(row * gridColumns + column)] = 1;
+        occupied_rows[static_cast<std::size_t>(row)] = 1;
+        occupied_columns[static_cast<std::size_t>(column)] = 1;
+    }
+    support.occupiedCells = std::accumulate(occupied.begin(), occupied.end(), 0);
+    support.occupiedRows = std::accumulate(occupied_rows.begin(), occupied_rows.end(), 0);
+    support.occupiedColumns = std::accumulate(occupied_columns.begin(), occupied_columns.end(), 0);
+    return support;
 }
 
 double distance3d(const std::array<double, 3> &a, const std::array<double, 3> &b)

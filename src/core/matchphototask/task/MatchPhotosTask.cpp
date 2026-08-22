@@ -520,7 +520,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
                 image_matching::SiftFeatureExtractor::resolveBackend(
                     requestedSiftBackend(_options.device), _options.cudaDevice);
             result.algorithmPlan = MatchPhotosAlgorithmSelector::resolveExecutionBackend(
-                _options, std::move(result.algorithmPlan), backend);
+                _options, std::move(result.algorithmPlan), backend, _options.cudaDevice);
         }
         catch (const std::exception &error)
         {
@@ -541,6 +541,11 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         result.errorMessage = result.algorithmPlan.validationError;
         return result;
+    }
+    if (runtimeContext.computeDeviceCallback &&
+        !result.algorithmPlan.computeDeviceDisplayName.trimmed().isEmpty())
+    {
+        runtimeContext.computeDeviceCallback(result.algorithmPlan.computeDeviceDisplayName);
     }
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),

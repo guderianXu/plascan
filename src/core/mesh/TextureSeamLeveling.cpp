@@ -44,7 +44,8 @@ TextureSeamLevelingStats applyTextureSeamLeveling(
     const std::vector<TextureSeamConstraint> &constraints,
     int chartCount,
     int borderBlendRadiusPixels,
-    float maximumAbsoluteLinearCorrection)
+    float maximumAbsoluteLinearCorrection,
+    float globalCorrectionStrength)
 {
     TextureSeamLevelingStats stats;
     if (!atlasBgr || atlasBgr->type() != CV_8UC3 ||
@@ -186,6 +187,8 @@ TextureSeamLevelingStats applyTextureSeamLeveling(
     }
 
     const int radius = std::clamp(borderBlendRadiusPixels, 1, 64);
+    const float global_strength = std::clamp(
+        globalCorrectionStrength, 0.0f, 1.0f);
     std::vector<cv::Rect> bounds(
         static_cast<std::size_t>(chartCount),
         cv::Rect(atlasBgr->cols, atlasBgr->rows, 0, 0));
@@ -252,12 +255,14 @@ TextureSeamLevelingStats applyTextureSeamLeveling(
                 {
                     continue;
                 }
-                const float alpha = std::clamp(
+                const float border_alpha = std::clamp(
                     (static_cast<float>(radius) + 1.0f -
                      distance_row[column + 1]) /
                         static_cast<float>(radius),
                     0.0f,
                     1.0f);
+                const float alpha = global_strength +
+                    (1.0f - global_strength) * border_alpha;
                 if (alpha <= 0.0f)
                 {
                     continue;

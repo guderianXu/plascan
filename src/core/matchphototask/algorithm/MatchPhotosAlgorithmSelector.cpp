@@ -155,7 +155,8 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::resolveExecutionBackend(
     const MatchPhotosOptions &options,
     MatchPhotosAlgorithmPlan plan,
-    image_matching::SiftComputeBackend resolvedBackend)
+    image_matching::SiftComputeBackend resolvedBackend,
+    int deviceIndex)
 {
     if (!plan.valid ||
         plan.algorithmId != QLatin1String(image_matching::kAutoSiftAlgorithmId))
@@ -168,8 +169,11 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::resolveExecutionBackend(
     plan.preferCuda = resolvedBackend == image_matching::SiftComputeBackend::Cuda;
     plan.backendFallback = options.device == ComputeDevice::Auto &&
         resolvedBackend == image_matching::SiftComputeBackend::Cpu;
-    plan.backendReason = QStringLiteral("SIFT 计算后端：%1")
-                             .arg(image_matching::siftBackendDisplayName(resolvedBackend));
+    plan.computeDeviceName = image_matching::siftBackendDeviceName(resolvedBackend, deviceIndex);
+    plan.computeDeviceDisplayName =
+        image_matching::siftBackendRuntimeDisplayName(resolvedBackend, deviceIndex);
+    plan.backendReason = QStringLiteral("SIFT 计算设备：%1")
+                             .arg(plan.computeDeviceDisplayName);
     return plan;
 }
 

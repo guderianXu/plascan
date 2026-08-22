@@ -7,6 +7,7 @@ namespace xjw::image_matching
 
 #if defined(PLASCAN_HAS_CUDA_SIFT)
     bool isCudaSiftBackendAvailable(int deviceIndex);
+    QString cudaSiftDeviceName(int deviceIndex);
     SiftRawFeatures extractCudaSift(const SiftExtractionRequest& request);
     std::vector<SiftNearestMatch>
     matchCudaSift(const cv::Mat& queryDescriptors, const cv::Mat& trainDescriptors, int deviceIndex);
@@ -14,6 +15,7 @@ namespace xjw::image_matching
 
 #if defined(PLASCAN_HAS_OPENCL_SIFT)
     bool isOpenClSiftBackendAvailable(int deviceIndex);
+    QString openClSiftDeviceName(int deviceIndex);
     SiftRawFeatures extractOpenClSift(const SiftExtractionRequest& request);
     std::vector<SiftNearestMatch>
     matchOpenClSift(const cv::Mat& queryDescriptors, const cv::Mat& trainDescriptors, int deviceIndex);
@@ -21,6 +23,7 @@ namespace xjw::image_matching
 
 #if defined(PLASCAN_HAS_METAL_SIFT)
     bool isMetalSiftBackendAvailable(int deviceIndex);
+    QString metalSiftDeviceName(int deviceIndex);
     SiftRawFeatures extractMetalSift(const SiftExtractionRequest& request);
     std::vector<SiftNearestMatch>
     matchMetalSift(const cv::Mat& queryDescriptors, const cv::Mat& trainDescriptors, int deviceIndex);
@@ -60,6 +63,44 @@ namespace xjw::image_matching
             return QStringLiteral("Metal");
         }
         return QStringLiteral("未知");
+    }
+
+    QString siftBackendDeviceName(SiftComputeBackend backend, int deviceIndex)
+    {
+        switch (backend)
+        {
+        case SiftComputeBackend::Cuda:
+#if defined(PLASCAN_HAS_CUDA_SIFT)
+            return cudaSiftDeviceName(deviceIndex);
+#else
+            break;
+#endif
+        case SiftComputeBackend::OpenCl:
+#if defined(PLASCAN_HAS_OPENCL_SIFT)
+            return openClSiftDeviceName(deviceIndex);
+#else
+            break;
+#endif
+        case SiftComputeBackend::Metal:
+#if defined(PLASCAN_HAS_METAL_SIFT)
+            return metalSiftDeviceName(deviceIndex);
+#else
+            break;
+#endif
+        case SiftComputeBackend::Automatic:
+        case SiftComputeBackend::Cpu:
+            break;
+        }
+        return QString();
+    }
+
+    QString siftBackendRuntimeDisplayName(SiftComputeBackend backend, int deviceIndex)
+    {
+        const QString backendName = siftBackendDisplayName(backend);
+        const QString deviceName = siftBackendDeviceName(backend, deviceIndex).trimmed();
+        return deviceName.isEmpty()
+            ? backendName
+            : QStringLiteral("%1 · %2").arg(backendName, deviceName);
     }
 
     bool isSiftBackendAvailable(SiftComputeBackend backend, int deviceIndex)

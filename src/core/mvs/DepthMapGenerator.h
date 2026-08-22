@@ -14,6 +14,8 @@
 #include "DepthMapFusion.h"
 #include "DepthPyramidEstimator.h"
 #include "DepthFrameQualityGate.h"
+#include "DepthGeometryHypothesisReranker.h"
+#include "DepthEvidenceConfidence.h"
 #include "DepthCompletenessMetrics.h"
 #include "DepthGapTargetedRecovery.h"
 #include "DepthResidualReestimation.h"
@@ -75,6 +77,8 @@ struct DepthFrameResult
     std::string sourceViewShortfallReason; ///< 源视图不足的主要原因
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
+    QSharedPointer<cv::Mat> photometricConfidence; ///< 原始光度置信度 (CV_32F)，双通道实验启用时保留
+    QSharedPointer<cv::Mat> geometricConfidence; ///< 独立跨视几何置信度 (CV_32F)，双通道实验启用时保留
     QSharedPointer<cv::Mat> normalMap;   ///< 最终层法线图 (CV_32FC3)，可为空
     QSharedPointer<cv::Mat> supportCount; ///< PatchMatch 候选来源数诊断图；不得作为最终几何支持 (CV_16U)
     QSharedPointer<cv::Mat> geometrySupportCount; ///< 参考帧+跨视几何确认数 (CV_16U)
@@ -84,6 +88,8 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> adaptiveGeometrySupportWeight; ///< 连续跨视几何支持权重 (CV_32F)
     QSharedPointer<cv::Mat> adaptiveGeometryEffectiveViewCount; ///< 连续证据有效视图数 (CV_32F)
     QSharedPointer<cv::Mat> adaptiveGeometryConflictRatio; ///< 可观测证据中的冲突比例 [0, 1] (CV_32F)
+    QSharedPointer<cv::Mat> depthLayerReliabilityClass; ///< 观测用深度层可靠性分类 (CV_8U)，不参与准入
+    QSharedPointer<DepthGeometryHypothesisRerankMaps> geometryRerankMaps; ///< 几何候选代价与独立性逐像素审计
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
     QSharedPointer<cv::Mat> targetedGapRecoveredMask; ///< 定向二源 PatchMatch 恢复像素 (CV_8U)
     QSharedPointer<cv::Mat> residualReestimatedMask; ///< 一致性后局部 PatchMatch 恢复像素 (CV_8U)
@@ -97,6 +103,8 @@ struct DepthFrameResult
     QJsonObject crossViewRepairDiagnostics; ///< 跨视补回和锚定插值的逐原因统计
     QJsonObject targetedGapRecoveryDiagnostics; ///< 缺口定向 PatchMatch 请求、接受和拒绝统计
     QJsonObject residualReestimationDiagnostics; ///< 一致性后残余缺口局部实测恢复统计
+    QJsonObject evidenceConfidenceDiagnostics; ///< 光度/几何双通道置信度与因果准入统计
+    DepthEvidenceConfidenceSummary evidenceConfidenceSummary; ///< 双通道置信度的强类型帧级摘要
     QJsonObject learnedCandidateDiagnostics; ///< 学习候选加载与最终几何门控统计
     QJsonObject poseRefinementDiagnostics; ///< 深度约束位姿细化候选与安全门诊断
     FramePinholeCamera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
@@ -151,6 +159,8 @@ struct DepthFrameResult
         adaptiveGeometrySupportWeight.clear();
         adaptiveGeometryEffectiveViewCount.clear();
         adaptiveGeometryConflictRatio.clear();
+        depthLayerReliabilityClass.clear();
+        geometryRerankMaps.clear();
         crossViewRepairedMask.clear();
         targetedGapRecoveredMask.clear();
         residualReestimatedMask.clear();

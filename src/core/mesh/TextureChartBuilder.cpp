@@ -195,7 +195,8 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
                           59 + std::clamp(percent, 0, 100) * 6 / 100);
                   })
                 : std::function<void(int)>(),
-            static_cast<float>(std::clamp(config.imageDownscale, 1, 8)));
+            static_cast<float>(std::clamp(config.imageDownscale, 1, 8)) *
+                std::clamp(config.atlasUpscaleLimit, 1.0f, 4.0f));
     if (packing.cancelled)
     {
         result->cancelled = true;

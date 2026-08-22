@@ -38,6 +38,10 @@ set(MVS_CXX_SOURCES
     DepthConsensusBiasPolicy.cpp
     DepthAnchoredHoleInterpolator.cpp
     DepthCrossViewHoleRepair.cpp
+    DepthEvidenceConfidence.cpp
+    DepthGeometryHypothesisReranker.cpp
+    DepthLayerReliability.cpp
+    DepthLayerReliabilityDiagnostics.cpp
     DepthGeometryConsistency.cpp
     DepthPoseAlignmentRefiner.cpp
     DepthPoseRefinementStage.cpp
@@ -89,6 +93,9 @@ set(MVS_HEADERS
     DepthConsensusBiasPolicy.h
     DepthAnchoredHoleInterpolator.h
     DepthCrossViewHoleRepair.h
+    DepthEvidenceConfidence.h
+    DepthGeometryHypothesisReranker.h
+    DepthLayerReliability.h
     DepthGeometryConsistency.h
     DepthPoseAlignmentRefiner.h
     DepthPoseRefinementStage.h
@@ -288,6 +295,23 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_depth_completeness)
+
+        add_executable(test_mvs_depth_layer_reliability
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_depth_layer_reliability.cpp
+        )
+        set_target_properties(test_mvs_depth_layer_reliability PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_layer_reliability PRIVATE
+            mvs
+            GTest::gtest_main
+            Qt6::Core
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_layer_reliability PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_layer_reliability)
 
         add_executable(test_mvs_stage_snapshot
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_stage_snapshot.cpp

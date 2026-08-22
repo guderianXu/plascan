@@ -78,6 +78,8 @@ TEST(MatchPhotosAlgorithmSelectorTest, AutoUsesResolvedCpuBackend)
     EXPECT_TRUE(plan.backendFallback);
     EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.backendReason.contains(QStringLiteral("OpenCV CPU")));
+    EXPECT_TRUE(plan.computeDeviceName.isEmpty());
+    EXPECT_EQ(plan.computeDeviceDisplayName, QStringLiteral("OpenCV CPU"));
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCudaUsesResolvedCudaBackend)

@@ -1,6 +1,7 @@
 #include "VisualHullDepthRefiner.h"
 
 #include "DepthFrameQualificationPolicy.h"
+#include "DepthProvenance.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "RobustSurfaceDisplacementSolver.h"
 #include "SurfaceReconstructorPostprocess.h"
@@ -248,17 +249,103 @@ bool validObservationPixel(
            std::isfinite(confidence);
 }
 
+bool nonInterpolatedMeasuredPixel(
+    const DepthTsdfFrame &frame,
+    int row,
+    int column)
+{
+    if (frame.depthProvenance.type() != CV_8UC1 ||
+        frame.depthProvenance.size() != frame.depth.size())
+    {
+        return false;
+    }
+    const std::uint8_t provenance =
+        frame.depthProvenance.at<std::uint8_t>(row, column);
+    return provenance != static_cast<std::uint8_t>(
+               xjw::mvs::DepthProvenance::Invalid) &&
+        !xjw::mvs::isInterpolatedDepthProvenance(provenance);
+}
+
+bool readDepthObservationPixel(
+    const DepthTsdfFrame &frame,
+    int row,
+    int column,
+    DepthObservation *observation)
+{
+    if (!validObservationPixel(frame, row, column))
+    {
+        return false;
+    }
+    observation->depth = frame.depth.at<float>(row, column);
+    observation->confidence = frame.confidence.empty()
+        ? 1.0f
+        : frame.confidence.at<float>(row, column);
+    observation->repairedFraction =
+        frame.crossViewRepairedMask.type() == CV_8UC1 &&
+        frame.crossViewRepairedMask.size() == frame.depth.size() &&
+        frame.crossViewRepairedMask.at<std::uint8_t>(row, column) != 0
+        ? 1.0f
+        : 0.0f;
+    if (frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
+        frame.inverseDepthRelativeSpread.size() == frame.depth.size())
+    {
+        const float spread =
+            frame.inverseDepthRelativeSpread.at<float>(row, column);
+        if (std::isfinite(spread) && spread >= 0.0f)
+        {
+            observation->inverseDepthRelativeSpread = spread;
+            observation->hasInverseDepthRelativeSpread = true;
+        }
+    }
+    return true;
+}
+
 bool sampleDepthObservation(
     const DepthTsdfFrame &frame,
     const double pixel[2],
+    const VisualHullDepthRefineOptions &options,
+    bool *rejectedNonMeasured,
+    bool *usedNearestMeasured,
     DepthObservation *observation)
 {
+    if (rejectedNonMeasured != nullptr)
+    {
+        *rejectedNonMeasured = false;
+    }
+    if (usedNearestMeasured != nullptr)
+    {
+        *usedNearestMeasured = false;
+    }
     if (observation == nullptr ||
         pixel[0] < 0.0 || pixel[1] < 0.0 ||
         pixel[0] > static_cast<double>(frame.depth.cols - 1) ||
         pixel[1] > static_cast<double>(frame.depth.rows - 1))
     {
         return false;
+    }
+
+    if (options.measuredDepthSamplesOnly)
+    {
+        const int column = static_cast<int>(std::lround(pixel[0]));
+        const int row = static_cast<int>(std::lround(pixel[1]));
+        if (!nonInterpolatedMeasuredPixel(frame, row, column))
+        {
+            if (rejectedNonMeasured != nullptr)
+            {
+                *rejectedNonMeasured = true;
+            }
+            return false;
+        }
+        if (!readDepthObservationPixel(
+                frame, row, column, observation))
+        {
+            return false;
+        }
+        if (usedNearestMeasured != nullptr)
+        {
+            *usedNearestMeasured = true;
+        }
+        return true;
     }
 
     const int x0 = static_cast<int>(std::floor(pixel[0]));
@@ -289,33 +376,8 @@ bool sampleDepthObservation(
     {
         const int column = static_cast<int>(std::lround(pixel[0]));
         const int row = static_cast<int>(std::lround(pixel[1]));
-        if (!validObservationPixel(frame, row, column))
-        {
-            return false;
-        }
-        observation->depth = frame.depth.at<float>(row, column);
-        observation->confidence = frame.confidence.empty()
-            ? 1.0f
-            : frame.confidence.at<float>(row, column);
-        observation->repairedFraction =
-            frame.crossViewRepairedMask.type() == CV_8UC1 &&
-            frame.crossViewRepairedMask.size() == frame.depth.size() &&
-            frame.crossViewRepairedMask.at<std::uint8_t>(
-                row, column) != 0
-            ? 1.0f
-            : 0.0f;
-        if (frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
-            frame.inverseDepthRelativeSpread.size() == frame.depth.size())
-        {
-            const float spread =
-                frame.inverseDepthRelativeSpread.at<float>(row, column);
-            if (std::isfinite(spread) && spread >= 0.0f)
-            {
-                observation->inverseDepthRelativeSpread = spread;
-                observation->hasInverseDepthRelativeSpread = true;
-            }
-        }
-        return true;
+        return readDepthObservationPixel(
+            frame, row, column, observation);
     }
 
     float depth = 0.0f;
@@ -417,6 +479,14 @@ std::vector<VertexDepthObservation> collectVertexObservations(
          ++frame_index)
     {
         const DepthTsdfFrame &frame = frames[frame_index];
+        if (options.primaryFramesOnly && frame.auxiliarySurfaceOnly)
+        {
+            if (statistics != nullptr)
+            {
+                ++statistics->rejectedAuxiliaryObservationCount;
+            }
+            continue;
+        }
         double pixel[2]{};
         double projected_depth = 0.0;
         if (!frame.camera.projectWorldPointWithDepth(
@@ -429,9 +499,25 @@ std::vector<VertexDepthObservation> collectVertexObservations(
             ++statistics->projectedObservationCount;
         }
         DepthObservation observation;
-        if (!sampleDepthObservation(frame, pixel, &observation))
+        bool rejected_non_measured = false;
+        bool used_nearest_measured = false;
+        if (!sampleDepthObservation(
+                frame,
+                pixel,
+                options,
+                &rejected_non_measured,
+                &used_nearest_measured,
+                &observation))
         {
+            if (statistics != nullptr && rejected_non_measured)
+            {
+                ++statistics->rejectedNonMeasuredObservationCount;
+            }
             continue;
+        }
+        if (statistics != nullptr && used_nearest_measured)
+        {
+            ++statistics->nearestMeasuredObservationCount;
         }
         const bool repaired_observation =
             observation.repairedFraction >= 0.5f;

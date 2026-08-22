@@ -50,6 +50,17 @@ PatchMatch 输出、跨视一致性输出、confidence 后处理输出和最终�
 有效掩膜，默认不启用，并受 `--stage-snapshot-max-long-edge` 与
 `--stage-snapshot-budget-mib` 限制。快照写入独立 `stage_snapshots/`，manifest 明确标记
 `authoritative=false`；写入或预算失败只影响诊断，不会改变生产深度、配置 hash 或准入结果。
+跨视一致性及后续阶段还会保存 `depth_layer_reliability` 分类图。内部 A/B 可附加
+`--depth-layer-reliability-anchor-gate`，只禁止低纹理歧义/疑似错误层的原生深度充当洞填补锚点，
+不直接删除深度；该开关默认关闭且不进入普通用户 GUI。
+`--depth-layer-reliability-guided-correction` 是独立的内部默认关闭开关：只有至少三个投影来源独立形成
+稳定深度层，且覆盖至少两个基线方向、候选的鲁棒几何代价显著优于原生深度时，才纠正低纹理弱证据。
+`AmbiguousLowTexture` 最多连续修正 1%，`RejectedLayer` 才允许严格换层；局部曲面只参与诊断，不会直接
+写入产品深度。跨视阶段还会仅在连通弱区调用该帧已经记录的 PatchMatch 后端做两次有界局部假设搜索，
+最终仍由同一个三源/双基线/代价优势门裁决，不会因为开关开启而提升 confidence 或准入等级。
+跨视阶段快照的可选 `geometry_rerank` 九通道矩阵记录原生/候选代价、优势、有效权重、修正幅度、最弱源
+confidence、源数、基线方向数和动作，便于在固定 GT 域中复核每个实际修改像素；后续阶段不重复写入
+这份不变的大矩阵，仍各自保存深度、confidence 和有效掩膜。
 
 `workflows/` 按用户可执行的摄影测量任务划分：空中三角测量、无 GUI 三维重建、生成模型和
 多视图纹理分别由独立入口覆盖；`reconstruct_pipeline_cli` 覆盖包含 DEM/正射产物的完整流水线。GUI 中的
@@ -57,12 +68,16 @@ PatchMatch 输出、跨视一致性输出、confidence 后处理输出和最终�
 
 `texture_map_cli` 设置里的 `colorCorrection` 默认是 `false`。显式启用时，v4 只使用共同可见的同一
 3D 点，在 linear-sRGB 亮度上解算 `0.90–1.10` 范围内的鲁棒标量增益；共同样本不足、高 MAD 或
-重叠图不连通均 fail-closed 为单位增益。`texture_result.json` 及 CLI payload 会记录
+可靠重叠图按连通分量独立求解，孤立视图 fail-closed 为单位增益；无可靠边时整批保持单位增益。
+`texture_result.json` 及 CLI payload 会记录
 `texture_exposure_correction_status`、共同观察/候选与通过 pair 数、拒绝原因计数、图连通状态和
 最终增益范围，便于区分“未启用”“安全跳过”和“实际应用”。
 纹理 v4 默认执行真实共享网格边上的全局 seam leveling：每条共享边采 9 个 linear-sRGB 样本，
 全局解算 chart 偏移后只在默认 16px 边界带局部融合，chart 内部保持原烘焙颜色。结果 JSON 记录约束数、
 调整 chart/像素数和最大实际线性修正；它不启用整图曝光校正，也不需要 8192² 全图 multiband 缓冲。
+固定图集还有空闲空间时，v4 会在不增加图集分辨率和峰值图集内存的前提下，将相机 chart 最多放大 4 倍，
+降低亚像素三角面退化为单个中心补色 texel 的比例；专家可用 `atlasUpscaleLimit` 将上限设为 1–4。
+锐化默认关闭，避免把 chart 边界和三角面边缘放大；仍可通过 `sharpeningStrength` 显式启用。
 
 `camera_convert_cli --pre-undistort-colmap-images` 是复杂 COLMAP 相机的推荐导入边界。它生成全有效
 无畸变 PNG、valid mask、零畸变 Tsai 和逐帧 manifest，支持 `THIN_PRISM_FISHEYE`，不会把复杂参数

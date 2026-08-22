@@ -67,6 +67,13 @@ live under `src/core/mvs/tests/`.
   primary seed unless both geometry signals are present, and is rejected when both are absent and its post-geometry
   mean confidence is also low. Semantic project support masks remain subject to normalized coverage checks, while
   content and prepared-raster validity masks only define the technical measurement domain.
+- Revision 44 separates original photometric confidence from independent cross-view geometry confidence for the
+  default-off depth-layer correction experiment. Relative consistency or confidence-retention loss is explained
+  only when this run actually corrected pixels and those pixels retain strong multi-source geometry, while absolute
+  coverage, sparse residual, connected-component, and search-boundary gates remain mandatory. Stage snapshots save
+  both confidence channels beside the combined confidence map. Residual local PatchMatch uses two overlapping
+  three-view baseline groups, and reduced native grids keep the measured contour plus one inward grid shell instead
+  of quantizing all boundary protection to zero. Revision-43 depth batches are regenerated.
 - Downstream geometry consumers use one fail-closed frame-role contract. Only a `completed` frame with explicit
   `acceptance=accepted` and `fusion_eligible=true` is `Primary`; a completed `validation_only` frame with explicit
   eligibility metadata is `CoverageAuxiliary`; rejected, failed, incomplete, and manifestless frames are `Excluded`.
@@ -138,9 +145,41 @@ live under `src/core/mvs/tests/`.
   plan, replay-report, or diagnostic keys, preserving the default canonical config/hash and source-plan schema.
 - Selected-frame stage snapshots are a separate, default-off diagnostic. Replay can atomically persist depth,
   confidence, and valid-mask triplets after PatchMatch, after cross-view consistency, after confidence
-  postprocessing, and at final admission. The bounded snapshot manifest is explicitly non-authoritative and is
+  postprocessing, and at final admission. Cross-view and later snapshots may also carry the observe-only
+  `depth_layer_reliability` class map (`reliable`, `ambiguous_low_texture`, or `rejected_layer`). The bounded
+  snapshot manifest is explicitly non-authoritative and is
   excluded from the algorithm config hash; snapshot failure never changes the production depth result. The strict
   ETH3D evaluator binds every stage camera and pose back to the authoritative workspace frame before scoring it.
+- `enableDepthLayerReliabilityAnchorGate` is a default-off experiment. It does not delete or invalidate depth;
+  it only prevents low-texture ambiguous or rejected native depth from becoming an anchored-hole interpolation
+  boundary. A missing or malformed reliability map fails closed for native anchors, while projected strong anchors
+  remain available. Enabling it changes the depth config hash and reports admitted/rejected anchor counts.
+- `enableDepthLayerReliabilityGuidedCorrection` is a separate default-off experiment. The reliability classifier
+  uses a robust quadratic inverse-depth surface, but the fitted surface is diagnostic only and is never copied into
+  the product. Candidate depths are restricted to the native estimate and directly projected measured source depths.
+  Each candidate is scored with confidence-weighted robust relative-depth residuals, reprojection-footprint error,
+  asymmetric occlusion handling, at least three distinct sources, and at least two baseline sectors.
+  `RejectedLayer` may switch only when the measured candidate has a strict cost advantage;
+  `AmbiguousLowTexture` may only make a continuous correction of at most one percent and never jump directly to a
+  different layer. `sourceQualityScore` remains diagnostic and is not a new admission threshold. Missing or malformed
+  reliability evidence disables the extra path, and enabling it changes the depth config hash. For Custom/general scenes the
+  treatment now builds the same measured source-depth layers before confidence postprocessing, but it is restricted
+  to weak native reliability classes: reliable pixels and missing pixels remain byte-exact and the Orbital-only
+  depth-transfer behavior is not enabled. The Custom path first preserves the legacy consistency mask, then overlays
+  only pixels whose depth was actually refined or switched by a stable independent-source cluster; merely evaluating
+  an ambiguous pixel cannot retain it or reduce its confidence.
+- Guided Custom processing also performs a bounded second hypothesis search only inside connected ambiguous/rejected
+  regions that pass the minimum component size. It reuses the frame's recorded CPU/CUDA/OpenCL PatchMatch backend and
+  the frozen source plan, then applies the same backend-independent measured-geometry scorer before accepting a
+  replacement. Accepted pixels inherit confidence from their actual candidate/source evidence and persist the exact
+  supporting-source mask and inverse-depth moments; opening the experiment never grants a confidence or admission
+  bonus. If either local hypothesis, three-source/two-sector support, or the robust cost advantage is missing, the
+  original consistency result is retained unchanged.
+- The cross-view snapshot may additionally contain a nine-channel `geometry_rerank` matrix ordered as
+  native cost, candidate cost, cost advantage, effective source weight, relative correction, weakest source
+  confidence, source count, baseline-sector count, and decision action. It is budgeted and non-authoritative like the
+  other snapshot payloads and cannot affect cache reuse or publication. Later stages keep their independent
+  depth/confidence/mask triplets without duplicating the unchanged nine-channel evidence payload.
 - The selected source plan is saved with the depth frame record so depth generation and fusion use the same
   overlap assumptions.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
@@ -312,9 +351,9 @@ The implementation plan and current boundary are documented in
   a 12-full-pixel footprint. Every frame
   records `effective_native_final_depth_grid`, raster/grid dimensions, exact x/y, linear and area scales,
   plus configured/effective parameter values in `pixel_domain_diagnostics`. The request participates in
-  the workspace hash. Revision 43 evaluates a zero-radius reduced-grid consistency lookup over the bounded
-  nearest subpixel footprint and preserves one audited grid boundary shell while keeping a subpixel
-  protection radius inactive; it does not silently widen every configured full-raster threshold.
+  the workspace hash. Revision 44 evaluates a zero-radius reduced-grid consistency lookup over the bounded
+  nearest subpixel footprint and preserves the measured contour plus one inward protection shell; other
+  configured subpixel thresholds remain inactive rather than being silently widened.
 - CPU, CUDA, and OpenCL PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
 - CPU, CUDA, and OpenCL PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only

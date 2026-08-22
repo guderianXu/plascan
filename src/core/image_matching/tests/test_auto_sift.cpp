@@ -141,6 +141,25 @@ namespace xjw::image_matching
             EXPECT_EQ(result.matches0[1], 0);
         }
 
+        TEST(AutoSiftBackendTest, CpuRuntimeDisplayIsExplicitAndHasNoHardwareName)
+        {
+            EXPECT_TRUE(siftBackendDeviceName(SiftComputeBackend::Cpu).isEmpty());
+            EXPECT_EQ(siftBackendRuntimeDisplayName(SiftComputeBackend::Cpu),
+                      QStringLiteral("OpenCV CPU"));
+        }
+
+        TEST(AutoSiftBackendTest, AvailableCudaDeviceHasAuditableRuntimeName)
+        {
+            if (!isSiftBackendAvailable(SiftComputeBackend::Cuda, 0))
+            {
+                GTEST_SKIP() << "CUDA SIFT device 0 is unavailable";
+            }
+
+            EXPECT_FALSE(siftBackendDeviceName(SiftComputeBackend::Cuda, 0).isEmpty());
+            EXPECT_TRUE(siftBackendRuntimeDisplayName(SiftComputeBackend::Cuda, 0)
+                            .startsWith(QStringLiteral("CUDA · ")));
+        }
+
         TEST(AutoSiftGuidedMatcherTest, RecoversMutualDescriptorsInsideEpipolarBand)
         {
             FeatureSet features0;

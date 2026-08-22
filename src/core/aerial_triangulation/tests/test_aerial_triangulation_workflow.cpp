@@ -155,6 +155,11 @@ TEST(AerialTriangulationWorkflowTest, RecordsEffectiveCudaPairConcurrencyAfterMa
             EXPECT_EQ(actualOptions.cudaParallelPairs, 3);
             xjw::matchphotos::MatchPhotosResult tiePoints;
             tiePoints.success = true;
+            tiePoints.algorithmPlan.executionBackend =
+                xjw::image_matching::SiftComputeBackend::Cuda;
+            tiePoints.algorithmPlan.computeDeviceName = QStringLiteral("Test GPU");
+            tiePoints.algorithmPlan.computeDeviceDisplayName =
+                QStringLiteral("CUDA · Test GPU");
             xjw::matchphotos::MatchPhotosMatchRecord match;
             match.settings.insert(
                 QStringLiteral("cuda_parallel_pairs_effective"), 2);
@@ -165,6 +170,34 @@ TEST(AerialTriangulationWorkflowTest, RecordsEffectiveCudaPairConcurrencyAfterMa
     EXPECT_EQ(result.config.resolvedSettings.value(
                   QStringLiteral("cuda_parallel_pairs_effective")).toInt(),
               2);
+    EXPECT_EQ(result.config.resolvedSettings.value(
+                  QStringLiteral("matching_compute_backend")).toString(),
+              QStringLiteral("cuda"));
+    EXPECT_EQ(result.config.resolvedSettings.value(
+                  QStringLiteral("matching_compute_device_name")).toString(),
+              QStringLiteral("Test GPU"));
+    EXPECT_EQ(result.config.resolvedSettings.value(
+                  QStringLiteral("matching_compute_device_display")).toString(),
+              QStringLiteral("CUDA · Test GPU"));
+}
+
+TEST(AerialTriangulationWorkflowTest, ForwardsResolvedComputeDeviceCallback)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    QString actualDisplayName;
+    options.computeDeviceFn = [&actualDisplayName](const QString &displayName)
+    {
+        actualDisplayName = displayName;
+    };
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+    ASSERT_TRUE(static_cast<bool>(resolved.tiePointContext.computeDeviceCallback));
+
+    resolved.tiePointContext.computeDeviceCallback(QStringLiteral("OpenCL · Test GPU"));
+
+    EXPECT_EQ(actualDisplayName, QStringLiteral("OpenCL · Test GPU"));
 }
 
 TEST(AerialTriangulationWorkflowTest, SequenceModeUsesLinearPairWindow)
@@ -348,6 +381,52 @@ TEST(AerialTriangulationWorkflowTest, ExistingTiePointGraphSkipsPreparation)
 
     EXPECT_FALSE(tiePointRunnerCalled);
     EXPECT_FALSE(result.tiePointPreparationExecuted);
+    EXPECT_TRUE(result.reconstructionResult.success);
+}
+
+TEST(AerialTriangulationWorkflowTest, ExplicitGuidedMatchingRefreshesExistingTiePointGraph)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.guidedImageMatching = true;
+    options.reuseExistingMatches = true;
+    options.autoGenerateMissingMatches = false;
+    const QString tiePointPath = QDir(options.assetsDir)
+        .filePath(QStringLiteral("tie_points/latest_tie_points.json"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(tiePointPath).absolutePath()));
+    QFile tiePoints(tiePointPath);
+    ASSERT_TRUE(tiePoints.open(QIODevice::WriteOnly));
+    tiePoints.write("{}");
+    tiePoints.close();
+
+    bool tiePointRunnerCalled = false;
+    const auto result = xjw::aerial_triangulation::AerialTriangulationWorkflow::run(
+        options,
+        [](const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+        {
+            EXPECT_TRUE(QFileInfo::exists(input.tiePointPath));
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult reconstruction;
+            reconstruction.success = true;
+            return reconstruction;
+        },
+        [&](const xjw::matchphotos::MatchPhotosOptions &matchOptions,
+            const xjw::matchphotos::MatchPhotosContext &)
+        {
+            tiePointRunnerCalled = true;
+            EXPECT_TRUE(matchOptions.enableGuidedMatching);
+            EXPECT_TRUE(matchOptions.reuseExistingMatches);
+            xjw::matchphotos::MatchPhotosResult tiePointResult;
+            tiePointResult.success = true;
+            tiePointResult.tiePointPath = tiePointPath;
+            return tiePointResult;
+        });
+
+    EXPECT_TRUE(tiePointRunnerCalled);
+    EXPECT_TRUE(result.tiePointPreparationExecuted);
+    EXPECT_FALSE(result.config.forceRebuildTiePoints);
+    EXPECT_EQ(result.config.resolvedSettings.value(
+                  QStringLiteral("tie_point_preparation")).toString(),
+              QStringLiteral("guided_refresh"));
     EXPECT_TRUE(result.reconstructionResult.success);
 }
 

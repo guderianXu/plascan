@@ -40,6 +40,8 @@ struct VisualHullDepthRefineOptions
     float globalSolverRobustScaleMultiplier = 0.5f;
     float globalSolverLaplacianWeight = 0.45f;
     float globalSolverHullPriorWeight = 0.02f;
+    bool measuredDepthSamplesOnly = false;
+    bool primaryFramesOnly = false;
 };
 
 struct VisualHullDepthRefineStatistics
@@ -47,6 +49,9 @@ struct VisualHullDepthRefineStatistics
     bool applied = false;
     std::uint64_t projectedObservationCount = 0;
     std::uint64_t acceptedObservationCount = 0;
+    std::uint64_t rejectedAuxiliaryObservationCount = 0;
+    std::uint64_t rejectedNonMeasuredObservationCount = 0;
+    std::uint64_t nearestMeasuredObservationCount = 0;
     std::uint64_t spreadDownweightedObservationCount = 0;
     std::uint64_t spreadVeryWeakObservationCount = 0;
     std::uint64_t anchoredVertexCount = 0;

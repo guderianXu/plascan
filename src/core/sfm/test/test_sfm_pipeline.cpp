@@ -20,6 +20,7 @@
 #include "pipeline/HierarchicalBaBlockSolver.h"
 #include "pipeline/ImageRegistrationEngine.h"
 #include "pipeline/IncrementalSfm.h"
+#include "pipeline/IncrementalSfmDetail.h"
 #include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "common/SfmTypes.h"
@@ -37,6 +38,76 @@
 #include <vector>
 
 using namespace xjw;
+
+TEST(PnpCorrespondenceSelectionTest, PrefersMultineighborConsensusAndKeepsOneToOneMapping)
+{
+    using incremental_sfm_detail::PnpCorrespondenceProposal;
+    const std::vector<PnpCorrespondenceProposal> proposals{
+        {10, 100, 1, 2, 0.90, 0.8},
+        {10, 100, 1, 2, 0.95, 0.7},
+        {10, 101, 1, 6, 0.99, 0.1},
+        {11, 100, 1, 8, 0.99, 0.1},
+        {11, 102, 1, 3, 0.80, 0.5},
+        {12, 103, 1, 4, 0.85, 0.4},
+    };
+
+    const auto selected =
+        incremental_sfm_detail::selectUniquePnpCorrespondences(proposals);
+
+    ASSERT_EQ(selected.size(), 3u);
+    EXPECT_EQ(selected[0].featureIdx, 10u);
+    EXPECT_EQ(selected[0].pointId, 100u);
+    EXPECT_EQ(selected[0].supportingNeighbors, 2);
+    EXPECT_EQ(selected[1].featureIdx, 12u);
+    EXPECT_EQ(selected[1].pointId, 103u);
+    EXPECT_EQ(selected[2].featureIdx, 11u);
+    EXPECT_EQ(selected[2].pointId, 102u);
+
+    std::vector<PnpCorrespondenceProposal> reversed = proposals;
+    std::reverse(reversed.begin(), reversed.end());
+    const auto selected_reversed =
+        incremental_sfm_detail::selectUniquePnpCorrespondences(reversed);
+    ASSERT_EQ(selected_reversed.size(), selected.size());
+    for (std::size_t index = 0; index < selected.size(); ++index)
+    {
+        EXPECT_EQ(selected_reversed[index].featureIdx, selected[index].featureIdx);
+        EXPECT_EQ(selected_reversed[index].pointId, selected[index].pointId);
+        EXPECT_EQ(selected_reversed[index].supportingNeighbors,
+                  selected[index].supportingNeighbors);
+    }
+}
+
+TEST(PnpCorrespondenceSelectionTest, MeasuresDistributedAndClusteredSmallSupport)
+{
+    const std::vector<std::array<double, 2>> points{
+        {{80.0, 60.0}}, {{240.0, 60.0}}, {{400.0, 180.0}}, {{560.0, 180.0}},
+        {{80.0, 300.0}}, {{240.0, 300.0}}, {{400.0, 420.0}}, {{560.0, 420.0}},
+    };
+    const std::vector<unsigned char> all_inliers(points.size(), 1);
+    const auto distributed =
+        incremental_sfm_detail::measurePnpInlierSpatialSupport(
+            points, all_inliers, 640, 480);
+    EXPECT_EQ(distributed.occupiedCells, 8);
+    EXPECT_EQ(distributed.occupiedRows, 4);
+    EXPECT_EQ(distributed.occupiedColumns, 4);
+
+    std::vector<std::array<double, 2>> clustered(points.size(), {{20.0, 20.0}});
+    const auto local =
+        incremental_sfm_detail::measurePnpInlierSpatialSupport(
+            clustered, all_inliers, 640, 480);
+    EXPECT_EQ(local.occupiedCells, 1);
+    EXPECT_EQ(local.occupiedRows, 1);
+    EXPECT_EQ(local.occupiedColumns, 1);
+}
+
+TEST(PnpCorrespondenceSelectionTest, StrictSmallSupportRecoveryIsOptIn)
+{
+    const PnpOptions options;
+    EXPECT_FALSE(options.allowStrictSmallSupportRecovery);
+    EXPECT_EQ(options.strictSmallSupportMinInliers, 8);
+    EXPECT_DOUBLE_EQ(options.strictSmallSupportMinInlierRatio, 0.80);
+    EXPECT_EQ(options.strictSmallSupportMinGridCells, 3);
+}
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
 {

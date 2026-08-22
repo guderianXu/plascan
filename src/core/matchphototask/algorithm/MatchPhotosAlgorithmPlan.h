@@ -31,6 +31,8 @@ struct MatchPhotosAlgorithmPlan
         image_matching::SiftComputeBackend::Automatic;
     bool backendFallback = false;
     QString backendReason;
+    QString computeDeviceName;
+    QString computeDeviceDisplayName;
 
     int maxImageDim = 2048;
     int maxKeypoints = 8192;

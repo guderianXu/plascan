@@ -13,6 +13,7 @@
 #include "DenseCloudBuilder.h"
 #include "DepthPyramidPolicy.h"
 #include "DepthFrameQualityGate.h"
+#include "DepthEvidenceConfidence.h"
 #include "DepthConsistencyCache.h"
 #include "DepthGeometryConsistency.h"
 #include "EpipolarRectifier.h"
@@ -872,6 +873,9 @@ TEST(MvsSceneClassifierTest, SourceAngleExperimentCapOnlyTightensSceneMaximum)
     EXPECT_FLOAT_EQ(default_config.sourceMaximumAngleDegCap, 0.0f);
     EXPECT_FALSE(default_config.evaluateCompleteVisibilityCandidatePool);
     EXPECT_FLOAT_EQ(default_config.sourceAngleSoftRankingStrength, 0.0f);
+    EXPECT_FALSE(default_config.enableDepthLayerReliabilityAnchorGate);
+    EXPECT_FALSE(
+        default_config.enableDepthLayerReliabilityGuidedCorrection);
     const QString default_hash =
         xjw::mvs::makeMvsDepthConfigHash(default_config, 26);
     xjw::mvs::DepthGenConfig explicit_default_config = default_config;
@@ -896,6 +900,20 @@ TEST(MvsSceneClassifierTest, SourceAngleExperimentCapOnlyTightensSceneMaximum)
     EXPECT_NE(
         xjw::mvs::makeMvsDepthConfigHash(complete_pool_config, 26),
         xjw::mvs::makeMvsDepthConfigHash(soft_rank_config, 26));
+
+    xjw::mvs::DepthGenConfig reliability_gate_config = default_config;
+    reliability_gate_config.enableDepthLayerReliabilityAnchorGate = true;
+    EXPECT_NE(
+        default_hash,
+        xjw::mvs::makeMvsDepthConfigHash(reliability_gate_config, 26));
+
+    xjw::mvs::DepthGenConfig reliability_correction_config = default_config;
+    reliability_correction_config.enableDepthLayerReliabilityGuidedCorrection =
+        true;
+    EXPECT_NE(
+        default_hash,
+        xjw::mvs::makeMvsDepthConfigHash(
+            reliability_correction_config, 26));
 }
 
 TEST(DepthMapGeneratorTest,
@@ -2660,6 +2678,73 @@ TEST(DepthFrameQualityGateTest, KeepsConsistencyAndFusionPostprocessLossDistinct
               decision.reasons.end());
 }
 
+TEST(DepthEvidenceConfidenceTest,
+     PreservesPhotometricAndIndependentGeometryChannels)
+{
+    const cv::Mat depth(1, 3, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat photometric =
+        (cv::Mat_<float>(1, 3) << 0.20f, 0.80f, 0.20f);
+    const cv::Mat support =
+        (cv::Mat_<std::uint16_t>(1, 3) << 4, 1, 3);
+    const cv::Mat spread =
+        (cv::Mat_<float>(1, 3) << 0.001f, 0.0f, 0.030f);
+
+    const auto result = xjw::mvs::buildDepthEvidenceConfidence(
+        depth, photometric, support, spread);
+
+    ASSERT_TRUE(result.summary.available);
+    EXPECT_EQ(result.summary.geometryObservedPixelCount, 2);
+    EXPECT_GT(result.geometric.at<float>(0, 0), 0.80f);
+    EXPECT_FLOAT_EQ(result.geometric.at<float>(0, 1), 0.0f);
+    EXPECT_LT(result.geometric.at<float>(0, 2), 0.30f);
+    EXPECT_FLOAT_EQ(result.photometric.at<float>(0, 0), 0.20f);
+    EXPECT_GT(result.combined.at<float>(0, 0), 0.55f);
+}
+
+TEST(DepthFrameQualityGateTest,
+     CausalGeometryCoreExplainsRelativeRetentionWithoutBypassingAbsoluteGates)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::Custom;
+    input.sourceViewCount = 4;
+    input.validCoverage = 0.35f;
+    input.largestComponentRatio = 0.90f;
+    input.meanConfidence = 0.65f;
+    input.multiViewConsistency = 0.80f;
+    input.outputFilterRetentionRatio = 1.0f;
+    input.consistencyRetentionRatio = 0.70f;
+    input.fusionPostprocessRetentionRatio = 0.70f;
+    input.discreteGeometryCoreAvailable = true;
+    input.discreteGeometryCoreRatio = 0.80f;
+    input.sparseDepthResidual.available = true;
+    input.sparseDepthResidual.projectedSampleCount = 40;
+    input.sparseDepthResidual.validSampleCount = 40;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.002f;
+    input.dualChannelConfidenceAvailable = true;
+    input.meanPhotometricConfidence = 0.55f;
+    input.meanIndependentGeometryConfidence = 0.75f;
+    input.strongIndependentGeometryCoverage = 0.25f;
+    input.geometryEvidenceTreatmentEnabled = true;
+    input.geometryCorrectedPixelCount = 100;
+    input.correctedMeanIndependentGeometryConfidence = 0.80f;
+
+    const auto stable = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(stable.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_NE(std::find(stable.reasons.begin(),
+                        stable.reasons.end(),
+                        std::string(
+                            "relative_retention_explained_by_causal_geometry_core")),
+              stable.reasons.end());
+
+    input.validCoverage = 0.01f;
+    const auto rejected = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(rejected.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(rejected.reasons.begin(),
+                        rejected.reasons.end(),
+                        std::string("insufficient_valid_coverage")),
+              rejected.reasons.end());
+}
+
 TEST(DepthGeometryConsistencyTest,
      FinalizesAdaptiveEvidenceMapsWithoutDiscardingPrefilterHypotheses)
 {
@@ -3401,11 +3486,11 @@ TEST(MvsPipelineTest, NativeGridPreservesOneAuditedBoundaryShell)
         &evidence,
         cv::Size(36, 36));
 
-    EXPECT_EQ(stats.boundaryGeometryRetained, 16)
-        << "A reduced grid still needs one explicit silhouette shell; "
-           "otherwise confidence filtering erases every boundary sample.";
-    EXPECT_EQ(stats.confidenceRemoved, 8);
-    EXPECT_EQ(stats.validAfterPostprocess, 17);
+    EXPECT_EQ(stats.boundaryGeometryRetained, 24)
+        << "The native grid must retain the measured contour and one inward "
+           "protection shell after full-raster radii are quantized.";
+    EXPECT_EQ(stats.confidenceRemoved, 0);
+    EXPECT_EQ(stats.validAfterPostprocess, 25);
 }
 
 TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSupportedThinDepthLayer)

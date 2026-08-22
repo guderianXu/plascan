@@ -26,15 +26,16 @@ struct TextureSeamLevelingStats
 };
 
 /// Solve one robust, symmetric chart-offset graph from true shared-edge
-/// observations, then apply the global solution only inside a bounded chart
-/// border band.  Interiors remain untouched and disconnected charts fail
-/// closed with zero correction.
+/// observations. `globalCorrectionStrength` applies a bounded fraction of the
+/// solution across chart interiors while the border band receives the full
+/// correction. Disconnected charts fail closed with zero correction.
 TextureSeamLevelingStats applyTextureSeamLeveling(
     cv::Mat *atlasBgr,
     const cv::Mat &chartIndexMap,
     const std::vector<TextureSeamConstraint> &constraints,
     int chartCount,
     int borderBlendRadiusPixels,
-    float maximumAbsoluteLinearCorrection);
+    float maximumAbsoluteLinearCorrection,
+    float globalCorrectionStrength = 0.0f);
 
 } // namespace xjw::mesh::texture_v4

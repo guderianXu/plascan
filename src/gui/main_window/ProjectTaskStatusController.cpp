@@ -54,6 +54,8 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager *project
             this, &ProjectTaskStatusController::finishPointCloud);
     connect(_projectManager, &ProjectManager::atProgressChanged,
             this, &ProjectTaskStatusController::updateAerialTriangulation);
+    connect(_projectManager, &ProjectManager::atComputeDeviceChanged,
+            this, &ProjectTaskStatusController::updateAerialTriangulationDevice);
     connect(_projectManager, &ProjectManager::atProgressFinished,
             this, &ProjectTaskStatusController::finishAerialTriangulation);
     connect(_projectManager, &ProjectManager::maskGenerationProgressChanged,
@@ -169,6 +171,14 @@ void ProjectTaskStatusController::updateAerialTriangulation(const QString &stage
                       percent,
                       true,
                       QStringLiteral("aerial_triangulation"));
+}
+
+void ProjectTaskStatusController::updateAerialTriangulationDevice(const QString &displayName)
+{
+    _aerialTriangulationStatus->setDetailText(
+        displayName.trimmed().isEmpty()
+            ? QString()
+            : tr("计算设备：%1").arg(displayName.trimmed()));
 }
 
 void ProjectTaskStatusController::finishAerialTriangulation(bool success)

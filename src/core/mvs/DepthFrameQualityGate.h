@@ -59,6 +59,13 @@ struct DepthFrameQualityInput
     float validCoverage = 0.0f;
     float largestComponentRatio = 0.0f;
     float meanConfidence = 0.0f;
+    bool dualChannelConfidenceAvailable = false;
+    float meanPhotometricConfidence = -1.0f;
+    float meanIndependentGeometryConfidence = -1.0f;
+    float strongIndependentGeometryCoverage = -1.0f;
+    bool geometryEvidenceTreatmentEnabled = false;
+    int geometryCorrectedPixelCount = 0;
+    float correctedMeanIndependentGeometryConfidence = -1.0f;
     /// True only after cross-view geometry has produced this metric.  A
     /// pre-geometry frame must not synthesize it from photometric confidence.
     bool multiViewConsistencyAvailable = true;
@@ -164,6 +171,13 @@ bool hasReliableCustomFusionCore(const DepthFrameQualityInput &input);
 /// intentionally insufficient for Primary because no discrete multi-view
 /// core survived.
 bool hasReliableCustomSparseAnchoredSurface(
+    const DepthFrameQualityInput &input);
+
+/// A treatment may bypass relative-retention penalties only when its changed
+/// pixels are backed by independent geometry and the frame still has the
+/// existing absolute sparse and discrete geometry cores. It never bypasses
+/// absolute coverage, topology, search-boundary, or sparse-error rejection.
+bool hasReliableCausalGeometryCorrection(
     const DepthFrameQualityInput &input);
 
 /// A continuous adaptive residual can be over-sensitive for very narrow-FOV

@@ -12,6 +12,7 @@
 #include "DepthConsistencyEvidencePolicy.h"
 #include "DepthCrossViewHoleRepair.h"
 #include "DepthGeometryConsistency.h"
+#include "DepthLayerReliability.h"
 #include "DepthFrameUtils.h"
 #include "GpuDeviceLease.h"
 #include "DepthMemoryPolicy.h"
@@ -115,6 +116,102 @@ int effectiveSparseResidualRadius(const DepthFrameResult &result,
         pixelDomainScaleForResult(result, grid_size));
 }
 
+struct PreRepairDepthLayerReliability
+{
+    DepthLayerReliabilityResult result;
+    QJsonObject diagnostics;
+};
+
+PreRepairDepthLayerReliability analyzePreRepairDepthLayerReliability(
+    const DepthFrameResult &frame,
+    const cv::Mat &depth,
+    const cv::Mat *reference_gray,
+    const cv::Mat &consistent_votes,
+    const cv::Mat &occluded_votes,
+    const cv::Mat &contradicted_votes,
+    const cv::Mat &geometry_source_mask,
+    const cv::Mat &source_inverse_depth_sum,
+    const cv::Mat &source_inverse_depth_squared_sum,
+    const AdaptiveGeometryEvidenceAccumulatorMaps *adaptive_accumulator)
+{
+    const GeometryEvidenceMaps discrete_evidence = makeGeometryEvidenceMaps(
+        depth,
+        consistent_votes,
+        geometry_source_mask,
+        source_inverse_depth_sum,
+        source_inverse_depth_squared_sum);
+    cv::Mat effective_view_count;
+    cv::Mat conflict_ratio;
+    QString evidence_source = QStringLiteral("discrete_vote_proxy");
+    if (adaptive_accumulator)
+    {
+        const AdaptiveGeometryEvidenceMaps adaptive_evidence =
+            makeAdaptiveGeometryEvidenceMaps(depth, *adaptive_accumulator);
+        effective_view_count = adaptive_evidence.effectiveViewCount;
+        conflict_ratio = adaptive_evidence.conflictRatio;
+        evidence_source = QStringLiteral("adaptive_weighted_geometry");
+    }
+    else
+    {
+        consistent_votes.convertTo(effective_view_count, CV_32FC1);
+        conflict_ratio = cv::Mat(depth.size(), CV_32FC1, cv::Scalar(0.0f));
+        for (int y = 0; y < depth.rows; ++y)
+        {
+            const std::uint16_t *consistent_row =
+                consistent_votes.ptr<std::uint16_t>(y);
+            const std::uint16_t *occluded_row =
+                occluded_votes.ptr<std::uint16_t>(y);
+            const std::uint16_t *contradicted_row =
+                contradicted_votes.ptr<std::uint16_t>(y);
+            float *conflict_row = conflict_ratio.ptr<float>(y);
+            for (int x = 0; x < depth.cols; ++x)
+            {
+                const int observed = consistent_row[x] + occluded_row[x] +
+                    contradicted_row[x];
+                if (observed > 0)
+                {
+                    conflict_row[x] = static_cast<float>(contradicted_row[x]) /
+                        static_cast<float>(observed);
+                }
+            }
+        }
+    }
+
+    DepthLayerReliabilityOptions options;
+    const DepthPixelDomainScale pixel_scale =
+        pixelDomainScaleForResult(frame, depth.size());
+    options.textureRadiusPixels = std::max(
+        1, scaleDepthPixelRadius(options.textureRadiusPixels, pixel_scale));
+    options.boundaryRingRadiusPixels = std::max(
+        1, scaleDepthPixelRadius(options.boundaryRingRadiusPixels, pixel_scale));
+    options.minimumComponentArea = std::max(
+        1, scaleDepthPixelArea(options.minimumComponentArea, pixel_scale));
+    options.minimumBoundaryAnchorCount = std::max(
+        3, scaleDepthPixelArea(options.minimumBoundaryAnchorCount, pixel_scale));
+
+    PreRepairDepthLayerReliability observation;
+    observation.result = analyzeDepthLayerReliability(
+        depth,
+        reference_gray ? *reference_gray : cv::Mat(),
+        effective_view_count,
+        conflict_ratio,
+        discrete_evidence.inverseDepthRelativeSpread,
+        options);
+    observation.diagnostics = depthLayerReliabilityDiagnosticsToJson(
+        observation.result, options);
+    observation.diagnostics.insert(
+        QStringLiteral("classification_boundary"),
+        QStringLiteral(
+            "after_cross_view_vote_accumulation_before_layer_selection_or_repair"));
+    observation.diagnostics.insert(
+        QStringLiteral("geometry_evidence_source"), evidence_source);
+    observation.diagnostics.insert(
+        QStringLiteral("configured_full_raster_texture_radius_pixels"), 3);
+    observation.diagnostics.insert(
+        QStringLiteral("configured_full_raster_boundary_ring_radius_pixels"), 6);
+    return observation;
+}
+
 QJsonObject configuredEffectiveInteger(int configured, int effective)
 {
     return QJsonObject{
@@ -148,7 +245,10 @@ QJsonObject makePixelDomainDiagnostics(
         : quantized_boundary_edge_radius;
     const int boundary_protection_radius = scale.usesReducedGrid()
         ? std::max(
-              0,
+              fusion_config.enableBoundaryAwareRetention &&
+                      fusion_config.boundaryProtectionRadiusPixels > 0
+                  ? 1
+                  : 0,
               static_cast<int>(std::floor(
                   static_cast<float>(
                       fusion_config.boundaryProtectionRadiusPixels) *
@@ -204,6 +304,14 @@ QJsonObject makePixelDomainDiagnostics(
                                boundary_protection_radius);
     boundary_protection.insert(QStringLiteral("active"),
                                boundary_retention_active);
+    if (boundary_retention_active && scale.usesReducedGrid() &&
+        fusion_config.boundaryProtectionRadiusPixels > 0 &&
+        boundary_protection_radius == 1)
+    {
+        boundary_protection.insert(
+            QStringLiteral("quantization_strategy"),
+            QStringLiteral("minimum_single_grid_protection_shell"));
+    }
     if (!boundary_retention_active)
     {
         boundary_protection.insert(
@@ -757,6 +865,8 @@ QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
                   stats.lowConfidenceCandidateCount);
     object.insert(QStringLiteral("geometry_supported_low_confidence_retained"),
                   stats.geometrySupportedLowConfidenceRetained);
+    object.insert(QStringLiteral("independent_geometry_confidence_retained"),
+                  stats.independentGeometryConfidenceRetained);
     object.insert(QStringLiteral("boundary_geometry_retained"),
                   stats.boundaryGeometryRetained);
     object.insert(QStringLiteral("confidence_removed"), stats.confidenceRemoved);
@@ -773,6 +883,14 @@ QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
 DepthPostProcessEvidence depthPostProcessEvidence(const DepthFrameResult &frame)
 {
     DepthPostProcessEvidence evidence;
+    if (frame.photometricConfidence)
+    {
+        evidence.photometricConfidence = *frame.photometricConfidence;
+    }
+    if (frame.geometricConfidence)
+    {
+        evidence.geometricConfidence = *frame.geometricConfidence;
+    }
     if (frame.geometrySupportCount)
     {
         evidence.geometrySupportCount = *frame.geometrySupportCount;
@@ -793,6 +911,44 @@ DepthPostProcessEvidence depthPostProcessEvidence(const DepthFrameResult &frame)
     {
         evidence.adaptiveConflictRatio = *frame.adaptiveGeometryConflictRatio;
     }
+    return evidence;
+}
+
+DepthPostProcessEvidence updateDepthEvidenceConfidence(
+    DepthFrameResult &frame,
+    const cv::Mat &depth,
+    cv::Mat &confidence,
+    DepthPostProcessEvidence evidence,
+    bool enabled)
+{
+    if (!enabled || depth.empty() || confidence.empty())
+    {
+        return evidence;
+    }
+    const DepthEvidenceConfidenceResult confidence_result =
+        buildDepthEvidenceConfidence(
+            depth,
+            confidence,
+            evidence.geometrySupportCount,
+            evidence.inverseDepthRelativeSpread,
+            evidence.adaptiveSupportWeight,
+            evidence.adaptiveEffectiveViewCount,
+            evidence.adaptiveConflictRatio,
+            frame.geometryRerankMaps.data());
+    frame.evidenceConfidenceDiagnostics =
+        depthEvidenceConfidenceSummaryToJson(confidence_result.summary);
+    frame.evidenceConfidenceSummary = confidence_result.summary;
+    if (!confidence_result.summary.available)
+    {
+        return evidence;
+    }
+    frame.photometricConfidence = QSharedPointer<cv::Mat>::create(
+        confidence_result.photometric);
+    frame.geometricConfidence = QSharedPointer<cv::Mat>::create(
+        confidence_result.geometric);
+    confidence = confidence_result.combined;
+    evidence.photometricConfidence = confidence_result.photometric;
+    evidence.geometricConfidence = confidence_result.geometric;
     return evidence;
 }
 
@@ -2747,6 +2903,21 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
     quality_input.validCoverage = result.qualityMetrics.validCoverage;
     quality_input.largestComponentRatio = result.qualityMetrics.largestComponentRatio;
     quality_input.meanConfidence = result.qualityMetrics.meanConfidence;
+    quality_input.dualChannelConfidenceAvailable =
+        result.evidenceConfidenceSummary.available;
+    quality_input.meanPhotometricConfidence =
+        result.evidenceConfidenceSummary.meanPhotometricConfidence;
+    quality_input.meanIndependentGeometryConfidence =
+        result.evidenceConfidenceSummary.meanGeometricConfidence;
+    quality_input.strongIndependentGeometryCoverage =
+        result.evidenceConfidenceSummary.strongGeometryCoverage;
+    quality_input.geometryEvidenceTreatmentEnabled =
+        result.geometryRerankMaps &&
+        result.evidenceConfidenceSummary.available;
+    quality_input.geometryCorrectedPixelCount =
+        result.evidenceConfidenceSummary.correctedPixelCount;
+    quality_input.correctedMeanIndependentGeometryConfidence =
+        result.evidenceConfidenceSummary.correctedMeanGeometricConfidence;
     quality_input.multiViewConsistency = std::clamp(
         quality_consistency_keep_rate, 0.0f, 1.0f);
     quality_input.depthAtSearchBoundaryRatio = search_boundary_ratio;
@@ -5528,7 +5699,10 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         : quantized_boundary_edge_radius;
     const int boundary_protection_radius = pixel_scale.usesReducedGrid()
         ? std::max(
-              0,
+              config.enableBoundaryAwareRetention &&
+                      config.boundaryProtectionRadiusPixels > 0
+                  ? 1
+                  : 0,
               static_cast<int>(std::floor(
                   static_cast<float>(
                       config.boundaryProtectionRadiusPixels) *
@@ -5649,6 +5823,12 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                 evidence->geometrySupportCount.size() == depthMap.size() &&
                 evidence->inverseDepthRelativeSpread.type() == CV_32FC1 &&
                 evidence->inverseDepthRelativeSpread.size() == depthMap.size();
+            const bool hasIndependentGeometryConfidence = evidence &&
+                evidence->geometricConfidence.type() == CV_32FC1 &&
+                evidence->geometricConfidence.size() == depthMap.size();
+            const bool hasPhotometricConfidence = evidence &&
+                evidence->photometricConfidence.type() == CV_32FC1 &&
+                evidence->photometricConfidence.size() == depthMap.size();
             const bool hasAdaptiveGeometryEvidence = hasGeometryEvidence &&
                 evidence->adaptiveSupportWeight.type() == CV_32FC1 &&
                 evidence->adaptiveSupportWeight.size() == depthMap.size() &&
@@ -5658,14 +5838,20 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                 evidence->adaptiveConflictRatio.size() == depthMap.size();
             int lowConfidenceCandidateCount = 0;
             int geometrySupportedRetainedCount = 0;
+            int independentGeometryConfidenceRetainedCount = 0;
             int boundaryGeometryRetainedCount = 0;
 #if defined(HAS_OPENMP)
-#pragma omp parallel for schedule(static) reduction(+:lowConfidenceCandidateCount, geometrySupportedRetainedCount, boundaryGeometryRetainedCount)
+#pragma omp parallel for schedule(static) reduction(+:lowConfidenceCandidateCount, geometrySupportedRetainedCount, independentGeometryConfidenceRetainedCount, boundaryGeometryRetainedCount)
 #endif
             for (int v = 0; v < depthMap.rows; ++v)
             {
                 float *depthRow = depthMap.ptr<float>(v);
                 const float *confRow = confidenceMap.ptr<float>(v);
+                const float *photometricRow = hasPhotometricConfidence
+                    ? evidence->photometricConfidence.ptr<float>(v) : confRow;
+                const float *geometricConfidenceRow =
+                    hasIndependentGeometryConfidence
+                    ? evidence->geometricConfidence.ptr<float>(v) : nullptr;
                 const std::uint16_t *geometrySupportRow = hasGeometryEvidence
                     ? evidence->geometrySupportCount.ptr<std::uint16_t>(v) : nullptr;
                 const float *inverseDepthSpreadRow = hasGeometryEvidence
@@ -5706,6 +5892,18 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                                 adaptiveConflictRow[u] <=
                                     config.geometrySupportedMaximumAdaptiveConflictRatio;
                         }
+                        const bool retainForIndependentGeometry =
+                            !retainForGeometry &&
+                            hasIndependentGeometryConfidence &&
+                            geometricConfidenceRow[u] >= 0.55f &&
+                            photometricRow[u] >= 0.10f &&
+                            hasGeometryEvidence &&
+                            geometrySupportRow[u] >=
+                                config.geometrySupportedMinimumObservationCount &&
+                            std::isfinite(inverseDepthSpreadRow[u]) &&
+                            inverseDepthSpreadRow[u] >= 0.0f &&
+                            inverseDepthSpreadRow[u] <=
+                                config.geometrySupportedMaximumInverseDepthSpread;
                         const bool retainForBoundary = !retainForGeometry
                             && boundaryRow && boundaryRow[u] != 0
                             && config.enableBoundaryAwareRetention
@@ -5724,6 +5922,10 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                         {
                             ++geometrySupportedRetainedCount;
                         }
+                        else if (retainForIndependentGeometry)
+                        {
+                            ++independentGeometryConfidenceRetainedCount;
+                        }
                         else if (retainForBoundary)
                         {
                             ++boundaryGeometryRetainedCount;
@@ -5739,17 +5941,21 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             stats.lowConfidenceCandidateCount = lowConfidenceCandidateCount;
             stats.geometrySupportedLowConfidenceRetained =
                 geometrySupportedRetainedCount;
+            stats.independentGeometryConfidenceRetained =
+                independentGeometryConfidenceRetainedCount;
             stats.boundaryGeometryRetained = boundaryGeometryRetainedCount;
 
             int validAfterConfidence = cv::countNonZero(depthMap > 0.0f);
             LOG_DEBUG("[MVS][帧 %d][后处理] 置信度过滤 %d->%d threshold=%.4f "
-                      "candidates=%d geometry_retained=%d boundary_retained=%d",
+                      "candidates=%d geometry_retained=%d independent_geometry_retained=%d "
+                      "boundary_retained=%d",
                       refIdx,
                       stats.validBeforePostprocess,
                       validAfterConfidence,
                       confThresh,
                       lowConfidenceCandidateCount,
                       geometrySupportedRetainedCount,
+                      independentGeometryConfidenceRetainedCount,
                       boundaryGeometryRetainedCount);
 
             if (!adaptiveConfidenceRaised &&
@@ -7044,9 +7250,12 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     const bool capture_adaptive_reliability =
         _config.enableAdaptiveGeometryEvidence &&
         _effectiveSceneProfile == MvsSceneProfile::OrbitalObject;
+    const bool capture_projected_confidence =
+        capture_adaptive_reliability ||
+        _config.enableDepthLayerReliabilityGuidedCorrection;
     std::vector<cv::Mat> origDepths(NV);
     std::vector<cv::Mat> origConfidences(
-        capture_adaptive_reliability ? static_cast<std::size_t>(NV) : 0U);
+        capture_projected_confidence ? static_cast<std::size_t>(NV) : 0U);
     for (int i = 0; i < NV; ++i)
     {
         if (_cancelled.load())
@@ -7056,7 +7265,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         if (_depthFrames[i].eligibleAsConsistencySource() && _depthFrames[i].depthMap)
         {
             origDepths[i] = _depthFrames[i].depthMap->clone();
-            if (capture_adaptive_reliability && _depthFrames[i].confidence &&
+            if (capture_projected_confidence && _depthFrames[i].confidence &&
                 !_depthFrames[i].confidence->empty())
             {
                 origConfidences[static_cast<std::size_t>(i)] =
@@ -7120,14 +7329,22 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         const bool generate_adaptive_evidence =
             _config.enableAdaptiveGeometryEvidence &&
             _effectiveSceneProfile == MvsSceneProfile::OrbitalObject;
+        const bool generate_projected_source_layers =
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject ||
+            _config.enableDepthLayerReliabilityGuidedCorrection;
         AdaptiveGeometryEvidenceAccumulatorMaps adaptive_evidence_accumulator =
             generate_adaptive_evidence
             ? makeAdaptiveGeometryEvidenceAccumulatorMaps(depthI.size())
             : AdaptiveGeometryEvidenceAccumulatorMaps{};
         std::vector<cv::Mat> projected_sources;
-        if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        std::vector<ProjectedDepthEvidence> projected_source_evidence;
+        if (generate_projected_source_layers)
         {
             projected_sources.resize(repairSources.size());
+            if (_config.enableDepthLayerReliabilityGuidedCorrection)
+            {
+                projected_source_evidence.resize(repairSources.size());
+            }
         }
         std::vector<DepthConsistencySourceInput> consistency_inputs;
         consistency_inputs.reserve(consistencySources.size());
@@ -7192,18 +7409,42 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     input.searchRadiusPixels == 0;
                 consistency_inputs.push_back(std::move(input));
             }
-            if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+            if (generate_projected_source_layers)
             {
-                projected_sources[static_cast<std::size_t>(source_ordinal)] =
-                    projectSourceDepthToReference(
-                    depthJ,
-                    camJ,
-                    camI,
-                    depthI.size(),
-                    repair_options.maximumProjectionDistancePixels,
-                    nullptr,
-                    rowWorkers,
-                    &_cancelled);
+                if (_config.enableDepthLayerReliabilityGuidedCorrection &&
+                    !origConfidences[static_cast<std::size_t>(j)].empty())
+                {
+                    ProjectedDepthEvidence evidence =
+                        projectSourceDepthEvidenceToReference(
+                            depthJ,
+                            origConfidences[static_cast<std::size_t>(j)],
+                            camJ,
+                            camI,
+                            depthI.size(),
+                            repair_options.maximumProjectionDistancePixels,
+                            cameraBaselineSector(camI, camJ),
+                            nullptr,
+                            rowWorkers,
+                            &_cancelled);
+                    projected_sources[static_cast<std::size_t>(source_ordinal)] =
+                        evidence.depth;
+                    projected_source_evidence[
+                        static_cast<std::size_t>(source_ordinal)] =
+                        std::move(evidence);
+                }
+                else
+                {
+                    projected_sources[static_cast<std::size_t>(source_ordinal)] =
+                        projectSourceDepthToReference(
+                            depthJ,
+                            camJ,
+                            camI,
+                            depthI.size(),
+                            repair_options.maximumProjectionDistancePixels,
+                            nullptr,
+                            rowWorkers,
+                            &_cancelled);
+                }
             }
         }
 
@@ -7227,6 +7468,41 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             generate_adaptive_evidence
                 ? &adaptive_evidence_accumulator
                 : nullptr);
+
+        std::string referenceImageError;
+        MvsImageCache::ImageLease referenceImageLease = acquireImageFrame(
+            i, &referenceImageError);
+        const cv::Mat *referenceGray = referenceImageLease
+            ? &referenceImageLease->preparedGray
+            : nullptr;
+        if (!referenceImageLease)
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][帧 %1][一致性] 参考影像不可用，"
+                         "跳过影像引导修复与深度层可靠性诊断：%2")
+                         .arg(i)
+                         .arg(QString::fromStdString(referenceImageError)));
+        }
+        const PreRepairDepthLayerReliability depth_layer_reliability =
+            analyzePreRepairDepthLayerReliability(
+                _depthFrames[i],
+                depthBackup,
+                referenceGray,
+                consistent_votes,
+                occluded_votes,
+                contradicted_votes,
+                geometry_source_mask,
+                source_inverse_depth_sum,
+                source_inverse_depth_squared_sum,
+                generate_adaptive_evidence
+                    ? &adaptive_evidence_accumulator
+                    : nullptr);
+        if (depth_layer_reliability.result.validInputs)
+        {
+            _depthFrames[i].depthLayerReliabilityClass =
+                QSharedPointer<cv::Mat>::create(
+                    depth_layer_reliability.result.classMap);
+        }
 
         cv::Mat repair_mask = _depthFrames[i].supportRegionMask &&
                 !_depthFrames[i].supportRegionMask->empty()
@@ -7265,6 +7541,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             QSharedPointer<cv::Mat>::create(
                 depthI.size(), CV_8UC1, cv::Scalar(0));
         DominantDepthLayerSelectionStats layer_selection_stats;
+        DepthGeometryHypothesisRerankMaps geometry_rerank_maps;
         if (generate_adaptive_evidence)
         {
             // Revision 15 chooses one observable depth layer before TSDF.
@@ -7274,13 +7551,23 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             // so consistency filtering cannot create an entire missing sector.
             depthBackup.copyTo(depthI);
             depthI.setTo(0.0f, repair_mask == 0);
+            DominantDepthLayerSelectionOptions layer_selection_options;
+            layer_selection_options.enableReliabilityGuidedCorrection =
+                _config.enableDepthLayerReliabilityGuidedCorrection;
+            layer_selection_options.restrictToReliabilityGuidedCandidates =
+                !generate_adaptive_evidence &&
+                _config.enableDepthLayerReliabilityGuidedCorrection;
+            const cv::Mat *native_reliability_classes =
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                ? &depth_layer_reliability.result.classMap
+                : nullptr;
             layer_selection_stats = selectDominantProjectedDepthLayer(
                 depthI,
                 repair_mask,
                 projected_sources,
                 consistent_votes,
                 contradicted_votes,
-                {},
+                layer_selection_options,
                 _depthFrames[i].confidence
                     ? _depthFrames[i].confidence.data() : nullptr,
                 _depthFrames[i].crossViewRepairedMask.data(),
@@ -7289,11 +7576,78 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &source_inverse_depth_squared_sum,
                 &consistent_votes,
                 rowWorkers,
-                &_cancelled);
+                &_cancelled,
+                native_reliability_classes,
+                nullptr,
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                    ? &projected_source_evidence : nullptr,
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                    ? &geometry_rerank_maps : nullptr);
+        }
+        else if (_config.enableDepthLayerReliabilityGuidedCorrection)
+        {
+            cv::Mat guided_depth = depthBackup.clone();
+            guided_depth.setTo(0.0f, repair_mask == 0);
+            cv::Mat guided_confidence = _depthFrames[i].confidence
+                ? _depthFrames[i].confidence->clone() : cv::Mat();
+            cv::Mat guided_geometry_source_mask = geometry_source_mask.clone();
+            cv::Mat guided_inverse_sum = source_inverse_depth_sum.clone();
+            cv::Mat guided_inverse_squared_sum =
+                source_inverse_depth_squared_sum.clone();
+            cv::Mat guided_votes = consistent_votes.clone();
+            cv::Mat guided_changed_mask;
+            DominantDepthLayerSelectionOptions layer_selection_options;
+            layer_selection_options.enableReliabilityGuidedCorrection = true;
+            layer_selection_options.restrictToReliabilityGuidedCandidates = true;
+            layer_selection_stats = selectDominantProjectedDepthLayer(
+                guided_depth,
+                repair_mask,
+                projected_sources,
+                consistent_votes,
+                contradicted_votes,
+                layer_selection_options,
+                guided_confidence.empty() ? nullptr : &guided_confidence,
+                _depthFrames[i].crossViewRepairedMask.data(),
+                &guided_geometry_source_mask,
+                &guided_inverse_sum,
+                &guided_inverse_squared_sum,
+                &guided_votes,
+                rowWorkers,
+                &_cancelled,
+                &depth_layer_reliability.result.classMap,
+                &guided_changed_mask,
+                &projected_source_evidence,
+                &geometry_rerank_maps);
+            depthBackup.copyTo(depthI);
+            depthI.setTo(0.0f, repair_mask == 0);
+            depthI.setTo(0.0f, consistentMask == 0);
+            if (!guided_changed_mask.empty())
+            {
+                guided_depth.copyTo(depthI, guided_changed_mask);
+                if (_depthFrames[i].confidence && !guided_confidence.empty())
+                {
+                    guided_confidence.copyTo(
+                        *_depthFrames[i].confidence, guided_changed_mask);
+                }
+                guided_geometry_source_mask.copyTo(
+                    geometry_source_mask, guided_changed_mask);
+                guided_inverse_sum.copyTo(
+                    source_inverse_depth_sum, guided_changed_mask);
+                guided_inverse_squared_sum.copyTo(
+                    source_inverse_depth_squared_sum, guided_changed_mask);
+                guided_votes.copyTo(consistent_votes, guided_changed_mask);
+            }
         }
         else
         {
             depthI.setTo(0, consistentMask == 0);
+        }
+        if (_config.enableDepthLayerReliabilityGuidedCorrection &&
+            geometry_rerank_maps.compatible(depthI.size()))
+        {
+            _depthFrames[i].geometryRerankMaps =
+                QSharedPointer<DepthGeometryHypothesisRerankMaps>::create(
+                    std::move(geometry_rerank_maps));
         }
         WeakNativeDepthRetentionStats weak_native_retention;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
@@ -7315,18 +7669,25 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     : nullptr);
         }
         cv::Mat anchored_interpolation_mask;
-        std::string referenceImageError;
-        MvsImageCache::ImageLease referenceImageLease = acquireImageFrame(
-            i, &referenceImageError);
-        const cv::Mat *referenceGray = referenceImageLease
-            ? &referenceImageLease->preparedGray
-            : nullptr;
-        if (!referenceImageLease)
+        cv::Mat native_interpolation_anchor_eligibility_mask;
+        const cv::Mat *native_interpolation_anchor_eligibility = nullptr;
+        if (_config.enableDepthLayerReliabilityAnchorGate)
         {
-            LOG_WARN(QStringLiteral(
-                         "[MVS][帧 %1][一致性] 参考影像不可用，跳过影像引导修复：%2")
-                         .arg(i)
-                         .arg(QString::fromStdString(referenceImageError)));
+            native_interpolation_anchor_eligibility_mask = cv::Mat(
+                depthI.size(), CV_8UC1, cv::Scalar(0));
+            if (depth_layer_reliability.result.validInputs &&
+                depth_layer_reliability.result.classMap.type() == CV_8UC1 &&
+                depth_layer_reliability.result.classMap.size() == depthI.size())
+            {
+                cv::compare(
+                    depth_layer_reliability.result.classMap,
+                    static_cast<std::uint8_t>(
+                        DepthLayerReliabilityClass::Reliable),
+                    native_interpolation_anchor_eligibility_mask,
+                    cv::CMP_EQ);
+            }
+            native_interpolation_anchor_eligibility =
+                &native_interpolation_anchor_eligibility_mask;
         }
         emit progressChanged(
             QStringLiteral("多视一致性：帧 %1/%2，修复内部缺口")
@@ -7349,7 +7710,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 referenceGray,
                 &anchored_interpolation_mask,
                 rowWorkers,
-                &_cancelled);
+                &_cancelled,
+                native_interpolation_anchor_eligibility);
         if (_cancelled.load())
         {
             return;
@@ -7376,6 +7738,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     : nullptr);
         _depthFrames[i].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
+        _depthFrames[i].crossViewRepairDiagnostics.insert(
+            QStringLiteral("depth_layer_reliability"),
+            depth_layer_reliability.diagnostics);
         _depthFrames[i].crossViewRepairDiagnostics.insert(
             QStringLiteral("dominant_depth_layer_selection"),
             dominantDepthLayerSelectionStatsToJson(layer_selection_stats));
@@ -7751,8 +8116,12 @@ void DepthMapGenerator::applyLearnedDepthCandidatesAfterConsistency()
 void DepthMapGenerator::recoverResidualDepthAfterConsistency()
 {
     const int view_count = static_cast<int>(_views.size());
+    const bool reliability_guided_local_pass =
+        _config.enableDepthLayerReliabilityGuidedCorrection &&
+        _effectiveSceneProfile == MvsSceneProfile::Custom;
     if (!_config.enablePostConsistencyResidualReestimation ||
-        _effectiveSceneProfile != MvsSceneProfile::OrbitalObject ||
+        (_effectiveSceneProfile != MvsSceneProfile::OrbitalObject &&
+         !reliability_guided_local_pass) ||
         view_count < 4 || static_cast<int>(_depthFrames.size()) != view_count)
     {
         return;
@@ -7764,6 +8133,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
     }
 
     std::vector<cv::Mat> frozen_depths(static_cast<std::size_t>(view_count));
+    std::vector<cv::Mat> frozen_confidences(static_cast<std::size_t>(view_count));
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
     {
         if (_depthFrames[frame_index].eligibleAsConsistencySource() &&
@@ -7775,6 +8145,12 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             // snapshot here; cloning every full-resolution frame is redundant.
             frozen_depths[static_cast<std::size_t>(frame_index)] =
                 *_depthFrames[frame_index].depthMap;
+            if (_depthFrames[frame_index].confidence &&
+                !_depthFrames[frame_index].confidence->empty())
+            {
+                frozen_confidences[static_cast<std::size_t>(frame_index)] =
+                    *_depthFrames[frame_index].confidence;
+            }
         }
     }
 
@@ -7783,12 +8159,15 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         cv::Mat depth;
         cv::Mat confidence;
         cv::Mat recoveredMask;
-        cv::Mat geometrySupportCount;
+        cv::Mat geometrySourceMask;
+        cv::Mat sourceInverseDepthSum;
+        cv::Mat sourceInverseDepthSquaredSum;
+        cv::Mat confirmedSourceCount;
         DepthResidualReestimationStats stats;
     };
     std::vector<PendingResidualRecovery> pending(
         static_cast<std::size_t>(view_count));
-    const DepthResidualReestimationOptions base_options{
+    DepthResidualReestimationOptions base_options{
         64,
         0.001f,
         4,
@@ -7800,6 +8179,18 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                    0.005f,
                    0.25f),
         std::clamp(_config.postConsistencyResidualConfidence, 0.0f, 1.0f)};
+    if (reliability_guided_local_pass)
+    {
+        base_options.minimumLayerSourceCount = 3;
+        base_options.minimumLayerSectorCount = 2;
+        base_options.minimumGeometryConfirmationCount = 3;
+        base_options.minimumGeometrySectorCount = 2;
+        base_options.allowValidDepthReplacement = true;
+        base_options.minimumReplacementCostAdvantage = 0.08f;
+        base_options.ambiguousMaximumRelativeCorrection = 0.01f;
+        base_options.minimumCandidateConfidence = std::min(
+            base_options.minimumCandidateConfidence, 0.18f);
+    }
     const int residual_frame_workers = std::clamp(
         _config.gpuFrameWorkerCount,
         1,
@@ -7837,22 +8228,53 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         const FramePinholeCamera reference_camera = frame.cameraModel.isValid()
             ? frame.cameraModel
             : mvsPinholeCamera(_views[frame_index].camera);
-        const std::vector<int> source_indices = orbitalHoleRepairSourceIndices(
-            _depthFrames,
-            consistencySourceIndicesForFrame(
-                _depthFrames, frame_index, view_count),
-            frame_index,
-            view_count,
-            _config.postConsistencyResidualSourceCount);
+        const std::vector<int> source_indices = reliability_guided_local_pass
+            ? frame.geometrySourceViewIndices
+            : orbitalHoleRepairSourceIndices(
+                  _depthFrames,
+                  consistencySourceIndicesForFrame(
+                      _depthFrames, frame_index, view_count),
+                  frame_index,
+                  view_count,
+                  _config.postConsistencyResidualSourceCount);
         cv::Mat support_mask = frame.supportRegionMask &&
                 !frame.supportRegionMask->empty()
             ? *frame.supportRegionMask
             : cv::Mat(frame.depthMap->size(), CV_8UC1, cv::Scalar(255));
-        DepthResidualReestimationPreflight preflight =
-            inspectDepthResidualReestimationNeed(
-                *frame.depthMap,
-                support_mask,
-                base_options);
+        DepthResidualReestimationPreflight preflight;
+        if (reliability_guided_local_pass && frame.depthLayerReliabilityClass &&
+            frame.geometryRerankMaps &&
+            frame.geometryRerankMaps->compatible(frame.depthMap->size()))
+        {
+            cv::Mat ambiguous;
+            cv::Mat rejected;
+            cv::compare(
+                *frame.depthLayerReliabilityClass,
+                static_cast<std::uint8_t>(
+                    DepthLayerReliabilityClass::AmbiguousLowTexture),
+                ambiguous,
+                cv::CMP_EQ);
+            cv::compare(
+                *frame.depthLayerReliabilityClass,
+                static_cast<std::uint8_t>(DepthLayerReliabilityClass::RejectedLayer),
+                rejected,
+                cv::CMP_EQ);
+            cv::Mat weak_mask;
+            cv::bitwise_or(ambiguous, rejected, weak_mask);
+            cv::bitwise_and(
+                weak_mask,
+                frame.geometryRerankMaps->decisionAction ==
+                    static_cast<std::uint8_t>(
+                        DepthGeometryHypothesisAction::None),
+                weak_mask);
+            preflight = inspectDepthReestimationMask(
+                support_mask, weak_mask, base_options);
+        }
+        else
+        {
+            preflight = inspectDepthResidualReestimationNeed(
+                *frame.depthMap, support_mask, base_options);
+        }
         recovery.stats.supportPixelCount = preflight.supportPixelCount;
         recovery.stats.requestedResidualPixelCount =
             preflight.requestedResidualPixelCount;
@@ -7862,6 +8284,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             return;
         }
         std::vector<cv::Mat> projected_sources;
+        std::vector<ProjectedDepthEvidence> projected_source_evidence;
         std::vector<int> source_sector_ids;
         std::vector<cv::Mat> source_images;
         std::vector<FramePinholeCamera> source_cameras;
@@ -7891,17 +8314,46 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 _depthFrames[source_index].cameraModel.isValid()
                 ? _depthFrames[source_index].cameraModel
                 : mvsPinholeCamera(_views[source_index].camera);
-            projected_sources.push_back(projectSourceDepthToReference(
-                frozen_depths[static_cast<std::size_t>(source_index)],
-                source_camera,
-                reference_camera,
-                frame.depthMap->size(),
-                0.8f,
-                nullptr,
-                row_workers,
-                &_cancelled));
-            source_sector_ids.push_back(cameraBaselineSector(
-                reference_camera, source_camera));
+            const int sector = cameraBaselineSector(
+                reference_camera, source_camera);
+            if (reliability_guided_local_pass &&
+                !frozen_confidences[static_cast<std::size_t>(source_index)].empty())
+            {
+                ProjectedDepthEvidence evidence =
+                    projectSourceDepthEvidenceToReference(
+                        frozen_depths[static_cast<std::size_t>(source_index)],
+                        frozen_confidences[static_cast<std::size_t>(source_index)],
+                        source_camera,
+                        reference_camera,
+                        frame.depthMap->size(),
+                        0.8f,
+                        sector,
+                        nullptr,
+                        row_workers,
+                        &_cancelled);
+                projected_sources.push_back(evidence.depth);
+                projected_source_evidence.push_back(std::move(evidence));
+            }
+            else
+            {
+                projected_sources.push_back(projectSourceDepthToReference(
+                    frozen_depths[static_cast<std::size_t>(source_index)],
+                    source_camera,
+                    reference_camera,
+                    frame.depthMap->size(),
+                    0.8f,
+                    nullptr,
+                    row_workers,
+                    &_cancelled));
+                if (reliability_guided_local_pass)
+                {
+                    ProjectedDepthEvidence unavailable_evidence;
+                    unavailable_evidence.baselineSector = sector;
+                    projected_source_evidence.push_back(
+                        std::move(unavailable_evidence));
+                }
+            }
+            source_sector_ids.push_back(sector);
             source_images.push_back(sourceImageLease->preparedGray);
             source_cameras.push_back(source_camera);
             source_masks.push_back(
@@ -7941,14 +8393,8 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             return;
         }
 
-        std::vector<std::vector<int>> source_groups(2);
-        for (int source_ordinal = 0;
-             source_ordinal < static_cast<int>(source_images.size());
-             ++source_ordinal)
-        {
-            source_groups[static_cast<std::size_t>(source_ordinal % 2)]
-                .push_back(source_ordinal);
-        }
+        const std::vector<std::vector<int>> source_groups =
+            buildDepthResidualPatchMatchSourceGroups(source_sector_ids);
         std::vector<cv::Mat> candidate_depths;
         std::vector<cv::Mat> candidate_confidences;
         recovery.stats.attemptedHypothesisCount = 2;
@@ -7985,7 +8431,8 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 std::max(6, patch_match.numIterations / 2), 6, 10);
             patch_match.patchHalf = std::max(3, patch_match.patchHalf - 1);
             patch_match.confidenceThresh = std::min(
-                patch_match.confidenceThresh, 0.18f);
+                patch_match.confidenceThresh,
+                reliability_guided_local_pass ? 0.10f : 0.18f);
             patch_match.minimumMaskedPatchSupportRatio = std::min(
                 patch_match.minimumMaskedPatchSupportRatio, 0.25f);
             patch_match.geomConsistency = false;
@@ -8037,6 +8484,24 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         recovery.confidence = frame.confidence && !frame.confidence->empty()
             ? frame.confidence->clone()
             : cv::Mat(frame.depthMap->size(), CV_32FC1, cv::Scalar(0.0f));
+        recovery.geometrySourceMask = cv::Mat(
+            frame.depthMap->size(), CV_16UC1, cv::Scalar(0));
+        recovery.sourceInverseDepthSum = cv::Mat(
+            frame.depthMap->size(), CV_32FC1, cv::Scalar(0.0f));
+        recovery.sourceInverseDepthSquaredSum = cv::Mat(
+            frame.depthMap->size(), CV_32FC1, cv::Scalar(0.0f));
+        recovery.confirmedSourceCount = cv::Mat(
+            frame.depthMap->size(), CV_16UC1, cv::Scalar(0));
+        DepthResidualReestimationEvidenceOutputs evidence_outputs;
+        evidence_outputs.geometrySourceMask = &recovery.geometrySourceMask;
+        evidence_outputs.sourceInverseDepthSum =
+            &recovery.sourceInverseDepthSum;
+        evidence_outputs.sourceInverseDepthSquaredSum =
+            &recovery.sourceInverseDepthSquaredSum;
+        evidence_outputs.confirmedSourceCount =
+            &recovery.confirmedSourceCount;
+        evidence_outputs.rerankMaps = reliability_guided_local_pass
+            ? frame.geometryRerankMaps.data() : nullptr;
         recovery.stats = mergeDepthResidualReestimationCandidates(
             recovery.depth,
             recovery.confidence,
@@ -8046,11 +8511,15 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             projected_sources,
             source_sector_ids,
             &recovery.recoveredMask,
-            base_options);
+            base_options,
+            reliability_guided_local_pass
+                ? frame.depthLayerReliabilityClass.data() : nullptr,
+            reliability_guided_local_pass
+                ? &projected_source_evidence : nullptr,
+            reliability_guided_local_pass ? &evidence_outputs : nullptr);
         recovery.stats.attemptedHypothesisCount = 2;
         recovery.stats.successfulHypothesisCount = 2;
         recovery.stats.sourceCount = static_cast<int>(source_images.size());
-        recovery.geometrySupportCount = target.layerSourceCount;
         LOG_INFO("[MVS][帧 %d][残余重估] target=%d layer=%d candidate=%d "
                  "consensus=%d recovered=%d",
                  frame_index,
@@ -8102,14 +8571,21 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 ? *frame.crossViewRepairedMask : cv::Mat(),
             cv::Mat(),
             *frame.residualReestimatedMask);
+        if (reliability_guided_local_pass && frame.geometrySourceMask &&
+            frame.geometrySourceMask->size() ==
+                frame.residualReestimatedMask->size())
+        {
+            recovery.geometrySourceMask.copyTo(
+                *frame.geometrySourceMask,
+                *frame.residualReestimatedMask);
+        }
         if (frame.geometrySupportCount &&
             frame.geometrySupportCount->size() ==
                 frame.residualReestimatedMask->size())
         {
             cv::Mat retained_support;
-            recovery.geometrySupportCount.convertTo(
+            recovery.confirmedSourceCount.convertTo(
                 retained_support, CV_16UC1, 1.0, 1.0);
-            cv::max(retained_support, 3, retained_support);
             retained_support.copyTo(
                 *frame.geometrySupportCount,
                 *frame.residualReestimatedMask);
@@ -8117,18 +8593,46 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         if (frame.inverseDepthMean &&
             frame.inverseDepthMean->size() == frame.depthMap->size())
         {
-            cv::Mat recovered_inverse_depth;
-            cv::divide(1.0f, *frame.depthMap, recovered_inverse_depth);
-            recovered_inverse_depth.copyTo(
-                *frame.inverseDepthMean,
-                *frame.residualReestimatedMask);
+            cv::Mat source_count_float;
+            recovery.confirmedSourceCount.convertTo(
+                source_count_float, CV_32FC1);
+            cv::Mat recovered_inverse_depth_mean;
+            cv::divide(
+                recovery.sourceInverseDepthSum,
+                source_count_float,
+                recovered_inverse_depth_mean,
+                1.0,
+                CV_32FC1);
+            recovered_inverse_depth_mean.copyTo(
+                *frame.inverseDepthMean, *frame.residualReestimatedMask);
         }
         if (frame.inverseDepthRelativeSpread &&
             frame.inverseDepthRelativeSpread->size() == frame.depthMap->size())
         {
-            frame.inverseDepthRelativeSpread->setTo(
-                cv::Scalar(
-                    _config.postConsistencyResidualMaximumLayerSpread),
+            cv::Mat source_count_float;
+            recovery.confirmedSourceCount.convertTo(
+                source_count_float, CV_32FC1);
+            cv::Mat inverse_mean;
+            cv::Mat inverse_squared_mean;
+            cv::divide(
+                recovery.sourceInverseDepthSum,
+                source_count_float,
+                inverse_mean,
+                1.0,
+                CV_32FC1);
+            cv::divide(
+                recovery.sourceInverseDepthSquaredSum,
+                source_count_float,
+                inverse_squared_mean,
+                1.0,
+                CV_32FC1);
+            cv::Mat variance = inverse_squared_mean - inverse_mean.mul(
+                inverse_mean);
+            cv::max(variance, 0.0f, variance);
+            cv::sqrt(variance, variance);
+            cv::divide(variance, inverse_mean, variance);
+            variance.copyTo(
+                *frame.inverseDepthRelativeSpread,
                 *frame.residualReestimatedMask);
         }
     }
@@ -8328,14 +8832,22 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         const bool generate_adaptive_evidence =
             _config.enableAdaptiveGeometryEvidence &&
             _effectiveSceneProfile == MvsSceneProfile::OrbitalObject;
+        const bool generate_projected_source_layers =
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject ||
+            _config.enableDepthLayerReliabilityGuidedCorrection;
         AdaptiveGeometryEvidenceAccumulatorMaps adaptive_evidence_accumulator =
             generate_adaptive_evidence
             ? makeAdaptiveGeometryEvidenceAccumulatorMaps(reference->depth.size())
             : AdaptiveGeometryEvidenceAccumulatorMaps{};
         std::vector<cv::Mat> projected_sources;
-        if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        std::vector<ProjectedDepthEvidence> projected_source_evidence;
+        if (generate_projected_source_layers)
         {
             projected_sources.resize(repair_source_indices.size());
+            if (_config.enableDepthLayerReliabilityGuidedCorrection)
+            {
+                projected_source_evidence.resize(repair_source_indices.size());
+            }
         }
         std::vector<DepthConsistencyCache::FrameHandle>
             consistency_source_handles;
@@ -8467,24 +8979,71 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 consistency_source_handles.push_back(source);
                 consistency_batch_bytes += source_bytes;
             }
-            if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+            if (generate_projected_source_layers)
             {
-                projected_sources[static_cast<std::size_t>(source_ordinal)] =
-                    projectSourceDepthToReference(
-                    source->depth,
+                const FramePinholeCamera source_camera =
                     _depthFrames[source_index].cameraModel.isValid()
-                        ? _depthFrames[source_index].cameraModel
-                        : mvsPinholeCamera(_views[source_index].camera),
-                    reference_camera,
-                    filtered_depth.size(),
-                    repair_options.maximumProjectionDistancePixels,
-                    nullptr,
-                    row_workers,
-                    &_cancelled);
+                    ? _depthFrames[source_index].cameraModel
+                    : mvsPinholeCamera(_views[source_index].camera);
+                if (_config.enableDepthLayerReliabilityGuidedCorrection &&
+                    !source->confidence.empty())
+                {
+                    ProjectedDepthEvidence evidence =
+                        projectSourceDepthEvidenceToReference(
+                            source->depth,
+                            source->confidence,
+                            source_camera,
+                            reference_camera,
+                            filtered_depth.size(),
+                            repair_options.maximumProjectionDistancePixels,
+                            cameraBaselineSector(reference_camera, source_camera),
+                            nullptr,
+                            row_workers,
+                            &_cancelled);
+                    projected_sources[static_cast<std::size_t>(source_ordinal)] =
+                        evidence.depth;
+                    projected_source_evidence[
+                        static_cast<std::size_t>(source_ordinal)] =
+                        std::move(evidence);
+                }
+                else
+                {
+                    projected_sources[static_cast<std::size_t>(source_ordinal)] =
+                        projectSourceDepthToReference(
+                            source->depth,
+                            source_camera,
+                            reference_camera,
+                            filtered_depth.size(),
+                            repair_options.maximumProjectionDistancePixels,
+                            nullptr,
+                            row_workers,
+                            &_cancelled);
+                }
             }
         }
         flush_consistency_batch();
         const auto source_stage_end = Clock::now();
+
+        const PreRepairDepthLayerReliability depth_layer_reliability =
+            analyzePreRepairDepthLayerReliability(
+                _depthFrames[frame_index],
+                reference->depth,
+                referenceGray,
+                consistent_votes,
+                occluded_votes,
+                contradicted_votes,
+                geometry_source_mask,
+                source_inverse_depth_sum,
+                source_inverse_depth_squared_sum,
+                generate_adaptive_evidence
+                    ? &adaptive_evidence_accumulator
+                    : nullptr);
+        if (depth_layer_reliability.result.validInputs)
+        {
+            _depthFrames[frame_index].depthLayerReliabilityClass =
+                QSharedPointer<cv::Mat>::create(
+                    depth_layer_reliability.result.classMap);
+        }
 
         cv::Mat repair_mask = _depthFrames[frame_index].supportRegionMask &&
                 !_depthFrames[frame_index].supportRegionMask->empty()
@@ -8543,17 +9102,28 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             QSharedPointer<cv::Mat>::create(
                 filtered_depth.size(), CV_8UC1, cv::Scalar(0));
         DominantDepthLayerSelectionStats layer_selection_stats;
+        DepthGeometryHypothesisRerankMaps geometry_rerank_maps;
         if (generate_adaptive_evidence)
         {
             reference->depth.copyTo(filtered_depth);
             filtered_depth.setTo(0.0f, repair_mask == 0);
+            DominantDepthLayerSelectionOptions layer_selection_options;
+            layer_selection_options.enableReliabilityGuidedCorrection =
+                _config.enableDepthLayerReliabilityGuidedCorrection;
+            layer_selection_options.restrictToReliabilityGuidedCandidates =
+                !generate_adaptive_evidence &&
+                _config.enableDepthLayerReliabilityGuidedCorrection;
+            const cv::Mat *native_reliability_classes =
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                ? &depth_layer_reliability.result.classMap
+                : nullptr;
             layer_selection_stats = selectDominantProjectedDepthLayer(
                 filtered_depth,
                 repair_mask,
                 projected_sources,
                 consistent_votes,
                 contradicted_votes,
-                {},
+                layer_selection_options,
                 filtered_confidence.empty() ? nullptr : &filtered_confidence,
                 _depthFrames[frame_index].crossViewRepairedMask.data(),
                 &geometry_source_mask,
@@ -8561,11 +9131,78 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &source_inverse_depth_squared_sum,
                 &consistent_votes,
                 row_workers,
-                &_cancelled);
+                &_cancelled,
+                native_reliability_classes,
+                nullptr,
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                    ? &projected_source_evidence : nullptr,
+                _config.enableDepthLayerReliabilityGuidedCorrection
+                    ? &geometry_rerank_maps : nullptr);
+        }
+        else if (_config.enableDepthLayerReliabilityGuidedCorrection)
+        {
+            cv::Mat guided_depth = reference->depth.clone();
+            guided_depth.setTo(0.0f, repair_mask == 0);
+            cv::Mat guided_confidence = reference->confidence.empty()
+                ? cv::Mat() : reference->confidence.clone();
+            cv::Mat guided_geometry_source_mask = geometry_source_mask.clone();
+            cv::Mat guided_inverse_sum = source_inverse_depth_sum.clone();
+            cv::Mat guided_inverse_squared_sum =
+                source_inverse_depth_squared_sum.clone();
+            cv::Mat guided_votes = consistent_votes.clone();
+            cv::Mat guided_changed_mask;
+            DominantDepthLayerSelectionOptions layer_selection_options;
+            layer_selection_options.enableReliabilityGuidedCorrection = true;
+            layer_selection_options.restrictToReliabilityGuidedCandidates = true;
+            layer_selection_stats = selectDominantProjectedDepthLayer(
+                guided_depth,
+                repair_mask,
+                projected_sources,
+                consistent_votes,
+                contradicted_votes,
+                layer_selection_options,
+                guided_confidence.empty() ? nullptr : &guided_confidence,
+                _depthFrames[frame_index].crossViewRepairedMask.data(),
+                &guided_geometry_source_mask,
+                &guided_inverse_sum,
+                &guided_inverse_squared_sum,
+                &guided_votes,
+                row_workers,
+                &_cancelled,
+                &depth_layer_reliability.result.classMap,
+                &guided_changed_mask,
+                &projected_source_evidence,
+                &geometry_rerank_maps);
+            reference->depth.copyTo(filtered_depth);
+            filtered_depth.setTo(0.0f, repair_mask == 0);
+            filtered_depth.setTo(0.0f, consistent_mask == 0);
+            if (!guided_changed_mask.empty())
+            {
+                guided_depth.copyTo(filtered_depth, guided_changed_mask);
+                if (!filtered_confidence.empty() && !guided_confidence.empty())
+                {
+                    guided_confidence.copyTo(
+                        filtered_confidence, guided_changed_mask);
+                }
+                guided_geometry_source_mask.copyTo(
+                    geometry_source_mask, guided_changed_mask);
+                guided_inverse_sum.copyTo(
+                    source_inverse_depth_sum, guided_changed_mask);
+                guided_inverse_squared_sum.copyTo(
+                    source_inverse_depth_squared_sum, guided_changed_mask);
+                guided_votes.copyTo(consistent_votes, guided_changed_mask);
+            }
         }
         else
         {
             filtered_depth.setTo(0.0f, consistent_mask == 0);
+        }
+        if (_config.enableDepthLayerReliabilityGuidedCorrection &&
+            geometry_rerank_maps.compatible(filtered_depth.size()))
+        {
+            _depthFrames[frame_index].geometryRerankMaps =
+                QSharedPointer<DepthGeometryHypothesisRerankMaps>::create(
+                    std::move(geometry_rerank_maps));
         }
         WeakNativeDepthRetentionStats weak_native_retention;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
@@ -8582,6 +9219,27 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         }
         const auto layer_stage_end = Clock::now();
         cv::Mat anchored_interpolation_mask;
+        cv::Mat native_interpolation_anchor_eligibility_mask;
+        const cv::Mat *native_interpolation_anchor_eligibility = nullptr;
+        if (_config.enableDepthLayerReliabilityAnchorGate)
+        {
+            native_interpolation_anchor_eligibility_mask = cv::Mat(
+                filtered_depth.size(), CV_8UC1, cv::Scalar(0));
+            if (depth_layer_reliability.result.validInputs &&
+                depth_layer_reliability.result.classMap.type() == CV_8UC1 &&
+                depth_layer_reliability.result.classMap.size() ==
+                    filtered_depth.size())
+            {
+                cv::compare(
+                    depth_layer_reliability.result.classMap,
+                    static_cast<std::uint8_t>(
+                        DepthLayerReliabilityClass::Reliable),
+                    native_interpolation_anchor_eligibility_mask,
+                    cv::CMP_EQ);
+            }
+            native_interpolation_anchor_eligibility =
+                &native_interpolation_anchor_eligibility_mask;
+        }
         emit progressChanged(
             QStringLiteral("流式多视一致性：帧 %1/%2，修复内部缺口")
                 .arg(frame_index + 1)
@@ -8604,7 +9262,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 referenceGray,
                 &anchored_interpolation_mask,
                 row_workers,
-                &_cancelled);
+                &_cancelled,
+                native_interpolation_anchor_eligibility);
         if (_cancelled.load())
         {
             remove_pending_files();
@@ -8626,6 +9285,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         _depthFrames[frame_index].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
+        _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
+            QStringLiteral("depth_layer_reliability"),
+            depth_layer_reliability.diagnostics);
         _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
             QStringLiteral("dominant_depth_layer_selection"),
             dominantDepthLayerSelectionStatsToJson(layer_selection_stats));
@@ -8694,8 +9356,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         const auto repair_stage_end = Clock::now();
         DepthResidualReestimationStats residual_stats;
         cv::Mat residual_reestimated_mask;
+        const bool reliability_guided_local_pass =
+            _config.enableDepthLayerReliabilityGuidedCorrection &&
+            _effectiveSceneProfile == MvsSceneProfile::Custom;
         if (_config.enablePostConsistencyResidualReestimation &&
-            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
+            (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject ||
+             reliability_guided_local_pass) &&
             referenceImageLease)
         {
             emit progressChanged(
@@ -8705,6 +9371,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 static_cast<float>(completed_frames) /
                     static_cast<float>(std::max(1, view_count)));
             std::vector<cv::Mat> residual_projected_sources;
+            std::vector<ProjectedDepthEvidence>
+                residual_projected_source_evidence;
             std::vector<int> residual_sector_ids;
             std::vector<cv::Mat> residual_source_images;
             std::vector<FramePinholeCamera> residual_source_cameras;
@@ -8741,6 +9409,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     ? _depthFrames[source_index].cameraModel
                     : mvsPinholeCamera(_views[source_index].camera);
                 residual_projected_sources.push_back(projected);
+                if (reliability_guided_local_pass)
+                {
+                    residual_projected_source_evidence.push_back(
+                        projected_source_evidence[
+                            static_cast<std::size_t>(source_ordinal)]);
+                }
                 residual_sector_ids.push_back(cameraBaselineSector(
                     reference_camera, source_camera));
                 residual_source_images.push_back(sourceImageLease->preparedGray);
@@ -8766,13 +9440,61 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 0.25f);
             residual_options.minimumCandidateConfidence = std::clamp(
                 _config.postConsistencyResidualConfidence, 0.0f, 1.0f);
+            if (reliability_guided_local_pass)
+            {
+                residual_options.minimumLayerSourceCount = 3;
+                residual_options.minimumLayerSectorCount = 2;
+                residual_options.minimumGeometryConfirmationCount = 3;
+                residual_options.minimumGeometrySectorCount = 2;
+                residual_options.allowValidDepthReplacement = true;
+                residual_options.minimumReplacementCostAdvantage = 0.08f;
+                residual_options.ambiguousMaximumRelativeCorrection = 0.01f;
+                residual_options.minimumCandidateConfidence = std::min(
+                    residual_options.minimumCandidateConfidence, 0.18f);
+            }
+            DepthResidualReestimationPreflight residual_preflight;
+            if (reliability_guided_local_pass &&
+                depth_layer_reliability.result.validInputs &&
+                geometry_rerank_maps.compatible(filtered_depth.size()))
+            {
+                cv::Mat ambiguous;
+                cv::Mat rejected;
+                cv::compare(
+                    depth_layer_reliability.result.classMap,
+                    static_cast<std::uint8_t>(
+                        DepthLayerReliabilityClass::AmbiguousLowTexture),
+                    ambiguous,
+                    cv::CMP_EQ);
+                cv::compare(
+                    depth_layer_reliability.result.classMap,
+                    static_cast<std::uint8_t>(
+                        DepthLayerReliabilityClass::RejectedLayer),
+                    rejected,
+                    cv::CMP_EQ);
+                cv::Mat weak_mask;
+                cv::bitwise_or(ambiguous, rejected, weak_mask);
+                cv::bitwise_and(
+                    weak_mask,
+                    geometry_rerank_maps.decisionAction ==
+                        static_cast<std::uint8_t>(
+                            DepthGeometryHypothesisAction::None),
+                    weak_mask);
+                residual_preflight = inspectDepthReestimationMask(
+                    repair_mask, weak_mask, residual_options);
+            }
+            else
+            {
+                residual_preflight = inspectDepthResidualReestimationNeed(
+                    filtered_depth, repair_mask, residual_options);
+            }
             const DepthResidualReestimationTarget residual_target =
                 buildDepthResidualReestimationTarget(
                     filtered_depth,
                     repair_mask,
                     residual_projected_sources,
                     residual_sector_ids,
-                    residual_options);
+                    residual_options,
+                    std::move(residual_preflight));
             residual_stats.supportPixelCount =
                 residual_target.supportPixelCount;
             residual_stats.requestedResidualPixelCount =
@@ -8790,15 +9512,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             residual_stats.skippedReason = residual_target.skippedReason;
             if (residual_target.valid && residual_source_images.size() >= 4)
             {
-                std::vector<std::vector<int>> source_groups(2);
-                for (int source_ordinal = 0;
-                     source_ordinal <
-                         static_cast<int>(residual_source_images.size());
-                     ++source_ordinal)
-                {
-                    source_groups[static_cast<std::size_t>(
-                        source_ordinal % 2)].push_back(source_ordinal);
-                }
+                const std::vector<std::vector<int>> source_groups =
+                    buildDepthResidualPatchMatchSourceGroups(
+                        residual_sector_ids);
                 double minimum_hint = 0.0;
                 double maximum_hint = 0.0;
                 cv::minMaxLoc(
@@ -8838,7 +9554,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     patch_match.patchHalf = std::max(
                         3, patch_match.patchHalf - 1);
                     patch_match.confidenceThresh = std::min(
-                        patch_match.confidenceThresh, 0.18f);
+                        patch_match.confidenceThresh,
+                        reliability_guided_local_pass ? 0.10f : 0.18f);
                     patch_match.minimumMaskedPatchSupportRatio = std::min(
                         patch_match.minimumMaskedPatchSupportRatio, 0.25f);
                     patch_match.geomConsistency = false;
@@ -8883,6 +9600,16 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     residual_stats.successfulHypothesisCount;
                 if (candidate_depths.size() == 2)
                 {
+                    DepthResidualReestimationEvidenceOutputs evidence_outputs;
+                    evidence_outputs.geometrySourceMask =
+                        &geometry_source_mask;
+                    evidence_outputs.sourceInverseDepthSum =
+                        &source_inverse_depth_sum;
+                    evidence_outputs.sourceInverseDepthSquaredSum =
+                        &source_inverse_depth_squared_sum;
+                    evidence_outputs.confirmedSourceCount = &consistent_votes;
+                    evidence_outputs.rerankMaps = reliability_guided_local_pass
+                        ? &geometry_rerank_maps : nullptr;
                     residual_stats =
                         mergeDepthResidualReestimationCandidates(
                             filtered_depth,
@@ -8893,36 +9620,44 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                             residual_projected_sources,
                             residual_sector_ids,
                             &residual_reestimated_mask,
-                            residual_options);
+                            residual_options,
+                            reliability_guided_local_pass
+                                ? &depth_layer_reliability.result.classMap
+                                : nullptr,
+                            reliability_guided_local_pass
+                                ? &residual_projected_source_evidence
+                                : nullptr,
+                            reliability_guided_local_pass
+                                ? &evidence_outputs : nullptr);
                     residual_stats.attemptedHypothesisCount = 2;
                     residual_stats.successfulHypothesisCount = 2;
                     residual_stats.sourceCount = static_cast<int>(
                         residual_source_images.size());
                     if (residual_stats.recoveredPixelCount > 0)
                     {
-                        consistent_votes.setTo(
-                            cv::Scalar(2), residual_reestimated_mask);
-                        // The two residual PatchMatch hypotheses each combine
-                        // multiple repair views. They prove measured support,
-                        // but do not identify two exact camera ordinals. Keep
-                        // source provenance empty instead of aliasing the
-                        // hypotheses to repair-source bits 0 and 1.
-                        geometry_source_mask.setTo(
-                            cv::Scalar(0), residual_reestimated_mask);
-                        cv::Mat recovered_inverse_depth;
-                        cv::divide(
-                            1.0f, filtered_depth, recovered_inverse_depth);
-                        cv::Mat recovered_inverse_depth_sum =
-                            recovered_inverse_depth * 2.0f;
-                        recovered_inverse_depth_sum.copyTo(
-                            source_inverse_depth_sum,
-                            residual_reestimated_mask);
-                        cv::Mat recovered_inverse_depth_squared_sum =
-                            recovered_inverse_depth.mul(
-                                recovered_inverse_depth) * 2.0f;
-                        recovered_inverse_depth_squared_sum.copyTo(
-                            source_inverse_depth_squared_sum,
-                            residual_reestimated_mask);
+                        if (!reliability_guided_local_pass)
+                        {
+                            consistent_votes.setTo(
+                                cv::Scalar(2), residual_reestimated_mask);
+                            // Legacy Orbital recovery proves two grouped
+                            // hypotheses but cannot identify exact source bits.
+                            geometry_source_mask.setTo(
+                                cv::Scalar(0), residual_reestimated_mask);
+                            cv::Mat recovered_inverse_depth;
+                            cv::divide(
+                                1.0f, filtered_depth, recovered_inverse_depth);
+                            cv::Mat recovered_inverse_depth_sum =
+                                recovered_inverse_depth * 2.0f;
+                            recovered_inverse_depth_sum.copyTo(
+                                source_inverse_depth_sum,
+                                residual_reestimated_mask);
+                            cv::Mat recovered_inverse_depth_squared_sum =
+                                recovered_inverse_depth.mul(
+                                    recovered_inverse_depth) * 2.0f;
+                            recovered_inverse_depth_squared_sum.copyTo(
+                                source_inverse_depth_squared_sum,
+                                residual_reestimated_mask);
+                        }
                     }
                 }
                 else
@@ -9048,6 +9783,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         postprocess_evidence.adaptiveEffectiveViewCount =
             adaptive_evidence.effectiveViewCount;
         postprocess_evidence.adaptiveConflictRatio = adaptive_evidence.conflictRatio;
+        postprocess_evidence = updateDepthEvidenceConfidence(
+            _depthFrames[frame_index],
+            filtered_depth,
+            filtered_confidence,
+            std::move(postprocess_evidence),
+            _config.enableDepthLayerReliabilityGuidedCorrection);
         markDepthLossReason(*_depthFrames[frame_index].missingReasonMap,
                             reference->depth,
                             filtered_depth,
@@ -10701,6 +11442,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.targetedGapRecoveryDiagnostics;
         artifact[QStringLiteral("residual_reestimation_diagnostics")] =
             result.residualReestimationDiagnostics;
+        artifact[QStringLiteral("evidence_confidence_diagnostics")] =
+            result.evidenceConfidenceDiagnostics;
         artifact[QStringLiteral("learned_candidate_diagnostics")] =
             result.learnedCandidateDiagnostics;
         artifact[QStringLiteral("depth_provenance_summary")] =
@@ -12580,8 +13323,14 @@ void DepthMapGenerator::runInBackgroundImpl()
                     static_cast<int>(res.sourceViewIndices.size()),
                     _config.patchMatch.confidenceThresh,
                     fusion_config.confidenceThresh).fusion;
-                const DepthPostProcessEvidence postprocess_evidence =
+                DepthPostProcessEvidence postprocess_evidence =
                     depthPostProcessEvidence(res);
+                postprocess_evidence = updateDepthEvidenceConfidence(
+                    res,
+                    *res.depthMap,
+                    confidence,
+                    std::move(postprocess_evidence),
+                    _config.enableDepthLayerReliabilityGuidedCorrection);
                 res.depthPostprocess = postprocessFusionDepthMap(*res.depthMap,
                                                                   confidence,
                                                                   fusion_config,
@@ -12696,7 +13445,9 @@ void DepthMapGenerator::runInBackgroundImpl()
         }
 
         if (_config.enablePostConsistencyResidualReestimation &&
-            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+            (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject ||
+             (_config.enableDepthLayerReliabilityGuidedCorrection &&
+              _effectiveSceneProfile == MvsSceneProfile::Custom)))
         {
             emit progressChanged(
                 QStringLiteral("最终残余空洞局部重估..."),

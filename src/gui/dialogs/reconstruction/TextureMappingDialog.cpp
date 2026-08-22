@@ -9,6 +9,13 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 
+namespace
+{
+
+constexpr int kTextureMappingSettingsRevision = 2;
+
+} // namespace
+
 TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -32,9 +39,11 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     _imageDownscaleCombo->setCurrentIndex(0);
     _colorCorrCheck->setChecked(false);
     _colorCorrCheck->setToolTip(tr(
-        "仅用共同可见的同一三维点估计曝光；样本不足、离散度过高或视图不连通时不校正，"
+        "仅用共同可见的同一三维点估计曝光；每个可靠连通分量独立校正，孤立视图保持原值，"
         "每张影像增益限制为 0.90–1.10。"));
-    _seamsMarginSpin->setValue(0.35);
+    // Sharpening exaggerates chart boundaries on dense meshes. Keep the
+    // projection neutral by default and leave sharpening as an explicit opt-in.
+    _seamsMarginSpin->setValue(0.0);
 
     for (QComboBox *combo_box : {_texSizeCombo, _blendCombo, _imageDownscaleCombo})
     {
@@ -74,6 +83,7 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
 QJsonObject TextureMappingDialog::collectSettings() const
 {
     QJsonObject o;
+    o["textureMappingSettingsRevision"] = kTextureMappingSettingsRevision;
     o["textureType"] = QStringLiteral("texture_mapping");
     o["sourceData"] = QStringLiteral("images");
     o["textureSize"] = _texSizeCombo->currentText().toInt();
@@ -161,7 +171,21 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
     if (s.contains("colorCorrection")) _colorCorrCheck->setChecked(s["colorCorrection"].toBool(false));
     if (s.contains("ghostFilter")) _ghostFilterCheck->setChecked(s["ghostFilter"].toBool(true));
     if (s.contains("outOfFocusFilter")) _outOfFocusFilterCheck->setChecked(s["outOfFocusFilter"].toBool());
-    if (s.contains("sharpeningStrength")) _seamsMarginSpin->setValue(s["sharpeningStrength"].toDouble(1.0));
+    if (s.contains("sharpeningStrength"))
+    {
+        double sharpening_strength =
+            s["sharpeningStrength"].toDouble(0.0);
+        const int settings_revision =
+            s["textureMappingSettingsRevision"].toInt(0);
+        if (settings_revision < kTextureMappingSettingsRevision &&
+            qFuzzyCompare(sharpening_strength, 0.35))
+        {
+            // Revision 1 persisted 0.35 as the implicit default. Migrate only
+            // that exact legacy value so current explicit choices stay intact.
+            sharpening_strength = 0.0;
+        }
+        _seamsMarginSpin->setValue(sharpening_strength);
+    }
 }
 
 void TextureMappingDialog::emitSettingsNow()
