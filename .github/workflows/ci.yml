@@ -110,7 +110,7 @@ jobs:
             vcpkg-${{ runner.os }}-3c5d90a305ff00ca841f085a74a7ce74ee777dee-
 
       - name: Install Python test dependencies
-        run: python3 -m pip install --disable-pip-version-check numpy scipy
+        run: python3 -m pip install --disable-pip-version-check numpy pillow scipy
 
       - name: Restore compiler cache
         uses: actions/cache@v4
