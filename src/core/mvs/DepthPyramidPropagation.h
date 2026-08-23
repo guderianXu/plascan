@@ -17,6 +17,7 @@ struct DepthLevelResult
     cv::Mat normalMap;
     cv::Mat confidence;
     cv::Mat supportCount; ///< PatchMatch 候选来源数诊断图，不代表逐像素几何确认数
+    cv::Mat photometricSourceMask; ///< CV_32SC1；bit 位对应当前帧 source ordinal
     cv::Mat uncertainty;
     cv::Mat validMask;
 };

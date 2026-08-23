@@ -883,6 +883,7 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("max_image_dim")] = options.maxImageDim;
+    settings[QStringLiteral("low_texture_recovery")] = plan.lowTextureRecovery;
     settings[QStringLiteral("storage")] = QStringLiteral("memory_only");
     return settings;
 }
@@ -910,6 +911,7 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("sift_minimum_adaptive_ratio")] =
         static_cast<double>(options.siftMinimumAdaptiveRatio);
     settings[QStringLiteral("adaptive_sift_ratio")] = options.adaptiveSiftRatio;
+    settings[QStringLiteral("low_texture_recovery")] = plan.lowTextureRecovery;
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("tie_point_frontend_version")] = kTiePointFrontendVersion;

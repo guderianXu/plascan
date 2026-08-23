@@ -260,6 +260,90 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         << "Recovered CPU depth should have meaningful confidence";
 }
 
+TEST(PatchMatchCpuRegressionTest, FrozenGeometryGuidanceEmitsSeparatePhotometricSourceMask)
+{
+    constexpr int width = 80;
+    constexpr int height = 60;
+    constexpr float expected_depth = 10.0f;
+    constexpr double focal = 80.0;
+    constexpr double baseline = 1.0;
+    constexpr int disparity = 8;
+    const double identity[9] = {1.0, 0.0, 0.0,
+                                0.0, 1.0, 0.0,
+                                0.0, 0.0, 1.0};
+    const double reference_center[3] = {0.0, 0.0, 0.0};
+    const double source_center[3] = {baseline, 0.0, 0.0};
+    const xjw::FramePinholeCamera reference_camera = makeCamera(
+        focal, focal, width * 0.5, height * 0.5,
+        1, 1, identity, reference_center, false).normalizedForPositiveDepth();
+    const xjw::FramePinholeCamera source_camera = makeCamera(
+        focal, focal, width * 0.5, height * 0.5,
+        1, 1, identity, source_center, false).normalizedForPositiveDepth();
+    const cv::Mat reference = makeTexturedImage(width, height);
+    const cv::Mat source = makeShiftedImage(reference, disparity);
+
+    xjw::mvs::PatchMatchConfig config;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
+    config.downsampleFactor = 1;
+    config.numIterations = 2;
+    config.patchHalf = 2;
+    config.confidenceThresh = 0.05f;
+    config.doMedianBlur = false;
+    config.doBilateralFilter = false;
+    cv::Mat hint(height, width, CV_32F, cv::Scalar(expected_depth));
+    cv::Mat hint_radius(height, width, CV_32F, cv::Scalar(0.3f));
+    cv::Mat frozen_source_depth(height, width, CV_32F, cv::Scalar(expected_depth));
+    const std::vector<cv::Mat> source_depths{frozen_source_depth};
+    xjw::mvs::PatchMatchAuxiliaryInput auxiliary_input;
+    auxiliary_input.sourceDepthMaps = &source_depths;
+    cv::Mat source_selection;
+    xjw::mvs::PatchMatchAuxiliaryOutput auxiliary_output;
+    auxiliary_output.photometricSourceMask = &source_selection;
+
+    cv::Mat guided_depth;
+    cv::Mat guided_confidence;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        reference,
+        std::vector<cv::Mat>{source},
+        reference_camera,
+        std::vector<xjw::FramePinholeCamera>{source_camera},
+        5.0f,
+        15.0f,
+        config,
+        guided_depth,
+        &guided_confidence,
+        &error,
+        &hint,
+        &hint_radius,
+        nullptr,
+        nullptr,
+        &auxiliary_input,
+        &auxiliary_output)) << error;
+
+    ASSERT_EQ(source_selection.type(), CV_32SC1);
+    ASSERT_EQ(source_selection.size(), guided_depth.size());
+    const cv::Mat valid = guided_depth > 0.0f;
+    ASSERT_GT(cv::countNonZero(valid), width * height / 3);
+    for (int row = 0; row < height; ++row)
+    {
+        const float *depth_row = guided_depth.ptr<float>(row);
+        const float *confidence_row = guided_confidence.ptr<float>(row);
+        const std::int32_t *selection_row = source_selection.ptr<std::int32_t>(row);
+        for (int column = 0; column < width; ++column)
+        {
+            if (!(depth_row[column] > 0.0f))
+            {
+                EXPECT_EQ(selection_row[column], 0);
+                continue;
+            }
+            EXPECT_EQ(selection_row[column], 1);
+            EXPECT_GE(confidence_row[column], 0.0f);
+            EXPECT_LE(confidence_row[column], 1.0f);
+        }
+    }
+}
+
 TEST(PatchMatchHostCameraDataTest,
      PreservesRelativePoseAfterLargeCommonWorldTranslation)
 {

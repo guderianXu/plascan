@@ -106,7 +106,7 @@ signals:
     void imageImportFinished(bool success, const QString &message);
     // 控制点、检查点或比例尺 sidecar 成功更新后发出。
     void surveyControlChanged();
-    // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
+    // 照片蒙版生成或清除后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）
     /// img0/img1: 影像绝对路径; matchFilePath: owner `.pimatch` 分片; numMatches: 内点数
@@ -204,6 +204,8 @@ public slots:
     void openGenerateMaskDialog();
     // 为照片面板当前选择生成蒙版；对话框默认作用于传入照片。
     void openGenerateMaskDialogForImages(const QStringList &selectedImages);
+    // 清除照片面板当前选择的蒙版文件及关联元数据。
+    void clearMasksForImages(const QStringList &selectedImages);
     // 取消正在运行的照片蒙版生成任务。
     void cancelMaskGeneration();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。

@@ -38,6 +38,9 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.depthPng = QStringLiteral("depth_%1.png").arg(index, 3, 10, QLatin1Char('0'));
     record.rawDepthPath = QStringLiteral("depth_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
     record.rawConfidencePath = QStringLiteral("confidence_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
+    record.rawPhotometricSourceMaskPath =
+        QStringLiteral("photometric_source_mask_%1.bin")
+            .arg(index, 3, 10, QLatin1Char('0'));
     record.rawGeometrySupportPath = QStringLiteral("geometry_support_%1.bin")
                                         .arg(index, 3, 10, QLatin1Char('0'));
     record.rawAdaptiveGeometrySupportWeightPath =
@@ -202,8 +205,13 @@ void attachPreparedArtifactFiles(const QTemporaryDir &temporaryDirectory,
     record->preparedValidMaskPath = QDir(temporaryDirectory.path()).filePath(
         QStringLiteral("prepared_%1_valid.png").arg(record->refIndex));
     record->preparedCameraModel = record->cameraModel;
+    record->rawPhotometricSourceMaskPath =
+        QDir(temporaryDirectory.path()).filePath(
+            QStringLiteral("photometric_source_mask_%1.bin")
+                .arg(record->refIndex));
     touchFile(record->preparedImage);
     touchFile(record->preparedValidMaskPath);
+    touchFile(record->rawPhotometricSourceMaskPath);
 }
 }
 
@@ -288,6 +296,8 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
             .toDouble(),
         1200.0);
     EXPECT_EQ(loaded.frames().front().rawConfidencePath, QStringLiteral("confidence_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawPhotometricSourceMaskPath,
+              QStringLiteral("photometric_source_mask_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawGeometrySupportPath,
               QStringLiteral("geometry_support_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometrySupportWeightPath,
@@ -463,14 +473,14 @@ TEST(MvsWorkspaceManifest, SortsCompletedFramesByNaturalFileName)
 {
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
-    manifest.upsertFrame(makeRecord(10, QStringLiteral("depth_010.png"), QStringLiteral("completed")));
+    manifest.upsertFrame(makeRecord(10, QStringLiteral("depth_A_10.png"), QStringLiteral("completed")));
     manifest.upsertFrame(makeRecord(1, QStringLiteral("depth_001.png"), QStringLiteral("failed")));
-    manifest.upsertFrame(makeRecord(2, QStringLiteral("depth_002.png"), QStringLiteral("completed")));
+    manifest.upsertFrame(makeRecord(2, QStringLiteral("DEPTH_a_2.png"), QStringLiteral("completed")));
 
     const auto sorted = manifest.completedFramesSortedByName();
     ASSERT_EQ(sorted.size(), 2);
-    EXPECT_EQ(sorted[0].refImage, QStringLiteral("depth_002.png"));
-    EXPECT_EQ(sorted[1].refImage, QStringLiteral("depth_010.png"));
+    EXPECT_EQ(sorted[0].refImage, QStringLiteral("DEPTH_a_2.png"));
+    EXPECT_EQ(sorted[1].refImage, QStringLiteral("depth_A_10.png"));
 }
 
 TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
@@ -1657,6 +1667,16 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
     touchFile(record.rawInverseDepthSpreadPath);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 
+    const QString photometric_source_mask_path =
+        record.rawPhotometricSourceMaskPath;
+    record.rawPhotometricSourceMaskPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A revision-45 frame without its photometric source mask must not be reused";
+    record.rawPhotometricSourceMaskPath = photometric_source_mask_path;
+    manifest.upsertFrame(record);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
     record.geometrySourceIndices.clear();
     manifest.upsertFrame(record);
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
@@ -1814,6 +1834,24 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.cudaUseParallelSweep = !changed.patchMatch.cudaUseParallelSweep;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.enablePerPixelSourceSelection =
+            !changed.patchMatch.enablePerPixelSourceSelection;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.sourceSelectionNeighborBonus += 0.01f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.enableAsymmetricPropagation =
+            !changed.patchMatch.enableAsymmetricPropagation;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.enableGeometricGuidancePass =
+            !changed.patchMatch.enableGeometricGuidancePass;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.geometricGuidanceWeight += 0.05f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.backend = xjw::mvs::PatchMatchBackend::OpenCl;

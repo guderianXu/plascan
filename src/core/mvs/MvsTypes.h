@@ -73,6 +73,14 @@ struct PatchMatchConfig
     float photometricUniquenessRelativeDepthStep = 0.01f; ///< 竞争深度相对偏移（正负各一次）
     float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
     float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
+    bool  enablePerPixelSourceSelection = true; ///< 每个像素保存并传播独立的光度来源 bitset
+    float sourceSelectionNeighborBonus = 0.04f; ///< 邻域已选来源的有界排序先验，不直接增加 NCC
+    bool  enableAsymmetricPropagation = true; ///< checkerboard/CPU 使用近邻、远邻和局部表面法线候选
+    bool  enableGeometricGuidancePass = true; ///< 首轮冻结后允许 source-depth 引导的第二轮 PatchMatch
+    int   geometricGuidanceIterations = 2; ///< 第二轮的窄范围传播迭代数
+    float geometricGuidanceWeight = 0.20f; ///< 往返重投影项在候选目标中的权重
+    float geometricGuidanceMaxErrorPixels = 1.5f; ///< 超过此往返像素误差时几何引导代价饱和
+    float geometricGuidanceRelativeDepthRadius = 0.03f; ///< 第二轮围绕首轮深度的相对搜索半径
     PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  returnNativeResolution = false; ///< 仅返回 PatchMatch 工作分辨率；默认保持对外全尺寸契约

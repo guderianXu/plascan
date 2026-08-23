@@ -126,6 +126,7 @@ QByteArray rawConfigFingerprint(const MatchPhotosOptions &options,
         static_cast<double>(plan.siftContrastThreshold);
     object[QStringLiteral("adaptive_sift")] =
         plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
+    object[QStringLiteral("low_texture_recovery")] = plan.lowTextureRecovery;
     object[QStringLiteral("root_sift")] =
         plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
     object[QStringLiteral("guided_matching")] = options.enableGuidedMatching;
@@ -467,7 +468,7 @@ MatchPhotosStageReport MatchingStage::run(
         modelName = QStringLiteral("内置 Auto SIFT %1 后端")
                         .arg(backendDisplayName(algorithmPlan.executionBackend));
         engineFingerprint = sha256(
-            QByteArrayLiteral("builtin:auto_sift_root:v2:") +
+            QByteArrayLiteral("builtin:auto_sift_root_clahe:v3:") +
             QByteArray(image_matching::siftBackendName(algorithmPlan.executionBackend)));
     }
     else

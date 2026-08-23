@@ -1387,15 +1387,25 @@ TEST(MvsSchedulerContractTest, PatchMatchRequiresRobustMultiViewPhotometricSuppo
     const QString policy = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchPhotometricCost.h"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
     const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
-    const QString implementation = policy + cuda + cpu;
 
-    expectContainsAll(implementation, {
+    expectContainsAll(policy, {
         "robustMultiSourceNcc",
         "requiredPhotometricSupport",
-        "cpuEvalHypCost",
-        "evalHypCost",
+        "JointViewSelection",
+        "selectJointSourceViews",
     });
-    EXPECT_GE(countOccurrences(implementation, "robustMultiSourceNcc("), 3);
+    expectContainsAll(cpu, {
+        "cpuEvalHypCost",
+        "const JointViewSelection selection = selectJointSourceViews(",
+        "result.photometricNcc = selection.photometricScore",
+        "result.sourceMask = selection.sourceMask",
+    });
+    expectContainsAll(cuda, {
+        "evalHypCost",
+        "const JointViewSelection selection = selectJointSourceViews(",
+        "*selectedMask = selection.sourceMask",
+        "*photometricNcc = selection.photometricScore",
+    });
     expectNotContainsAll(cuda, {
         "if (ncc > 0.05f) { sumScore += ncc; ++goodSrc; }",
         "sumScore / static_cast<float>(goodSrc)",

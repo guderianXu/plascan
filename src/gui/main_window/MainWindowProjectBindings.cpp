@@ -350,6 +350,16 @@ void MainWindow::setupProjectManager()
                         _projectManager->openGenerateMaskDialogForImages(imagePaths);
                     }
                 });
+        connect(_photoStrip,
+                &PhotoStripWidget::clearMasksRequested,
+                this,
+                [this](const QStringList &imagePaths)
+                {
+                    if (_projectManager)
+                    {
+                        _projectManager->clearMasksForImages(imagePaths);
+                    }
+                });
     }
     // 画布切换影像时，持久化活跃影像路径。
     if (_canvas)

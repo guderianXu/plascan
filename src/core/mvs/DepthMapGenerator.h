@@ -81,6 +81,7 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> geometricConfidence; ///< 独立跨视几何置信度 (CV_32F)，双通道实验启用时保留
     QSharedPointer<cv::Mat> normalMap;   ///< 最终层法线图 (CV_32FC3)，可为空
     QSharedPointer<cv::Mat> supportCount; ///< PatchMatch 候选来源数诊断图；不得作为最终几何支持 (CV_16U)
+    QSharedPointer<cv::Mat> photometricSourceMask; ///< PatchMatch 每像素光度来源 bitset (CV_32SC1)
     QSharedPointer<cv::Mat> geometrySupportCount; ///< 参考帧+跨视几何确认数 (CV_16U)
     QSharedPointer<cv::Mat> geometrySourceMask; ///< bit N 对应 geometrySourceViewIndices 的第 N 个来源 (CV_16U)
     QSharedPointer<cv::Mat> inverseDepthMean; ///< 几何确认观测的逆深度均值 (CV_32F)
@@ -152,6 +153,7 @@ struct DepthFrameResult
         confidence.clear();
         normalMap.clear();
         supportCount.clear();
+        photometricSourceMask.clear();
         geometrySupportCount.clear();
         geometrySourceMask.clear();
         inverseDepthMean.clear();
@@ -396,7 +398,8 @@ private:
         int refIdx,
         const DepthGenConfig *configOverride = nullptr,
         const std::function<bool(const DepthLevelSummary &, std::string *)>
-            &firstLevelCompletionGate = {});
+            &firstLevelCompletionGate = {},
+        const std::vector<cv::Mat> *frozenDepthMaps = nullptr);
 
     /// 预计算 MVS 可见性与源视图候选，避免每帧重复全量扫描稀疏点
     void prepareFrameCaches();

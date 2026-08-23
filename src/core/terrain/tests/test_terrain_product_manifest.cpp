@@ -67,19 +67,19 @@ TEST(TerrainProductManifest, SavesLoadsAndPreservesQualityRasterPaths)
 TEST(TerrainProductManifest, UpsertsRecordsAndSortsByNaturalPrimaryFileName)
 {
     TerrainProductManifest manifest;
-    manifest.upsertRecord(makeDemRecord(QStringLiteral("dem-10"), QStringLiteral("dem_010.tif")));
-    manifest.upsertRecord(makeDemRecord(QStringLiteral("dem-2"), QStringLiteral("dem_002.tif")));
+    manifest.upsertRecord(makeDemRecord(QStringLiteral("dem-10"), QStringLiteral("dem_A_10.tif")));
+    manifest.upsertRecord(makeDemRecord(QStringLiteral("dem-2"), QStringLiteral("DEM_a_2.tif")));
 
-    TerrainProductRecord replacement = makeDemRecord(QStringLiteral("dem-10"), QStringLiteral("dem_001.tif"));
+    TerrainProductRecord replacement = makeDemRecord(QStringLiteral("dem-10"), QStringLiteral("dem_A_10.tif"));
     replacement.gridResolution = 0.5;
     manifest.upsertRecord(replacement);
 
     ASSERT_EQ(manifest.records().size(), 2);
     const auto sorted = manifest.recordsSortedByPrimaryPath();
     ASSERT_EQ(sorted.size(), 2);
-    EXPECT_EQ(sorted[0].productId, QStringLiteral("dem-10"));
-    EXPECT_EQ(sorted[0].gridResolution, 0.5);
-    EXPECT_EQ(sorted[1].productId, QStringLiteral("dem-2"));
+    EXPECT_EQ(sorted[0].productId, QStringLiteral("dem-2"));
+    EXPECT_EQ(sorted[1].productId, QStringLiteral("dem-10"));
+    EXPECT_EQ(sorted[1].gridResolution, 0.5);
 }
 
 TEST(TerrainProductManifest, ProducesProjectMetadataFieldsForGuiConsumption)

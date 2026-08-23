@@ -160,6 +160,12 @@ int resolveGeometryVerificationWorkers(int pairCount,
     return std::max(1, std::min(workersByItems, workersByCpu));
 }
 
+int resolveGuidedMatchingWorkers(int pairCount,
+                                 unsigned int hardwareThreads)
+{
+    return resolveGeometryVerificationWorkers(pairCount, hardwareThreads);
+}
+
 bool isCudaOutOfMemoryError(const QString &message)
 {
     const QString normalized = message.trimmed().toLower();

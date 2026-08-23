@@ -46,6 +46,91 @@ class DownloadPhotogrammetryTestDataTest(unittest.TestCase):
                 self.assertGreater(len(dataset.resources), 0)
                 self.assertTrue(any(resource.url or resource.manual_url for resource in dataset.resources))
 
+    def test_eth3d_office_highres_has_pinned_official_resources(self):
+        dataset = downloader.DATASETS["eth3d_office_highres"]
+        resources = {resource.filename: resource for resource in dataset.resources}
+
+        self.assertEqual(dataset.category, "benchmark_depth_gt")
+        self.assertEqual(
+            set(resources),
+            {
+                "office_dslr_undistorted.7z",
+                "office_dslr_scan_eval.7z",
+                "office_dslr_depth.7z",
+            },
+        )
+        self.assertEqual(sum(resource.expected_bytes for resource in resources.values()), 883139523)
+        for filename, resource in resources.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(resource.url, f"https://www.eth3d.net/data/{filename}")
+                self.assertTrue(resource.large)
+                self.assertEqual(len(resource.expected_sha256), 64)
+
+    def test_eth3d_courtyard_highres_has_complete_pinned_scene(self):
+        dataset = downloader.DATASETS["eth3d_courtyard_highres"]
+        resources = {resource.filename: resource for resource in dataset.resources}
+
+        self.assertEqual(
+            set(resources),
+            {
+                "courtyard_dslr_undistorted.7z",
+                "courtyard_dslr_jpg.7z",
+                "courtyard_dslr_scan_eval.7z",
+                "courtyard_dslr_depth.7z",
+            },
+        )
+        self.assertEqual(sum(resource.expected_bytes for resource in resources.values()), 1536923897)
+        for filename, resource in resources.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(resource.url, f"https://www.eth3d.net/data/{filename}")
+                self.assertTrue(resource.large)
+                self.assertEqual(len(resource.expected_sha256), 64)
+
+    def test_eth3d_facade_highres_has_complete_scene(self):
+        dataset = downloader.DATASETS["eth3d_facade_highres"]
+        resources = {resource.filename: resource for resource in dataset.resources}
+
+        self.assertEqual(
+            set(resources),
+            {
+                "facade_dslr_undistorted.7z",
+                "facade_dslr_jpg.7z",
+                "facade_dslr_scan_eval.7z",
+                "facade_dslr_depth.7z",
+            },
+        )
+        self.assertEqual(sum(resource.expected_bytes for resource in resources.values()), 3394284959)
+        for filename, resource in resources.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(resource.url, f"https://www.eth3d.net/data/{filename}")
+                self.assertTrue(resource.large)
+                self.assertEqual(len(resource.expected_sha256), 64)
+
+    def test_lronac_planetary_example_has_pinned_release_contract(self):
+        dataset = downloader.DATASETS["asp_lronac_csm_example"]
+        resource = dataset.resources[0]
+
+        self.assertEqual(dataset.category, "planetary_stereo")
+        self.assertEqual(resource.filename, "LRONAC_example.tar")
+        self.assertEqual(resource.expected_bytes, 204144640)
+        self.assertEqual(
+            resource.expected_sha256,
+            "5307b5a42a829833339e6e3e2991f837f352c11232c1a54c99a20409ed282dfa",
+        )
+
+    def test_dawn_fc_planetary_example_is_pinned_frame_camera_data(self):
+        dataset = downloader.DATASETS["asp_dawn_fc_vesta_frame"]
+        resource = dataset.resources[0]
+
+        self.assertEqual(dataset.category, "planetary_stereo")
+        self.assertIn("CSM Frame", dataset.description)
+        self.assertEqual(resource.filename, "DawnFramingCamera_example.tar")
+        self.assertEqual(resource.expected_bytes, 13189120)
+        self.assertEqual(
+            resource.expected_sha256,
+            "fdb4f595175fd04ec4ec3a063d601c987bbc678d6ece6c98dbffc06fb8a506f7",
+        )
+
     def test_selection_supports_dataset_ids_categories_and_all(self):
         selected = downloader.select_datasets(
             dataset_ids=["colmap_south_building"],
@@ -56,6 +141,7 @@ class DownloadPhotogrammetryTestDataTest(unittest.TestCase):
         selected_ids = {dataset.dataset_id for dataset in selected}
 
         self.assertIn("colmap_south_building", selected_ids)
+        self.assertIn("asp_dawn_fc_vesta_frame", selected_ids)
         self.assertIn("asp_lronac_csm_example", selected_ids)
         self.assertNotIn("middlebury_temple_sparse_ring", selected_ids)
 
@@ -107,6 +193,10 @@ class DownloadPhotogrammetryTestDataTest(unittest.TestCase):
             output = stdout.getvalue()
             self.assertEqual(exit_code, 0)
             self.assertIn("colmap_south_building", output)
+            self.assertIn("eth3d_office_highres", output)
+            self.assertIn("eth3d_courtyard_highres", output)
+            self.assertIn("eth3d_facade_highres", output)
+            self.assertIn("asp_dawn_fc_vesta_frame", output)
             self.assertIn("aerial_mapping", output)
             self.assertFalse(target_root.exists())
 

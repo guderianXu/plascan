@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -110,4 +112,25 @@ TEST(PathIOTest, InvalidPathFailsClosed)
     const auto comparison = xjw::common::io::comparePathsSafely({}, root);
     EXPECT_FALSE(comparison.valid);
     EXPECT_TRUE(static_cast<bool>(comparison.error));
+}
+
+TEST(PathIOTest, SortsFileNamesNaturallyWithoutLocaleOrIntegerLimits)
+{
+    QStringList names{
+        QStringLiteral("frame_10.PNG"),
+        QStringLiteral("FRAME_2.png"),
+        QStringLiteral("frame_000000000000000000000000000000003.png"),
+        QStringLiteral("frame_1.png")};
+
+    std::stable_sort(names.begin(), names.end(), xjw::common::io::naturalFileNameLessThan);
+
+    EXPECT_EQ(names,
+              (QStringList{QStringLiteral("frame_1.png"),
+                           QStringLiteral("FRAME_2.png"),
+                           QStringLiteral("frame_000000000000000000000000000000003.png"),
+                           QStringLiteral("frame_10.PNG")}));
+    EXPECT_FALSE(xjw::common::io::naturalFileNameLessThan(
+        QStringLiteral("frame_02.png"), QStringLiteral("FRAME_2.PNG")));
+    EXPECT_FALSE(xjw::common::io::naturalFileNameLessThan(
+        QStringLiteral("FRAME_2.PNG"), QStringLiteral("frame_02.png")));
 }

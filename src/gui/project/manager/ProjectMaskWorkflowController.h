@@ -19,6 +19,7 @@ public:
     void setActiveImagePath(const QString &imagePath);
     void openDialog();
     void openDialogForImages(const QStringList &requestedImages);
+    void clearMasksForImages(const QStringList &requestedImages);
     void cancelActiveTask();
 
 signals:

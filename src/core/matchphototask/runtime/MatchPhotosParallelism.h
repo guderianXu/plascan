@@ -52,6 +52,10 @@ int resolveLoMaRKeypointBudget(int requestedKeypoints,
 int resolveGeometryVerificationWorkers(int pairCount,
                                        unsigned int hardwareThreads);
 
+// SIFT 引导匹配的描述子搜索在单个像对内保持串行，在像对层使用一半逻辑 CPU 并行。
+int resolveGuidedMatchingWorkers(int pairCount,
+                                 unsigned int hardwareThreads);
+
 bool isCudaOutOfMemoryError(const QString &message);
 
 } // namespace matchphotos

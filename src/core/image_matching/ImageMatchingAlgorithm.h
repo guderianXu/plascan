@@ -66,6 +66,7 @@ struct ImageMatchingRuntimeConfig
     int descriptorDimension = 0;
     SiftComputeBackend siftBackend = SiftComputeBackend::Automatic;
     bool adaptiveSift = false;
+    bool lowTextureRecovery = false;
     bool adaptiveSiftRatio = true;
     bool rootSift = false;
     QByteArray configFingerprint;

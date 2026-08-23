@@ -174,6 +174,9 @@ struct PatchMatchGpuWorkspace
     ReusableCudaBuffer<float> depth;
     ReusableCudaBuffer<float> normal;
     ReusableCudaBuffer<float> confidence;
+    ReusableCudaBuffer<float> objective;
+    ReusableCudaBuffer<float> sourceDepths;
+    ReusableCudaBuffer<std::uint32_t> sourceSelection;
     ReusableCudaBuffer<float> hint;
     ReusableCudaBuffer<float> hintRadius;
     ReusableCudaBuffer<float *> srcPointers;
@@ -186,8 +189,10 @@ struct PatchMatchGpuWorkspace
     ReusablePinnedBuffer<std::uint8_t> sourceMasksHost;
     ReusablePinnedBuffer<std::uint8_t> hintHost;
     ReusablePinnedBuffer<std::uint8_t> hintRadiusHost;
+    ReusablePinnedBuffer<std::uint8_t> sourceDepthsHost;
     ReusablePinnedBuffer<float> depthHost;
     ReusablePinnedBuffer<float> confidenceHost;
+    ReusablePinnedBuffer<std::uint32_t> sourceSelectionHost;
 
     cudaError_t initialize()
     {
@@ -238,6 +243,9 @@ struct PatchMatchGpuWorkspace
         depth.reset();
         normal.reset();
         confidence.reset();
+        objective.reset();
+        sourceDepths.reset();
+        sourceSelection.reset();
         hint.reset();
         hintRadius.reset();
         srcPointers.reset();
@@ -249,8 +257,10 @@ struct PatchMatchGpuWorkspace
         sourceMasksHost.reset();
         hintHost.reset();
         hintRadiusHost.reset();
+        sourceDepthsHost.reset();
         depthHost.reset();
         confidenceHost.reset();
+        sourceSelectionHost.reset();
         for (cudaEvent_t *event : {&uploadsReady,
                                   &cancellationCheckpoint,
                                   &computeReady,
@@ -1092,6 +1102,71 @@ __device__ float propagateDepth(float d1, const float n1[3],
     return (t > 0.f) ? t : d1;
 }
 
+__device__ bool localSurfaceNormal(const float *depthMap,
+                                   int width,
+                                   int height,
+                                   int row,
+                                   int col,
+                                   float normal[3])
+{
+    if (row <= 0 || row + 1 >= height || col <= 0 || col + 1 >= width)
+    {
+        return false;
+    }
+    const float depths[4] = {
+        depthMap[row * width + col - 1],
+        depthMap[row * width + col + 1],
+        depthMap[(row - 1) * width + col],
+        depthMap[(row + 1) * width + col]};
+    if (!(depths[0] > 0.0f) || !(depths[1] > 0.0f) ||
+        !(depths[2] > 0.0f) || !(depths[3] > 0.0f))
+    {
+        return false;
+    }
+    float points[4][3];
+    const int pointRows[4] = {row, row, row - 1, row + 1};
+    const int pointCols[4] = {col - 1, col + 1, col, col};
+    for (int pointIndex = 0; pointIndex < 4; ++pointIndex)
+    {
+        points[pointIndex][0] = depths[pointIndex] *
+            (c_ref_inv_K[0] * static_cast<float>(pointCols[pointIndex]) + c_ref_inv_K[1]);
+        points[pointIndex][1] = depths[pointIndex] *
+            (c_ref_inv_K[2] * static_cast<float>(pointRows[pointIndex]) + c_ref_inv_K[3]);
+        points[pointIndex][2] = depths[pointIndex];
+    }
+    const float horizontal[3] = {
+        points[1][0] - points[0][0],
+        points[1][1] - points[0][1],
+        points[1][2] - points[0][2]};
+    const float vertical[3] = {
+        points[3][0] - points[2][0],
+        points[3][1] - points[2][1],
+        points[3][2] - points[2][2]};
+    normal[0] = horizontal[1] * vertical[2] - horizontal[2] * vertical[1];
+    normal[1] = horizontal[2] * vertical[0] - horizontal[0] * vertical[2];
+    normal[2] = horizontal[0] * vertical[1] - horizontal[1] * vertical[0];
+    const float lengthSquared = dot3(normal, normal);
+    if (!(lengthSquared > 1e-12f))
+    {
+        return false;
+    }
+    const float inverseLength = rsqrtf(lengthSquared);
+    normal[0] *= inverseLength;
+    normal[1] *= inverseLength;
+    normal[2] *= inverseLength;
+    const float ray[3] = {
+        c_ref_inv_K[0] * static_cast<float>(col) + c_ref_inv_K[1],
+        c_ref_inv_K[2] * static_cast<float>(row) + c_ref_inv_K[3],
+        1.0f};
+    if (dot3(normal, ray) > 0.0f)
+    {
+        normal[0] = -normal[0];
+        normal[1] = -normal[1];
+        normal[2] = -normal[2];
+    }
+    return true;
+}
+
 // =============================================================================
 // 平面单应性合成（参考 COLMAP ComposeHomography）
 // srcData: {fx_s,cx_s,fy_s,cy_s, R_rel[9], T_rel[3]}  共 16 floats
@@ -1288,12 +1363,74 @@ __device__ inline void pixelDepthSearchBounds(
 // =============================================================================
 // 单假设多源 NCC 代价评估（代价 = 2 - 2*NCC，范围 [0,2]，越小越好）
 // =============================================================================
+__device__ float roundTripReprojectionError(int col,
+                                            int row,
+                                            float depth,
+                                            const float *sourceDepth,
+                                            int width,
+                                            int height,
+                                            const float sourceData[16])
+{
+    if (sourceDepth == nullptr || !(depth > 0.0f))
+    {
+        return -1.0f;
+    }
+    const float referenceX =
+        (c_ref_inv_K[0] * static_cast<float>(col) + c_ref_inv_K[1]) * depth;
+    const float referenceY =
+        (c_ref_inv_K[2] * static_cast<float>(row) + c_ref_inv_K[3]) * depth;
+    const float sourceX = sourceData[4] * referenceX +
+        sourceData[5] * referenceY + sourceData[6] * depth + sourceData[13];
+    const float sourceY = sourceData[7] * referenceX +
+        sourceData[8] * referenceY + sourceData[9] * depth + sourceData[14];
+    const float sourceZ = sourceData[10] * referenceX +
+        sourceData[11] * referenceY + sourceData[12] * depth + sourceData[15];
+    if (!(sourceZ > 0.0f))
+    {
+        return -1.0f;
+    }
+    const float sourceU = sourceData[0] * sourceX / sourceZ + sourceData[1];
+    const float sourceV = sourceData[2] * sourceY / sourceZ + sourceData[3];
+    const float sampledDepth = bilinear(sourceDepth, width, height, sourceU, sourceV);
+    if (!(sampledDepth > 0.0f) || !isfinite(sampledDepth))
+    {
+        return -1.0f;
+    }
+    const float sampledX = (sourceU - sourceData[1]) / sourceData[0] * sampledDepth;
+    const float sampledY = (sourceV - sourceData[3]) / sourceData[2] * sampledDepth;
+    const float translatedX = sampledX - sourceData[13];
+    const float translatedY = sampledY - sourceData[14];
+    const float translatedZ = sampledDepth - sourceData[15];
+    const float roundTripX = sourceData[4] * translatedX +
+        sourceData[7] * translatedY + sourceData[10] * translatedZ;
+    const float roundTripY = sourceData[5] * translatedX +
+        sourceData[8] * translatedY + sourceData[11] * translatedZ;
+    const float roundTripZ = sourceData[6] * translatedX +
+        sourceData[9] * translatedY + sourceData[12] * translatedZ;
+    if (!(roundTripZ > 0.0f))
+    {
+        return -1.0f;
+    }
+    const float roundTripU = (roundTripX / roundTripZ - c_ref_inv_K[1]) / c_ref_inv_K[0];
+    const float roundTripV = (roundTripY / roundTripZ - c_ref_inv_K[3]) / c_ref_inv_K[2];
+    const float deltaU = roundTripU - static_cast<float>(col);
+    const float deltaV = roundTripV - static_cast<float>(row);
+    return sqrtf(deltaU * deltaU + deltaV * deltaV);
+}
+
 __device__ float evalHypCost(
     int col, int row, float depth, const float normal[3],
     const float *refImg, int refW, int refH,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
     const std::uint8_t *refMask, const std::uint8_t *srcMasks,
-    int patchHalf, float minimumMaskedSupportRatio)
+    int patchHalf, float minimumMaskedSupportRatio,
+    std::uint32_t neighborMask = 0u,
+    float neighborBonus = 0.0f,
+    std::uint32_t *selectedMask = nullptr,
+    float *photometricNcc = nullptr,
+    const float *sourceDepths = nullptr,
+    float geometricWeight = 0.0f,
+    float geometricMaxErrorPixels = 1.5f)
 {
     if (depth <= 0.f) return 2.f;
     float scores[kMaxPatchMatchSourceViews] = {};
@@ -1314,8 +1451,52 @@ __device__ float evalHypCost(
             minimumMaskedSupportRatio);
         scores[si] = ncc;
     }
-    const float robust_ncc = robustMultiSourceNcc(scores, source_count);
-    return 2.f - 2.f * robust_ncc;  // [0,2]
+    // Shared helper clamps the public photometric channel to [0, 1] while
+    // leaving the separate geometry-guided objective free to exceed 2.
+    const JointViewSelection selection = selectJointSourceViews(
+        scores, source_count, neighborMask, neighborBonus);
+    if (selectedMask)
+    {
+        *selectedMask = selection.sourceMask;
+    }
+    if (photometricNcc)
+    {
+        *photometricNcc = selection.photometricScore;
+    }
+    float objective = 2.f - 2.f * selection.photometricScore;
+    if (sourceDepths != nullptr && geometricWeight > 0.0f &&
+        geometricMaxErrorPixels > 0.0f)
+    {
+        float normalizedErrorSum = 0.0f;
+        int geometricSupport = 0;
+        for (int sourceIndex = 0; sourceIndex < source_count; ++sourceIndex)
+        {
+            if (((selection.sourceMask >> sourceIndex) & 1u) == 0u)
+            {
+                continue;
+            }
+            const float error = roundTripReprojectionError(
+                col,
+                row,
+                depth,
+                sourceDepths + sourceIndex * srcW * srcH,
+                srcW,
+                srcH,
+                srcDatas + sourceIndex * 16);
+            if (error < 0.0f)
+            {
+                continue;
+            }
+            normalizedErrorSum += fminf(error / geometricMaxErrorPixels, 1.0f);
+            ++geometricSupport;
+        }
+        if (geometricSupport > 0)
+        {
+            objective += geometricWeight *
+                normalizedErrorSum / static_cast<float>(geometricSupport);
+        }
+    }
+    return objective;
 }
 
 // Deterministic inverse-depth initialization shared semantically with the
@@ -1323,13 +1504,18 @@ __device__ float evalHypCost(
 // basins before both implementations enter the same plane propagation stage.
 __global__ void kernelInitializePlanes(
     float *depthMap, float *normalMap, float *confMap,
+    float *objectiveMap,
+    std::uint32_t *sourceSelection,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
     const std::uint8_t *refMask, const std::uint8_t *srcMasks,
+    const float *sourceDepths,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     int depthSampleCount,
-    float minimumMaskedSupportRatio)
+    float minimumMaskedSupportRatio,
+    float geometricWeight,
+    float geometricMaxErrorPixels)
 {
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
     const int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1346,6 +1532,8 @@ __global__ void kernelInitializePlanes(
         normalMap[idx * 3 + 1] = 0.0f;
         normalMap[idx * 3 + 2] = -1.0f;
         confMap[idx] = 0.0f;
+        objectiveMap[idx] = 2.0f;
+        sourceSelection[idx] = 0u;
         return;
     }
 
@@ -1366,21 +1554,30 @@ __global__ void kernelInitializePlanes(
     const float normal[3] = {0.0f, 0.0f, -1.0f};
     float bestDepth = 0.0f;
     float bestCost = 2.0f;
+    std::uint32_t bestSelection = 0u;
+    float bestNcc = 0.0f;
 
     for (int sampleIndex = 0; sampleIndex < coarseSamples; ++sampleIndex)
     {
         const float inverseDepth = inverseFar
             + inverseStep * static_cast<float>(sampleIndex);
         const float depth = 1.0f / inverseDepth;
+        std::uint32_t candidateSelection = 0u;
+        float candidateNcc = 0.0f;
         const float cost = evalHypCost(col, row, depth, normal,
                                        refImg, W, H,
                                        srcImgs, srcDatas, srcW, srcH, numSrc,
                                        refMask, srcMasks,
-                                       patchHalf, minimumMaskedSupportRatio);
+                                       patchHalf, minimumMaskedSupportRatio,
+                                       0u, 0.0f, &candidateSelection, &candidateNcc,
+                                       sourceDepths, geometricWeight,
+                                       geometricMaxErrorPixels);
         if (cost < bestCost)
         {
             bestCost = cost;
             bestDepth = depth;
+            bestSelection = candidateSelection;
+            bestNcc = candidateNcc;
         }
     }
 
@@ -1395,15 +1592,23 @@ __global__ void kernelInitializePlanes(
                 fminf(inverseNear,
                       bestInverse + refineStep * static_cast<float>(refineIndex)));
             const float depth = 1.0f / inverseDepth;
+            std::uint32_t candidateSelection = 0u;
+            float candidateNcc = 0.0f;
             const float cost = evalHypCost(col, row, depth, normal,
                                            refImg, W, H,
                                            srcImgs, srcDatas, srcW, srcH, numSrc,
                                            refMask, srcMasks,
-                                           patchHalf, minimumMaskedSupportRatio);
+                                           patchHalf, minimumMaskedSupportRatio,
+                                           bestSelection, 0.0f,
+                                           &candidateSelection, &candidateNcc,
+                                           sourceDepths, geometricWeight,
+                                           geometricMaxErrorPixels);
             if (cost < bestCost)
             {
                 bestCost = cost;
                 bestDepth = depth;
+                bestSelection = candidateSelection;
+                bestNcc = candidateNcc;
             }
         }
     }
@@ -1412,7 +1617,9 @@ __global__ void kernelInitializePlanes(
     normalMap[idx * 3] = normal[0];
     normalMap[idx * 3 + 1] = normal[1];
     normalMap[idx * 3 + 2] = normal[2];
-    confMap[idx] = bestDepth > 0.0f ? 1.0f - bestCost * 0.5f : 0.0f;
+    confMap[idx] = bestDepth > 0.0f ? bestNcc : 0.0f;
+    objectiveMap[idx] = bestDepth > 0.0f ? bestCost : 2.0f;
+    sourceSelection[idx] = bestDepth > 0.0f ? bestSelection : 0u;
 }
 
 // =============================================================================
@@ -1773,9 +1980,18 @@ __device__ inline void considerHypothesis(
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
     const std::uint8_t *refMask, const std::uint8_t *srcMasks,
+    const float *sourceDepths,
     float zNear, float zFar, int patchHalf,
     float minimumMaskedSupportRatio,
-    float *bestCost, float *bestDepth, float bestNormal[3])
+    std::uint32_t neighborMask,
+    float neighborBonus,
+    float geometricWeight,
+    float geometricMaxErrorPixels,
+    float *bestCost,
+    float *bestPhotometricNcc,
+    std::uint32_t *bestSourceSelection,
+    float *bestDepth,
+    float bestNormal[3])
 {
     if (candidateDepth <= 0.f)
     {
@@ -1790,14 +2006,22 @@ __device__ inline void considerHypothesis(
     {
         return;
     }
+    std::uint32_t candidateSelection = 0u;
+    float candidateNcc = 0.0f;
     const float cost = evalHypCost(col, row, candidateDepth, candidateNormal,
                                    refImg, W, H,
                                    srcImgs, srcDatas, srcW, srcH, numSrc,
                                    refMask, srcMasks,
-                                   patchHalf, minimumMaskedSupportRatio);
+                                   patchHalf, minimumMaskedSupportRatio,
+                                   neighborMask, neighborBonus,
+                                   &candidateSelection, &candidateNcc,
+                                   sourceDepths, geometricWeight,
+                                   geometricMaxErrorPixels);
     if (cost < *bestCost)
     {
         *bestCost = cost;
+        *bestPhotometricNcc = candidateNcc;
+        *bestSourceSelection = candidateSelection;
         *bestDepth = candidateDepth;
         bestNormal[0] = candidateNormal[0];
         bestNormal[1] = candidateNormal[1];
@@ -1811,12 +2035,19 @@ __device__ inline void considerHypothesis(
 // =============================================================================
 __global__ void kernelCheckerboardSweep(
     float *depthMap, float *normalMap, float *confMap,
+    float *objectiveMap,
+    std::uint32_t *sourceSelection,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
     const std::uint8_t *refMask, const std::uint8_t *srcMasks,
+    const float *sourceDepths,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float minimumMaskedSupportRatio,
+    float sourceSelectionNeighborBonus,
+    int enableAsymmetricPropagation,
+    float geometricWeight,
+    float geometricMaxErrorPixels,
     float perturbation,
     int iteration,
     int parity)
@@ -1853,14 +2084,21 @@ __global__ void kernelCheckerboardSweep(
     float bestDepth = currDepth;
     float bestNormal[3] = { currNormal[0], currNormal[1], currNormal[2] };
     const float currentNcc = fmaxf(0.0f, fminf(1.0f, confMap[idx]));
-    float bestCost = 2.0f - 2.0f * currentNcc;
+    float bestCost = objectiveMap[idx];
+    float bestPhotometricNcc = currentNcc;
+    std::uint32_t bestSourceSelection = sourceSelection[idx];
 
     const int dRow[4] = { -1, 1, 0, 0 };
     const int dCol[4] = { 0, 0, -1, 1 };
+    const int propagationDistances[4] = {1, 3, 5, 9};
+    const int distanceCount = enableAsymmetricPropagation != 0 ? 4 : 1;
     for (int ni = 0; ni < 4; ++ni)
     {
-        const int neighborRow = row + dRow[ni];
-        const int neighborCol = col + dCol[ni];
+        for (int distanceIndex = 0; distanceIndex < distanceCount; ++distanceIndex)
+        {
+        const int distance = propagationDistances[distanceIndex];
+        const int neighborRow = row + dRow[ni] * distance;
+        const int neighborCol = col + dCol[ni] * distance;
         if (neighborRow < 0 || neighborRow >= H || neighborCol < 0 || neighborCol >= W)
         {
             continue;
@@ -1878,6 +2116,8 @@ __global__ void kernelCheckerboardSweep(
             normalMap[neighborIdx * 3 + 1],
             normalMap[neighborIdx * 3 + 2]
         };
+        const std::uint32_t neighborMask = bestSourceSelection |
+            sourceSelection[neighborIdx];
         const float propDepth = propagateDepth(neighborDepth,
                                                neighborNormal,
                                                static_cast<float>(neighborRow),
@@ -1890,17 +2130,45 @@ __global__ void kernelCheckerboardSweep(
                                refImg, W, H,
                                srcImgs, srcDatas, srcW, srcH, numSrc,
                                refMask, srcMasks,
+                               sourceDepths,
                                localNear, localFar, patchHalf,
                                minimumMaskedSupportRatio,
-                               &bestCost, &bestDepth, bestNormal);
+                               neighborMask, sourceSelectionNeighborBonus,
+                               geometricWeight, geometricMaxErrorPixels,
+                               &bestCost, &bestPhotometricNcc,
+                               &bestSourceSelection, &bestDepth, bestNormal);
         }
         considerHypothesis(col, row, bestDepth, neighborNormal,
                            refImg, W, H,
                            srcImgs, srcDatas, srcW, srcH, numSrc,
                            refMask, srcMasks,
+                           sourceDepths,
                            localNear, localFar, patchHalf,
                            minimumMaskedSupportRatio,
-                           &bestCost, &bestDepth, bestNormal);
+                           neighborMask, sourceSelectionNeighborBonus,
+                           geometricWeight, geometricMaxErrorPixels,
+                           &bestCost, &bestPhotometricNcc,
+                           &bestSourceSelection, &bestDepth, bestNormal);
+        }
+    }
+
+    if (enableAsymmetricPropagation != 0)
+    {
+        float localNormal[3];
+        if (localSurfaceNormal(depthMap, W, H, row, col, localNormal))
+        {
+            considerHypothesis(col, row, bestDepth, localNormal,
+                               refImg, W, H,
+                               srcImgs, srcDatas, srcW, srcH, numSrc,
+                               refMask, srcMasks,
+                               sourceDepths,
+                               localNear, localFar, patchHalf,
+                               minimumMaskedSupportRatio,
+                               bestSourceSelection, sourceSelectionNeighborBonus,
+                               geometricWeight, geometricMaxErrorPixels,
+                               &bestCost, &bestPhotometricNcc,
+                               &bestSourceSelection, &bestDepth, bestNormal);
+        }
     }
 
     const float refinedDepth = bestDepth;
@@ -1933,29 +2201,43 @@ __global__ void kernelCheckerboardSweep(
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
                        refMask, srcMasks,
+                       sourceDepths,
                        localNear, localFar, patchHalf,
                        minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
+                       bestSourceSelection, sourceSelectionNeighborBonus,
+                       geometricWeight, geometricMaxErrorPixels,
+                       &bestCost, &bestPhotometricNcc,
+                       &bestSourceSelection, &bestDepth, bestNormal);
     considerHypothesis(col, row, randomDepth, refinedNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
                        refMask, srcMasks,
+                       sourceDepths,
                        localNear, localFar, patchHalf,
                        minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
+                       bestSourceSelection, sourceSelectionNeighborBonus,
+                       geometricWeight, geometricMaxErrorPixels,
+                       &bestCost, &bestPhotometricNcc,
+                       &bestSourceSelection, &bestDepth, bestNormal);
     considerHypothesis(col, row, randomDepth, randNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
                        refMask, srcMasks,
+                       sourceDepths,
                        localNear, localFar, patchHalf,
                        minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
+                       bestSourceSelection, sourceSelectionNeighborBonus,
+                       geometricWeight, geometricMaxErrorPixels,
+                       &bestCost, &bestPhotometricNcc,
+                       &bestSourceSelection, &bestDepth, bestNormal);
 
     depthMap[idx] = bestDepth;
     normalMap[idx * 3] = bestNormal[0];
     normalMap[idx * 3 + 1] = bestNormal[1];
     normalMap[idx * 3 + 2] = bestNormal[2];
-    confMap[idx] = 1.f - bestCost * 0.5f;
+    confMap[idx] = bestPhotometricNcc;
+    objectiveMap[idx] = bestCost;
+    sourceSelection[idx] = bestSourceSelection;
 }
 
 // Probe distinct depths around the converged PatchMatch hypothesis. A high
@@ -2039,13 +2321,22 @@ __global__ void kernelApplyPhotometricUniqueness(
 
 /// 置信度阈值过滤
 __global__ void kernelFinalizeDepth(
-    float *depthMap, float *confMap, int W, int H, float confThresh)
+    float *depthMap,
+    float *confMap,
+    std::uint32_t *sourceSelection,
+    int W,
+    int H,
+    float confThresh)
 {
     int u = blockIdx.x * blockDim.x + threadIdx.x;
     int v = blockIdx.y * blockDim.y + threadIdx.y;
     if (u >= W || v >= H) return;
     int idx = v * W + u;
-    if (confMap[idx] < confThresh) depthMap[idx] = 0.f;
+    if (confMap[idx] < confThresh)
+    {
+        depthMap[idx] = 0.f;
+        sourceSelection[idx] = 0u;
+    }
 }
 
 // =============================================================================
@@ -2064,7 +2355,9 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat                *hintDepth,
     const cv::Mat                *hintRadius,
     const cv::Mat                *refValidMask,
-    const std::vector<cv::Mat>   *srcValidMasks)
+    const std::vector<cv::Mat>   *srcValidMasks,
+    const PatchMatchAuxiliaryInput *auxiliaryInput,
+    PatchMatchAuxiliaryOutput *auxiliaryOutput)
 {
     const auto estimate_start = std::chrono::steady_clock::now();
     int device_count = 0;
@@ -2110,6 +2403,47 @@ bool PatchMatchDepthEstimator::estimateGPU(
                                   scaled_size);
             has_source_masks = has_source_masks ||
                 !source_masks_scaled[static_cast<std::size_t>(source_index)].empty();
+        }
+    }
+    bool has_source_depths = false;
+    std::vector<float> packed_source_depths;
+    if (auxiliaryInput && auxiliaryInput->sourceDepthMaps)
+    {
+        packed_source_depths.assign(
+            static_cast<std::size_t>(N) * static_cast<std::size_t>(sW * sH),
+            0.0f);
+        for (int source_index = 0; source_index < N; ++source_index)
+        {
+            const cv::Mat &source_depth =
+                (*auxiliaryInput->sourceDepthMaps)[static_cast<std::size_t>(source_index)];
+            if (source_depth.empty())
+            {
+                continue;
+            }
+            cv::Mat source_depth_float;
+            source_depth.convertTo(source_depth_float, CV_32F);
+            cv::Mat source_depth_scaled;
+            if (source_depth_float.size() == scaled_size)
+            {
+                source_depth_scaled = source_depth_float.isContinuous()
+                    ? source_depth_float
+                    : source_depth_float.clone();
+            }
+            else
+            {
+                cv::resize(source_depth_float,
+                           source_depth_scaled,
+                           scaled_size,
+                           0.0,
+                           0.0,
+                           cv::INTER_NEAREST);
+            }
+            std::memcpy(
+                packed_source_depths.data() +
+                    static_cast<std::size_t>(source_index) * static_cast<std::size_t>(sW * sH),
+                source_depth_scaled.ptr<float>(),
+                static_cast<std::size_t>(sW * sH) * sizeof(float));
+            has_source_depths = true;
         }
     }
 
@@ -2258,15 +2592,20 @@ bool PatchMatchDepthEstimator::estimateGPU(
     CUDA_CHECK(workspace.depth.reserve(static_cast<std::size_t>(refPx)));
     CUDA_CHECK(workspace.normal.reserve(static_cast<std::size_t>(refPx) * 3));
     CUDA_CHECK(workspace.confidence.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.objective.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.sourceSelection.reserve(static_cast<std::size_t>(refPx)));
     CUDA_CHECK(workspace.srcPointers.reserve(static_cast<std::size_t>(N)));
 
     float *d_srcData = workspace.srcData.ptr;
     float *d_depth = workspace.depth.ptr;
     float *d_normal = workspace.normal.ptr;
     float *d_conf = workspace.confidence.ptr;
+    float *d_objective = workspace.objective.ptr;
+    std::uint32_t *d_sourceSelection = workspace.sourceSelection.ptr;
     float **d_srcPtrs = workspace.srcPointers.ptr;
     std::uint8_t *d_refMask = nullptr;
     std::uint8_t *d_srcMasks = nullptr;
+    float *d_sourceDepths = nullptr;
 
     CUDA_CHECK(cudaMemcpyToSymbolAsync(c_ref_inv_K,
                                        h_inv_K,
@@ -2282,6 +2621,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
     CUDA_CHECK(cudaMemsetAsync(d_conf,
                                0,
                                static_cast<std::size_t>(refPx) * sizeof(float),
+                               workspace.computeStream));
+    CUDA_CHECK(cudaMemsetAsync(d_sourceSelection,
+                               0,
+                               static_cast<std::size_t>(refPx) * sizeof(std::uint32_t),
                                workspace.computeStream));
 
     if (!ref_mask_scaled.empty())
@@ -2318,6 +2661,17 @@ bool PatchMatchDepthEstimator::estimateGPU(
                                          packed_masks.data(),
                                          source_mask_bytes,
                                          d_srcMasks,
+                                         workspace.transferStream));
+    }
+    if (has_source_depths)
+    {
+        const std::size_t source_depth_count = packed_source_depths.size();
+        CUDA_CHECK(workspace.sourceDepths.reserve(source_depth_count));
+        d_sourceDepths = workspace.sourceDepths.ptr;
+        CUDA_CHECK(stageHostToDeviceCopy(workspace.sourceDepthsHost,
+                                         packed_source_depths.data(),
+                                         source_depth_count * sizeof(float),
+                                         d_sourceDepths,
                                          workspace.transferStream));
     }
 
@@ -2381,14 +2735,17 @@ bool PatchMatchDepthEstimator::estimateGPU(
         ? propagationIterations
         : config.numIterations;
     kernelInitializePlanes<<<grid, block, 0, workspace.computeStream>>>(
-        d_depth, d_normal, d_conf,
+        d_depth, d_normal, d_conf, d_objective, d_sourceSelection,
         d_ref, sW, sH,
         d_srcPtrs, d_srcData, srcW, srcH2, N,
         d_refMask, d_srcMasks,
+        d_sourceDepths,
         d_hint, d_hintRadius,
         zNear, zFar, config.patchHalf,
         depthSampleCount,
-        config.minimumMaskedPatchSupportRatio);
+        config.minimumMaskedPatchSupportRatio,
+        has_source_depths ? config.geometricGuidanceWeight : 0.0f,
+        config.geometricGuidanceMaxErrorPixels);
     CUDA_CHECK(cudaGetLastError());
 
     // ── 迭代传播 + 精化 ───────────────────────────────────────
@@ -2412,25 +2769,39 @@ bool PatchMatchDepthEstimator::estimateGPU(
         if (config.cudaUseParallelSweep)
         {
             kernelCheckerboardSweep<<<gridPixel, blockPixel, 0, workspace.computeStream>>>(
-                d_depth, d_normal, d_conf,
+                d_depth, d_normal, d_conf, d_objective, d_sourceSelection,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
                 d_refMask, d_srcMasks,
+                d_sourceDepths,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
+                config.enablePerPixelSourceSelection
+                    ? config.sourceSelectionNeighborBonus
+                    : 0.0f,
+                config.enableAsymmetricPropagation ? 1 : 0,
+                has_source_depths ? config.geometricGuidanceWeight : 0.0f,
+                config.geometricGuidanceMaxErrorPixels,
                 perturbation, iter,
                 0);
             CUDA_CHECK(cudaGetLastError());
 
             kernelCheckerboardSweep<<<gridPixel, blockPixel, 0, workspace.computeStream>>>(
-                d_depth, d_normal, d_conf,
+                d_depth, d_normal, d_conf, d_objective, d_sourceSelection,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
                 d_refMask, d_srcMasks,
+                d_sourceDepths,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
+                config.enablePerPixelSourceSelection
+                    ? config.sourceSelectionNeighborBonus
+                    : 0.0f,
+                config.enableAsymmetricPropagation ? 1 : 0,
+                has_source_depths ? config.geometricGuidanceWeight : 0.0f,
+                config.geometricGuidanceMaxErrorPixels,
                 perturbation, iter,
                 1);
             CUDA_CHECK(cudaGetLastError());
@@ -2540,12 +2911,13 @@ bool PatchMatchDepthEstimator::estimateGPU(
         CUDA_CHECK(cudaGetLastError());
     }
     kernelFinalizeDepth<<<grid, block, 0, workspace.computeStream>>>(
-        d_depth, d_conf, sW, sH, config.confidenceThresh);
+        d_depth, d_conf, d_sourceSelection, sW, sH, config.confidenceThresh);
     CUDA_CHECK(cudaGetLastError());
 
     // ── 独立传输流异步拷回固定页内存 ─────────────────────────────
     CUDA_CHECK(workspace.depthHost.reserve(static_cast<std::size_t>(refPx)));
     CUDA_CHECK(workspace.confidenceHost.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.sourceSelectionHost.reserve(static_cast<std::size_t>(refPx)));
     CUDA_CHECK(cudaEventRecord(workspace.computeReady, workspace.computeStream));
     CUDA_CHECK(cudaStreamWaitEvent(workspace.transferStream,
                                    workspace.computeReady,
@@ -2560,17 +2932,26 @@ bool PatchMatchDepthEstimator::estimateGPU(
                                static_cast<std::size_t>(refPx) * sizeof(float),
                                cudaMemcpyDeviceToHost,
                                workspace.transferStream));
+    CUDA_CHECK(cudaMemcpyAsync(workspace.sourceSelectionHost.ptr,
+                               d_sourceSelection,
+                               static_cast<std::size_t>(refPx) * sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost,
+                               workspace.transferStream));
     CUDA_CHECK(cudaEventRecord(workspace.downloadsReady,
                                workspace.transferStream));
     CUDA_CHECK(cudaEventSynchronize(workspace.downloadsReady));
 
     cv::Mat depthS(sH, sW, CV_32F), confS(sH, sW, CV_32F);
+    cv::Mat sourceSelectionS(sH, sW, CV_32S);
     std::memcpy(depthS.ptr<float>(),
                 workspace.depthHost.ptr,
                 static_cast<std::size_t>(refPx) * sizeof(float));
     std::memcpy(confS.ptr<float>(),
                 workspace.confidenceHost.ptr,
                 static_cast<std::size_t>(refPx) * sizeof(float));
+    std::memcpy(sourceSelectionS.ptr<std::int32_t>(),
+                workspace.sourceSelectionHost.ptr,
+                static_cast<std::size_t>(refPx) * sizeof(std::uint32_t));
     workspace_run_guard.markCompleted();
     const auto gpu_slot_finished = std::chrono::steady_clock::now();
     gpu_execution_lock.unlock();
@@ -2579,6 +2960,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
         const cv::Mat invalid_reference = ref_mask_scaled == 0;
         depthS.setTo(cv::Scalar(0.0f), invalid_reference);
         confS.setTo(cv::Scalar(0.0f), invalid_reference);
+        sourceSelectionS.setTo(cv::Scalar(0), invalid_reference);
     }
 
     // ── 后处理结果统计诊断 ────────────────────────────────────────
@@ -2610,6 +2992,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     // ── 上采样到原始分辨率 ───────────────────────────────────────
     cv::Mat depthFull = depthS, confFull = confS;
+    cv::Mat sourceSelectionFull = sourceSelectionS;
     if (ds > 1 && !config.returnNativeResolution)
     {
         // 深度图和置信度图必须使用最近邻插值上采样，避免在有效/无效像素
@@ -2617,10 +3000,20 @@ bool PatchMatchDepthEstimator::estimateGPU(
         // 远低于 zNear 的伪深度值，导致大量点云离群点）
         cv::resize(depthS, depthFull, cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);
         cv::resize(confS,  confFull,  cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);
+        cv::resize(sourceSelectionS,
+                   sourceSelectionFull,
+                   cv::Size(refW, refH),
+                   0,
+                   0,
+                   cv::INTER_NEAREST);
     }
 
     depthOut = depthFull;
     if (confOut) *confOut = confFull;
+    if (auxiliaryOutput && auxiliaryOutput->photometricSourceMask)
+    {
+        *auxiliaryOutput->photometricSourceMask = sourceSelectionFull;
+    }
 
     int valid = cv::countNonZero(depthFull > 0);
     float mean = (valid>0) ? (float)cv::mean(depthFull, depthFull>0)[0] : 0.f;
@@ -2761,10 +3154,13 @@ bool PatchMatchDepthEstimator::reserveGpuWorkspace(
     CUDA_CHECK(workspace.depth.reserve(referencePixelCount));
     CUDA_CHECK(workspace.normal.reserve(referencePixelCount * 3));
     CUDA_CHECK(workspace.confidence.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.objective.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.sourceSelection.reserve(referencePixelCount));
     CUDA_CHECK(workspace.hint.reserve(referencePixelCount));
     CUDA_CHECK(workspace.hintRadius.reserve(referencePixelCount));
     CUDA_CHECK(workspace.depthHost.reserve(referencePixelCount));
     CUDA_CHECK(workspace.confidenceHost.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.sourceSelectionHost.reserve(referencePixelCount));
     if (reserveReferenceMask)
     {
         CUDA_CHECK(workspace.referenceMask.reserve(referencePixelCount));

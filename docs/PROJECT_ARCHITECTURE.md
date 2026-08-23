@@ -140,6 +140,7 @@ core/
 │   ├── sift/                   # Auto SIFT 唯一维护边界
 │   │   ├── AutoSiftAlgorithm.h/cpp # 注册入口与统一提取/匹配调度
 │   │   ├── SiftFeatureExtractor.h/cpp # 大小影像自适应、瓦片、筛选与 RootSIFT
+│   │   ├── SiftLowTextureRecovery.h/cpp # 覆盖不足网格的 CLAHE 双通道补点
 │   │   ├── SiftComputeBackend.h/cpp # 统一后端选择、可用性与设备端调用接口
 │   │   ├── SiftCudaBackend.cpp      # cudaSift 提取与匹配封装
 │   │   ├── SiftOpenClBackend.cpp    # OpenCL C 1.2 金字塔、特征与匹配运行时

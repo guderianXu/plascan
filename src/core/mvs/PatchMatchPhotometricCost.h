@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 
 #if defined(__CUDACC__)
 #define PLASCAN_MVS_HOST_DEVICE __host__ __device__
@@ -16,6 +17,7 @@ namespace mvs
 constexpr int kMaxPatchMatchSourceViews = 32;
 constexpr float kDefaultMinimumMaskedPatchSupportRatio = 0.35f;
 constexpr float kDefaultPatchMatchHintRadiusRatio = 0.05f;
+constexpr float kDefaultSourceSelectionNeighborBonus = 0.04f;
 
 /// Keep CUDA and OpenCL on the same deterministic search budget. The public
 /// numIterations value controls both the coarse inverse-depth sweep and a
@@ -257,13 +259,30 @@ PLASCAN_MVS_HOST_DEVICE inline int requiredPhotometricSupport(int source_count)
 /// Source selection currently uses at most a handful of views. The fixed local
 /// array keeps this helper allocation-free inside CUDA kernels and also lets the
 /// CPU fallback share exactly the same acceptance rule.
-PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
-                                                          int source_count,
-                                                          float minimum_ncc = 0.05f)
+struct JointViewSelection
 {
+    float photometricScore = 0.0f;
+    std::uint32_t sourceMask = 0;
+    int sourceCount = 0;
+};
+
+/// Select the strongest supported sources for one pixel/hypothesis.
+///
+/// The neighbour mask is only a bounded ranking prior. The returned score is
+/// always averaged from the original NCC observations, so spatial agreement
+/// cannot manufacture photometric confidence. This keeps the bitset useful for
+/// PatchMatch propagation without confusing it with independent geometry.
+PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
+    const float *scores,
+    int source_count,
+    std::uint32_t neighbor_mask = 0,
+    float neighbor_bonus = kDefaultSourceSelectionNeighborBonus,
+    float minimum_ncc = 0.05f)
+{
+    JointViewSelection result;
     if (scores == nullptr || source_count <= 0)
     {
-        return 0.0f;
+        return result;
     }
 
     const int effective_count = source_count < kMaxPatchMatchSourceViews
@@ -271,6 +290,8 @@ PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
                                     : kMaxPatchMatchSourceViews;
     const int required_support = requiredPhotometricSupport(effective_count);
     float strongest[kMaxPatchMatchSourceViews] = {};
+    float strongest_rank[kMaxPatchMatchSourceViews] = {};
+    int strongest_index[kMaxPatchMatchSourceViews] = {};
     int support_count = 0;
     int stored_count = 0;
 
@@ -283,23 +304,36 @@ PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
         }
 
         ++support_count;
-        if (stored_count == required_support
-            && score <= strongest[required_support - 1])
+        const float rank_score = score +
+            (((neighbor_mask >> source_index) & 1u) != 0u
+                 ? (neighbor_bonus > 0.0f ? neighbor_bonus : 0.0f)
+                 : 0.0f);
+        if (stored_count == required_support &&
+            (rank_score < strongest_rank[required_support - 1] ||
+             (rank_score == strongest_rank[required_support - 1] &&
+              source_index > strongest_index[required_support - 1])))
         {
             continue;
         }
         int insert_at = stored_count < required_support ? stored_count : required_support - 1;
-        while (insert_at > 0 && strongest[insert_at - 1] < score)
+        while (insert_at > 0 &&
+               (strongest_rank[insert_at - 1] < rank_score ||
+                (strongest_rank[insert_at - 1] == rank_score &&
+                 strongest_index[insert_at - 1] > source_index)))
         {
             if (insert_at < required_support)
             {
                 strongest[insert_at] = strongest[insert_at - 1];
+                strongest_rank[insert_at] = strongest_rank[insert_at - 1];
+                strongest_index[insert_at] = strongest_index[insert_at - 1];
             }
             --insert_at;
         }
         if (insert_at < required_support)
         {
             strongest[insert_at] = score;
+            strongest_rank[insert_at] = rank_score;
+            strongest_index[insert_at] = source_index;
             if (stored_count < required_support)
             {
                 ++stored_count;
@@ -309,15 +343,40 @@ PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
 
     if (support_count < required_support || stored_count < required_support)
     {
-        return 0.0f;
+        return result;
     }
 
     float score_sum = 0.0f;
     for (int support_index = 0; support_index < required_support; ++support_index)
     {
         score_sum += strongest[support_index];
+        result.sourceMask |= 1u << strongest_index[support_index];
     }
-    return score_sum / static_cast<float>(required_support);
+    const float average_score = score_sum / static_cast<float>(required_support);
+    result.photometricScore = average_score < 0.0f
+        ? 0.0f
+        : (average_score > 1.0f ? 1.0f : average_score);
+    result.sourceCount = required_support;
+    return result;
+}
+
+PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
+                                                          int source_count,
+                                                          float minimum_ncc = 0.05f)
+{
+    return selectJointSourceViews(scores, source_count, 0, 0.0f, minimum_ncc)
+        .photometricScore;
+}
+
+PLASCAN_MVS_HOST_DEVICE inline int selectedSourceCount(std::uint32_t source_mask)
+{
+    int count = 0;
+    while (source_mask != 0u)
+    {
+        source_mask &= source_mask - 1u;
+        ++count;
+    }
+    return count;
 }
 
 /// Convert a local depth-cost uniqueness margin into a soft confidence scale.

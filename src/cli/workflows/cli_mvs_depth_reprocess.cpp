@@ -273,6 +273,9 @@ int main(int argc, char **argv)
     bool completeVisibilityCandidatePool = false;
     bool depthPoseCandidates = false;
     bool disableTargetedGapRecovery = false;
+    bool disablePerPixelSourceSelection = false;
+    bool disableAsymmetricPropagation = false;
+    bool disableGeometricGuidancePass = false;
     bool depthLayerReliabilityAnchorGate = false;
     bool depthLayerReliabilityGuidedCorrection = false;
     std::vector<int> stageSnapshotRefs;
@@ -353,6 +356,18 @@ int main(int argc, char **argv)
         "--disable-targeted-gap-recovery",
         disableTargetedGapRecovery,
         "诊断：关闭缺口定向 PatchMatch 恢复，用于同输入 A/B 对比");
+    app.add_flag(
+        "--disable-per-pixel-source-selection",
+        disablePerPixelSourceSelection,
+        "诊断：关闭 PatchMatch 每像素联合源视图选择，用于同输入 A/B 对比");
+    app.add_flag(
+        "--disable-asymmetric-propagation",
+        disableAsymmetricPropagation,
+        "诊断：关闭 PatchMatch 近远邻与局部表面法线候选，用于同输入 A/B 对比");
+    app.add_flag(
+        "--disable-geometric-guidance-pass",
+        disableGeometricGuidancePass,
+        "诊断：关闭使用冻结来源深度的第二轮几何引导 PatchMatch，用于同输入 A/B 对比");
     app.add_flag(
         "--depth-layer-reliability-anchor-gate",
         depthLayerReliabilityAnchorGate,
@@ -582,6 +597,12 @@ int main(int argc, char **argv)
     config.requireVerifiedSourcePairs = true;
     config.depthPoseRefinement.enabled = depthPoseCandidates;
     config.enableTargetedGapRecovery = !disableTargetedGapRecovery;
+    config.patchMatch.enablePerPixelSourceSelection =
+        !disablePerPixelSourceSelection;
+    config.patchMatch.enableAsymmetricPropagation =
+        !disableAsymmetricPropagation;
+    config.patchMatch.enableGeometricGuidancePass =
+        !disableGeometricGuidancePass;
     config.enableDepthLayerReliabilityAnchorGate =
         depthLayerReliabilityAnchorGate;
     config.enableDepthLayerReliabilityGuidedCorrection =
@@ -594,6 +615,9 @@ int main(int argc, char **argv)
                  "source_max_angle_cap_deg=%.3f "
                  "source_complete_visibility_pool=%s "
                  "source_angle_soft_ranking_strength=%.3f "
+                 "per_pixel_source_selection=%s "
+                 "asymmetric_propagation=%s "
+                 "geometric_guidance_pass=%s "
                  "depth_layer_reliability_anchor_gate=%s "
                  "depth_layer_reliability_guided_correction=%s "
                  "pair_evidence_provenance=%s\n",
@@ -605,6 +629,9 @@ int main(int argc, char **argv)
                  sourceMaximumAngleDeg,
                  completeVisibilityCandidatePool ? "true" : "false",
                  sourceAngleSoftRankingStrength,
+                 disablePerPixelSourceSelection ? "false" : "true",
+                 disableAsymmetricPropagation ? "false" : "true",
+                 disableGeometricGuidancePass ? "false" : "true",
                  depthLayerReliabilityAnchorGate ? "true" : "false",
                  depthLayerReliabilityGuidedCorrection ? "true" : "false",
                  pairEvidenceProvenance.toUtf8().constData());

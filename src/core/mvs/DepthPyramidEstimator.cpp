@@ -3,6 +3,7 @@
 #include "PatchMatchCUDA.h"
 #include "DepthPyramidPolicy.h"
 #include "MvsQualityReport.h"
+#include "PatchMatchPhotometricCost.h"
 
 #include <algorithm>
 #include <chrono>
@@ -35,6 +36,12 @@ public:
         const cv::Mat *radius = request.prior && !request.prior->radius.empty()
             ? &request.prior->radius
             : nullptr;
+        PatchMatchAuxiliaryInput auxiliary_input;
+        auxiliary_input.sourceDepthMaps = request.sourceDepthMaps.empty()
+            ? nullptr
+            : &request.sourceDepthMaps;
+        PatchMatchAuxiliaryOutput auxiliary_output;
+        auxiliary_output.photometricSourceMask = &result.photometricSourceMask;
         if (!PatchMatchDepthEstimator::estimate(request.referenceImage,
                                                 request.sourceImages,
                                                 request.referenceCamera,
@@ -52,7 +59,9 @@ public:
                                                     : &request.referenceValidMask,
                                                 request.sourceValidMasks.empty()
                                                     ? nullptr
-                                                    : &request.sourceValidMasks))
+                                                    : &request.sourceValidMasks,
+                                                &auxiliary_input,
+                                                &auxiliary_output))
         {
             return false;
         }
@@ -62,8 +71,25 @@ public:
         result.confidence = confidence;
         result.validMask = result.depth > 0.0f;
         result.supportCount = cv::Mat(result.depth.size(), CV_16U, cv::Scalar(0));
-        result.supportCount.setTo(
-            cv::Scalar(static_cast<int>(request.sourceImages.size())), result.validMask);
+        for (int row = 0; row < result.depth.rows; ++row)
+        {
+            const std::int32_t *mask_row = result.photometricSourceMask.empty()
+                ? nullptr
+                : result.photometricSourceMask.ptr<std::int32_t>(row);
+            std::uint16_t *support_row = result.supportCount.ptr<std::uint16_t>(row);
+            const std::uint8_t *valid_row = result.validMask.ptr<std::uint8_t>(row);
+            for (int column = 0; column < result.depth.cols; ++column)
+            {
+                if (valid_row[column] == 0)
+                {
+                    continue;
+                }
+                support_row[column] = mask_row
+                    ? static_cast<std::uint16_t>(selectedSourceCount(
+                          static_cast<std::uint32_t>(mask_row[column])))
+                    : static_cast<std::uint16_t>(request.sourceImages.size());
+            }
+        }
         result.uncertainty = cv::Mat(result.depth.size(), CV_32F, cv::Scalar(0.0f));
         for (int row = 0; row < result.depth.rows; ++row)
         {
@@ -230,6 +256,7 @@ void resizeLevelResultArtifacts(DepthLevelResult &result, const cv::Size &target
     resize_artifact(result.normalMap);
     resize_artifact(result.confidence);
     resize_artifact(result.supportCount);
+    resize_artifact(result.photometricSourceMask);
     resize_artifact(result.uncertainty);
     resize_artifact(result.validMask);
 }
@@ -278,6 +305,10 @@ void applyValidMaskToLevelResult(DepthLevelResult &result, const cv::Mat &valid_
     if (!result.supportCount.empty())
     {
         result.supportCount.setTo(cv::Scalar(0), invalid_mask);
+    }
+    if (!result.photometricSourceMask.empty())
+    {
+        result.photometricSourceMask.setTo(cv::Scalar(0), invalid_mask);
     }
     if (!result.uncertainty.empty())
     {
@@ -430,6 +461,18 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
                 request.referenceImage.size());
         }
         mergeSparseHint(prior, request.sparseDepthHints[index], target_size);
+        if (request.sparseDepthHintRelativeRadius > 0.0f && !prior.center.empty())
+        {
+            if (prior.radius.empty())
+            {
+                prior.radius = cv::Mat(
+                    prior.center.size(), CV_32F, cv::Scalar(0.0f));
+            }
+            const cv::Mat valid_hint = prior.center > 0.0f;
+            cv::Mat explicit_radius = prior.center *
+                request.sparseDepthHintRelativeRadius;
+            explicit_radius.copyTo(prior.radius, valid_hint);
+        }
         applyValidMaskToPrior(prior, level_valid_mask);
 
         PatchMatchBackendRequest backend_request;
@@ -437,6 +480,7 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         backend_request.referenceValidMask = level_valid_mask;
         backend_request.sourceImages = request.sourceImages;
         backend_request.sourceValidMasks = std::move(level_source_valid_masks);
+        backend_request.sourceDepthMaps = request.sourceDepthMaps;
         backend_request.referenceCamera = request.referenceCamera;
         backend_request.sourceCameras = request.sourceCameras;
         backend_request.zNear = request.zNear;

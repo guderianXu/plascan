@@ -1,6 +1,7 @@
 #include "TerrainProductManifest.h"
 
-#include <QCollator>
+#include "io/PathIO.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -200,15 +201,13 @@ const QVector<TerrainProductRecord> &TerrainProductManifest::records() const
 QVector<TerrainProductRecord> TerrainProductManifest::recordsSortedByPrimaryPath() const
 {
     QVector<TerrainProductRecord> result = _records;
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
     std::stable_sort(result.begin(),
                      result.end(),
-                     [&collator](const TerrainProductRecord &lhs, const TerrainProductRecord &rhs)
+                     [](const TerrainProductRecord &lhs, const TerrainProductRecord &rhs)
                      {
-                         return collator.compare(QFileInfo(lhs.primaryPath()).fileName(),
-                                                 QFileInfo(rhs.primaryPath()).fileName()) < 0;
+                         return xjw::common::io::naturalFileNameLessThan(
+                             QFileInfo(lhs.primaryPath()).fileName(),
+                             QFileInfo(rhs.primaryPath()).fileName());
                      });
     return result;
 }

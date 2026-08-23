@@ -119,6 +119,29 @@ bool isStrictPathAncestor(const std::filesystem::path &ancestor,
     return ancestor_it == ancestor.end() && descendant_it != descendant.end();
 }
 
+bool isAsciiDigit(QChar value)
+{
+    return value >= QLatin1Char('0') && value <= QLatin1Char('9');
+}
+
+qsizetype skipLeadingZeros(QStringView text, qsizetype position, qsizetype end)
+{
+    while (position < end && text[position] == QLatin1Char('0'))
+    {
+        ++position;
+    }
+    return position;
+}
+
+qsizetype asciiDigitRunEnd(QStringView text, qsizetype position)
+{
+    while (position < text.size() && isAsciiDigit(text[position]))
+    {
+        ++position;
+    }
+    return position;
+}
+
 bool pathExistsForSafety(const std::filesystem::path &path,
                          bool *exists,
                          std::error_code *error)
@@ -194,6 +217,50 @@ QString fromFilesystemPath(const std::filesystem::path &path)
     const std::string nativePath = path.string();
     return QString::fromUtf8(nativePath.data(), static_cast<int>(nativePath.size()));
 #endif
+}
+
+bool naturalFileNameLessThan(QStringView left, QStringView right)
+{
+    qsizetype left_position = 0;
+    qsizetype right_position = 0;
+    while (left_position < left.size() && right_position < right.size())
+    {
+        if (isAsciiDigit(left[left_position]) && isAsciiDigit(right[right_position]))
+        {
+            const qsizetype left_end = asciiDigitRunEnd(left, left_position);
+            const qsizetype right_end = asciiDigitRunEnd(right, right_position);
+            const qsizetype left_significant = skipLeadingZeros(left, left_position, left_end);
+            const qsizetype right_significant = skipLeadingZeros(right, right_position, right_end);
+            const qsizetype left_length = left_end - left_significant;
+            const qsizetype right_length = right_end - right_significant;
+            if (left_length != right_length)
+            {
+                return left_length < right_length;
+            }
+            for (qsizetype offset = 0; offset < left_length; ++offset)
+            {
+                const QChar left_digit = left[left_significant + offset];
+                const QChar right_digit = right[right_significant + offset];
+                if (left_digit != right_digit)
+                {
+                    return left_digit < right_digit;
+                }
+            }
+            left_position = left_end;
+            right_position = right_end;
+            continue;
+        }
+
+        const QChar left_folded = left[left_position].toCaseFolded();
+        const QChar right_folded = right[right_position].toCaseFolded();
+        if (left_folded != right_folded)
+        {
+            return left_folded < right_folded;
+        }
+        ++left_position;
+        ++right_position;
+    }
+    return left_position == left.size() && right_position != right.size();
 }
 
 SafePathComparison comparePathsSafely(const std::filesystem::path &first,

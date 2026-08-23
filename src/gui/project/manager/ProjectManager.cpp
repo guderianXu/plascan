@@ -1297,6 +1297,11 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
     _maskWorkflowController->openDialogForImages(requestedImages);
 }
 
+void ProjectManager::clearMasksForImages(const QStringList &requestedImages)
+{
+    _maskWorkflowController->clearMasksForImages(requestedImages);
+}
+
 void ProjectManager::runReferenceQualityCheck()
 {
     if (!requireOpenProject(_projectData,

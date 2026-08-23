@@ -172,6 +172,21 @@ TEST(MvsDepthReprocessCliContractTest, PoseRefinementIsExplicitCandidateOnlyOptI
     });
 }
 
+TEST(MvsDepthReprocessCliContractTest, PatchMatchUpgradesHaveReproducibleDisableControls)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--disable-per-pixel-source-selection",
+        "--disable-asymmetric-propagation",
+        "--disable-geometric-guidance-pass",
+        "config.patchMatch.enablePerPixelSourceSelection =",
+        "config.patchMatch.enableAsymmetricPropagation =",
+        "config.patchMatch.enableGeometricGuidancePass =",
+    });
+}
+
 TEST(MvsDepthReprocessCliContractTest, NativeFinalDepthGridIsExplicitAndAudited)
 {
     const QString source = readSourceFile(

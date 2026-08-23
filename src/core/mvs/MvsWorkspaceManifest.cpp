@@ -2,8 +2,8 @@
 
 #include "DepthFrameQualityGate.h"
 #include "MvsTypes.h"
+#include "io/PathIO.h"
 
-#include <QCollator>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -226,6 +226,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("depth_png"), depthPng);
     object.insert(QStringLiteral("raw_depth_path"), rawDepthPath);
     object.insert(QStringLiteral("raw_confidence_path"), rawConfidencePath);
+    object.insert(QStringLiteral("raw_photometric_source_mask_path"),
+                  rawPhotometricSourceMaskPath);
     object.insert(QStringLiteral("raw_geometry_support_path"), rawGeometrySupportPath);
     object.insert(QStringLiteral("raw_adaptive_geometry_support_weight_path"),
                   rawAdaptiveGeometrySupportWeightPath);
@@ -349,6 +351,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.depthPng = object.value(QStringLiteral("depth_png")).toString();
     record.rawDepthPath = object.value(QStringLiteral("raw_depth_path")).toString();
     record.rawConfidencePath = object.value(QStringLiteral("raw_confidence_path")).toString();
+    record.rawPhotometricSourceMaskPath = object.value(
+        QStringLiteral("raw_photometric_source_mask_path")).toString();
     record.rawGeometrySupportPath = object.value(
         QStringLiteral("raw_geometry_support_path")).toString();
     record.rawAdaptiveGeometrySupportWeightPath = object.value(
@@ -521,13 +525,11 @@ QVector<MvsDepthFrameRecord> MvsWorkspaceManifest::completedFramesSortedByName()
         }
     }
 
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
     std::stable_sort(result.begin(), result.end(),
-                     [&collator](const MvsDepthFrameRecord &lhs, const MvsDepthFrameRecord &rhs)
+                     [](const MvsDepthFrameRecord &lhs, const MvsDepthFrameRecord &rhs)
                      {
-                         return collator.compare(frameSortName(lhs), frameSortName(rhs)) < 0;
+                         return xjw::common::io::naturalFileNameLessThan(
+                             frameSortName(lhs), frameSortName(rhs));
                      });
     return result;
 }
@@ -765,6 +767,12 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return false;
     }
 
+    if (record.algorithmRevision >= kMvsJointViewAndGeometricGuidanceRevision &&
+        !artifact_exists(record.rawPhotometricSourceMaskPath))
+    {
+        return false;
+    }
+
     if (record.algorithmRevision >= kMvsGeometryFusionSupportRevision &&
         (!artifact_exists(record.rawGeometrySupportPath) ||
          !artifact_exists(record.rawInverseDepthSpreadPath)))
@@ -863,6 +871,22 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                  config.patchMatch.photometricUniquenessMinimumMargin);
     patch.insert(QStringLiteral("photometric_uniqueness_minimum_confidence_scale"),
                  config.patchMatch.photometricUniquenessMinimumConfidenceScale);
+    patch.insert(QStringLiteral("per_pixel_source_selection"),
+                 config.patchMatch.enablePerPixelSourceSelection);
+    patch.insert(QStringLiteral("source_selection_neighbor_bonus"),
+                 config.patchMatch.sourceSelectionNeighborBonus);
+    patch.insert(QStringLiteral("asymmetric_propagation"),
+                 config.patchMatch.enableAsymmetricPropagation);
+    patch.insert(QStringLiteral("geometric_guidance_pass"),
+                 config.patchMatch.enableGeometricGuidancePass);
+    patch.insert(QStringLiteral("geometric_guidance_iterations"),
+                 config.patchMatch.geometricGuidanceIterations);
+    patch.insert(QStringLiteral("geometric_guidance_weight"),
+                 config.patchMatch.geometricGuidanceWeight);
+    patch.insert(QStringLiteral("geometric_guidance_max_error_pixels"),
+                 config.patchMatch.geometricGuidanceMaxErrorPixels);
+    patch.insert(QStringLiteral("geometric_guidance_relative_depth_radius"),
+                 config.patchMatch.geometricGuidanceRelativeDepthRadius);
     patch.insert(QStringLiteral("backend"), static_cast<int>(config.patchMatch.backend));
     patch.insert(QStringLiteral("downsample_factor"), config.patchMatch.downsampleFactor);
     patch.insert(QStringLiteral("median_blur"), config.patchMatch.doMedianBlur);

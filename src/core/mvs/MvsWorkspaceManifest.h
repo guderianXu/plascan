@@ -28,7 +28,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 44;
+inline constexpr int kMvsDepthAlgorithmRevision = 45;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -75,6 +75,11 @@ inline constexpr int kMvsNativeGridQualityRevision = 43;
 /// geometry evidence before relative-retention loss can be explained, and
 /// keeps one inward measured boundary shell on reduced native grids.
 inline constexpr int kMvsCausalAdmissionEvidenceRevision = 44;
+/// Revision 45 adds a per-pixel photometric source bitset, asymmetric
+/// near/far checkerboard propagation with a local surface-normal candidate,
+/// and a frozen-source-depth geometric guidance pass. The guidance objective
+/// remains separate from independent geometric confidence.
+inline constexpr int kMvsJointViewAndGeometricGuidanceRevision = 45;
 
 struct MvsDepthFrameRecord
 {
@@ -133,6 +138,7 @@ struct MvsDepthFrameRecord
     QString depthPng;
     QString rawDepthPath;
     QString rawConfidencePath;
+    QString rawPhotometricSourceMaskPath;
     QString rawGeometrySupportPath;
     QString rawAdaptiveGeometrySupportWeightPath;
     QString rawAdaptiveGeometryEffectiveViewCountPath;

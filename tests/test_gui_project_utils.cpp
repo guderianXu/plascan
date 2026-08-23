@@ -62,6 +62,7 @@
 #include "ProjectDashboardWidget.h"
 #include "WorkPanelWidget.h"
 #include "ProjectManager.h"
+#include "ProjectMaskWorkflowController.h"
 #include "ProjectPointCloudWorkflowController.h"
 #include "ProjectTaskStatusController.h"
 #include "SelectionPropertiesWidget.h"
@@ -75,6 +76,7 @@
 #include "ObjRenderPreparation.h"
 #include "ObjStreamingLoader.h"
 #include "LayerImageLoader.h"
+#include "LayerFeatureLoader.h"
 
 #include "FramePinholeCamera.h"
 #include "DemDomIO.h"
@@ -85,6 +87,7 @@
 #include <plapoint/io/ply_io.h>
 
 #include <QApplication>
+#include <QAbstractButton>
 #include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -114,6 +117,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
@@ -128,6 +132,7 @@
 #include <QStyleOptionButton>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeView>
@@ -8276,6 +8281,143 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
 }
 
+TEST(GenerateMaskWorkflowTest, ClearsManagedMaskAndAllMaskMetadata)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString projectPath = tempDir.filePath(QStringLiteral("clear_mask.plascan"));
+    const QString sourceImagePath = tempDir.filePath(QStringLiteral("image.png"));
+    QImage sourceImage(16, 12, QImage::Format_RGB32);
+    sourceImage.fill(Qt::white);
+    ASSERT_TRUE(sourceImage.save(sourceImagePath));
+
+    ProjectData projectData;
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("clear_mask")));
+    ASSERT_TRUE(projectData.addImages(QStringList{sourceImagePath}));
+    const QStringList projectImages = projectData.getAllImages();
+    ASSERT_EQ(projectImages.size(), 1);
+
+    const QString maskPath = xjw::common::project::ProjectIO::maskOutputPathForImage(
+        projectPath, projectImages.constFirst());
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(maskPath).absolutePath()));
+    QImage mask(16, 12, QImage::Format_Grayscale8);
+    mask.fill(255);
+    ASSERT_TRUE(mask.save(maskPath));
+    const QString enginePath = QDir(QFileInfo(maskPath).absolutePath())
+                                   .filePath(QStringLiteral("shared.engine"));
+    QFile engineFile(enginePath);
+    ASSERT_TRUE(engineFile.open(QIODevice::WriteOnly));
+    ASSERT_GT(engineFile.write("engine"), 0);
+    engineFile.close();
+
+    QJsonObject meta = projectData.coreFilesMeta();
+    QJsonArray images = meta.value(QStringLiteral("images")).toArray();
+    ASSERT_EQ(images.size(), 1);
+    QJsonObject image = images.at(0).toObject();
+    image[QStringLiteral("mask_path")] = maskPath;
+    image[QStringLiteral("mask_method")] = QStringLiteral("u2net");
+    image[QStringLiteral("mask_engine_cache_path")] = enginePath;
+    image[QStringLiteral("mask_updated_at")] = QStringLiteral("2026-08-23T00:00:00Z");
+    images.replace(0, image);
+    meta[QStringLiteral("images")] = images;
+    projectData.updateMetadata(meta, false);
+
+    ProjectMaskWorkflowController controller(&projectData, nullptr);
+    QSignalSpy masksChangedSpy(&controller, &ProjectMaskWorkflowController::masksGenerated);
+    QSignalSpy metadataSpy(&controller, &ProjectMaskWorkflowController::projectMetadataUpdated);
+    QTimer dialogCloser;
+    QObject::connect(&dialogCloser, &QTimer::timeout, []()
+    {
+        auto *messageBox = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!messageBox)
+        {
+            return;
+        }
+        QAbstractButton *button = messageBox->button(QMessageBox::Yes);
+        if (!button)
+        {
+            button = messageBox->button(QMessageBox::Ok);
+        }
+        ASSERT_NE(button, nullptr);
+        button->click();
+    });
+    dialogCloser.start(10);
+    controller.clearMasksForImages(projectImages);
+    dialogCloser.stop();
+
+    EXPECT_FALSE(QFileInfo::exists(maskPath));
+    EXPECT_TRUE(QFileInfo::exists(enginePath));
+    const QJsonObject updatedImage =
+        projectData.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
+    EXPECT_FALSE(updatedImage.contains(QStringLiteral("mask_path")));
+    EXPECT_FALSE(updatedImage.contains(QStringLiteral("mask_method")));
+    EXPECT_FALSE(updatedImage.contains(QStringLiteral("mask_engine_cache_path")));
+    EXPECT_FALSE(updatedImage.contains(QStringLiteral("mask_updated_at")));
+    ASSERT_EQ(masksChangedSpy.count(), 1);
+    EXPECT_EQ(masksChangedSpy.takeFirst().at(0).toStringList(), projectImages);
+    EXPECT_EQ(metadataSpy.count(), 1);
+}
+
+TEST(GenerateMaskWorkflowTest, RetainsMetadataWhenManagedMaskCannotBeDeleted)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString projectPath = tempDir.filePath(QStringLiteral("blocked_mask.plascan"));
+    const QString sourceImagePath = tempDir.filePath(QStringLiteral("image.png"));
+    QImage sourceImage(16, 12, QImage::Format_RGB32);
+    sourceImage.fill(Qt::white);
+    ASSERT_TRUE(sourceImage.save(sourceImagePath));
+
+    ProjectData projectData;
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("blocked_mask")));
+    ASSERT_TRUE(projectData.addImages(QStringList{sourceImagePath}));
+    const QStringList projectImages = projectData.getAllImages();
+    ASSERT_EQ(projectImages.size(), 1);
+
+    const QString maskPath = xjw::common::project::ProjectIO::maskOutputPathForImage(
+        projectPath, projectImages.constFirst());
+    ASSERT_TRUE(QDir().mkpath(maskPath));
+    QJsonObject meta = projectData.coreFilesMeta();
+    QJsonArray images = meta.value(QStringLiteral("images")).toArray();
+    QJsonObject image = images.at(0).toObject();
+    image[QStringLiteral("mask_path")] = maskPath;
+    image[QStringLiteral("mask_method")] = QStringLiteral("threshold");
+    images.replace(0, image);
+    meta[QStringLiteral("images")] = images;
+    projectData.updateMetadata(meta, false);
+
+    ProjectMaskWorkflowController controller(&projectData, nullptr);
+    QSignalSpy masksChangedSpy(&controller, &ProjectMaskWorkflowController::masksGenerated);
+    QSignalSpy metadataSpy(&controller, &ProjectMaskWorkflowController::projectMetadataUpdated);
+    QTimer dialogCloser;
+    QObject::connect(&dialogCloser, &QTimer::timeout, []()
+    {
+        auto *messageBox = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!messageBox)
+        {
+            return;
+        }
+        QAbstractButton *button = messageBox->button(QMessageBox::Yes);
+        if (!button)
+        {
+            button = messageBox->button(QMessageBox::Ok);
+        }
+        ASSERT_NE(button, nullptr);
+        button->click();
+    });
+    dialogCloser.start(10);
+    controller.clearMasksForImages(projectImages);
+    dialogCloser.stop();
+
+    EXPECT_TRUE(QFileInfo(maskPath).isDir());
+    const QJsonObject updatedImage =
+        projectData.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
+    EXPECT_EQ(updatedImage.value(QStringLiteral("mask_path")).toString(), maskPath);
+    EXPECT_EQ(updatedImage.value(QStringLiteral("mask_method")).toString(), QStringLiteral("threshold"));
+    EXPECT_EQ(masksChangedSpy.count(), 0);
+    EXPECT_EQ(metadataSpy.count(), 0);
+}
+
 TEST(GenerateMaskWorkflowTest, AiMaskGenerationUsesSharedInferenceAdapter)
 {
     const QString source = readProjectSourceFile(
@@ -11921,6 +12063,41 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadi
     EXPECT_FALSE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO")));
 }
 
+TEST(CanvasWidgetResponsivenessTest, MissingMatchObservationShardIsAQuietEmptyState)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString missing_path = QDir(temporary_directory.path())
+                                     .filePath(QStringLiteral("not-generated.pimatch"));
+
+    testing::internal::CaptureStderr();
+    const auto keypoints = xjw::gui::views::loadMatchedKeypointsFromFile(missing_path);
+    const std::string diagnostics = testing::internal::GetCapturedStderr();
+
+    EXPECT_TRUE(keypoints.empty());
+    EXPECT_TRUE(diagnostics.empty()) << diagnostics;
+}
+
+TEST(CanvasWidgetResponsivenessTest, ExistingInvalidMatchObservationShardStillWarns)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString invalid_path = QDir(temporary_directory.path())
+                                     .filePath(QStringLiteral("invalid.pimatch"));
+    QFile invalid_file(invalid_path);
+    ASSERT_TRUE(invalid_file.open(QIODevice::WriteOnly));
+    ASSERT_EQ(invalid_file.write("not-a-pimatch"), 13);
+    invalid_file.close();
+
+    testing::internal::CaptureStderr();
+    const auto keypoints = xjw::gui::views::loadMatchedKeypointsFromFile(invalid_path);
+    const std::string diagnostics = testing::internal::GetCapturedStderr();
+
+    EXPECT_TRUE(keypoints.empty());
+    EXPECT_NE(diagnostics.find("读取影像匹配分片失败"), std::string::npos)
+        << diagnostics;
+}
+
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDoesNotRetainStitchedPairDebugOutput)
 {
     const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
@@ -14976,7 +15153,8 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
     PhotoStripWidget strip;
     strip.resize(600, 240);
     strip.loadFromJson(QJsonObject{{QStringLiteral("images"), QJsonArray{
-        QJsonObject{{QStringLiteral("path"), firstPath}},
+        QJsonObject{{QStringLiteral("path"), firstPath},
+                    {QStringLiteral("mask_path"), QStringLiteral("stale-mask.png")}},
         QJsonObject{{QStringLiteral("path"), secondPath}},
         QJsonObject{{QStringLiteral("path"), firstPath}}
     }}});
@@ -14989,6 +15167,7 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
     list->item(1)->setSelected(true);
     list->item(2)->setSelected(true);
     QSignalSpy requestSpy(&strip, &PhotoStripWidget::generateMaskRequested);
+    QSignalSpy clearSpy(&strip, &PhotoStripWidget::clearMasksRequested);
 
     const QPoint itemPosition = list->visualItemRect(list->item(0)).center();
     QTest::mouseClick(list->viewport(), Qt::RightButton, Qt::NoModifier, itemPosition);
@@ -14999,12 +15178,27 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
     QCoreApplication::processEvents();
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     ASSERT_NE(menu, nullptr);
-    ASSERT_EQ(menu->actions().size(), 1);
+    ASSERT_EQ(menu->actions().size(), 3);
     EXPECT_EQ(menu->actions().first()->text(), QStringLiteral("生成蒙版..."));
+    EXPECT_TRUE(menu->actions().at(1)->isSeparator());
+    EXPECT_EQ(menu->actions().at(2)->text(), QStringLiteral("清除蒙版"));
+    EXPECT_TRUE(menu->actions().at(2)->isEnabled());
     menu->actions().first()->trigger();
 
     ASSERT_EQ(requestSpy.count(), 1);
     EXPECT_EQ(requestSpy.takeFirst().at(0).toStringList(), QStringList({firstPath, secondPath}));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&strip,
+                                          "showPhotoContextMenu",
+                                          Qt::DirectConnection,
+                                          Q_ARG(QPoint, itemPosition)));
+    QCoreApplication::processEvents();
+    menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+    ASSERT_NE(menu, nullptr);
+    ASSERT_EQ(menu->actions().size(), 3);
+    menu->actions().at(2)->trigger();
+    ASSERT_EQ(clearSpy.count(), 1);
+    EXPECT_EQ(clearSpy.takeFirst().at(0).toStringList(), QStringList({firstPath, secondPath}));
     QTest::qWait(100);
 }
 
@@ -15047,7 +15241,8 @@ TEST(PhotoStripWidgetTest, ContextMenuSelectsAnUnselectedClickedPhoto)
     QCoreApplication::processEvents();
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     ASSERT_NE(menu, nullptr);
-    ASSERT_EQ(menu->actions().size(), 1);
+    ASSERT_EQ(menu->actions().size(), 3);
+    EXPECT_FALSE(menu->actions().at(2)->isEnabled());
     menu->actions().first()->trigger();
 
     EXPECT_FALSE(list->item(0)->isSelected());

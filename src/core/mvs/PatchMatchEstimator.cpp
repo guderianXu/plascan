@@ -56,7 +56,9 @@ bool PatchMatchDepthEstimator::estimate(
     const cv::Mat                *hintDepth,
     const cv::Mat                *hintRadius,
     const cv::Mat                *refValidMask,
-    const std::vector<cv::Mat>   *srcValidMasks)
+    const std::vector<cv::Mat>   *srcValidMasks,
+    const PatchMatchAuxiliaryInput *auxiliaryInput,
+    PatchMatchAuxiliaryOutput *auxiliaryOutput)
 {
     if (config.numIterations <= 0)
     {
@@ -77,6 +79,23 @@ bool PatchMatchDepthEstimator::estimate(
     {
         if (errorMsg) *errorMsg = "source valid mask count does not match source frame count";
         return false;
+    }
+    if (auxiliaryInput && auxiliaryInput->sourceDepthMaps &&
+        auxiliaryInput->sourceDepthMaps->size() != srcGrays.size())
+    {
+        if (errorMsg) *errorMsg = "source depth map count does not match source frame count";
+        return false;
+    }
+    if (auxiliaryInput && auxiliaryInput->sourceDepthMaps)
+    {
+        for (const cv::Mat &source_depth : *auxiliaryInput->sourceDepthMaps)
+        {
+            if (!source_depth.empty() && source_depth.channels() != 1)
+            {
+                if (errorMsg) *errorMsg = "source depth maps must be single-channel";
+                return false;
+            }
+        }
     }
     if (srcValidMasks)
     {
@@ -106,6 +125,18 @@ bool PatchMatchDepthEstimator::estimate(
     }
     const PatchMatchBackend backend = resolvePatchMatchEstimatorBackend(
         config.backend, cuda_available, opencl_available);
+    const bool has_geometric_guidance_input = auxiliaryInput &&
+        auxiliaryInput->sourceDepthMaps &&
+        !auxiliaryInput->sourceDepthMaps->empty();
+    if (backend == PatchMatchBackend::OpenCl && has_geometric_guidance_input)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "OpenCL PatchMatch does not support frozen source-depth guidance; "
+                        "select CUDA or CPU explicitly";
+        }
+        return false;
+    }
 
     bool accelerator_ok = false;
     bool fallback_to_cpu = false;
@@ -118,7 +149,8 @@ bool PatchMatchDepthEstimator::estimate(
         {
             accelerator_ok = estimateGPU(refGray, srcGrays, refCam, srcCams,
                                          zNear, zFar, config, depthOut, confOut, errorMsg,
-                                         hintDepth, hintRadius, refValidMask, srcValidMasks);
+                                         hintDepth, hintRadius, refValidMask, srcValidMasks,
+                                         auxiliaryInput, auxiliaryOutput);
         }
         else if (errorMsg)
         {
@@ -133,7 +165,8 @@ bool PatchMatchDepthEstimator::estimate(
         {
             accelerator_ok = estimateOpenCL(refGray, srcGrays, refCam, srcCams,
                                             zNear, zFar, config, depthOut, confOut, errorMsg,
-                                            hintDepth, hintRadius, refValidMask, srcValidMasks);
+                                            hintDepth, hintRadius, refValidMask, srcValidMasks,
+                                            auxiliaryInput, auxiliaryOutput);
         }
         else if (errorMsg)
         {
@@ -159,7 +192,8 @@ bool PatchMatchDepthEstimator::estimate(
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
                        zNear, zFar, config, depthOut, confOut, errorMsg,
-                       hintDepth, hintRadius, refValidMask, srcValidMasks);
+                       hintDepth, hintRadius, refValidMask, srcValidMasks,
+                       auxiliaryInput, auxiliaryOutput);
 }
 
 } // namespace mvs

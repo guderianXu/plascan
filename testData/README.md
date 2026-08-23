@@ -10,9 +10,42 @@ Use `download_photogrammetry_testdata.py` to download curated public benchmark d
 ```bash
 python testData/download_photogrammetry_testdata.py --list
 python testData/download_photogrammetry_testdata.py --dataset middlebury_dino_sparse_ring --extract
+python testData/download_photogrammetry_testdata.py --dataset asp_dawn_fc_vesta_frame --extract
+python testData/download_photogrammetry_testdata.py --dataset asp_lronac_csm_example --extract
+python testData/download_photogrammetry_testdata.py --dataset eth3d_courtyard_highres --include-large
+python testData/download_photogrammetry_testdata.py --dataset eth3d_facade_highres --include-large
+python testData/download_photogrammetry_testdata.py --dataset eth3d_office_highres --include-large
 ```
 
 Large datasets are skipped unless `--include-large` is passed.
+
+For PlaScan's current planetary frame-camera path, prefer `asp_dawn_fc_vesta_frame`. It is a fixed NASA Ames Stereo
+Pipeline solved example over Vesta from the digital Dawn FC2 orbital framing camera. The package contains two
+1024×1024 ISIS cubes, matching USGS CSM Frame camera JSON files, an ASP recipe, and sample DEM/DRG outputs. All pixels
+in each CSM Frame image share one acquisition time, camera center, and orientation, so this is not line-scan or
+push-frame data. The packaged recipe does not require ISIS supporting data or an ISIS installation. Files are stored
+under `testData/photogrammetry_benchmarks/asp_dawn_fc_vesta_frame/`.
+
+The older `asp_lronac_csm_example` contains two cropped LRO NAC ISIS cubes, CSM camera JSON files, and sample DEM/DRG
+outputs. LRO NAC is a pushbroom/line-scan sensor, so keep it as a dataset and interoperability fixture until PlaScan
+implements a time-varying line-scan camera model; it is not a pinhole/frame-camera reconstruction regression.
+
+For the current outdoor frame-camera regression, use `eth3d_courtyard_highres`. It downloads the official 38-view
+Courtyard training scene into `testData/photogrammetry_benchmarks/eth3d_courtyard_highres/archives/`, including raw
+and undistorted DSLR images, camera parameters, scan-evaluation data, and per-view depth ground truth (1,536,923,897
+compressed bytes total). The downloader validates exact sizes and pinned SHA-256 hashes. The `.7z` archives require
+7-Zip/p7zip for extraction.
+
+For a larger outdoor architectural regression, use `eth3d_facade_highres`. It contains 76 building-facade views,
+raw and undistorted DSLR inputs, camera parameters, scan-evaluation data, and depth ground truth. Its four archives
+total 3,394,284,959 compressed bytes and are downloaded into
+`testData/photogrammetry_benchmarks/eth3d_facade_highres/archives/`.
+
+The `eth3d_office_highres` entry downloads the official 26-view Office training scene into
+`testData/photogrammetry_benchmarks/eth3d_office_highres/archives/`. It includes undistorted DSLR images and camera
+parameters, scan-evaluation ground truth, and per-view depth ground truth (883,139,523 compressed bytes total). The
+downloader validates exact sizes and pinned SHA-256 hashes. Python's standard library does not extract `.7z` files;
+use 7-Zip/p7zip after the download when extracted files are needed.
 
 ## Prepare the 100-camera Agisoft aerial model benchmark
 

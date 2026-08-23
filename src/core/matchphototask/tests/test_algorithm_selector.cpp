@@ -19,7 +19,19 @@ TEST(MatchPhotosAlgorithmSelectorTest, DefaultUsesRegisteredAutoSift)
     EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.rotationRobust);
     EXPECT_TRUE(plan.preferCuda);
+    EXPECT_TRUE(plan.lowTextureRecovery);
     EXPECT_TRUE(plan.reason.contains(QStringLiteral(".pimatch")));
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, FastAutoSiftDisablesLowTextureRecovery)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.profile = xjw::matchphotos::MatchPhotosProfile::Fast;
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    ASSERT_TRUE(plan.valid);
+    EXPECT_FALSE(plan.lowTextureRecovery);
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, RejectsUnknownAlgorithm)

@@ -42,6 +42,7 @@
 namespace
 {
 constexpr int PathRole = Qt::UserRole + 1;
+constexpr int MaskAvailableRole = Qt::UserRole + 2;
 constexpr int ThumbWidth = 132;
 constexpr int ThumbHeight = 88;
 constexpr int GridWidth = 220;
@@ -394,6 +395,20 @@ QStringList PhotoStripWidget::selectedPhotoPaths() const
     return paths;
 }
 
+bool PhotoStripWidget::selectedPhotosHaveMasks() const
+{
+    if (!_list)
+    {
+        return false;
+    }
+
+    const QList<QListWidgetItem *> selectedItems = _list->selectedItems();
+    return std::any_of(selectedItems.cbegin(), selectedItems.cend(), [](const QListWidgetItem *item)
+    {
+        return item && item->data(MaskAvailableRole).toBool();
+    });
+}
+
 void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
 {
     if (!_list)
@@ -427,6 +442,17 @@ void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
         menu->close();
         emit generateMaskRequested(imagePaths);
     });
+    menu->addSeparator();
+    QAction *clearAction = menu->addAction(tr("清除蒙版"));
+    clearAction->setEnabled(selectedPhotosHaveMasks());
+    clearAction->setStatusTip(clearAction->isEnabled()
+                                  ? tr("清除所选照片的蒙版")
+                                  : tr("所选照片没有可清除的蒙版"));
+    connect(clearAction, &QAction::triggered, this, [this, menu, imagePaths]()
+    {
+        menu->close();
+        emit clearMasksRequested(imagePaths);
+    });
     menu->popup(_list->viewport()->mapToGlobal(position));
 }
 
@@ -454,6 +480,10 @@ QListWidgetItem *PhotoStripWidget::createItem(const QJsonObject &entry)
     const QString key = thumbnailCacheKey(imagePath);
     auto *item = new QListWidgetItem(displayNameForEntry(entry, imagePath));
     item->setData(PathRole, imagePath);
+    const bool hasMask = !entry.value(QStringLiteral("mask_path")).toString().trimmed().isEmpty()
+                         || !xjw::common::project::ProjectIO::findMaskForImage(
+                                 _projectFilePath, imagePath).isEmpty();
+    item->setData(MaskAvailableRole, hasMask);
     item->setTextAlignment(Qt::AlignHCenter);
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
 

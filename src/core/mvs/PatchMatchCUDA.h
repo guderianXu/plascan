@@ -71,6 +71,22 @@ struct OpenClExecutionStats
     double kernelDutyRatio = 0.0;
 };
 
+/// Optional frozen evidence consumed by one PatchMatch invocation. Source
+/// depths use the same ordinal order as srcGrays/srcCams and contain source
+/// camera Z depth. They are read-only and never updated by the invocation.
+struct PatchMatchAuxiliaryInput
+{
+    const std::vector<cv::Mat> *sourceDepthMaps = nullptr;
+};
+
+/// Optional diagnostics produced independently from depth/confidence. The
+/// source-view mask is CV_32SC1 and its bits follow the srcGrays ordinal order;
+/// it is photometric evidence and must not be interpreted as geometry support.
+struct PatchMatchAuxiliaryOutput
+{
+    cv::Mat *photometricSourceMask = nullptr;
+};
+
 class PatchMatchDepthEstimator
 {
 public:
@@ -128,7 +144,9 @@ public:
         const cv::Mat                          *hintDepth  = nullptr,
         const cv::Mat                          *hintRadius = nullptr,
         const cv::Mat                          *refValidMask = nullptr,
-        const std::vector<cv::Mat>             *srcValidMasks = nullptr);
+        const std::vector<cv::Mat>             *srcValidMasks = nullptr,
+        const PatchMatchAuxiliaryInput         *auxiliaryInput = nullptr,
+        PatchMatchAuxiliaryOutput              *auxiliaryOutput = nullptr);
 
 private:
     static bool estimateGPU(
@@ -143,7 +161,9 @@ private:
         const cv::Mat *hintDepth,
         const cv::Mat *hintRadius,
         const cv::Mat *refValidMask,
-        const std::vector<cv::Mat> *srcValidMasks);
+        const std::vector<cv::Mat> *srcValidMasks,
+        const PatchMatchAuxiliaryInput *auxiliaryInput,
+        PatchMatchAuxiliaryOutput *auxiliaryOutput);
 
     static bool estimateCPU(
         const cv::Mat                          &refGray,
@@ -157,7 +177,9 @@ private:
         const cv::Mat *hintDepth,
         const cv::Mat *hintRadius,
         const cv::Mat *refValidMask,
-        const std::vector<cv::Mat> *srcValidMasks);
+        const std::vector<cv::Mat> *srcValidMasks,
+        const PatchMatchAuxiliaryInput *auxiliaryInput,
+        PatchMatchAuxiliaryOutput *auxiliaryOutput);
 
     static bool estimateOpenCL(
         const cv::Mat                          &refGray,
@@ -171,7 +193,9 @@ private:
         const cv::Mat *hintDepth,
         const cv::Mat *hintRadius,
         const cv::Mat *refValidMask,
-        const std::vector<cv::Mat> *srcValidMasks);
+        const std::vector<cv::Mat> *srcValidMasks,
+        const PatchMatchAuxiliaryInput *auxiliaryInput,
+        PatchMatchAuxiliaryOutput *auxiliaryOutput);
 };
 
 } // namespace mvs

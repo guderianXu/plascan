@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringView>
 
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,15 @@ std::string toNativeNarrowPath(const std::string &path);
 std::string toNativeNarrowPath(const std::filesystem::path &path);
 QString fromUtf8Path(const std::string &path);
 QString fromFilesystemPath(const std::filesystem::path &path);
+
+/**
+ * @brief 按不区分大小写的自然顺序比较两个文件名。
+ *
+ * ASCII 数字串按数值大小比较且不转换为固定宽度整数，因此长数字不会溢出；
+ * 其他字符按 Unicode 简单大小写折叠后的码位比较。结果不依赖进程 locale，
+ * 可用于 `std::stable_sort`，避免 POSIX `QCollator` 不支持数字和忽略大小写模式。
+ */
+bool naturalFileNameLessThan(QStringView left, QStringView right);
 
 /**
  * @brief 以适合覆盖/删除前校验的方式比较两个路径。

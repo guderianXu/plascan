@@ -1718,6 +1718,7 @@ private:
         appendSharedMatAllocationSpan(result.confidence, spans);
         appendSharedMatAllocationSpan(result.normalMap, spans);
         appendSharedMatAllocationSpan(result.supportCount, spans);
+        appendSharedMatAllocationSpan(result.photometricSourceMask, spans);
         appendSharedMatAllocationSpan(result.geometrySupportCount, spans);
         appendSharedMatAllocationSpan(result.geometrySourceMask, spans);
         appendSharedMatAllocationSpan(result.inverseDepthMean, spans);
@@ -6042,7 +6043,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     int refIdx,
     const DepthGenConfig *configOverride,
     const std::function<bool(const DepthLevelSummary &, std::string *)>
-        &firstLevelCompletionGate)
+        &firstLevelCompletionGate,
+    const std::vector<cv::Mat> *frozenDepthMaps)
 {
     DepthFrameResult result;
     result.refViewIdx = refIdx;
@@ -6459,6 +6461,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     cv::Mat confMap;
     cv::Mat normalMap;
     cv::Mat supportCount;
+    cv::Mat photometricSourceMask;
     DepthPyramidConfig pyramid_config = makeDepthPyramidConfig(pmCfg,
                                                                workRefImg.cols,
                                                                workRefImg.rows);
@@ -6563,10 +6566,41 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     pyramid_request.guideImage = workRefImg;
     pyramid_request.referenceCamera = workRefCam;
     pyramid_request.sourceCameras = workSrcCams;
+    pyramid_request.sparseDepthHints = pyramid_sparse_hints;
+    if (frozenDepthMaps && !useRectified)
+    {
+        pyramid_request.sparseDepthHintRelativeRadius =
+            config.patchMatch.geometricGuidanceRelativeDepthRadius;
+        pyramid_request.sourceDepthMaps.reserve(sourceIndices.size());
+        for (const int source_index : sourceIndices)
+        {
+            pyramid_request.sourceDepthMaps.push_back(
+                source_index >= 0 &&
+                    source_index < static_cast<int>(frozenDepthMaps->size())
+                    ? (*frozenDepthMaps)[static_cast<std::size_t>(source_index)]
+                    : cv::Mat());
+        }
+        if (refIdx >= 0 && refIdx < static_cast<int>(frozenDepthMaps->size()) &&
+            !(*frozenDepthMaps)[static_cast<std::size_t>(refIdx)].empty())
+        {
+            for (int level_index = 0;
+                 level_index < pyramid_config.activeLevelCount;
+                 ++level_index)
+            {
+                const cv::Size hint_size = patchMatchWorkSize(
+                    workRefImg, pyramid_config.levels[level_index].patchMatch);
+                cv::resize((*frozenDepthMaps)[static_cast<std::size_t>(refIdx)],
+                           pyramid_request.sparseDepthHints[level_index],
+                           hint_size,
+                           0.0,
+                           0.0,
+                           cv::INTER_NEAREST);
+            }
+        }
+    }
     pyramid_request.zNear = zNear;
     pyramid_request.zFar = zFar;
     pyramid_request.pyramidConfig = pyramid_config;
-    pyramid_request.sparseDepthHints = pyramid_sparse_hints;
     pyramid_request.cancelFlag = pmCfg.cancelFlag;
     if (pyramid_config.activeLevelCount > 1)
     {
@@ -6588,6 +6622,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     confMap = std::move(pyramid_result.finalLevel.confidence);
     normalMap = std::move(pyramid_result.finalLevel.normalMap);
     supportCount = std::move(pyramid_result.finalLevel.supportCount);
+    photometricSourceMask =
+        std::move(pyramid_result.finalLevel.photometricSourceMask);
     result.selectedLevel = pyramid_result.finalLevel.level;
     result.effectiveNativeFinalDepthGrid =
         pyramid_config.returnNativeFinalResolution;
@@ -6659,6 +6695,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         {
             supportCount = mvs::EpipolarRectifier::unrectifyNearest(
                 supportCount, rectPair, W, H);
+        }
+        if (!photometricSourceMask.empty())
+        {
+            photometricSourceMask = mvs::EpipolarRectifier::unrectifyNearest(
+                photometricSourceMask, rectPair, W, H);
         }
         // Rectified normals are expressed in the rectified camera frame. Re-estimate them from
         // fused depth later instead of attaching vectors in the wrong coordinate frame.
@@ -7018,6 +7059,19 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         }
         supportCount.setTo(cv::Scalar(0), ~finalValidMask);
     }
+    if (!photometricSourceMask.empty())
+    {
+        if (photometricSourceMask.size() != depthMap.size())
+        {
+            cv::resize(photometricSourceMask,
+                       photometricSourceMask,
+                       depthMap.size(),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
+        }
+        photometricSourceMask.setTo(cv::Scalar(0), ~finalValidMask);
+    }
     if (!normalMap.empty())
     {
         if (normalMap.size() != depthMap.size())
@@ -7111,6 +7165,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     result.supportCount = supportCount.empty()
         ? QSharedPointer<cv::Mat>()
         : QSharedPointer<cv::Mat>::create(supportCount);
+    result.photometricSourceMask = photometricSourceMask.empty()
+        ? QSharedPointer<cv::Mat>()
+        : QSharedPointer<cv::Mat>::create(photometricSourceMask);
     result.validMask = QSharedPointer<cv::Mat>::create(finalValidMask);
     result.supportRegionMask = QSharedPointer<cv::Mat>::create(effectiveReferenceMask);
     result.targetedGapRecoveredMask = targeted_gap_recovered_mask.empty()
@@ -10462,6 +10519,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         raw_directory + "/depth_" + std::to_string(frameIndex) + ".bin";
     const std::string rawConfidencePath =
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_conf.bin";
+    const std::string rawPhotometricSourceMaskPath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_photometric_source_mask.bin";
     const std::string rawGeometrySupportPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_geometry_support.bin";
     const std::string rawGeometrySourceMaskPath =
@@ -10715,6 +10775,21 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         }
         return true;
     };
+    const bool photometricSourceMaskSaved = save_geometry_evidence(
+        result.photometricSourceMask,
+        CV_32SC1,
+        rawPhotometricSourceMaskPath,
+        QStringLiteral("PatchMatch 光度来源掩码"),
+        true);
+    if (saveRawDepth && !photometricSourceMaskSaved)
+    {
+        const QString message = QStringLiteral(
+            "帧 %1 的 PatchMatch 光度来源掩码写盘失败；拒绝发布不完整的 revision-45 工件")
+                                    .arg(frameIndex);
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+        emit errorOccurred(message);
+        return false;
+    }
     bool geometrySourceMaskSaved = false;
     if (geometry_source_contract.persistMask)
     {
@@ -11348,6 +11423,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("raw_depth_path")] = saveRawDepth ? QString::fromStdString(rawDepthPath) : QString();
         artifact[QStringLiteral("raw_confidence_path")] =
             confidenceSaved ? QString::fromStdString(rawConfidencePath) : QString();
+        artifact[QStringLiteral("raw_photometric_source_mask_path")] =
+            photometricSourceMaskSaved
+                ? QString::fromStdString(rawPhotometricSourceMaskPath)
+                : QString();
         artifact[QStringLiteral("raw_geometry_support_path")] =
             geometrySupportSaved ? QString::fromStdString(rawGeometrySupportPath) : QString();
         artifact[QStringLiteral("raw_geometry_source_mask_path")] =
@@ -11582,6 +11661,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.depthPng = QString::fromStdString(pngPath);
         record.rawDepthPath = saveRawDepth ? QString::fromStdString(rawDepthPath) : QString();
         record.rawConfidencePath = confidenceSaved ? QString::fromStdString(rawConfidencePath) : QString();
+        record.rawPhotometricSourceMaskPath = photometricSourceMaskSaved
+            ? QString::fromStdString(rawPhotometricSourceMaskPath)
+            : QString();
         record.rawGeometrySupportPath = geometrySupportSaved
             ? QString::fromStdString(rawGeometrySupportPath)
             : QString();
@@ -13230,6 +13312,105 @@ void DepthMapGenerator::runInBackgroundImpl()
     if (saveQueue.failed())
     {
         anyFailure = true;
+    }
+
+    // ── 阶段 1.25：冻结来源深度引导的第二轮 PatchMatch ────────────────
+    // 所有首轮结果已经完成且保存队列为空。第二轮只读取这一份浅拷贝快照，
+    // 所有 refined frame 完成前不覆盖 _depthFrames，避免帧间原地污染。
+    const bool geometric_guidance_memory_available =
+        keepDepthFramesInMemory.load() &&
+        !memoryPressureRequiresStreaming(
+            _config, querySystemMemorySnapshot(), initialMemoryDecision);
+    if (_config.patchMatch.enableGeometricGuidancePass &&
+        geometric_guidance_memory_available && NV >= 2)
+    {
+        emit progressChanged(
+            QStringLiteral("冻结来源深度，执行几何引导 PatchMatch..."),
+            static_cast<float>(NV) / static_cast<float>(NV + 4));
+        std::vector<cv::Mat> frozen_depth_maps(static_cast<std::size_t>(NV));
+        for (int frame_index = 0; frame_index < NV; ++frame_index)
+        {
+            const DepthFrameResult &frame = _depthFrames[static_cast<std::size_t>(frame_index)];
+            if (frame.success && frame.depthMap && !frame.depthMap->empty())
+            {
+                frozen_depth_maps[static_cast<std::size_t>(frame_index)] = *frame.depthMap;
+            }
+        }
+
+        std::vector<DepthFrameResult> guided_results(static_cast<std::size_t>(NV));
+        std::vector<std::uint8_t> guided_success(static_cast<std::size_t>(NV), 0);
+        int guided_frame_count = 0;
+        for (int frame_index = 0; frame_index < NV && !_cancelled.load(); ++frame_index)
+        {
+            const DepthFrameResult &original =
+                _depthFrames[static_cast<std::size_t>(frame_index)];
+            if (!original.success || !original.depthMap || original.depthMap->empty() ||
+                original.sourceViewIndices.size() < 2)
+            {
+                continue;
+            }
+
+            DepthGenConfig guided_config = _config;
+            guided_config.saveIntermediatePyramidLevels = false;
+            guided_config.patchMatch = patchMatchConfigForRecordedWorker(
+                guided_config.patchMatch, original.device);
+            if (guided_config.patchMatch.backend == PatchMatchBackend::OpenCl)
+            {
+                guided_config.patchMatch.backend = PatchMatchBackend::Cpu;
+                guided_config.patchMatch.openClDeviceIndex = -1;
+                LOG_INFO(QStringLiteral(
+                             "[MVS][帧 %1][几何引导] OpenCL 首轮使用 CPU reference "
+                             "执行第二轮，避免静默忽略 source depth")
+                             .arg(frame_index));
+            }
+            guided_config.patchMatch.numIterations = std::max(
+                1, guided_config.patchMatch.geometricGuidanceIterations);
+            DepthFrameResult guided = computeDepthForView(
+                frame_index,
+                &guided_config,
+                {},
+                &frozen_depth_maps);
+            if (!guided.success)
+            {
+                LOG_WARN(QStringLiteral(
+                             "[MVS][帧 %1][几何引导] 第二轮失败，保留冻结首轮结果: %2")
+                             .arg(frame_index)
+                             .arg(QString::fromStdString(guided.errorMsg)));
+                continue;
+            }
+            guided.device = guided_config.patchMatch.backend == PatchMatchBackend::Cpu
+                ? DepthComputeWorker{DepthComputeBackend::Cpu, -1}.id()
+                : original.device;
+            guided_results[static_cast<std::size_t>(frame_index)] = std::move(guided);
+            guided_success[static_cast<std::size_t>(frame_index)] = 1;
+            ++guided_frame_count;
+            emit progressChanged(
+                QStringLiteral("几何引导 PatchMatch：帧 %1/%2")
+                    .arg(frame_index + 1)
+                    .arg(NV),
+                static_cast<float>(NV + frame_index + 1) /
+                    static_cast<float>(2 * NV + 4));
+        }
+        for (int frame_index = 0; frame_index < NV; ++frame_index)
+        {
+            if (guided_success[static_cast<std::size_t>(frame_index)] != 0)
+            {
+                _depthFrames[static_cast<std::size_t>(frame_index)] =
+                    std::move(guided_results[static_cast<std::size_t>(frame_index)]);
+            }
+        }
+        LOG_INFO(QStringLiteral(
+                     "[MVS] 几何引导 PatchMatch 完成: refined=%1/%2；"
+                     "置信度仍为独立光度通道")
+                     .arg(guided_frame_count)
+                     .arg(NV));
+    }
+    else if (_config.patchMatch.enableGeometricGuidancePass &&
+             !geometric_guidance_memory_available)
+    {
+        LOG_WARN(QStringLiteral(
+                     "[MVS] 当前采用流式深度缓存或内存余量不足，跳过几何引导第二轮；"
+                     "首轮结果和后续独立几何一致性检查保持不变"));
     }
 
     if (keepDepthFramesInMemory.load() && _config.adaptiveDepthCacheMemory)

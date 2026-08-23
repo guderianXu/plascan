@@ -38,6 +38,7 @@ signals:
     void photoSelected(const QString &imagePath);
     void photoActivated(const QString &imagePath);
     void generateMaskRequested(const QStringList &imagePaths);
+    void clearMasksRequested(const QStringList &imagePaths);
     void imageLoadingProgressChanged(const QString &stage, int done, int total);
     void imageLoadingFinished(bool success, const QString &message);
 
@@ -83,6 +84,7 @@ private:
     void resetItemIcons(const QString &key);
     void advanceThumbnailGeneration(bool clearCache);
     QStringList selectedPhotoPaths() const;
+    bool selectedPhotosHaveMasks() const;
     QString resolveImagePath(const QString &imagePath) const;
     QString normalizedPath(const QString &imagePath) const;
     QString thumbnailCacheKey(const QString &imagePath) const;

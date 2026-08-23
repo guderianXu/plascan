@@ -20,6 +20,7 @@ struct PatchMatchBackendRequest
     cv::Mat referenceValidMask;
     std::vector<cv::Mat> sourceImages;
     std::vector<cv::Mat> sourceValidMasks;
+    std::vector<cv::Mat> sourceDepthMaps;
     FramePinholeCamera referenceCamera;
     std::vector<FramePinholeCamera> sourceCameras;
     float zNear = 0.0f;
@@ -58,6 +59,7 @@ struct DepthPyramidRequest
     cv::Mat referenceValidMask;
     std::vector<cv::Mat> sourceImages;
     std::vector<cv::Mat> sourceValidMasks;
+    std::vector<cv::Mat> sourceDepthMaps;
     cv::Mat guideImage;
     FramePinholeCamera referenceCamera;
     std::vector<FramePinholeCamera> sourceCameras;
@@ -65,6 +67,7 @@ struct DepthPyramidRequest
     float zFar = 0.0f;
     DepthPyramidConfig pyramidConfig;
     std::array<cv::Mat, 3> sparseDepthHints;
+    float sparseDepthHintRelativeRadius = 0.0f; ///< >0 时为提示深度显式设置相对搜索半径
     const std::atomic_bool *cancelFlag = nullptr;
     /// Optional calibration gate invoked after the first successful pyramid
     /// level. Rejecting it aborts the complete frame; the coarse result is

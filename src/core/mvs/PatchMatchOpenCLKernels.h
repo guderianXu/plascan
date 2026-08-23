@@ -604,6 +604,113 @@ inline constexpr const char *kPatchMatchOpenClSourceGradientCensus = R"CLC(
 )CLC";
 
 inline constexpr const char *kPatchMatchOpenClSourceMain = R"CLC(
+static inline float joint_depth_score(int x,
+                                int y,
+                                float depth,
+                                float4 normal,
+                                __local const float *reference_tile,
+                                __local const uchar *reference_mask_tile,
+                                __global const float *sources,
+                                __global const float *source_cameras,
+                                __global const uchar *source_masks,
+                                int width,
+                                int height,
+                                int source_count,
+                                int patch_half,
+                                int patch_step,
+                                float minimum_mask_ratio,
+                                int has_reference_mask,
+                                int has_source_masks,
+                                float inv_fx,
+                                float inv_fy,
+                                float cx,
+                                float cy,
+                                int tile_origin_x,
+                                int tile_origin_y,
+                                int reference_tile_stride,
+                                uint neighbor_mask,
+                                float neighbor_bonus,
+                                uint *selected_mask)
+{
+    int required_support = source_count <= 2 ? source_count : source_count / 2 + 1;
+    float strongest[MAX_ROBUST_SUPPORT];
+    float strongest_rank[MAX_ROBUST_SUPPORT];
+    int strongest_index[MAX_ROBUST_SUPPORT];
+    for (int index = 0; index < required_support; ++index)
+    {
+        strongest[index] = 0.0f;
+        strongest_rank[index] = 0.0f;
+        strongest_index[index] = 0;
+    }
+    int support_count = 0;
+    int stored_count = 0;
+    for (int source_index = 0; source_index < source_count; ++source_index)
+    {
+        float score = source_ncc(x, y, depth, normal, source_index,
+                                 reference_tile, reference_mask_tile,
+                                 sources, source_cameras, source_masks,
+                                 width, height, patch_half, patch_step,
+                                 minimum_mask_ratio,
+                                 has_reference_mask, has_source_masks,
+                                 inv_fx, inv_fy, cx, cy,
+                                 tile_origin_x, tile_origin_y,
+                                 reference_tile_stride);
+        if (!(score > 0.05f))
+        {
+            continue;
+        }
+
+        ++support_count;
+        float rank_score = score +
+            (((neighbor_mask >> source_index) & 1u) != 0u
+                 ? fmax(neighbor_bonus, 0.0f)
+                 : 0.0f);
+        if (stored_count == required_support
+            && (rank_score < strongest_rank[required_support - 1]
+                || (rank_score == strongest_rank[required_support - 1]
+                    && source_index > strongest_index[required_support - 1])))
+        {
+            continue;
+        }
+        int insert_at = stored_count < required_support
+            ? stored_count
+            : required_support - 1;
+        while (insert_at > 0
+               && (strongest_rank[insert_at - 1] < rank_score
+                   || (strongest_rank[insert_at - 1] == rank_score
+                       && strongest_index[insert_at - 1] > source_index)))
+        {
+            if (insert_at < required_support)
+            {
+                strongest[insert_at] = strongest[insert_at - 1];
+                strongest_rank[insert_at] = strongest_rank[insert_at - 1];
+                strongest_index[insert_at] = strongest_index[insert_at - 1];
+            }
+            --insert_at;
+        }
+        strongest[insert_at] = score;
+        strongest_rank[insert_at] = rank_score;
+        strongest_index[insert_at] = source_index;
+        if (stored_count < required_support)
+        {
+            ++stored_count;
+        }
+    }
+    if (support_count < required_support || stored_count < required_support)
+    {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    uint mask = 0u;
+    for (int index = 0; index < required_support; ++index)
+    {
+        sum += strongest[index];
+        mask |= 1u << strongest_index[index];
+    }
+    *selected_mask = mask;
+    return clamp(sum / (float)required_support, 0.0f, 1.0f);
+}
+
 static inline float robust_depth_score(int x,
                                 int y,
                                 float depth,
@@ -629,63 +736,15 @@ static inline float robust_depth_score(int x,
                                 int tile_origin_y,
                                 int reference_tile_stride)
 {
-    int required_support = source_count <= 2 ? source_count : source_count / 2 + 1;
-    float strongest[MAX_ROBUST_SUPPORT];
-    for (int index = 0; index < required_support; ++index)
-    {
-        strongest[index] = 0.0f;
-    }
-    int support_count = 0;
-    int stored_count = 0;
-    for (int source_index = 0; source_index < source_count; ++source_index)
-    {
-        float score = source_ncc(x, y, depth, normal, source_index,
-                                 reference_tile, reference_mask_tile,
-                                 sources, source_cameras, source_masks,
-                                 width, height, patch_half, patch_step,
-                                 minimum_mask_ratio,
-                                 has_reference_mask, has_source_masks,
-                                 inv_fx, inv_fy, cx, cy,
-                                 tile_origin_x, tile_origin_y,
-                                 reference_tile_stride);
-        if (!(score > 0.05f))
-        {
-            continue;
-        }
-
-        ++support_count;
-        if (stored_count == required_support
-            && score <= strongest[required_support - 1])
-        {
-            continue;
-        }
-        int insert_at = stored_count < required_support
-            ? stored_count
-            : required_support - 1;
-        while (insert_at > 0 && strongest[insert_at - 1] < score)
-        {
-            if (insert_at < required_support)
-            {
-                strongest[insert_at] = strongest[insert_at - 1];
-            }
-            --insert_at;
-        }
-        strongest[insert_at] = score;
-        if (stored_count < required_support)
-        {
-            ++stored_count;
-        }
-    }
-    if (support_count < required_support || stored_count < required_support)
-    {
-        return 0.0f;
-    }
-    float sum = 0.0f;
-    for (int index = 0; index < required_support; ++index)
-    {
-        sum += strongest[index];
-    }
-    return sum / (float)required_support;
+    uint selected_mask = 0u;
+    return joint_depth_score(x, y, depth, normal,
+                             reference_tile, reference_mask_tile,
+                             sources, source_cameras, source_masks,
+                             width, height, source_count, patch_half, patch_step,
+                             minimum_mask_ratio, has_reference_mask, has_source_masks,
+                             inv_fx, inv_fy, cx, cy,
+                             tile_origin_x, tile_origin_y, reference_tile_stride,
+                             0u, 0.0f, &selected_mask);
 }
 
 __kernel void initialize_planes(
@@ -699,6 +758,7 @@ __kernel void initialize_planes(
     __global float *depth_output,
     __global float4 *normal_output,
     __global float *score_output,
+    __global uint *source_selection_output,
     int width,
     int height,
     int source_count,
@@ -754,6 +814,7 @@ __kernel void initialize_planes(
         depth_output[index] = 0.0f;
         normal_output[index] = (float4)(0.0f, 0.0f, -1.0f, 0.0f);
         score_output[index] = 0.0f;
+        source_selection_output[index] = 0u;
         return;
     }
 
@@ -785,22 +846,26 @@ __kernel void initialize_planes(
     float inverse_step = (inverse_near - inverse_far) / (float)(coarse_samples - 1);
     float best_depth = 0.0f;
     float best_score = 0.0f;
+    uint best_selection = 0u;
     for (int sample_index = 0; sample_index < coarse_samples; ++sample_index)
     {
         float inverse_depth = inverse_far + inverse_step * (float)sample_index;
         float depth = 1.0f / inverse_depth;
-        float score = robust_depth_score(x, y, depth, fronto_parallel_normal,
-                                         reference_tile, reference_mask_tile,
-                                         sources, source_cameras, source_masks,
-                                         width, height, source_count, patch_half, 1,
-                                         minimum_mask_ratio, has_reference_mask,
-                                         has_source_masks, inv_fx, inv_fy, cx, cy,
-                                         tile_origin_x, tile_origin_y,
-                                         REFERENCE_TILE_SIZE);
+        uint candidate_selection = 0u;
+        float score = joint_depth_score(
+            x, y, depth, fronto_parallel_normal,
+            reference_tile, reference_mask_tile,
+            sources, source_cameras, source_masks,
+            width, height, source_count, patch_half, 1,
+            minimum_mask_ratio, has_reference_mask,
+            has_source_masks, inv_fx, inv_fy, cx, cy,
+            tile_origin_x, tile_origin_y, REFERENCE_TILE_SIZE,
+            0u, 0.0f, &candidate_selection);
         if (score > best_score)
         {
             best_score = score;
             best_depth = depth;
+            best_selection = candidate_selection;
         }
     }
 
@@ -814,18 +879,21 @@ __kernel void initialize_planes(
                                         inverse_far,
                                         inverse_near);
             float depth = 1.0f / inverse_depth;
-            float score = robust_depth_score(x, y, depth, fronto_parallel_normal,
-                                             reference_tile, reference_mask_tile,
-                                             sources, source_cameras, source_masks,
-                                             width, height, source_count, patch_half, 1,
-                                             minimum_mask_ratio, has_reference_mask,
-                                             has_source_masks, inv_fx, inv_fy, cx, cy,
-                                             tile_origin_x, tile_origin_y,
-                                             REFERENCE_TILE_SIZE);
+            uint candidate_selection = 0u;
+            float score = joint_depth_score(
+                x, y, depth, fronto_parallel_normal,
+                reference_tile, reference_mask_tile,
+                sources, source_cameras, source_masks,
+                width, height, source_count, patch_half, 1,
+                minimum_mask_ratio, has_reference_mask,
+                has_source_masks, inv_fx, inv_fy, cx, cy,
+                tile_origin_x, tile_origin_y, REFERENCE_TILE_SIZE,
+                best_selection, 0.0f, &candidate_selection);
             if (score > best_score)
             {
                 best_score = score;
                 best_depth = depth;
+                best_selection = candidate_selection;
             }
         }
     }
@@ -833,10 +901,54 @@ __kernel void initialize_planes(
     depth_output[index] = best_depth;
     normal_output[index] = fronto_parallel_normal;
     score_output[index] = best_score;
+    source_selection_output[index] = best_selection;
 }
 )CLC";
 
 inline constexpr const char *kPatchMatchOpenClSourcePropagation = R"CLC(
+
+static inline int local_surface_normal(__global const float *depth,
+                                       int width,
+                                       int height,
+                                       int x,
+                                       int y,
+                                       float inv_fx,
+                                       float inv_fy,
+                                       float cx,
+                                       float cy,
+                                       float4 *normal)
+{
+    if (x <= 0 || y <= 0 || x + 1 >= width || y + 1 >= height)
+    {
+        return 0;
+    }
+    float depths[4] = {
+        depth[y * width + x - 1], depth[y * width + x + 1],
+        depth[(y - 1) * width + x], depth[(y + 1) * width + x]};
+    if (!(depths[0] > 0.0f) || !(depths[1] > 0.0f)
+        || !(depths[2] > 0.0f) || !(depths[3] > 0.0f))
+    {
+        return 0;
+    }
+    float3 left = reference_ray(x - 1, y, inv_fx, inv_fy, cx, cy) * depths[0];
+    float3 right = reference_ray(x + 1, y, inv_fx, inv_fy, cx, cy) * depths[1];
+    float3 top = reference_ray(x, y - 1, inv_fx, inv_fy, cx, cy) * depths[2];
+    float3 bottom = reference_ray(x, y + 1, inv_fx, inv_fy, cx, cy) * depths[3];
+    float3 value = cross(right - left, bottom - top);
+    float length_squared = dot(value, value);
+    if (!(length_squared > 1.0e-12f))
+    {
+        return 0;
+    }
+    value *= rsqrt(length_squared);
+    float3 ray = reference_ray(x, y, inv_fx, inv_fy, cx, cy);
+    if (dot(value, ray) > 0.0f)
+    {
+        value = -value;
+    }
+    *normal = (float4)(value.x, value.y, value.z, 0.0f);
+    return 1;
+}
 
 __kernel void propagate_planes(
     __global const float *reference,
@@ -849,6 +961,7 @@ __kernel void propagate_planes(
     __global float *depth_output,
     __global float4 *normal_output,
     __global float *score_output,
+    __global uint *source_selection_output,
     int width,
     int height,
     int source_count,
@@ -869,6 +982,8 @@ __kernel void propagate_planes(
     float inv_fy,
     float cx,
     float cy,
+    float source_selection_neighbor_bonus,
+    int enable_asymmetric_propagation,
     int checkerboard,
     int iteration,
     float perturbation)
@@ -930,12 +1045,18 @@ __kernel void propagate_planes(
     float4 best_normal = face_normal_toward_camera(
         normal_output[index], reference_ray(x, y, inv_fx, inv_fy, cx, cy));
     float best_score = score_output[index];
+    uint best_selection = source_selection_output[index];
     const int offset_x[4] = {-1, 1, 0, 0};
     const int offset_y[4] = {0, 0, -1, 1};
+    const int propagation_distances[4] = {1, 3, 5, 9};
+    int distance_count = enable_asymmetric_propagation ? 4 : 1;
     for (int neighbor = 0; neighbor < 4; ++neighbor)
     {
-        int neighbor_x = x + offset_x[neighbor];
-        int neighbor_y = y + offset_y[neighbor];
+        for (int distance_index = 0; distance_index < distance_count; ++distance_index)
+        {
+        int distance = propagation_distances[distance_index];
+        int neighbor_x = x + offset_x[neighbor] * distance;
+        int neighbor_y = y + offset_y[neighbor] * distance;
         if (neighbor_x < 0 || neighbor_y < 0
             || neighbor_x >= width || neighbor_y >= height)
         {
@@ -950,30 +1071,35 @@ __kernel void propagate_planes(
         float4 neighbor_normal = face_normal_toward_camera(
             normal_output[neighbor_index],
             reference_ray(x, y, inv_fx, inv_fy, cx, cy));
+        uint neighbor_selection = best_selection | source_selection_output[neighbor_index];
         float candidate_depth = propagated_plane_depth(
             neighbor_x, neighbor_y, neighbor_depth, neighbor_normal,
             x, y, inv_fx, inv_fy, cx, cy);
         float candidate_score = 0.0f;
+        uint candidate_selection = best_selection;
         int has_candidate_score = 0;
         if (candidate_depth >= local_near && candidate_depth <= local_far)
         {
             candidate_score = same_plane_hypothesis(
                 candidate_depth, neighbor_normal, best_depth, best_normal)
                 ? best_score
-                : robust_depth_score(
+                : joint_depth_score(
                     x, y, candidate_depth, neighbor_normal,
                     reference_tile, reference_mask_tile,
                     sources, source_cameras, source_masks,
                     width, height, source_count, patch_half, 1,
                     minimum_mask_ratio, has_reference_mask, has_source_masks,
                     inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
-                    CHECKERBOARD_TILE_WIDTH);
+                    CHECKERBOARD_TILE_WIDTH,
+                    neighbor_selection, source_selection_neighbor_bonus,
+                    &candidate_selection);
             has_candidate_score = 1;
             if (candidate_score > best_score)
             {
                 best_depth = candidate_depth;
                 best_normal = neighbor_normal;
                 best_score = candidate_score;
+                best_selection = candidate_selection;
             }
         }
 
@@ -985,18 +1111,48 @@ __kernel void propagate_planes(
             ? best_score
             : (has_candidate_score && candidate_depth == best_depth
                 ? candidate_score
-                : robust_depth_score(
+                : joint_depth_score(
                     x, y, best_depth, neighbor_normal,
                     reference_tile, reference_mask_tile,
                     sources, source_cameras, source_masks,
                     width, height, source_count, patch_half, 1,
                     minimum_mask_ratio, has_reference_mask, has_source_masks,
                     inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
-                    CHECKERBOARD_TILE_WIDTH));
+                    CHECKERBOARD_TILE_WIDTH,
+                    neighbor_selection, source_selection_neighbor_bonus,
+                    &candidate_selection));
         if (normal_only_score > best_score)
         {
             best_normal = neighbor_normal;
             best_score = normal_only_score;
+            best_selection = candidate_selection;
+        }
+        }
+    }
+
+    if (enable_asymmetric_propagation)
+    {
+        float4 local_normal;
+        if (local_surface_normal(depth_output, width, height, x, y,
+                                 inv_fx, inv_fy, cx, cy, &local_normal))
+        {
+            uint candidate_selection = best_selection;
+            float candidate_score = joint_depth_score(
+                x, y, best_depth, local_normal,
+                reference_tile, reference_mask_tile,
+                sources, source_cameras, source_masks,
+                width, height, source_count, patch_half, 1,
+                minimum_mask_ratio, has_reference_mask, has_source_masks,
+                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+                CHECKERBOARD_TILE_WIDTH,
+                best_selection, source_selection_neighbor_bonus,
+                &candidate_selection);
+            if (candidate_score > best_score)
+            {
+                best_normal = local_normal;
+                best_score = candidate_score;
+                best_selection = candidate_selection;
+            }
         }
     }
 
@@ -1029,25 +1185,30 @@ __kernel void propagate_planes(
         {
             continue;
         }
-        float candidate_score = robust_depth_score(
+        uint candidate_selection = best_selection;
+        float candidate_score = joint_depth_score(
             x, y, candidate_depths[candidate], candidate_normals[candidate],
             reference_tile, reference_mask_tile,
             sources, source_cameras, source_masks,
             width, height, source_count, patch_half, 1,
             minimum_mask_ratio, has_reference_mask, has_source_masks,
             inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
-            CHECKERBOARD_TILE_WIDTH);
+            CHECKERBOARD_TILE_WIDTH,
+            best_selection, source_selection_neighbor_bonus,
+            &candidate_selection);
         if (candidate_score > best_score)
         {
             best_depth = candidate_depths[candidate];
             best_normal = candidate_normals[candidate];
             best_score = candidate_score;
+            best_selection = candidate_selection;
         }
     }
 
     depth_output[index] = best_depth;
     normal_output[index] = best_normal;
     score_output[index] = best_score;
+    source_selection_output[index] = best_selection;
 }
 )CLC";
 
@@ -1064,6 +1225,7 @@ __kernel void finalize_planes(
     __global float *depth_output,
     __global float4 *normal_output,
     __global float *score_output,
+    __global uint *source_selection_output,
     int width,
     int height,
     int source_count,
@@ -1121,6 +1283,7 @@ __kernel void finalize_planes(
     {
         depth_output[index] = 0.0f;
         score_output[index] = 0.0f;
+        source_selection_output[index] = 0u;
         return;
     }
 
@@ -1166,6 +1329,10 @@ __kernel void finalize_planes(
             + (1.0f - uniqueness_minimum_scale) * margin_scale;
     }
     depth_output[index] = confidence >= confidence_threshold ? best_depth : 0.0f;
+    if (!(confidence >= confidence_threshold))
+    {
+        source_selection_output[index] = 0u;
+    }
     score_output[index] = confidence;
 }
 )CLC";

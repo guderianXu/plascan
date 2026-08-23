@@ -275,7 +275,7 @@ int tiePointProgress(const QString &stageId, int current, int maximum)
         {"feature", 8, 18}, {"generic_preselection", 18, 22},
         {"reference_preselection", 22, 25},
         {"pair_selection", 25, 28}, {"matching", 28, 33},
-        {"geometry", 33, 34}, {"track_build", 34, 35}, {"guided_matching", 34, 35}};
+        {"geometry", 33, 34}, {"guided_match", 34, 35}, {"track_build", 35, 35}};
     Range selected{"unknown", 1, 35};
     const QString token = normalizedToken(stageId, QStringLiteral("unknown"));
     if (token == QStringLiteral("model_prepare") && maximum <= 0)

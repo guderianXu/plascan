@@ -4,14 +4,24 @@
 #include "MatchGeometryVerifier.h"
 #include "MatchPhotosFeatureCache.h"
 #include "MatchPhotosMaskSupport.h"
+#include "MatchPhotosParallelism.h"
+#include "MatchPhotosRuntime.h"
+#include "concurrency/SafeWorkerGroup.h"
+#include "log/Logger.h"
 #include "sift/AutoSiftAlgorithm.h"
 #include "sift/SiftGuidedMatcher.h"
 
 #include <algorithm>
-#include <cstdint>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <mutex>
+#include <thread>
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QHash>
 #include <QSet>
@@ -215,6 +225,160 @@ namespace xjw::matchphotos
             return geometry.modelEstimated;
         }
 
+        struct GuidedPairResult
+        {
+            QString outcome;
+            std::uint64_t descriptorComparisons = 0;
+            int addedMatches = 0;
+            int improvedPairs = 0;
+            int unreliableModels = 0;
+            int consistencyRejected = 0;
+            bool processed = false;
+            bool canceled = false;
+        };
+
+        GuidedPairResult processGuidedPair(const MatchPhotosContext& context,
+                                           const MatchPhotosOptions& options,
+                                           const ObservationLinks& observationLinks,
+                                           MatchPhotosMatchRecord* record,
+                                           const std::function<bool()>& shouldCancel)
+        {
+            GuidedPairResult result;
+            if (!record)
+            {
+                result.outcome = QStringLiteral("跳过（像对记录缺失）");
+                return result;
+            }
+            if (!hasReliableFundamental(context, options, *record))
+            {
+                result.outcome = QStringLiteral("跳过（基础矩阵不可靠）");
+                result.unreliableModels = 1;
+                return result;
+            }
+            const auto features0 = context.featureCache->find(record->image0Path);
+            const auto features1 = context.featureCache->find(record->image1Path);
+            if (!features0 || !features1)
+            {
+                result.outcome = QStringLiteral("跳过（特征缓存缺失）");
+                return result;
+            }
+
+            std::vector<int> existing0;
+            std::vector<int> existing1;
+            existing0.reserve(record->pairData->correspondences.size());
+            existing1.reserve(record->pairData->correspondences.size());
+            for (const auto& correspondence : record->pairData->correspondences)
+            {
+                existing0.push_back(static_cast<int>(correspondence.observation0.featureId));
+                existing1.push_back(static_cast<int>(correspondence.observation1.featureId));
+            }
+
+            image_matching::SiftGuidedMatchOptions guidedOptions;
+            guidedOptions.epipolarThresholdPixels = std::max(2.0, options.geometryReprojThreshold * 2.0);
+            guidedOptions.maximumDescriptorRatio = std::min(0.95f, options.siftMaximumRatio);
+            guidedOptions.maximumAdditionalMatches =
+                std::max(256, options.maxTiePointsPerImage > 0 ? options.maxTiePointsPerImage : 5000);
+            if (shouldCancel && shouldCancel())
+            {
+                result.outcome = QStringLiteral("已取消（描述子搜索前）");
+                result.canceled = true;
+                return result;
+            }
+            guidedOptions.shouldCancel = shouldCancel;
+            image_matching::SiftGuidedMatchResult guidedResult = image_matching::findGuidedSiftMatchesDetailed(
+                *features0, *features1, record->pairData->geometryMatrix, existing0, existing1, guidedOptions);
+            result.processed = true;
+            result.descriptorComparisons = guidedResult.diagnostics.descriptorComparisons;
+            if (guidedResult.canceled)
+            {
+                result.outcome = QStringLiteral("已取消（描述子搜索中）");
+                result.canceled = true;
+                return result;
+            }
+            if (guidedResult.matches.empty())
+            {
+                result.outcome = QStringLiteral("完成（极线带内无新增互检匹配）");
+                return result;
+            }
+
+            const bool applyTiepointMask = shouldApplyMasksToTiepoints(options);
+            const cv::Mat mask0 = applyTiepointMask
+                                      ? softenedExclusionMask(loadMaskForImage(
+                                            context,
+                                            record->image0Path,
+                                            cv::Size(features0->imageWidth, features0->imageHeight)),
+                                            options)
+                                      : cv::Mat();
+            const cv::Mat mask1 = applyTiepointMask
+                                      ? softenedExclusionMask(loadMaskForImage(
+                                            context,
+                                            record->image1Path,
+                                            cv::Size(features1->imageWidth, features1->imageHeight)),
+                                            options)
+                                      : cv::Mat();
+            int accepted = 0;
+            for (const image_matching::SiftGuidedMatch& match : guidedResult.matches)
+            {
+                const cv::KeyPoint& keypoint0 = features0->keypoints[static_cast<std::size_t>(match.index0)];
+                const cv::KeyPoint& keypoint1 = features1->keypoints[static_cast<std::size_t>(match.index1)];
+                if (options.guidedRequireMultiViewConsistency &&
+                    !passesMultiViewConsistency(observationLinks,
+                                                record->image0Path,
+                                                match.index0,
+                                                record->image1Path,
+                                                match.index1))
+                {
+                    ++result.consistencyRejected;
+                    continue;
+                }
+                const float maskWeight = applyTiepointMask
+                    ? std::min(maskPointWeight(mask0, keypoint0.pt, options),
+                               maskPointWeight(mask1, keypoint1.pt, options))
+                    : 1.0f;
+                if (maskWeight <= 0.0f)
+                {
+                    continue;
+                }
+                image_matching::PairCorrespondence correspondence;
+                correspondence.observation0 = observationFor(keypoint0, match.index0);
+                correspondence.observation1 = observationFor(keypoint1, match.index1);
+                correspondence.confidence = match.confidence * maskWeight;
+                correspondence.flags =
+                    image_matching::MatchRecordFlag::MaskAccepted | image_matching::MatchRecordFlag::Guided;
+                record->pairData->correspondences.push_back(correspondence);
+                ++accepted;
+            }
+            if (accepted == 0)
+            {
+                result.outcome = QStringLiteral("完成（候选被一致性或蒙版约束拒绝）");
+                return result;
+            }
+
+            const int previousInliers = record->geometricInlierCount;
+            applyGuidedGeometry(*features0, *features1, context, options, record);
+            const auto beforeCleanup = record->pairData->correspondences.size();
+            std::erase_if(record->pairData->correspondences, [](const auto& correspondence)
+            {
+                return image_matching::hasFlag(correspondence.flags,
+                                                image_matching::MatchRecordFlag::Guided) &&
+                    !image_matching::hasFlag(correspondence.flags,
+                                             image_matching::MatchRecordFlag::GeometryInlier);
+            });
+            const int removed = static_cast<int>(beforeCleanup - record->pairData->correspondences.size());
+            if (removed > 0)
+            {
+                applyGuidedGeometry(*features0, *features1, context, options, record);
+            }
+            const int retained = accepted - removed;
+            record->settings[QStringLiteral("guided_matches_added")] = retained;
+            record->settings[QStringLiteral("guided_matches_rejected_by_geometry")] = removed;
+            record->settings[QStringLiteral("guided_matching_completed")] = true;
+            result.addedMatches = retained;
+            result.improvedPairs = record->geometricInlierCount > previousInliers ? 1 : 0;
+            result.outcome = QStringLiteral("完成");
+            return result;
+        }
+
     } // namespace
 
     MatchPhotosStageReport GuidedMatchStage::run(const MatchPhotosContext& context,
@@ -249,132 +413,186 @@ namespace xjw::matchphotos
         int improvedPairs = 0;
         int unreliableModels = 0;
         int consistencyRejected = 0;
-        const ObservationLinks observationLinks = buildReliableObservationLinks(*matchRecords);
-        for (MatchPhotosMatchRecord& record : *matchRecords)
+        int completedPairs = 0;
+        const int total_pairs = static_cast<int>(matchRecords->size());
+        const int worker_count = resolveGuidedMatchingWorkers(
+            total_pairs, std::thread::hardware_concurrency());
+        QElapsedTimer stage_timer;
+        stage_timer.start();
+        if (shouldCancelMatchPhotos(context))
         {
-            if (!hasReliableFundamental(context, options, record))
-            {
-                ++unreliableModels;
-                continue;
-            }
-            const auto features0 = context.featureCache->find(record.image0Path);
-            const auto features1 = context.featureCache->find(record.image1Path);
-            if (!features0 || !features1)
-            {
-                continue;
-            }
+            report.status = MatchPhotosStageStatus::Failed;
+            report.message = QStringLiteral("SIFT 几何引导重匹配已取消：已完成 0/%1 对，剩余 %1 对")
+                                 .arg(total_pairs);
+            return report;
+        }
 
-            std::vector<int> existing0;
-            std::vector<int> existing1;
-            existing0.reserve(record.pairData->correspondences.size());
-            existing1.reserve(record.pairData->correspondences.size());
-            for (const auto& correspondence : record.pairData->correspondences)
+        const ObservationLinks observationLinks = buildReliableObservationLinks(*matchRecords);
+        std::atomic_int next_index{0};
+        std::mutex report_mutex;
+        try
+        {
+            xjw::common::concurrency::runWorkerGroup(
+                static_cast<std::size_t>(worker_count),
+                [&](std::stop_token stop_token)
             {
-                existing0.push_back(static_cast<int>(correspondence.observation0.featureId));
-                existing1.push_back(static_cast<int>(correspondence.observation1.featureId));
-            }
-
-            image_matching::SiftGuidedMatchOptions guidedOptions;
-            guidedOptions.epipolarThresholdPixels = std::max(2.0, options.geometryReprojThreshold * 2.0);
-            guidedOptions.maximumDescriptorRatio = std::min(0.95f, options.siftMaximumRatio);
-            guidedOptions.maximumAdditionalMatches =
-                std::max(256, options.maxTiePointsPerImage > 0 ? options.maxTiePointsPerImage : 5000);
-            std::vector<image_matching::SiftGuidedMatch> additions = image_matching::findGuidedSiftMatches(
-                *features0, *features1, record.pairData->geometryMatrix, existing0, existing1, guidedOptions);
-            ++processedPairs;
-            if (additions.empty())
-            {
-                continue;
-            }
-
-            const bool applyTiepointMask = shouldApplyMasksToTiepoints(options);
-            const cv::Mat mask0 = applyTiepointMask
-                                      ? softenedExclusionMask(loadMaskForImage(
-                                            context,
-                                            record.image0Path,
-                                            cv::Size(features0->imageWidth, features0->imageHeight)),
-                                            options)
-                                      : cv::Mat();
-            const cv::Mat mask1 = applyTiepointMask
-                                      ? softenedExclusionMask(loadMaskForImage(
-                                            context,
-                                            record.image1Path,
-                                            cv::Size(features1->imageWidth, features1->imageHeight)),
-                                            options)
-                                      : cv::Mat();
-            int accepted = 0;
-            for (const image_matching::SiftGuidedMatch& match : additions)
-            {
-                const cv::KeyPoint& keypoint0 = features0->keypoints[static_cast<std::size_t>(match.index0)];
-                const cv::KeyPoint& keypoint1 = features1->keypoints[static_cast<std::size_t>(match.index1)];
-                if (options.guidedRequireMultiViewConsistency &&
-                    !passesMultiViewConsistency(observationLinks,
-                                                record.image0Path,
-                                                match.index0,
-                                                record.image1Path,
-                                                match.index1))
+                while (!stop_token.stop_requested() && !shouldCancelMatchPhotos(context))
                 {
-                    ++consistencyRejected;
-                    continue;
-                }
-                const float maskWeight = applyTiepointMask
-                    ? std::min(maskPointWeight(mask0, keypoint0.pt, options),
-                               maskPointWeight(mask1, keypoint1.pt, options))
-                    : 1.0f;
-                if (maskWeight <= 0.0f)
-                {
-                    continue;
-                }
-                image_matching::PairCorrespondence correspondence;
-                correspondence.observation0 = observationFor(keypoint0, match.index0);
-                correspondence.observation1 = observationFor(keypoint1, match.index1);
-                correspondence.confidence = match.confidence * maskWeight;
-                correspondence.flags =
-                    image_matching::MatchRecordFlag::MaskAccepted | image_matching::MatchRecordFlag::Guided;
-                record.pairData->correspondences.push_back(correspondence);
-                ++accepted;
-            }
-            if (accepted == 0)
-            {
-                continue;
-            }
+                    const int pair_index = next_index.fetch_add(1);
+                    if (pair_index >= total_pairs)
+                    {
+                        break;
+                    }
+                    if (stop_token.stop_requested() || shouldCancelMatchPhotos(context))
+                    {
+                        break;
+                    }
 
-            const int previousInliers = record.geometricInlierCount;
-            applyGuidedGeometry(*features0, *features1, context, options, &record);
+                    MatchPhotosMatchRecord& record =
+                        (*matchRecords)[static_cast<std::size_t>(pair_index)];
+                    const QString pair_name = QStringLiteral("%1 ↔ %2")
+                                                  .arg(QFileInfo(record.image0Path).fileName(),
+                                                       QFileInfo(record.image1Path).fileName());
+                    QElapsedTimer pair_timer;
+                    pair_timer.start();
+                    {
+                        std::lock_guard lock(report_mutex);
+                        reportMatchPhotosProgress(
+                            context,
+                            QStringLiteral("guided_match"),
+                            QStringLiteral("SIFT 引导匹配：启动像对 %1/%2，已完成 %3，CPU worker %4；%5")
+                                .arg(pair_index + 1)
+                                .arg(total_pairs)
+                                .arg(completedPairs)
+                                .arg(worker_count)
+                                .arg(pair_name),
+                            completedPairs,
+                            total_pairs);
+                    }
 
-            // 引导候选必须再次成为可靠 F 的内点。把未闭合的 guided 边移除，
-            // 防止其进入后续并查集并污染多视图轨迹。
-            const auto beforeCleanup = record.pairData->correspondences.size();
-            std::erase_if(record.pairData->correspondences, [](const auto& correspondence)
-            {
-                return image_matching::hasFlag(correspondence.flags,
-                                                image_matching::MatchRecordFlag::Guided) &&
-                    !image_matching::hasFlag(correspondence.flags,
-                                             image_matching::MatchRecordFlag::GeometryInlier);
+                    const GuidedPairResult pair_result = processGuidedPair(
+                        context,
+                        options,
+                        observationLinks,
+                        &record,
+                        [&context, stop_token]()
+                        {
+                            return stop_token.stop_requested() || shouldCancelMatchPhotos(context);
+                        });
+
+                    {
+                        std::lock_guard lock(report_mutex);
+                        if (pair_result.canceled)
+                        {
+                            const QString message =
+                                QStringLiteral("SIFT 引导匹配 %1：%2，耗时 %3 秒，已完成 %4/%5，"
+                                               "剩余 %6 对，CPU worker %7；描述子比较 %8 次")
+                                    .arg(pair_name)
+                                    .arg(pair_result.outcome)
+                                    .arg(pair_timer.elapsed() / 1000.0, 0, 'f', 3)
+                                    .arg(completedPairs)
+                                    .arg(total_pairs)
+                                    .arg(total_pairs - completedPairs)
+                                    .arg(worker_count)
+                                    .arg(static_cast<qulonglong>(pair_result.descriptorComparisons));
+                            LOG_INFO(message);
+                            reportMatchPhotosProgress(
+                                context,
+                                QStringLiteral("guided_match"),
+                                message,
+                                completedPairs,
+                                total_pairs);
+                        }
+                        else
+                        {
+                            processedPairs += pair_result.processed ? 1 : 0;
+                            addedMatches += pair_result.addedMatches;
+                            improvedPairs += pair_result.improvedPairs;
+                            unreliableModels += pair_result.unreliableModels;
+                            consistencyRejected += pair_result.consistencyRejected;
+                            ++completedPairs;
+                            const int remaining_pairs = total_pairs - completedPairs;
+                            const QString message =
+                                QStringLiteral("SIFT 引导匹配 [完成 %1/%2] %3：%4，耗时 %5 秒，"
+                                               "剩余 %6 对，CPU worker %7；新增内点 %8，"
+                                               "描述子比较 %9 次")
+                                    .arg(completedPairs)
+                                    .arg(total_pairs)
+                                    .arg(pair_name)
+                                    .arg(pair_result.outcome)
+                                    .arg(pair_timer.elapsed() / 1000.0, 0, 'f', 3)
+                                    .arg(remaining_pairs)
+                                    .arg(worker_count)
+                                    .arg(pair_result.addedMatches)
+                                    .arg(static_cast<qulonglong>(pair_result.descriptorComparisons));
+                            LOG_INFO(message);
+                            reportMatchPhotosProgress(
+                                context,
+                                QStringLiteral("guided_match"),
+                                message,
+                                completedPairs,
+                                total_pairs);
+                        }
+                    }
+
+                    if (pair_result.canceled)
+                    {
+                        break;
+                    }
+                }
             });
-            const int removed = static_cast<int>(
-                beforeCleanup - record.pairData->correspondences.size());
-            if (removed > 0)
-            {
-                applyGuidedGeometry(*features0, *features1, context, options, &record);
-            }
-            const int retained = accepted - removed;
-            record.settings[QStringLiteral("guided_matches_added")] = retained;
-            record.settings[QStringLiteral("guided_matches_rejected_by_geometry")] = removed;
-            record.settings[QStringLiteral("guided_matching_completed")] = true;
-            addedMatches += retained;
-            improvedPairs += record.geometricInlierCount > previousInliers ? 1 : 0;
+        }
+        catch (const std::exception& error)
+        {
+            report.status = MatchPhotosStageStatus::Failed;
+            report.itemCount = addedMatches;
+            report.message = QStringLiteral("SIFT 引导匹配 worker 异常：%1；已完成 %2/%3")
+                                 .arg(QString::fromUtf8(error.what()))
+                                 .arg(completedPairs)
+                                 .arg(total_pairs);
+            LOG_ERROR(report.message);
+            return report;
+        }
+        catch (...)
+        {
+            report.status = MatchPhotosStageStatus::Failed;
+            report.itemCount = addedMatches;
+            report.message = QStringLiteral("SIFT 引导匹配 worker 发生未知异常；已完成 %1/%2")
+                                 .arg(completedPairs)
+                                 .arg(total_pairs);
+            LOG_ERROR(report.message);
+            return report;
+        }
+
+        if (shouldCancelMatchPhotos(context))
+        {
+            report.status = MatchPhotosStageStatus::Failed;
+            report.itemCount = addedMatches;
+            report.message =
+                QStringLiteral("SIFT 几何引导重匹配已取消：已完成 %1/%2 对，耗时 %3 秒，"
+                               "剩余 %4 对，CPU worker %5")
+                    .arg(completedPairs)
+                    .arg(total_pairs)
+                    .arg(stage_timer.elapsed() / 1000.0, 0, 'f', 3)
+                    .arg(total_pairs - completedPairs)
+                    .arg(worker_count);
+            LOG_INFO(report.message);
+            return report;
         }
 
         report.status = MatchPhotosStageStatus::Completed;
         report.itemCount = addedMatches;
         report.message = QStringLiteral("SIFT 几何引导重匹配完成：检查 %1 对，保留 %2 个新增内点，"
-                                        "%3 对内点增加；跳过不可靠 F %4 对，多视图一致性拒绝 %5 个")
+                                        "%3 对内点增加；跳过不可靠 F %4 对，多视图一致性拒绝 %5 个；"
+                                        "CPU worker %6，总耗时 %7 秒")
                              .arg(processedPairs)
                              .arg(addedMatches)
                              .arg(improvedPairs)
                              .arg(unreliableModels)
-                             .arg(consistencyRejected);
+                             .arg(consistencyRejected)
+                             .arg(worker_count)
+                             .arg(stage_timer.elapsed() / 1000.0, 0, 'f', 3);
+        LOG_INFO(report.message);
         return report;
     }
 

@@ -261,6 +261,7 @@ MatchPhotosStageReport FeatureStage::run(
             ? algorithmPlan.executionBackend
             : image_matching::SiftComputeBackend::Cuda;
         runtime.adaptiveSift = autoSift;
+        runtime.lowTextureRecovery = algorithmPlan.lowTextureRecovery;
         runtime.rootSift = autoSift;
         runtime.siftMaximumRatio = options.siftMaximumRatio;
         runtime.siftMinimumAdaptiveRatio = options.siftMinimumAdaptiveRatio;

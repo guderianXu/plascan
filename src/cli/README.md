@@ -45,6 +45,11 @@ visibility graph 覆盖所有共视或 required pair；更多视图仍使用确�
 实际分层角度边界、数量不变量和逐候选分数/排名。
 启用 cap 后只要实际源数不足，该帧最多作为 `ValidationOnly`（原本拒绝的仍拒绝），不会因一致性确认数随源数降低而成为主融合帧。
 
+PatchMatch revision 45 的三项优化可用同一深度重放二进制做可复现消融：分别传入
+`--disable-per-pixel-source-selection`、`--disable-asymmetric-propagation` 和
+`--disable-geometric-guidance-pass` 可关闭每像素联合选源、近远邻/局部法线候选和冻结来源深度的第二轮
+几何引导。三个开关只用于诊断 A/B，默认均启用；光度来源 bitset 与后续独立几何来源证据始终分开保存。
+
 `mvs_depth_reprocess_cli --stage-snapshot-refs 2,6,22` 可对指定帧保存
 PatchMatch 输出、跨视一致性输出、confidence 后处理输出和最终准入输出。每阶段分别保存深度、置信度和
 有效掩膜，默认不启用，并受 `--stage-snapshot-max-long-edge` 与

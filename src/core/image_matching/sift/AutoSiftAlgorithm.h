@@ -11,7 +11,7 @@ namespace xjw::image_matching
 {
 
     inline constexpr const char* kAutoSiftAlgorithmId = "auto_sift";
-    inline constexpr std::uint32_t kAutoSiftAlgorithmVersion = 3;
+    inline constexpr std::uint32_t kAutoSiftAlgorithmVersion = 4;
 
     class AutoSiftAlgorithm final : public IImageMatchingAlgorithm
     {

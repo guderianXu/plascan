@@ -356,6 +356,15 @@ The implementation plan and current boundary are documented in
   configured subpixel thresholds remain inactive rather than being silently widened.
 - CPU, CUDA, and OpenCL PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
+- Revision 45 keeps a compact per-pixel photometric source bitset and uses it as a bounded spatial prior;
+  the prior may change which valid sources are averaged but cannot increase their measured NCC. CPU/CUDA/OpenCL
+  propagation tests near and odd-distance far neighbours plus a local depth-gradient normal. When all first-pass
+  frames are resident, a second narrow PatchMatch pass reads frozen source depth maps and adds round-trip
+  reprojection error only to the hypothesis objective. Its output confidence remains photometric, while the later
+  cross-view stage continues to produce independent geometric confidence and geometry-source masks. The bitset is
+  persisted separately as `raw_photometric_source_mask_path`; revision-45 cache reuse requires that artifact.
+  OpenCL source-depth guidance fails explicitly at the estimator boundary; resident batch processing records a CPU
+  reference second pass, while streaming or memory-pressure runs log a controlled skip.
 - CPU, CUDA, and OpenCL PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
   samples that are foreground in the reference mask and whose four source bilinear neighbors are foreground;
   a masked patch needs at least 35% valid samples (and at least four) before it can contribute photometric

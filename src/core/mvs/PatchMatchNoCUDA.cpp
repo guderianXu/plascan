@@ -60,7 +60,9 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat *,
     const cv::Mat *,
     const cv::Mat *,
-    const std::vector<cv::Mat> *)
+    const std::vector<cv::Mat> *,
+    const PatchMatchAuxiliaryInput *,
+    PatchMatchAuxiliaryOutput *)
 {
     if (errorMsg) *errorMsg = "CUDA 不可用（编译时未启用）";
     return false;

@@ -35,6 +35,8 @@ add_library(image_matching STATIC
     sift/SiftFeatureExtractor.h
     sift/SiftGuidedMatcher.cpp
     sift/SiftGuidedMatcher.h
+    sift/SiftLowTextureRecovery.cpp
+    sift/SiftLowTextureRecovery.h
     sift/SiftMatchFilter.cpp
     sift/SiftMatchFilter.h
     lightglue/LightGlueFeatureBudget.h

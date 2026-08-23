@@ -22,7 +22,8 @@ namespace xjw::image_matching
          * @brief 提取 SIFT 并恢复到原始影像坐标系。
          *
          * auto_sift 按 CUDA、Metal、OpenCL、CPU 的顺序选择可用后端；
-         * 自适应尺度、阈值重试、网格均匀化和 RootSIFT 由 runtime 显式启用。
+         * 自适应尺度、阈值重试、低纹理网格恢复、网格均匀化和 RootSIFT
+         * 由 runtime 显式启用。
          */
         static FeatureSet extract(const ImageFeatureInput& input, const ImageMatchingRuntimeConfig& runtime);
     };

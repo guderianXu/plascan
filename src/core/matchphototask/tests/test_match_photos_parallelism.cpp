@@ -149,3 +149,11 @@ TEST(MatchPhotosParallelismTest, GeometryVerificationKeepsSmallOrUnknownHostsSer
         xjw::matchphotos::resolveGeometryVerificationWorkers(0, 32),
         1);
 }
+
+TEST(MatchPhotosParallelismTest, GuidedMatchingUsesBoundedPairParallelism)
+{
+    EXPECT_EQ(xjw::matchphotos::resolveGuidedMatchingWorkers(120, 32), 16);
+    EXPECT_EQ(xjw::matchphotos::resolveGuidedMatchingWorkers(8, 20), 4);
+    EXPECT_EQ(xjw::matchphotos::resolveGuidedMatchingWorkers(2, 20), 1);
+    EXPECT_EQ(xjw::matchphotos::resolveGuidedMatchingWorkers(0, 20), 1);
+}

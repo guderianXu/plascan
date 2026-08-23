@@ -52,7 +52,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat *,
     const cv::Mat *,
     const cv::Mat *,
-    const std::vector<cv::Mat> *)
+    const std::vector<cv::Mat> *,
+    const PatchMatchAuxiliaryInput *,
+    PatchMatchAuxiliaryOutput *)
 {
     if (errorMsg)
     {

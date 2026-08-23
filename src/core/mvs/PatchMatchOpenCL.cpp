@@ -269,7 +269,7 @@ struct OpenClRuntime
     {
         cl_command_queue queue = nullptr;
         std::array<cl_kernel, 3> kernels{};
-        std::array<BufferSlot, 10> buffers;
+        std::array<BufferSlot, 11> buffers;
         bool busy = false;
     };
 
@@ -1060,8 +1060,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat *hintDepth,
     const cv::Mat *hintRadius,
     const cv::Mat *refValidMask,
-    const std::vector<cv::Mat> *srcValidMasks)
+    const std::vector<cv::Mat> *srcValidMasks,
+    const PatchMatchAuxiliaryInput *auxiliaryInput,
+    PatchMatchAuxiliaryOutput *auxiliaryOutput)
 {
+    (void)auxiliaryInput;
     const auto estimate_start = std::chrono::steady_clock::now();
     const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();
     const auto selected_device = config.openClDeviceIndex >= 0
@@ -1214,7 +1217,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     // full-frame placeholder on every pyramid level.
     const std::uint8_t dummy_mask = 255;
     const float dummy_float = 0.0f;
-    const std::array<std::size_t, 10> buffer_sizes = {
+    const std::array<std::size_t, 11> buffer_sizes = {
         image_float_bytes,
         packed_sources.size() * sizeof(float),
         camera_data.size() * sizeof(float),
@@ -1224,10 +1227,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         has_hint_radius ? packed_hint_radius.size() * sizeof(float) : sizeof(dummy_float),
         image_float_bytes,
         normal_float_bytes,
-        image_float_bytes};
+        image_float_bytes,
+        static_cast<std::size_t>(pixel_count) * sizeof(std::uint32_t)};
     const cl_mem_flags host_allocation = runtime->hostUnifiedMemory
         ? CL_MEM_ALLOC_HOST_PTR : 0;
-    const std::array<cl_mem_flags, 10> buffer_flags = {
+    const std::array<cl_mem_flags, 11> buffer_flags = {
         CL_MEM_READ_ONLY | host_allocation,
         CL_MEM_READ_ONLY | host_allocation,
         CL_MEM_READ_ONLY | host_allocation,
@@ -1237,6 +1241,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         CL_MEM_READ_ONLY | host_allocation,
         CL_MEM_READ_WRITE | host_allocation,
         CL_MEM_READ_WRITE,
+        CL_MEM_READ_WRITE | host_allocation,
         CL_MEM_READ_WRITE | host_allocation};
     const std::array<const void *, 7> input_data = {
         reference_float.ptr<float>(),
@@ -1302,7 +1307,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
     }
 
-    std::array<cl_mem, 10> memory_arguments{};
+    std::array<cl_mem, 11> memory_arguments{};
     for (std::size_t index = 0; index < memory_arguments.size(); ++index)
     {
         memory_arguments[index] = execution_lane.buffers[index].memory;
@@ -1366,12 +1371,14 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         global_size[1]};
     cv::Mat depth_work(height, width, CV_32F);
     cv::Mat confidence_work(height, width, CV_32F);
+    cv::Mat source_selection_work(height, width, CV_32S);
 
     OpenClEvent first_write_event;
     OpenClEvent last_write_event;
     OpenClEventList kernel_events;
     OpenClEvent depth_read_event;
     OpenClEvent confidence_read_event;
+    OpenClEvent source_selection_read_event;
     OpenClQueueDrain queue_drain(execution_lane.queue);
     const auto queue_wall_start = std::chrono::steady_clock::now();
     for (std::size_t index = 0; index < input_data.size(); ++index)
@@ -1436,22 +1443,34 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     {
         return false;
     }
-    constexpr cl_uint propagation_argument_start = 30;
+    constexpr cl_uint propagation_argument_start = 31;
     for (int iteration = 0; iteration < propagation_iterations; ++iteration)
     {
         const float perturbation = 0.35f * std::pow(0.5f, static_cast<float>(iteration));
         for (int checkerboard = 0; checkerboard < 2; ++checkerboard)
         {
+            const float neighbor_bonus = config.enablePerPixelSourceSelection
+                ? config.sourceSelectionNeighborBonus
+                : 0.0f;
+            const int asymmetric_propagation = config.enableAsymmetricPropagation ? 1 : 0;
             if (!setKernelArgument(execution_lane.kernels[1],
                                    propagation_argument_start,
-                                   checkerboard,
+                                   neighbor_bonus,
                                    errorMsg)
                 || !setKernelArgument(execution_lane.kernels[1],
                                       propagation_argument_start + 1,
-                                      iteration,
+                                      asymmetric_propagation,
                                       errorMsg)
                 || !setKernelArgument(execution_lane.kernels[1],
                                       propagation_argument_start + 2,
+                                      checkerboard,
+                                      errorMsg)
+                || !setKernelArgument(execution_lane.kernels[1],
+                                      propagation_argument_start + 3,
+                                      iteration,
+                                      errorMsg)
+                || !setKernelArgument(execution_lane.kernels[1],
+                                      propagation_argument_start + 4,
                                       perturbation,
                                       errorMsg)
                 || !enqueue_kernel(execution_lane.kernels[1],
@@ -1491,6 +1510,18 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
                                     nullptr,
                                     confidence_read_event.output());
     }
+    if (error == CL_SUCCESS)
+    {
+        error = clEnqueueReadBuffer(execution_lane.queue,
+                                    memory_arguments[10],
+                                    CL_FALSE,
+                                    0,
+                                    static_cast<std::size_t>(pixel_count) * sizeof(std::uint32_t),
+                                    source_selection_work.ptr<std::int32_t>(),
+                                    0,
+                                    nullptr,
+                                    source_selection_read_event.output());
+    }
     if (error != CL_SUCCESS)
     {
         if (errorMsg)
@@ -1503,7 +1534,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     error = clFlush(execution_lane.queue);
     if (error == CL_SUCCESS)
     {
-        const cl_event final_event = confidence_read_event.get();
+        const cl_event final_event = source_selection_read_event.get();
         error = clWaitForEvents(1, &final_event);
     }
     if (error != CL_SUCCESS)
@@ -1540,7 +1571,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const bool has_read_profile = eventProfileRange(
         depth_read_event.get(),
         CL_PROFILING_COMMAND_START,
-        confidence_read_event.get(),
+        source_selection_read_event.get(),
         CL_PROFILING_COMMAND_END,
         read_start_nanoseconds,
         read_end_nanoseconds);
@@ -1578,6 +1609,15 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
                        0.0,
                        cv::INTER_NEAREST);
         }
+        if (auxiliaryOutput && auxiliaryOutput->photometricSourceMask)
+        {
+            cv::resize(source_selection_work,
+                       *auxiliaryOutput->photometricSourceMask,
+                       refGray.size(),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
+        }
     }
     else
     {
@@ -1585,6 +1625,10 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         if (confOut)
         {
             *confOut = confidence_work;
+        }
+        if (auxiliaryOutput && auxiliaryOutput->photometricSourceMask)
+        {
+            *auxiliaryOutput->photometricSourceMask = source_selection_work;
         }
     }
 

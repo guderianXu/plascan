@@ -206,6 +206,60 @@ inline float cpuPropagateDepth(float depth,
     return t > 0.f ? t : depth;
 }
 
+CpuNormal cpuLocalSurfaceNormal(const cv::Mat &depth_map,
+                                int row,
+                                int col,
+                                const float invK[4],
+                                const CpuNormal &fallback)
+{
+    if (row <= 0 || row + 1 >= depth_map.rows ||
+        col <= 0 || col + 1 >= depth_map.cols)
+    {
+        return fallback;
+    }
+    const float left_depth = depth_map.at<float>(row, col - 1);
+    const float right_depth = depth_map.at<float>(row, col + 1);
+    const float top_depth = depth_map.at<float>(row - 1, col);
+    const float bottom_depth = depth_map.at<float>(row + 1, col);
+    if (!(left_depth > 0.0f) || !(right_depth > 0.0f) ||
+        !(top_depth > 0.0f) || !(bottom_depth > 0.0f))
+    {
+        return fallback;
+    }
+    auto point = [invK](int point_row, int point_col, float point_depth)
+    {
+        return CpuNormal{
+            point_depth * (invK[0] * static_cast<float>(point_col) + invK[1]),
+            point_depth * (invK[2] * static_cast<float>(point_row) + invK[3]),
+            point_depth};
+    };
+    const CpuNormal left = point(row, col - 1, left_depth);
+    const CpuNormal right = point(row, col + 1, right_depth);
+    const CpuNormal top = point(row - 1, col, top_depth);
+    const CpuNormal bottom = point(row + 1, col, bottom_depth);
+    const CpuNormal horizontal{
+        right[0] - left[0], right[1] - left[1], right[2] - left[2]};
+    const CpuNormal vertical{
+        bottom[0] - top[0], bottom[1] - top[1], bottom[2] - top[2]};
+    CpuNormal normal{
+        horizontal[1] * vertical[2] - horizontal[2] * vertical[1],
+        horizontal[2] * vertical[0] - horizontal[0] * vertical[2],
+        horizontal[0] * vertical[1] - horizontal[1] * vertical[0]};
+    if (cpuDot3(normal, normal) < 1e-12f)
+    {
+        return fallback;
+    }
+    const CpuNormal ray = cpuRayFromPixel(row, col, invK);
+    if (cpuDot3(normal, ray) > 0.0f)
+    {
+        normal[0] = -normal[0];
+        normal[1] = -normal[1];
+        normal[2] = -normal[2];
+    }
+    cpuNormalize3(normal);
+    return normal;
+}
+
 inline float cpuBilinear(const cv::Mat &image, float u, float v)
 {
     if (u < 0.f || v < 0.f || u >= static_cast<float>(image.cols - 1) || v >= static_cast<float>(image.rows - 1))
@@ -454,22 +508,96 @@ float cpuComputeHomographyNcc(int refCol,
     return accumulator.score(mask_aware, minimumMaskedSupportRatio);
 }
 
-float cpuEvalHypCost(int col,
-                     int row,
-                     float depth,
-                     const CpuNormal &normal,
-                     const cv::Mat &refImage,
-                     const std::vector<cv::Mat> &srcImages,
-                     const cv::Mat &refMask,
-                     const std::vector<cv::Mat> &srcMasks,
-                     const std::vector<float> &srcDatas,
-                     int patchHalf,
-                     const float invK[4],
-                     float minimumMaskedSupportRatio)
+struct CpuHypothesisCost
 {
+    float objective = 2.0f;
+    float photometricNcc = 0.0f;
+    std::uint32_t sourceMask = 0;
+};
+
+float cpuRoundTripReprojectionError(int col,
+                                    int row,
+                                    float depth,
+                                    const cv::Mat &source_depth,
+                                    const float source_data[16],
+                                    const float invK[4])
+{
+    if (source_depth.empty() || !(depth > 0.0f))
+    {
+        return -1.0f;
+    }
+
+    const float ref_x = static_cast<float>(col) * invK[0] + invK[1];
+    const float ref_y = static_cast<float>(row) * invK[2] + invK[3];
+    const float x = ref_x * depth;
+    const float y = ref_y * depth;
+    const float z = depth;
+    const float source_x = source_data[4] * x + source_data[5] * y +
+        source_data[6] * z + source_data[13];
+    const float source_y = source_data[7] * x + source_data[8] * y +
+        source_data[9] * z + source_data[14];
+    const float source_z = source_data[10] * x + source_data[11] * y +
+        source_data[12] * z + source_data[15];
+    if (!(source_z > 0.0f))
+    {
+        return -1.0f;
+    }
+    const float source_u = source_data[0] * source_x / source_z + source_data[1];
+    const float source_v = source_data[2] * source_y / source_z + source_data[3];
+    if (source_u < 0.0f || source_v < 0.0f ||
+        source_u > static_cast<float>(source_depth.cols - 1) ||
+        source_v > static_cast<float>(source_depth.rows - 1))
+    {
+        return -1.0f;
+    }
+
+    const float sampled_depth = cpuBilinear(source_depth, source_u, source_v);
+    if (!(sampled_depth > 0.0f) || !std::isfinite(sampled_depth))
+    {
+        return -1.0f;
+    }
+    const float sampled_x = (source_u - source_data[1]) / source_data[0] * sampled_depth;
+    const float sampled_y = (source_v - source_data[3]) / source_data[2] * sampled_depth;
+    const float translated_x = sampled_x - source_data[13];
+    const float translated_y = sampled_y - source_data[14];
+    const float translated_z = sampled_depth - source_data[15];
+    const float round_trip_x = source_data[4] * translated_x +
+        source_data[7] * translated_y + source_data[10] * translated_z;
+    const float round_trip_y = source_data[5] * translated_x +
+        source_data[8] * translated_y + source_data[11] * translated_z;
+    const float round_trip_z = source_data[6] * translated_x +
+        source_data[9] * translated_y + source_data[12] * translated_z;
+    if (!(round_trip_z > 0.0f))
+    {
+        return -1.0f;
+    }
+    const float round_trip_u = (round_trip_x / round_trip_z - invK[1]) / invK[0];
+    const float round_trip_v = (round_trip_y / round_trip_z - invK[3]) / invK[2];
+    const float delta_u = round_trip_u - static_cast<float>(col);
+    const float delta_v = round_trip_v - static_cast<float>(row);
+    return std::sqrt(delta_u * delta_u + delta_v * delta_v);
+}
+
+CpuHypothesisCost cpuEvalHypCost(int col,
+                                 int row,
+                                 float depth,
+                                 const CpuNormal &normal,
+                                 const cv::Mat &refImage,
+                                 const std::vector<cv::Mat> &srcImages,
+                                 const cv::Mat &refMask,
+                                 const std::vector<cv::Mat> &srcMasks,
+                                 const std::vector<cv::Mat> &sourceDepths,
+                                 const std::vector<float> &srcDatas,
+                                 int patchHalf,
+                                 const float invK[4],
+                                 float minimumMaskedSupportRatio,
+                                 std::uint32_t neighborMask,
+                                 const PatchMatchConfig &config)
+{
+    CpuHypothesisCost result;
     if (depth <= 0.f)
     {
-        return 2.f;
+        return result;
     }
 
     std::array<float, kMaxPatchMatchSourceViews> scores{};
@@ -486,8 +614,50 @@ float cpuEvalHypCost(int col,
         scores[static_cast<size_t>(srcIndex)] = ncc;
     }
 
-    const float robust_ncc = robustMultiSourceNcc(scores.data(), source_count);
-    return 2.f - 2.f * robust_ncc;
+    const JointViewSelection selection = selectJointSourceViews(
+        scores.data(),
+        source_count,
+        config.enablePerPixelSourceSelection ? neighborMask : 0u,
+        config.enablePerPixelSourceSelection
+            ? config.sourceSelectionNeighborBonus
+            : 0.0f);
+    result.photometricNcc = selection.photometricScore;
+    result.sourceMask = selection.sourceMask;
+    result.objective = 2.f - 2.f * result.photometricNcc;
+
+    if (!sourceDepths.empty() && config.geometricGuidanceWeight > 0.0f &&
+        config.geometricGuidanceMaxErrorPixels > 0.0f)
+    {
+        float normalized_error_sum = 0.0f;
+        int geometric_support = 0;
+        for (int source_index = 0; source_index < source_count; ++source_index)
+        {
+            if (((selection.sourceMask >> source_index) & 1u) == 0u)
+            {
+                continue;
+            }
+            const float error = cpuRoundTripReprojectionError(
+                col,
+                row,
+                depth,
+                sourceDepths[static_cast<std::size_t>(source_index)],
+                srcDatas.data() + source_index * 16,
+                invK);
+            if (error < 0.0f)
+            {
+                continue;
+            }
+            normalized_error_sum += std::min(
+                error / config.geometricGuidanceMaxErrorPixels, 1.0f);
+            ++geometric_support;
+        }
+        if (geometric_support > 0)
+        {
+            result.objective += config.geometricGuidanceWeight *
+                normalized_error_sum / static_cast<float>(geometric_support);
+        }
+    }
+    return result;
 }
 
 template <typename Fn>
@@ -589,7 +759,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
     const cv::Mat                *hintDepth,
     const cv::Mat                *hintRadius,
     const cv::Mat                *refValidMask,
-    const std::vector<cv::Mat>   *srcValidMasks)
+    const std::vector<cv::Mat>   *srcValidMasks,
+    const PatchMatchAuxiliaryInput *auxiliaryInput,
+    PatchMatchAuxiliaryOutput *auxiliaryOutput)
 {
     const int refW = refGray.cols;
     const int refH = refGray.rows;
@@ -613,6 +785,36 @@ bool PatchMatchDepthEstimator::estimateCPU(
             source_masks_scaled[static_cast<std::size_t>(source_index)] =
                 resizedBinaryMask(&(*srcValidMasks)[static_cast<std::size_t>(source_index)],
                                   scaled_size);
+        }
+    }
+    std::vector<cv::Mat> source_depths_scaled;
+    if (auxiliaryInput && auxiliaryInput->sourceDepthMaps)
+    {
+        source_depths_scaled.resize(static_cast<std::size_t>(N));
+        for (int source_index = 0; source_index < N; ++source_index)
+        {
+            const cv::Mat &source_depth =
+                (*auxiliaryInput->sourceDepthMaps)[static_cast<std::size_t>(source_index)];
+            if (source_depth.empty())
+            {
+                continue;
+            }
+            cv::Mat depth_float;
+            source_depth.convertTo(depth_float, CV_32F);
+            if (depth_float.size() == scaled_size)
+            {
+                source_depths_scaled[static_cast<std::size_t>(source_index)] =
+                    depth_float.isContinuous() ? depth_float : depth_float.clone();
+            }
+            else
+            {
+                cv::resize(depth_float,
+                           source_depths_scaled[static_cast<std::size_t>(source_index)],
+                           scaled_size,
+                           0.0,
+                           0.0,
+                           cv::INTER_NEAREST);
+            }
         }
     }
 
@@ -709,6 +911,8 @@ bool PatchMatchDepthEstimator::estimateCPU(
     // evaluated yet. Once scored, the NCC is invariant across propagation
     // sweeps and can be reused instead of evaluating the current plane again.
     cv::Mat confS(H, W, CV_32F, cv::Scalar(-1.f));
+    cv::Mat objectiveS(H, W, CV_32F, cv::Scalar(2.0f));
+    cv::Mat sourceMaskS(H, W, CV_32S, cv::Scalar(0));
     cv::Mat normalS(H, W, CV_32FC3, cv::Scalar(0.f, 0.f, -1.f));
 
     if (!cpuParallelForLines(H, cpuThreadCount, errorMsg, [&](int row)
@@ -736,6 +940,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
                               unsigned long long seed,
                               float perturbation)
     {
+        const cv::Mat depth_snapshot = config.enableAsymmetricPropagation
+            ? depthS.clone()
+            : cv::Mat();
         return cpuParallelForLines(W, cpuThreadCount, errorMsg, [&](int col) {
             std::mt19937 rng(static_cast<uint32_t>(seed + static_cast<unsigned long long>(col)));
             const int rowStart = topToBottom ? 0 : (H - 1);
@@ -783,8 +990,13 @@ bool PatchMatchDepthEstimator::estimateCPU(
 
                 const float cached_ncc = confS.at<float>(idxRow, col);
                 float bestCost = cached_ncc >= 0.0f
-                    ? 2.0f - 2.0f * std::clamp(cached_ncc, 0.0f, 1.0f)
+                    ? objectiveS.at<float>(idxRow, col)
                     : 2.0f;
+                float bestNcc = std::max(0.0f, cached_ncc);
+                std::uint32_t bestMask = static_cast<std::uint32_t>(
+                    sourceMaskS.at<std::int32_t>(idxRow, col));
+                const std::uint32_t neighborMask = bestMask |
+                    static_cast<std::uint32_t>(sourceMaskS.at<std::int32_t>(prevRow, col));
                 int bestIndex = 0;
                 const int first_hypothesis = cached_ncc >= 0.0f ? 1 : 0;
                 for (int hi = first_hypothesis; hi < 5; ++hi)
@@ -805,26 +1017,100 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     {
                         continue;
                     }
-                    const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
-                                                      refF, srcF,
-                                                      ref_mask_scaled, source_masks_scaled,
-                                                      srcDatas, config.patchHalf, invK,
-                                                      config.minimumMaskedPatchSupportRatio);
-                    if (cost < bestCost)
+                    const CpuHypothesisCost cost = cpuEvalHypCost(
+                        col, row, dep[hi], nor[hi],
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio,
+                        neighborMask,
+                        config);
+                    if (cost.objective < bestCost)
                     {
-                        bestCost = cost;
+                        bestCost = cost.objective;
+                        bestNcc = cost.photometricNcc;
+                        bestMask = cost.sourceMask;
                         bestIndex = hi;
                     }
                 }
 
-                depthS.at<float>(idxRow, col) = dep[bestIndex];
-                const CpuNormal &bestNormal = nor[bestIndex];
-                normalS.at<cv::Vec3f>(idxRow, col) = cv::Vec3f(bestNormal[0], bestNormal[1], bestNormal[2]);
-                confS.at<float>(idxRow, col) = 1.f - bestCost * 0.5f;
+                float chosenDepth = dep[bestIndex];
+                CpuNormal chosenNormal = nor[bestIndex];
+                if (config.enableAsymmetricPropagation)
+                {
+                    const int propagation_distances[] = {3, 5, 9};
+                    for (const int distance : propagation_distances)
+                    {
+                        const int candidate_row = row - rowStep * distance;
+                        if (candidate_row < 0 || candidate_row >= H)
+                        {
+                            continue;
+                        }
+                        const float candidate_depth = depthS.at<float>(candidate_row, col);
+                        const cv::Vec3f candidate_vector =
+                            normalS.at<cv::Vec3f>(candidate_row, col);
+                        const CpuNormal candidate_normal{
+                            candidate_vector[0], candidate_vector[1], candidate_vector[2]};
+                        const float propagated_depth = clampDepth(
+                            row,
+                            col,
+                            cpuPropagateDepth(candidate_depth,
+                                              candidate_normal,
+                                              static_cast<float>(candidate_row),
+                                              static_cast<float>(col),
+                                              static_cast<float>(row),
+                                              static_cast<float>(col),
+                                              invK));
+                        const std::uint32_t candidate_mask = neighborMask |
+                            static_cast<std::uint32_t>(
+                                sourceMaskS.at<std::int32_t>(candidate_row, col));
+                        const CpuHypothesisCost candidate_cost = cpuEvalHypCost(
+                            col, row, propagated_depth, candidate_normal,
+                            refF, srcF,
+                            ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                            srcDatas, config.patchHalf, invK,
+                            config.minimumMaskedPatchSupportRatio,
+                            candidate_mask,
+                            config);
+                        if (candidate_cost.objective < bestCost)
+                        {
+                            bestCost = candidate_cost.objective;
+                            bestNcc = candidate_cost.photometricNcc;
+                            bestMask = candidate_cost.sourceMask;
+                            chosenDepth = propagated_depth;
+                            chosenNormal = candidate_normal;
+                        }
+                    }
+                    const CpuNormal local_normal = cpuLocalSurfaceNormal(
+                        depth_snapshot, row, col, invK, chosenNormal);
+                    const CpuHypothesisCost local_cost = cpuEvalHypCost(
+                        col, row, chosenDepth, local_normal,
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio,
+                        neighborMask,
+                        config);
+                    if (local_cost.objective < bestCost)
+                    {
+                        bestCost = local_cost.objective;
+                        bestNcc = local_cost.photometricNcc;
+                        bestMask = local_cost.sourceMask;
+                        chosenNormal = local_normal;
+                    }
+                }
+
+                depthS.at<float>(idxRow, col) = chosenDepth;
+                normalS.at<cv::Vec3f>(idxRow, col) =
+                    cv::Vec3f(chosenNormal[0], chosenNormal[1], chosenNormal[2]);
+                confS.at<float>(idxRow, col) = bestNcc;
+                objectiveS.at<float>(idxRow, col) = bestCost;
+                sourceMaskS.at<std::int32_t>(idxRow, col) =
+                    static_cast<std::int32_t>(bestMask);
 
                 prevRow = row;
-                prevDepth = dep[bestIndex];
-                prevNormal = bestNormal;
+                prevDepth = chosenDepth;
+                prevNormal = chosenNormal;
             }
         });
     };
@@ -833,6 +1119,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
                            unsigned long long seed,
                            float perturbation)
     {
+        const cv::Mat depth_snapshot = config.enableAsymmetricPropagation
+            ? depthS.clone()
+            : cv::Mat();
         return cpuParallelForLines(H, cpuThreadCount, errorMsg, [&](int row) {
             std::mt19937 rng(static_cast<uint32_t>(seed + static_cast<unsigned long long>(row)));
             const int colStart = leftToRight ? 0 : (W - 1);
@@ -879,8 +1168,13 @@ bool PatchMatchDepthEstimator::estimateCPU(
 
                 const float cached_ncc = confS.at<float>(row, col);
                 float bestCost = cached_ncc >= 0.0f
-                    ? 2.0f - 2.0f * std::clamp(cached_ncc, 0.0f, 1.0f)
+                    ? objectiveS.at<float>(row, col)
                     : 2.0f;
+                float bestNcc = std::max(0.0f, cached_ncc);
+                std::uint32_t bestMask = static_cast<std::uint32_t>(
+                    sourceMaskS.at<std::int32_t>(row, col));
+                const std::uint32_t neighborMask = bestMask |
+                    static_cast<std::uint32_t>(sourceMaskS.at<std::int32_t>(row, prevCol));
                 int bestIndex = 0;
                 const int first_hypothesis = cached_ncc >= 0.0f ? 1 : 0;
                 for (int hi = first_hypothesis; hi < 5; ++hi)
@@ -901,26 +1195,100 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     {
                         continue;
                     }
-                    const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
-                                                      refF, srcF,
-                                                      ref_mask_scaled, source_masks_scaled,
-                                                      srcDatas, config.patchHalf, invK,
-                                                      config.minimumMaskedPatchSupportRatio);
-                    if (cost < bestCost)
+                    const CpuHypothesisCost cost = cpuEvalHypCost(
+                        col, row, dep[hi], nor[hi],
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio,
+                        neighborMask,
+                        config);
+                    if (cost.objective < bestCost)
                     {
-                        bestCost = cost;
+                        bestCost = cost.objective;
+                        bestNcc = cost.photometricNcc;
+                        bestMask = cost.sourceMask;
                         bestIndex = hi;
                     }
                 }
 
-                depthS.at<float>(row, col) = dep[bestIndex];
-                const CpuNormal &bestNormal = nor[bestIndex];
-                normalS.at<cv::Vec3f>(row, col) = cv::Vec3f(bestNormal[0], bestNormal[1], bestNormal[2]);
-                confS.at<float>(row, col) = 1.f - bestCost * 0.5f;
+                float chosenDepth = dep[bestIndex];
+                CpuNormal chosenNormal = nor[bestIndex];
+                if (config.enableAsymmetricPropagation)
+                {
+                    const int propagation_distances[] = {3, 5, 9};
+                    for (const int distance : propagation_distances)
+                    {
+                        const int candidate_col = col - colStep * distance;
+                        if (candidate_col < 0 || candidate_col >= W)
+                        {
+                            continue;
+                        }
+                        const float candidate_depth = depthS.at<float>(row, candidate_col);
+                        const cv::Vec3f candidate_vector =
+                            normalS.at<cv::Vec3f>(row, candidate_col);
+                        const CpuNormal candidate_normal{
+                            candidate_vector[0], candidate_vector[1], candidate_vector[2]};
+                        const float propagated_depth = clampDepth(
+                            row,
+                            col,
+                            cpuPropagateDepth(candidate_depth,
+                                              candidate_normal,
+                                              static_cast<float>(row),
+                                              static_cast<float>(candidate_col),
+                                              static_cast<float>(row),
+                                              static_cast<float>(col),
+                                              invK));
+                        const std::uint32_t candidate_mask = neighborMask |
+                            static_cast<std::uint32_t>(
+                                sourceMaskS.at<std::int32_t>(row, candidate_col));
+                        const CpuHypothesisCost candidate_cost = cpuEvalHypCost(
+                            col, row, propagated_depth, candidate_normal,
+                            refF, srcF,
+                            ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                            srcDatas, config.patchHalf, invK,
+                            config.minimumMaskedPatchSupportRatio,
+                            candidate_mask,
+                            config);
+                        if (candidate_cost.objective < bestCost)
+                        {
+                            bestCost = candidate_cost.objective;
+                            bestNcc = candidate_cost.photometricNcc;
+                            bestMask = candidate_cost.sourceMask;
+                            chosenDepth = propagated_depth;
+                            chosenNormal = candidate_normal;
+                        }
+                    }
+                    const CpuNormal local_normal = cpuLocalSurfaceNormal(
+                        depth_snapshot, row, col, invK, chosenNormal);
+                    const CpuHypothesisCost local_cost = cpuEvalHypCost(
+                        col, row, chosenDepth, local_normal,
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio,
+                        neighborMask,
+                        config);
+                    if (local_cost.objective < bestCost)
+                    {
+                        bestCost = local_cost.objective;
+                        bestNcc = local_cost.photometricNcc;
+                        bestMask = local_cost.sourceMask;
+                        chosenNormal = local_normal;
+                    }
+                }
+
+                depthS.at<float>(row, col) = chosenDepth;
+                normalS.at<cv::Vec3f>(row, col) =
+                    cv::Vec3f(chosenNormal[0], chosenNormal[1], chosenNormal[2]);
+                confS.at<float>(row, col) = bestNcc;
+                objectiveS.at<float>(row, col) = bestCost;
+                sourceMaskS.at<std::int32_t>(row, col) =
+                    static_cast<std::int32_t>(bestMask);
 
                 prevCol = col;
-                prevDepth = dep[bestIndex];
-                prevNormal = bestNormal;
+                prevDepth = chosenDepth;
+                prevNormal = chosenNormal;
             }
         });
     };
@@ -974,25 +1342,29 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     1e-6f, depth * relative_step * 0.25f);
                 if (depth - lower_depth >= minimum_distinct_depth)
                 {
-                    const float cost = cpuEvalHypCost(
+                    const CpuHypothesisCost cost = cpuEvalHypCost(
                         col, row, lower_depth, normal,
                         refF, srcF,
-                        ref_mask_scaled, source_masks_scaled,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
                         srcDatas, config.patchHalf, invK,
-                        config.minimumMaskedPatchSupportRatio);
+                        config.minimumMaskedPatchSupportRatio,
+                        static_cast<std::uint32_t>(sourceMaskS.at<std::int32_t>(row, col)),
+                        config);
                     competing_ncc = std::max(
-                        competing_ncc, 1.0f - cost * 0.5f);
+                        competing_ncc, cost.photometricNcc);
                 }
                 if (upper_depth - depth >= minimum_distinct_depth)
                 {
-                    const float cost = cpuEvalHypCost(
+                    const CpuHypothesisCost cost = cpuEvalHypCost(
                         col, row, upper_depth, normal,
                         refF, srcF,
-                        ref_mask_scaled, source_masks_scaled,
+                        ref_mask_scaled, source_masks_scaled, source_depths_scaled,
                         srcDatas, config.patchHalf, invK,
-                        config.minimumMaskedPatchSupportRatio);
+                        config.minimumMaskedPatchSupportRatio,
+                        static_cast<std::uint32_t>(sourceMaskS.at<std::int32_t>(row, col)),
+                        config);
                     competing_ncc = std::max(
-                        competing_ncc, 1.0f - cost * 0.5f);
+                        competing_ncc, cost.photometricNcc);
                 }
                 confidence_row[col] = best_ncc *
                     photometricUniquenessConfidenceScale(
@@ -1015,6 +1387,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
             if (confPtr[col] < config.confidenceThresh)
             {
                 depthPtr[col] = 0.f;
+                sourceMaskS.at<std::int32_t>(row, col) = 0;
             }
         }
     }
@@ -1024,6 +1397,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
         const cv::Mat invalid_reference = ref_mask_scaled == 0;
         depthS.setTo(cv::Scalar(0.0f), invalid_reference);
         confS.setTo(cv::Scalar(0.0f), invalid_reference);
+        sourceMaskS.setTo(cv::Scalar(0), invalid_reference);
     }
 
     LOG_DEBUG("[MVS][PatchMatch][CPU] size=%dx%d ds=%d threads=%d valid_rows=%d",
@@ -1033,16 +1407,27 @@ bool PatchMatchDepthEstimator::estimateCPU(
 
     cv::Mat depthFull = depthS;
     cv::Mat confFull = confS;
+    cv::Mat sourceMaskFull = sourceMaskS;
     if (ds > 1 && !config.returnNativeResolution)
     {
         cv::resize(depthS, depthFull, cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);
         cv::resize(confS, confFull, cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);
+        cv::resize(sourceMaskS,
+                   sourceMaskFull,
+                   cv::Size(refW, refH),
+                   0,
+                   0,
+                   cv::INTER_NEAREST);
     }
 
     depthOut = depthFull;
     if (confOut)
     {
         *confOut = confFull;
+    }
+    if (auxiliaryOutput && auxiliaryOutput->photometricSourceMask)
+    {
+        *auxiliaryOutput->photometricSourceMask = sourceMaskFull;
     }
     return true;
 }

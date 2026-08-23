@@ -74,6 +74,10 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
     EXPECT_EQ(cfg.downsampleFactor, 2);
     EXPECT_FALSE(cfg.returnNativeResolution)
         << "Standalone PatchMatch callers must retain the historical full-size output contract";
+    EXPECT_TRUE(cfg.enablePerPixelSourceSelection);
+    EXPECT_TRUE(cfg.enableAsymmetricPropagation);
+    EXPECT_TRUE(cfg.enableGeometricGuidancePass);
+    EXPECT_GT(cfg.geometricGuidanceWeight, 0.0f);
 }
 
 TEST(PatchMatchConfigTest, PostProcessingEnabled)

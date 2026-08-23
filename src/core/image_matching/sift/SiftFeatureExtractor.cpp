@@ -1,6 +1,7 @@
 #include "SiftFeatureExtractor.h"
 
 #include "SiftComputeBackend.h"
+#include "SiftLowTextureRecovery.h"
 
 #include <opencv2/features2d.hpp>
 #include <opencv2/imgproc.hpp>
@@ -147,15 +148,18 @@ namespace xjw::image_matching
             return best;
         }
 
-        SiftRawFeatures extractAdaptive(const ImageFeatureInput& input,
-                                        const ImageMatchingRuntimeConfig& runtime,
-                                        SiftComputeBackend backend)
+        SiftRawFeatures extractAdaptiveBase(const ImageFeatureInput& input,
+                                            const ImageMatchingRuntimeConfig& runtime,
+                                            SiftComputeBackend backend,
+                                            int targetOverride = 0)
         {
             const int maximumSide = std::max(input.grayImage.cols, input.grayImage.rows);
             const int minimumSide = std::min(input.grayImage.cols, input.grayImage.rows);
             const int maxDimension =
                 runtime.maxImageDimension > 0 ? std::max(512, runtime.maxImageDimension) : maximumSide;
-            const int target = adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
+            const int target = targetOverride > 0
+                ? targetOverride
+                : adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
             const auto runPass = [&](const cv::Mat& image, const cv::Mat& mask, int requested, int passTarget)
             {
                 if (backend != SiftComputeBackend::Cpu)
@@ -241,6 +245,39 @@ namespace xjw::image_matching
             return combined;
         }
 
+        SiftRawFeatures extractAdaptive(const ImageFeatureInput& input,
+                                        const ImageMatchingRuntimeConfig& runtime,
+                                        SiftComputeBackend backend)
+        {
+            SiftRawFeatures combined = extractAdaptiveBase(input, runtime, backend);
+            for (cv::KeyPoint& keypoint : combined.keypoints)
+            {
+                keypoint.class_id = 0;
+            }
+            const int target = adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
+            const auto recoveryPlan = planSiftLowTextureRecovery(
+                input, runtime, combined.keypoints, target);
+            if (!recoveryPlan || !recoveryPlan->isValid())
+            {
+                return combined;
+            }
+
+            ImageFeatureInput enhancedInput = input;
+            enhancedInput.grayImage = recoveryPlan->enhancedImage;
+            enhancedInput.validMask = recoveryPlan->recoveryMask;
+            ImageMatchingRuntimeConfig recoveryRuntime = runtime;
+            recoveryRuntime.lowTextureRecovery = false;
+            recoveryRuntime.maxKeypoints = recoveryPlan->maximumFeatures;
+            recoveryRuntime.siftDetectionThreshold *= recoveryPlan->thresholdScale;
+            recoveryRuntime.siftContrastThreshold *= recoveryPlan->thresholdScale;
+            SiftRawFeatures recovered = extractAdaptiveBase(
+                enhancedInput, recoveryRuntime, backend, recoveryPlan->targetFeatures);
+            recovered = filterRecoveredSiftFeatures(
+                combined, recovered, recoveryPlan->recoveryMask);
+            appendRawFeatures(&combined, std::move(recovered), 1.0);
+            return combined;
+        }
+
         SiftRawFeatures extractSinglePass(const ImageFeatureInput& input,
                                           const ImageMatchingRuntimeConfig& runtime,
                                           SiftComputeBackend backend)
@@ -293,6 +330,14 @@ namespace xjw::image_matching
                              ranked.end(),
                              [&](int left, int right)
                              {
+                                 const bool leftRecovery =
+                                     raw.keypoints[static_cast<std::size_t>(left)].class_id == 1;
+                                 const bool rightRecovery =
+                                     raw.keypoints[static_cast<std::size_t>(right)].class_id == 1;
+                                 if (leftRecovery != rightRecovery)
+                                 {
+                                     return !leftRecovery;
+                                 }
                                  const float leftResponse = raw.keypoints[static_cast<std::size_t>(left)].response;
                                  const float rightResponse = raw.keypoints[static_cast<std::size_t>(right)].response;
                                  return leftResponse == rightResponse ? left < right : leftResponse > rightResponse;

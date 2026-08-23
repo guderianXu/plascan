@@ -17,6 +17,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
@@ -25,11 +26,76 @@
 #include <QSet>
 
 #include <atomic>
+#include <algorithm>
 #include <exception>
 #include <memory>
 
 namespace
 {
+
+    struct ClearMaskTarget
+    {
+        int imageIndex = -1;
+        QString imagePath;
+        QStringList managedMaskPaths;
+    };
+
+    const QStringList& maskMetadataKeys()
+    {
+        static const QStringList keys{
+            QStringLiteral("mask_path"),
+            QStringLiteral("mask_method"),
+            QStringLiteral("mask_model_id"),
+            QStringLiteral("mask_model_file_name"),
+            QStringLiteral("mask_model_sha256"),
+            QStringLiteral("mask_model_input_size"),
+            QStringLiteral("mask_inference_backend"),
+            QStringLiteral("mask_inference_device"),
+            QStringLiteral("mask_inference_precision"),
+            QStringLiteral("mask_inference_environment"),
+            QStringLiteral("mask_inference_fallback_reason"),
+            QStringLiteral("mask_engine_cache_path"),
+            QStringLiteral("mask_engine_cache_reused"),
+            QStringLiteral("mask_updated_at")};
+        return keys;
+    }
+
+    bool hasMaskMetadata(const QJsonObject& image)
+    {
+        const QStringList& keys = maskMetadataKeys();
+        return std::any_of(keys.cbegin(), keys.cend(), [&image](const QString& key)
+        {
+            return image.contains(key);
+        });
+    }
+
+    void removeMaskMetadata(QJsonObject* image)
+    {
+        if (!image)
+        {
+            return;
+        }
+        for (const QString& key : maskMetadataKeys())
+        {
+            image->remove(key);
+        }
+    }
+
+    bool isPathInsideDirectory(const QString& path, const QString& directory)
+    {
+        const QString cleanPath = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        QString cleanDirectory = QDir::cleanPath(QFileInfo(directory).absoluteFilePath());
+        if (cleanPath.isEmpty() || cleanDirectory.isEmpty())
+        {
+            return false;
+        }
+        cleanDirectory += QDir::separator();
+#ifdef Q_OS_WIN
+        return cleanPath.startsWith(cleanDirectory, Qt::CaseInsensitive);
+#else
+        return cleanPath.startsWith(cleanDirectory);
+#endif
+    }
 
     struct GenerateMaskResult
     {
@@ -140,6 +206,168 @@ void ProjectMaskWorkflowController::setActiveImagePath(const QString& imagePath)
 void ProjectMaskWorkflowController::openDialog()
 {
     openDialogForImages(_projectData ? _projectData->getAllImages() : QStringList{});
+}
+
+void ProjectMaskWorkflowController::clearMasksForImages(const QStringList& requestedImages)
+{
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开项目，再清除照片蒙版。")))
+    {
+        return;
+    }
+    if (_running)
+    {
+        QMessageBox::warning(_parentWidget,
+                             QStringLiteral("清除蒙版"),
+                             QStringLiteral(
+                                 "照片蒙版生成任务正在运行，请等待完成或取消后再试。"));
+        return;
+    }
+
+    const QString projectPath = _projectData->currentProjectPath();
+    QHash<QString, QString> projectImages;
+    for (const QString& path : _projectData->getAllImages())
+    {
+        const QString resolved = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, path);
+        const QString key = xjw::common::project::normalizePath(resolved);
+        if (!key.isEmpty() && !projectImages.contains(key))
+        {
+            projectImages.insert(key, resolved);
+        }
+    }
+
+    QSet<QString> selectedKeys;
+    for (const QString& path : requestedImages)
+    {
+        const QString resolved = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, path);
+        const QString key = xjw::common::project::normalizePath(resolved);
+        if (projectImages.contains(key))
+        {
+            selectedKeys.insert(key);
+        }
+    }
+    if (selectedKeys.isEmpty())
+    {
+        QMessageBox::warning(_parentWidget,
+                             QStringLiteral("清除蒙版"),
+                             QStringLiteral("没有选中可处理的照片。"));
+        return;
+    }
+
+    QJsonObject meta = _projectData->coreFilesMeta();
+    QJsonArray images = meta.value(QStringLiteral("images")).toArray();
+    const QString masksDirectory = xjw::common::project::ProjectIO::maskOutputDir(projectPath);
+    QList<ClearMaskTarget> targets;
+    for (int i = 0; i < images.size(); ++i)
+    {
+        const QJsonObject image = images.at(i).toObject();
+        const QString imagePath = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            projectPath, image.value(QStringLiteral("path")).toString());
+        const QString imageKey = xjw::common::project::normalizePath(imagePath);
+        if (!selectedKeys.contains(imageKey))
+        {
+            continue;
+        }
+
+        const QString standardMask = xjw::common::project::ProjectIO::maskOutputPathForImage(
+            projectPath, imagePath);
+        if (!hasMaskMetadata(image) && !QFileInfo::exists(standardMask))
+        {
+            continue;
+        }
+
+        ClearMaskTarget target;
+        target.imageIndex = i;
+        target.imagePath = imagePath;
+        const QString storedMask = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            projectPath, image.value(QStringLiteral("mask_path")).toString());
+        for (const QString& candidate : QStringList{storedMask, standardMask})
+        {
+            const QString normalized = xjw::common::project::normalizePath(candidate);
+            if (!candidate.isEmpty()
+                && isPathInsideDirectory(candidate, masksDirectory)
+                && !target.managedMaskPaths.contains(normalized))
+            {
+                target.managedMaskPaths.push_back(normalized);
+            }
+        }
+        targets.push_back(target);
+    }
+
+    if (targets.isEmpty())
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("清除蒙版"),
+                                 QStringLiteral("所选照片没有可清除的蒙版。"));
+        return;
+    }
+
+    const QString confirmation = targets.size() == 1
+        ? QStringLiteral("确定清除“%1”的蒙版吗？此操作无法撤销。")
+              .arg(QFileInfo(targets.constFirst().imagePath).fileName())
+        : QStringLiteral("确定清除所选 %1 张照片的蒙版吗？此操作无法撤销。")
+              .arg(targets.size());
+    if (QMessageBox::question(_parentWidget,
+                              QStringLiteral("清除蒙版"),
+                              confirmation,
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No)
+        != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    QStringList clearedImages;
+    QStringList errors;
+    for (const ClearMaskTarget& target : targets)
+    {
+        QString failedPath;
+        for (const QString& maskPath : target.managedMaskPaths)
+        {
+            if (QFileInfo::exists(maskPath) && !QFile::remove(maskPath))
+            {
+                failedPath = maskPath;
+                break;
+            }
+        }
+        if (!failedPath.isEmpty())
+        {
+            errors.push_back(QStringLiteral("%1：无法删除 %2")
+                                 .arg(QFileInfo(target.imagePath).fileName(), failedPath));
+            continue;
+        }
+
+        QJsonObject image = images.at(target.imageIndex).toObject();
+        removeMaskMetadata(&image);
+        images.replace(target.imageIndex, image);
+        clearedImages.push_back(target.imagePath);
+    }
+
+    if (!clearedImages.isEmpty())
+    {
+        meta.insert(QStringLiteral("images"), images);
+        xjw::gui::project::persistProjectMeta(_projectData, meta, true);
+        emit projectMetadataUpdated(projectPath);
+        emit masksGenerated(clearedImages);
+        LOG_INFO(QStringLiteral("照片蒙版已清除: count=%1 dir=%2")
+                     .arg(clearedImages.size())
+                     .arg(masksDirectory));
+    }
+
+    if (!errors.isEmpty())
+    {
+        QMessageBox::warning(
+            _parentWidget,
+            QStringLiteral("清除蒙版"),
+            QStringLiteral(
+                "已清除 %1 张照片的蒙版。\n以下蒙版未能清除，项目记录已保留：\n%2")
+                .arg(clearedImages.size())
+                .arg(errors.join(QLatin1Char('\n'))));
+        return;
+    }
+    QMessageBox::information(_parentWidget,
+                             QStringLiteral("清除蒙版"),
+                             QStringLiteral("已清除 %1 张照片的蒙版。").arg(clearedImages.size()));
 }
 
 void ProjectMaskWorkflowController::openDialogForImages(const QStringList& requestedImages)

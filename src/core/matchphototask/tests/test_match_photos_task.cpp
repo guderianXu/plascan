@@ -1,5 +1,8 @@
 #include "GeometryVerifyStage.h"
+#include "GuidedMatchStage.h"
 #include "MatchPhotosAlgorithmSelector.h"
+#include "MatchPhotosFeatureCache.h"
+#include "MatchPhotosParallelism.h"
 #include "MatchPhotosTask.h"
 #include "MatchingStage.h"
 #include "MatchPhotosMaskSupport.h"
@@ -16,8 +19,125 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <mutex>
+#include <set>
+#include <thread>
+#include <tuple>
 #include <vector>
+
+TEST(MatchPhotosGuidedStageTest, ReportsEveryPairWithElapsedTimeAndRemainingCount)
+{
+    xjw::matchphotos::MatchPhotosContext context;
+    context.featureCache = std::make_shared<xjw::matchphotos::MatchPhotosFeatureCache>();
+    std::vector<std::tuple<QString, int, int>> updates;
+    context.progressCallback = [&updates](const QString& stage_id,
+                                         const QString& message,
+                                         int current,
+                                         int maximum)
+    {
+        if (stage_id == QStringLiteral("guided_match"))
+        {
+            updates.emplace_back(message, current, maximum);
+        }
+    };
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGuidedMatching = true;
+    xjw::matchphotos::MatchPhotosAlgorithmPlan plan;
+    plan.algorithmId = QStringLiteral("auto_sift");
+    std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records(2);
+    records[0].image0Path = QStringLiteral("a.png");
+    records[0].image1Path = QStringLiteral("b.png");
+    records[1].image0Path = QStringLiteral("c.png");
+    records[1].image1Path = QStringLiteral("d.png");
+
+    const xjw::matchphotos::GuidedMatchStage stage;
+    const auto report = stage.run(context, options, plan, &records);
+
+    EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
+    ASSERT_EQ(updates.size(), 4U);
+    EXPECT_EQ(std::get<1>(updates[1]), 1);
+    EXPECT_EQ(std::get<2>(updates[1]), 2);
+    EXPECT_TRUE(std::get<0>(updates[1]).contains(QStringLiteral("耗时")));
+    EXPECT_TRUE(std::get<0>(updates[1]).contains(QStringLiteral("剩余 1 对")));
+    EXPECT_EQ(std::get<1>(updates[3]), 2);
+    EXPECT_TRUE(std::get<0>(updates[3]).contains(QStringLiteral("剩余 0 对")));
+}
+
+TEST(MatchPhotosGuidedStageTest, HonorsCancellationBeforeStartingPair)
+{
+    std::atomic_bool canceled{true};
+    xjw::matchphotos::MatchPhotosContext context;
+    context.featureCache = std::make_shared<xjw::matchphotos::MatchPhotosFeatureCache>();
+    context.cancelFlag = &canceled;
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGuidedMatching = true;
+    xjw::matchphotos::MatchPhotosAlgorithmPlan plan;
+    plan.algorithmId = QStringLiteral("auto_sift");
+    std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records(1);
+
+    const xjw::matchphotos::GuidedMatchStage stage;
+    const auto report = stage.run(context, options, plan, &records);
+
+    EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Failed);
+    EXPECT_TRUE(report.message.contains(QStringLiteral("已取消")));
+    EXPECT_TRUE(report.message.contains(QStringLiteral("剩余 1 对")));
+}
+
+TEST(MatchPhotosGuidedStageTest, UsesMultipleWorkersForManyPairs)
+{
+    constexpr int pair_count = 8;
+    const int worker_count = xjw::matchphotos::resolveGuidedMatchingWorkers(
+        pair_count, std::thread::hardware_concurrency());
+    if (worker_count < 2)
+    {
+        GTEST_SKIP() << "Host exposes fewer than two guided matching workers";
+    }
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.featureCache = std::make_shared<xjw::matchphotos::MatchPhotosFeatureCache>();
+    std::mutex thread_ids_mutex;
+    std::set<std::thread::id> thread_ids;
+    context.progressCallback = [&](const QString& stage_id,
+                                   const QString& message,
+                                   int,
+                                   int)
+    {
+        if (stage_id != QStringLiteral("guided_match") ||
+            !message.contains(QStringLiteral("启动像对")))
+        {
+            return;
+        }
+        {
+            std::lock_guard lock(thread_ids_mutex);
+            thread_ids.insert(std::this_thread::get_id());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGuidedMatching = true;
+    xjw::matchphotos::MatchPhotosAlgorithmPlan plan;
+    plan.algorithmId = QStringLiteral("auto_sift");
+    std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records(pair_count);
+    for (int index = 0; index < pair_count; ++index)
+    {
+        records[static_cast<std::size_t>(index)].image0Path =
+            QStringLiteral("left_%1.png").arg(index);
+        records[static_cast<std::size_t>(index)].image1Path =
+            QStringLiteral("right_%1.png").arg(index);
+    }
+
+    const xjw::matchphotos::GuidedMatchStage stage;
+    const auto report = stage.run(context, options, plan, &records);
+
+    EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
+    EXPECT_GT(thread_ids.size(), 1U);
+    EXPECT_TRUE(report.message.contains(QStringLiteral("CPU worker %1").arg(worker_count)));
+}
 
 TEST(MatchPhotosTaskTest, PlanOnlyUsesUnifiedAlgorithmWithoutWritingIntermediateFiles)
 {
@@ -328,6 +448,21 @@ TEST(MatchPhotosRawCacheTest, FingerprintCoversResolvedSiftDetectionThreshold)
                   automatic, automaticPlan, 4096, 0.15f, modelFingerprint),
               xjw::matchphotos::rawMatchConfigurationFingerprint(
                   fast, fastPlan, 4096, 0.15f, modelFingerprint));
+}
+
+TEST(MatchPhotosRawCacheTest, FingerprintCoversLowTextureRecovery)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+    ASSERT_TRUE(plan.valid);
+    const QByteArray modelFingerprint(32, 'm');
+    const QByteArray baseline = xjw::matchphotos::rawMatchConfigurationFingerprint(
+        options, plan, 0, options.matchThreshold, modelFingerprint);
+
+    plan.lowTextureRecovery = !plan.lowTextureRecovery;
+    EXPECT_NE(xjw::matchphotos::rawMatchConfigurationFingerprint(
+                  options, plan, 0, options.matchThreshold, modelFingerprint),
+              baseline);
 }
 
 TEST(MatchPhotosGeometryCacheTest, ReusesCompleteVerifiedPairWithoutRunningUsac)

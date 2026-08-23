@@ -69,6 +69,82 @@ namespace xjw::image_matching
             return matches;
         }
 
+        std::vector<int> channelIndices(const FeatureSet& features, bool recovery)
+        {
+            std::vector<int> indices;
+            indices.reserve(features.keypoints.size());
+            for (int index = 0; index < features.size(); ++index)
+            {
+                const bool isRecovery =
+                    features.keypoints[static_cast<std::size_t>(index)].class_id == 1;
+                if (isRecovery == recovery)
+                {
+                    indices.push_back(index);
+                }
+            }
+            return indices;
+        }
+
+        cv::Mat descriptorSubset(const cv::Mat& descriptors, const std::vector<int>& indices)
+        {
+            cv::Mat subset(static_cast<int>(indices.size()), descriptors.cols, CV_32F);
+            for (int row = 0; row < static_cast<int>(indices.size()); ++row)
+            {
+                descriptors.row(indices[static_cast<std::size_t>(row)]).copyTo(subset.row(row));
+            }
+            return subset;
+        }
+
+        MatchResult matchDescriptorChannel(const cv::Mat& descriptors0,
+                                           const cv::Mat& descriptors1,
+                                           SiftComputeBackend backend,
+                                           int cudaDevice,
+                                           const SiftMatchFilterOptions& filterOptions)
+        {
+            if (descriptors0.empty() || descriptors1.empty())
+            {
+                return {};
+            }
+            if (backend == SiftComputeBackend::Cpu)
+            {
+                return filterSiftMutualMatches(cpuNearestMatches(descriptors0, descriptors1),
+                                               cpuNearestMatches(descriptors1, descriptors0),
+                                               filterOptions);
+            }
+            return filterSiftMutualMatches(
+                matchSiftOnGpu(backend, descriptors0, descriptors1, cudaDevice),
+                matchSiftOnGpu(backend, descriptors1, descriptors0, cudaDevice),
+                filterOptions);
+        }
+
+        void appendChannelMatches(MatchResult* destination,
+                                  const MatchResult& source,
+                                  const std::vector<int>& indices0,
+                                  const std::vector<int>& indices1)
+        {
+            if (!destination)
+            {
+                return;
+            }
+            for (const cv::DMatch& match : source.cvMatches)
+            {
+                if (match.queryIdx < 0 || match.trainIdx < 0 ||
+                    match.queryIdx >= static_cast<int>(indices0.size()) ||
+                    match.trainIdx >= static_cast<int>(indices1.size()))
+                {
+                    continue;
+                }
+                const int index0 = indices0[static_cast<std::size_t>(match.queryIdx)];
+                const int index1 = indices1[static_cast<std::size_t>(match.trainIdx)];
+                destination->matches0[static_cast<std::size_t>(index0)] = index1;
+                destination->matches1[static_cast<std::size_t>(index1)] = index0;
+                destination->matchingScores0[static_cast<std::size_t>(index0)] =
+                    source.matchingScores0[static_cast<std::size_t>(match.queryIdx)];
+                destination->matchingScores1[static_cast<std::size_t>(index1)] =
+                    source.matchingScores1[static_cast<std::size_t>(match.trainIdx)];
+            }
+        }
+
     } // namespace
 
     AutoSiftAlgorithm::AutoSiftAlgorithm(ImageMatchingRuntimeConfig config) : _config(std::move(config))
@@ -105,17 +181,40 @@ namespace xjw::image_matching
         filterOptions.minimumAdaptiveRatio = _config.siftMinimumAdaptiveRatio;
         filterOptions.adaptiveRatio = _config.adaptiveSiftRatio;
         const SiftComputeBackend backend = resolveSiftBackend(_config.siftBackend, _config.cudaDevice);
-        if (backend == SiftComputeBackend::Cpu)
+        const std::vector<int> recovery0 = channelIndices(features0, true);
+        const std::vector<int> recovery1 = channelIndices(features1, true);
+        if (recovery0.empty() && recovery1.empty())
         {
-            const std::vector<SiftNearestMatch> forward = cpuNearestMatches(descriptors0, descriptors1);
-            const std::vector<SiftNearestMatch> reverse = cpuNearestMatches(descriptors1, descriptors0);
-            return filterSiftMutualMatches(forward, reverse, filterOptions);
+            return matchDescriptorChannel(
+                descriptors0, descriptors1, backend, _config.cudaDevice, filterOptions);
         }
-        const std::vector<SiftNearestMatch> forward =
-            matchSiftOnGpu(backend, descriptors0, descriptors1, _config.cudaDevice);
-        const std::vector<SiftNearestMatch> reverse =
-            matchSiftOnGpu(backend, descriptors1, descriptors0, _config.cudaDevice);
-        return filterSiftMutualMatches(forward, reverse, filterOptions);
+
+        const std::vector<int> base0 = channelIndices(features0, false);
+        const std::vector<int> base1 = channelIndices(features1, false);
+        MatchResult result;
+        result.sourceAlgorithm = kAutoSiftAlgorithmId;
+        result.matches0.assign(features0.keypoints.size(), -1);
+        result.matches1.assign(features1.keypoints.size(), -1);
+        result.matchingScores0.assign(features0.keypoints.size(), 0.0f);
+        result.matchingScores1.assign(features1.keypoints.size(), 0.0f);
+        appendChannelMatches(&result,
+                             matchDescriptorChannel(descriptorSubset(descriptors0, base0),
+                                                    descriptorSubset(descriptors1, base1),
+                                                    backend,
+                                                    _config.cudaDevice,
+                                                    filterOptions),
+                             base0,
+                             base1);
+        appendChannelMatches(&result,
+                             matchDescriptorChannel(descriptorSubset(descriptors0, recovery0),
+                                                    descriptorSubset(descriptors1, recovery1),
+                                                    backend,
+                                                    _config.cudaDevice,
+                                                    filterOptions),
+                             recovery0,
+                             recovery1);
+        result.buildCvMatchesFromIndices();
+        return result;
     }
 
     void registerAutoSiftAlgorithm()

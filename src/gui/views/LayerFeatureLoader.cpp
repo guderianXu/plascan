@@ -4,6 +4,7 @@
 #include "project/ProjectIO.h"
 
 #include <QDebug>
+#include <QFileInfo>
 #include <QSet>
 
 #include <algorithm>
@@ -15,6 +16,10 @@ namespace xjw::gui::views
 std::vector<cv::KeyPoint> loadMatchedKeypointsFromFile(const QString &matchFilePath)
 {
     if (matchFilePath.trimmed().isEmpty())
+    {
+        return {};
+    }
+    if (!QFileInfo::exists(matchFilePath))
     {
         return {};
     }

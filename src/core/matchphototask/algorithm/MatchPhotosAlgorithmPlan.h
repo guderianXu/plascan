@@ -42,6 +42,7 @@ struct MatchPhotosAlgorithmPlan
     int featureRemoveBorders = 16;
     float siftDetectionThreshold = 0.0005f;
     float siftContrastThreshold = 0.02f;
+    bool lowTextureRecovery = false;
 
     QString reason;
     QString validationError;

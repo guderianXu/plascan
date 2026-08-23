@@ -623,6 +623,8 @@ feature_match_cli -L A.tif -R B.tif `
 
 SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。Auto SIFT 按 CUDA、Metal、OpenCL、CPU 的顺序
 选择可用后端且不依赖模型；可用 `--device cpu|cuda|opencl|metal` 显式固定设备，设备不可用时明确失败。
+除快速档外，Auto SIFT 会保留原图特征，并只在 8x8 空间网格中覆盖不足的有效区域追加稳健灰度拉伸与
+CLAHE 局部对比度增强特征；两个通道独立执行双向 ratio 互检后再合并，补点仍需通过 USAC 几何验证。
 LightGlue 和 LoMa-R 都只使用 TensorRT；Release
 分发 ONNX，目标机器首次使用时由 C++ TensorRT Builder 生成并缓存本机 engine。最终分片保存关键点观测、
 相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。ONNX 导出、固定容量和

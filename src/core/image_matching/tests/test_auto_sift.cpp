@@ -1,6 +1,7 @@
 #include "sift/AutoSiftAlgorithm.h"
 #include "sift/SiftFeatureExtractor.h"
 #include "sift/SiftGuidedMatcher.h"
+#include "sift/SiftLowTextureRecovery.h"
 #include "sift/SiftMatchFilter.h"
 #include "MatchGeometryVerifier.h"
 
@@ -141,6 +142,37 @@ namespace xjw::image_matching
             EXPECT_EQ(result.matches0[1], 0);
         }
 
+        TEST(AutoSiftAlgorithmTest, RecoveryDescriptorsDoNotChangeBaseChannelMatches)
+        {
+            FeatureSet features0;
+            features0.imageWidth = 100;
+            features0.imageHeight = 100;
+            features0.keypoints = {cv::KeyPoint(10.0f, 10.0f, 1.0f),
+                                   cv::KeyPoint(20.0f, 20.0f, 1.0f),
+                                   cv::KeyPoint(30.0f, 30.0f, 1.0f),
+                                   cv::KeyPoint(40.0f, 40.0f, 1.0f)};
+            features0.keypoints[2].class_id = 1;
+            features0.keypoints[3].class_id = 1;
+            features0.scores.assign(4, 1.0f);
+            features0.descriptors = cv::Mat::zeros(4, 128, CV_32F);
+            features0.descriptors.at<float>(0, 0) = 1.0f;
+            features0.descriptors.at<float>(1, 1) = 1.0f;
+            features0.descriptors.at<float>(2, 0) = 0.999f;
+            features0.descriptors.at<float>(2, 2) = 0.001f;
+            features0.descriptors.at<float>(3, 1) = 0.999f;
+            features0.descriptors.at<float>(3, 3) = 0.001f;
+
+            FeatureSet features1 = features0;
+            ImageMatchingRuntimeConfig config;
+            config.siftBackend = SiftComputeBackend::Cpu;
+            AutoSiftAlgorithm algorithm(config);
+
+            const MatchResult result = algorithm.matchFeatures(features0, features1);
+
+            EXPECT_EQ(result.matches0[0], 0);
+            EXPECT_EQ(result.matches0[1], 1);
+        }
+
         TEST(AutoSiftBackendTest, CpuRuntimeDisplayIsExplicitAndHasNoHardwareName)
         {
             EXPECT_TRUE(siftBackendDeviceName(SiftComputeBackend::Cpu).isEmpty());
@@ -182,6 +214,87 @@ namespace xjw::image_matching
             ASSERT_EQ(matches.size(), 2U);
             EXPECT_EQ(matches[0].index0, matches[0].index1);
             EXPECT_EQ(matches[1].index0, matches[1].index1);
+        }
+
+        TEST(AutoSiftGuidedMatcherTest, SpatialEpipolarIndexAvoidsFullDescriptorSearch)
+        {
+            constexpr int query_count = 16;
+            constexpr int distractor_count = 512;
+            FeatureSet features0 = makeSiftFeatures(query_count);
+            FeatureSet features1 = makeSiftFeatures(query_count + distractor_count);
+            for (int index = 0; index < query_count; ++index)
+            {
+                features0.keypoints[static_cast<std::size_t>(index)].pt =
+                    cv::Point2f(24.0f + 56.0f * index, 100.0f);
+                features1.keypoints[static_cast<std::size_t>(index)].pt =
+                    cv::Point2f(28.0f + 56.0f * index, 100.5f);
+                features0.descriptors.row(index).copyTo(features1.descriptors.row(index));
+            }
+            for (int index = query_count; index < query_count + distractor_count; ++index)
+            {
+                const int distractor = index - query_count;
+                features1.keypoints[static_cast<std::size_t>(index)].pt =
+                    cv::Point2f(8.0f + static_cast<float>((distractor * 37) % 1000),
+                                220.0f + static_cast<float>((distractor * 53) % 780));
+            }
+            const std::array<double, 9> fundamental{{0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0}};
+            SiftGuidedMatchOptions options;
+            options.spatialCellSizePixels = 32;
+
+            const SiftGuidedMatchResult result =
+                findGuidedSiftMatchesDetailed(features0, features1, fundamental, {}, {}, options);
+
+            ASSERT_FALSE(result.canceled);
+            ASSERT_EQ(result.matches.size(), static_cast<std::size_t>(query_count));
+            const std::uint64_t full_bidirectional_comparisons =
+                2ULL * query_count * (query_count + distractor_count);
+            EXPECT_LT(result.diagnostics.descriptorComparisons, full_bidirectional_comparisons / 8ULL);
+            for (const SiftGuidedMatch& match : result.matches)
+            {
+                EXPECT_EQ(match.index0, match.index1);
+            }
+        }
+
+        TEST(AutoSiftGuidedMatcherTest, HonorsCancellationBeforeDescriptorSearch)
+        {
+            FeatureSet features0 = makeSiftFeatures(32);
+            FeatureSet features1 = features0;
+            const std::array<double, 9> fundamental{{0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0}};
+            SiftGuidedMatchOptions options;
+            options.shouldCancel = []() { return true; };
+
+            const SiftGuidedMatchResult result =
+                findGuidedSiftMatchesDetailed(features0, features1, fundamental, {}, {}, options);
+
+            EXPECT_TRUE(result.canceled);
+            EXPECT_TRUE(result.matches.empty());
+            EXPECT_EQ(result.diagnostics.descriptorComparisons, 0U);
+        }
+
+        TEST(AutoSiftGuidedMatcherTest, HonorsCancellationDuringDescriptorSearch)
+        {
+            FeatureSet features0 = makeSiftFeatures(128);
+            FeatureSet features1 = features0;
+            for (int index = 0; index < features0.size(); ++index)
+            {
+                features0.keypoints[static_cast<std::size_t>(index)].pt =
+                    cv::Point2f(16.0f + 7.0f * index, 128.0f);
+                features1.keypoints[static_cast<std::size_t>(index)].pt =
+                    cv::Point2f(18.0f + 7.0f * index, 128.5f);
+            }
+            const std::array<double, 9> fundamental{{0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0}};
+            SiftGuidedMatchOptions options;
+            options.cancellationCheckInterval = 16;
+            int checks = 0;
+            options.shouldCancel = [&checks]() { return ++checks >= 5; };
+
+            const SiftGuidedMatchResult result =
+                findGuidedSiftMatchesDetailed(features0, features1, fundamental, {}, {}, options);
+
+            EXPECT_TRUE(result.canceled);
+            EXPECT_TRUE(result.matches.empty());
+            EXPECT_GT(result.diagnostics.descriptorComparisons, 0U);
+            EXPECT_LT(result.diagnostics.descriptorComparisons, 128ULL * 128ULL);
         }
 
         TEST(AutoSiftFeatureExtractorTest, AdaptiveCpuPathUpscalesSmallImages)
@@ -254,6 +367,111 @@ namespace xjw::image_matching
             EXPECT_TRUE(std::any_of(features.keypoints.cbegin(),
                                     features.keypoints.cend(),
                                     [](const cv::KeyPoint& keypoint) { return keypoint.pt.x > 900.0f; }));
+        }
+
+        TEST(AutoSiftFeatureExtractorTest, RecoveryPlannerTargetsOnlyUnderCoveredValidCells)
+        {
+            cv::Mat image(256, 256, CV_8UC1, cv::Scalar(96));
+            cv::Mat valid_mask(image.size(), CV_8UC1, cv::Scalar(255));
+            valid_mask(cv::Rect(224, 0, 32, 256)).setTo(0);
+            std::vector<cv::KeyPoint> base;
+            for (int row = 0; row < 8; ++row)
+            {
+                for (int column = 0; column < 7; ++column)
+                {
+                    if (row == 3 && column == 4)
+                    {
+                        continue;
+                    }
+                    const int left = column * 32;
+                    const int top = row * 32;
+                    base.emplace_back(static_cast<float>(left + 18),
+                                      static_cast<float>(top + 18),
+                                      3.0f);
+                    base.emplace_back(static_cast<float>(left + 26),
+                                      static_cast<float>(top + 18),
+                                      3.0f);
+                    base.emplace_back(static_cast<float>(left + 18),
+                                      static_cast<float>(top + 26),
+                                      3.0f);
+                    base.emplace_back(static_cast<float>(left + 26),
+                                      static_cast<float>(top + 26),
+                                      3.0f);
+                }
+            }
+
+            ImageFeatureInput input;
+            input.grayImage = image;
+            input.validMask = valid_mask;
+            ImageMatchingRuntimeConfig config;
+            config.adaptiveSift = true;
+            config.lowTextureRecovery = true;
+            const auto plan = planSiftLowTextureRecovery(input, config, base, 512);
+
+            ASSERT_TRUE(plan.has_value());
+            ASSERT_TRUE(plan->isValid());
+            EXPECT_NE(plan->recoveryMask.at<unsigned char>(112, 144), 0);
+            EXPECT_EQ(plan->recoveryMask.at<unsigned char>(80, 80), 0);
+            EXPECT_EQ(plan->recoveryMask.at<unsigned char>(112, 240), 0);
+        }
+
+        TEST(AutoSiftFeatureExtractorTest, DualChannelAddsKeypointsInLowContrastRegion)
+        {
+            cv::Mat image(512, 512, CV_8UC1, cv::Scalar(112));
+            for (int y = 20; y < image.rows - 20; y += 32)
+            {
+                for (int x = 20; x < image.cols / 2 - 12; x += 32)
+                {
+                    cv::circle(image,
+                               cv::Point(x, y),
+                               8,
+                               cv::Scalar(((x + y) / 32) % 2 == 0 ? 232 : 28),
+                               -1,
+                               cv::LINE_AA);
+                }
+            }
+            for (int y = 20; y < image.rows - 20; y += 32)
+            {
+                for (int x = image.cols / 2 + 12; x < image.cols - 20; x += 32)
+                {
+                    cv::circle(image,
+                               cv::Point(x, y),
+                               8,
+                               cv::Scalar(((x + y) / 32) % 2 == 0 ? 119 : 105),
+                               -1,
+                               cv::LINE_AA);
+                }
+            }
+
+            ImageFeatureInput input;
+            input.grayImage = image;
+            input.originalWidth = image.cols;
+            input.originalHeight = image.rows;
+            ImageMatchingRuntimeConfig config;
+            config.siftBackend = SiftComputeBackend::Cpu;
+            config.adaptiveSift = true;
+            config.rootSift = true;
+            config.maxKeypoints = 2000;
+            config.siftContrastThreshold = 0.02f;
+
+            const FeatureSet baseline = SiftFeatureExtractor::extract(input, config);
+            config.lowTextureRecovery = true;
+            const FeatureSet recovered = SiftFeatureExtractor::extract(input, config);
+            const auto rightCount = [&](const FeatureSet& features)
+            {
+                return std::count_if(
+                    features.keypoints.cbegin(),
+                    features.keypoints.cend(),
+                    [&](const cv::KeyPoint& keypoint)
+                    {
+                        return keypoint.pt.x >= static_cast<float>(image.cols / 2);
+                    });
+            };
+
+            EXPECT_GT(rightCount(recovered), rightCount(baseline));
+            EXPECT_GT(recovered.size(), baseline.size());
+            EXPECT_LE(recovered.size(), config.maxKeypoints);
+            EXPECT_TRUE(cv::checkRange(recovered.descriptors));
         }
 
         TEST(AutoSiftAlgorithmTest, CudaBackendHandlesPartialTiles)
@@ -374,6 +592,7 @@ namespace xjw::image_matching
             int featureCount1 = 0;
             int matchCount = 0;
             int geometryInliers = 0;
+            double minimumInlierGridCoverage = 0.0;
         };
 
         std::filesystem::path dinoImagePath(const char* fileName)
@@ -383,7 +602,40 @@ namespace xjw::image_matching
                 fileName;
         }
 
-        DinoBackendMetrics runDinoBackend(SiftComputeBackend backend)
+        double inlierGridCoverage(const FeatureSet& features,
+                                  const MatchResult& matches,
+                                  const MatchGeometryResult& geometry,
+                                  bool firstImage)
+        {
+            constexpr int columns = 8;
+            constexpr int rows = 8;
+            std::array<bool, columns * rows> occupied{};
+            for (int index = 0; index < static_cast<int>(matches.cvMatches.size()); ++index)
+            {
+                if (index >= static_cast<int>(geometry.inlierMask.size()) ||
+                    !geometry.inlierMask[static_cast<std::size_t>(index)])
+                {
+                    continue;
+                }
+                const cv::DMatch& match = matches.cvMatches[static_cast<std::size_t>(index)];
+                const int feature_index = firstImage ? match.queryIdx : match.trainIdx;
+                const cv::Point2f point = features.keypoints[static_cast<std::size_t>(feature_index)].pt;
+                const int column = std::clamp(
+                    static_cast<int>(point.x * columns / std::max(1, features.imageWidth)),
+                    0,
+                    columns - 1);
+                const int row = std::clamp(
+                    static_cast<int>(point.y * rows / std::max(1, features.imageHeight)),
+                    0,
+                    rows - 1);
+                occupied[static_cast<std::size_t>(row * columns + column)] = true;
+            }
+            return static_cast<double>(std::count(occupied.cbegin(), occupied.cend(), true)) /
+                static_cast<double>(occupied.size());
+        }
+
+        DinoBackendMetrics runDinoBackend(SiftComputeBackend backend,
+                                          bool lowTextureRecovery = true)
         {
             const cv::Mat image0 = cv::imread(dinoImagePath("dinoSR0001.png").string(), cv::IMREAD_GRAYSCALE);
             const cv::Mat image1 = cv::imread(dinoImagePath("dinoSR0002.png").string(), cv::IMREAD_GRAYSCALE);
@@ -395,6 +647,7 @@ namespace xjw::image_matching
             ImageMatchingRuntimeConfig config;
             config.siftBackend = backend;
             config.adaptiveSift = true;
+            config.lowTextureRecovery = lowTextureRecovery;
             config.rootSift = true;
             config.adaptiveSiftRatio = true;
             config.maxImageDimension = 1024;
@@ -418,7 +671,13 @@ namespace xjw::image_matching
             geometryOptions.reprojectionThresholdPixels = 2.0;
             const MatchGeometryResult geometry = MatchGeometryVerifier::verify(
                 matches, features0, features1, geometryOptions);
-            return {features0.size(), features1.size(), matches.numMatches, geometry.inlierCount};
+            const double coverage0 = inlierGridCoverage(features0, matches, geometry, true);
+            const double coverage1 = inlierGridCoverage(features1, matches, geometry, false);
+            return {features0.size(),
+                    features1.size(),
+                    matches.numMatches,
+                    geometry.inlierCount,
+                    std::min(coverage0, coverage1)};
         }
 
         void expectDinoBackendConsistentWithCpu(SiftComputeBackend backend)
@@ -455,6 +714,23 @@ namespace xjw::image_matching
         TEST(AutoSiftDinoRegressionTest, CpuProducesGeometricallyConsistentMatches)
         {
             expectDinoBackendConsistentWithCpu(SiftComputeBackend::Cpu);
+        }
+
+        TEST(AutoSiftDinoRegressionTest, LowTextureRecoveryImprovesOrPreservesGeometry)
+        {
+            if (!std::filesystem::is_regular_file(dinoImagePath("dinoSR0001.png")) ||
+                !std::filesystem::is_regular_file(dinoImagePath("dinoSR0002.png")))
+            {
+                GTEST_SKIP() << "Middlebury DinoSparseRing data is not downloaded";
+            }
+            const DinoBackendMetrics baseline = runDinoBackend(SiftComputeBackend::Cpu, false);
+            const DinoBackendMetrics recovered = runDinoBackend(SiftComputeBackend::Cpu, true);
+
+            EXPECT_GT(recovered.featureCount0, baseline.featureCount0);
+            EXPECT_GT(recovered.featureCount1, baseline.featureCount1);
+            EXPECT_GE(recovered.geometryInliers, baseline.geometryInliers);
+            EXPECT_GE(recovered.minimumInlierGridCoverage,
+                      baseline.minimumInlierGridCoverage);
         }
 
         TEST(AutoSiftDinoRegressionTest, MetalIsConsistentWithCpu)

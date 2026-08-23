@@ -146,6 +146,13 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.siftDetectionThreshold = resolveSiftDetectionThreshold(options.profile);
     plan.siftContrastThreshold = resolveSiftContrastThreshold(options.profile);
+    plan.lowTextureRecovery =
+        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) &&
+        options.profile != MatchPhotosProfile::Fast;
+    if (plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId))
+    {
+        plan.featureSchemaVersion = 3;
+    }
     plan.reason = QStringLiteral("%1 在任务内存中提取并匹配特征；只持久化最终 "
                                  ".pimatch 观测，不写中间特征文件。")
                       .arg(plan.displayName);
