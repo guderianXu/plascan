@@ -10,6 +10,7 @@ param(
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
     [string] $TensorRtRoot = "",
+    [string] $OpenCvRoot = "",
     [string] $Target = "",
     [string] $CTestRegex = "",
     [int] $Jobs = 0,
@@ -23,7 +24,6 @@ param(
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
-    [bool] $EnableCeresCudaBa = $false,
     [switch] $SkipVsDevCmd
 )
 
@@ -774,16 +774,21 @@ function Sync-OpenCvRuntime
 {
     param(
         [Parameter(Mandatory = $true)][string] $BuildPath,
-        [Parameter(Mandatory = $true)][string] $TripletRoot
+        [Parameter(Mandatory = $true)][string] $OpenCvRoot
     )
 
-    $opencvBin = Join-Path $TripletRoot "bin"
-    if (-not (Test-Path -LiteralPath $BuildPath) -or -not (Test-Path -LiteralPath $opencvBin))
+    $opencvBins = @(
+        (Join-Path $OpenCvRoot "bin"),
+        (Join-Path $OpenCvRoot "x64\vc17\bin")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    if (-not (Test-Path -LiteralPath $BuildPath) -or $opencvBins.Count -eq 0)
     {
         return
     }
 
-    $sources = @(Get-ChildItem -LiteralPath $opencvBin -Force -File -Filter "opencv*.dll" -ErrorAction SilentlyContinue)
+    $sources = @($opencvBins | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -Force -File -Filter "opencv*.dll" -ErrorAction SilentlyContinue
+    } | Sort-Object FullName -Unique)
     if ($sources.Count -eq 0)
     {
         return
@@ -1019,7 +1024,6 @@ function Assert-VcpkgInstalledPackages
 
     $requiredShareDirs = @(
         "Qt6",
-        "opencv4",
         "gdal",
         "gtest",
         "libzip",
@@ -1043,153 +1047,132 @@ function Assert-VcpkgInstalledPackages
     }
 }
 
-function Assert-OpenCvCpuOnlyFeatures
+function Assert-OpenCv5CpuOnly
 {
-    param([Parameter(Mandatory = $true)][string] $TripletRoot)
+    param([Parameter(Mandatory = $true)][string] $OpenCvRoot)
 
-    $abiInfo = Join-Path $TripletRoot "share\opencv4\vcpkg_abi_info.txt"
-    if (-not (Test-Path -LiteralPath $abiInfo))
+    $versionHeader = Join-Path $OpenCvRoot "include\opencv2\core\version.hpp"
+    if (-not (Test-Path -LiteralPath $versionHeader))
     {
-        throw "OpenCV ABI info not found: $abiInfo. Rerun this script with -InstallDeps."
+        throw "Source-built OpenCV 5 was not found at $OpenCvRoot. " +
+            "Run scripts\env\configure_with_env.py --source-deps first or pass -OpenCvRoot."
     }
 
-    $featureLine = @(Get-Content -LiteralPath $abiInfo | Where-Object { $_ -match '^features\s+' }) |
-        Select-Object -First 1
-    if ([string]::IsNullOrWhiteSpace($featureLine))
+    $versionText = Get-Content -Raw -LiteralPath $versionHeader
+    if ($versionText -notmatch '(?m)^#define\s+CV_VERSION_MAJOR\s+5\s*$')
     {
-        throw "OpenCV ABI feature list is missing from: $abiInfo"
+        throw "PlaScan requires OpenCV 5, but the version header is incompatible: $versionHeader"
     }
 
-    $features = @((($featureLine -replace '^features\s+', '') -split ';') |
-        ForEach-Object { $_.Trim().ToLowerInvariant() } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($features -notcontains "dnn")
+    $runtimeDirs = @(
+        (Join-Path $OpenCvRoot "bin"),
+        (Join-Path $OpenCvRoot "x64\vc17\bin")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    $dnnRuntime = @($runtimeDirs | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -File -Filter "opencv_dnn*.dll" -ErrorAction SilentlyContinue
+    })
+    if ($dnnRuntime.Count -eq 0)
     {
-        throw "OpenCV DNN CPU support is missing in $TripletRoot. Rerun this script with -InstallDeps."
+        throw "OpenCV 5 DNN runtime is missing below: $OpenCvRoot"
     }
 
-    $forbidden = @(@("cuda", "cudnn", "dnn-cuda") |
-        Where-Object { $features -contains $_ })
+    $forbidden = @($runtimeDirs | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -File -Filter "*.dll" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(opencv_cuda|cudnn)' }
+    })
     if ($forbidden.Count -gt 0)
     {
-        throw "OpenCV must remain CPU-only, but its vcpkg ABI enables: $($forbidden -join ', '). " +
-            "Remove the stale vcpkg_installed directory or rerun this script with -InstallDeps."
+        throw "OpenCV must remain CPU-only, but CUDA/cuDNN runtimes were found: " +
+            ($forbidden.FullName -join ', ')
     }
 }
 
-function Assert-CeresCudaFeatures
-{
-    param([Parameter(Mandatory = $true)][string] $TripletRoot)
-
-    $abiInfo = Join-Path $TripletRoot "share\ceres\vcpkg_abi_info.txt"
-    if (-not (Test-Path -LiteralPath $abiInfo))
-    {
-        throw "Ceres ABI info not found: $abiInfo. Rerun with -InstallDeps -EnableCeresCudaBa:`$true."
-    }
-
-    $text = Get-Content -LiteralPath $abiInfo -Raw
-    if ($text -notmatch "(?m)^features .*cuda" -or
-        $text -notmatch "(?m)^features .*eigensparse")
-    {
-        throw "Ceres CUDA/EigenSparse is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
-    }
-}
-
-function Find-VcpkgPortDirectory
+function Install-PinnedOpenCv5
 {
     param(
-        [Parameter(Mandatory = $true)][string] $VcpkgPath,
-        [Parameter(Mandatory = $true)][string] $PortName
+        [Parameter(Mandatory = $true)][string] $ProjectRoot,
+        [Parameter(Mandatory = $true)][string] $OpenCvRoot,
+        [Parameter(Mandatory = $true)][string] $CMakePath,
+        [Parameter(Mandatory = $true)][string] $NinjaPath,
+        [Parameter(Mandatory = $true)][int] $ParallelJobs,
+        [string] $MsvcCompiler = ""
     )
 
-    $candidates = New-Object 'System.Collections.Generic.List[string]'
-    $builtinPort = Join-Path $VcpkgPath ("ports\" + $PortName)
-    if (Test-Path -LiteralPath (Join-Path $builtinPort "portfile.cmake"))
+    $versionHeader = Join-Path $OpenCvRoot "include\opencv2\core\version.hpp"
+    if (Test-Path -LiteralPath $versionHeader)
     {
-        [void] $candidates.Add($builtinPort)
-    }
-
-    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
-    if (-not [string]::IsNullOrWhiteSpace($localAppData))
-    {
-        $registryRoot = Join-Path $localAppData "vcpkg\registries\git-trees"
-        if (Test-Path -LiteralPath $registryRoot)
+        $versionText = Get-Content -Raw -LiteralPath $versionHeader
+        if ($versionText -match '(?m)^#define\s+CV_VERSION_MAJOR\s+5\s*$')
         {
-            Get-ChildItem -LiteralPath $registryRoot -Directory | ForEach-Object {
-                $manifestPath = Join-Path $_.FullName "vcpkg.json"
-                $portfilePath = Join-Path $_.FullName "portfile.cmake"
-                if (-not (Test-Path -LiteralPath $manifestPath) -or
-                    -not (Test-Path -LiteralPath $portfilePath))
-                {
-                    return
-                }
-
-                try
-                {
-                    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-                    if ($manifest.name -eq $PortName)
-                    {
-                        [void] $candidates.Add($_.FullName)
-                    }
-                }
-                catch
-                {
-                }
-            }
+            return
         }
     }
 
-    foreach ($candidate in (Get-UniqueExistingPathList $candidates.ToArray()))
+    $opencvSource = Join-Path $ProjectRoot "3rdparty\opencv"
+    Assert-ExistingPath (Join-Path $opencvSource "CMakeLists.txt") "OpenCV 5 source checkout"
+    $opencvCommit = (& git -C $opencvSource rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $opencvCommit -ne "40738fb16ceddb5fb3fea747585f7ce6abb0605b")
     {
-        if ((Test-Path -LiteralPath (Join-Path $candidate "portfile.cmake")) -and
-            (Test-Path -LiteralPath (Join-Path $candidate "vcpkg.json")))
-        {
-            return (Resolve-FullPath $candidate)
-        }
+        throw "OpenCV source must be the pinned 5.0.0 commit, found: $opencvCommit"
     }
 
-    throw "Unable to locate vcpkg port '$PortName'. Run vcpkg manifest install once, or seed the vcpkg registry cache."
-}
-
-function Ensure-CeresCuda13OverlayPort
-{
-    param(
-        [Parameter(Mandatory = $true)][string] $SourceRoot,
-        [Parameter(Mandatory = $true)][string] $VcpkgPath
+    $dependencyBuildRoot = Split-Path -Parent $OpenCvRoot
+    $opencvBuild = Join-Path $dependencyBuildRoot "opencv-build"
+    New-Item -ItemType Directory -Force -Path $opencvBuild, $OpenCvRoot | Out-Null
+    $configureArgs = @(
+        "-S", (Convert-ToCMakePath $opencvSource),
+        "-B", (Convert-ToCMakePath $opencvBuild),
+        "-G", "Ninja",
+        "-DCMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $NinjaPath)",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_PREFIX=$(Convert-ToCMakePath $OpenCvRoot)",
+        "-DOPENCV_CMAKE_HOOKS_DIR=$(Convert-ToCMakePath (Join-Path $ProjectRoot 'cmake\opencv-hooks'))",
+        "-UOPENCV_EXTRA_MODULES_PATH",
+        "-UBUILD_opencv_x*",
+        "-DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo",
+        "-DBUILD_SHARED_LIBS=ON",
+        "-DBUILD_TESTS=OFF",
+        "-DBUILD_PERF_TESTS=OFF",
+        "-DBUILD_EXAMPLES=OFF",
+        "-DBUILD_opencv_apps=OFF",
+        "-DBUILD_opencv_python2=OFF",
+        "-DBUILD_opencv_python3=OFF",
+        "-DBUILD_opencv_world=OFF",
+        "-DWITH_CUDA=OFF",
+        "-DWITH_CUDNN=OFF",
+        "-DOPENCV_DNN_CUDA=OFF",
+        "-DWITH_QT=OFF"
     )
-
-    # Keep the Ceres overlay isolated. Reusing the historical shared overlay root
-    # could make a stale OpenCV CUDA port override the CPU-only manifest port.
-    $overlayRoot = Join-Path $SourceRoot "build\env\vcpkg-overlay-ports-ceres"
-    New-Item -ItemType Directory -Force -Path $overlayRoot | Out-Null
-
-    $overlayPort = Join-Path $overlayRoot "ceres"
-    Remove-SafeItem -Path $overlayPort -AllowedRoot $overlayRoot
-
-    $portSource = Find-VcpkgPortDirectory -VcpkgPath $VcpkgPath -PortName "ceres"
-    Copy-Item -LiteralPath $portSource -Destination $overlayPort -Recurse -Force
-
-    $portfile = Join-Path $overlayPort "portfile.cmake"
-    $portfileText = Get-Content -LiteralPath $portfile -Raw
-    if ($portfileText -notmatch "CMAKE_CUDA_STANDARD=17")
+    if (-not [string]::IsNullOrWhiteSpace($MsvcCompiler))
     {
-        $marker = '        "-DCUDAToolkit_ROOT=${cuda_toolkit_root}"'
-        if (-not $portfileText.Contains($marker))
-        {
-            throw "Unable to inject Ceres CUDA 13 build flags into generated overlay port: $portfile"
-        }
-
-        $cudaFlagsBlock = @'
-        "-DCMAKE_CUDA_STANDARD=17"
-        "-DCMAKE_CUDA_STANDARD_REQUIRED=ON"
-        "-DCMAKE_CUDA_FLAGS=--std=c++17"
-        "-DCMAKE_CUDA_ARCHITECTURES=75\;86\;89\;120"
-'@
-        $portfileText = $portfileText.Replace($marker, "$marker`r`n$cudaFlagsBlock")
-        Set-Content -LiteralPath $portfile -Encoding ASCII -Value $portfileText
+        $configureArgs += "-DCMAKE_CXX_COMPILER=$MsvcCompiler"
     }
 
-    return (Resolve-FullPath $overlayRoot)
+    $configureExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakePath -Arguments $configureArgs `
+        -ExitCode ([ref]$configureExitCode)
+    if ($configureExitCode -ne 0)
+    {
+        throw "OpenCV 5 configure failed with exit code $configureExitCode"
+    }
+
+    $buildExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakePath `
+        -Arguments @("--build", $opencvBuild, "--parallel", "$ParallelJobs") `
+        -ExitCode ([ref]$buildExitCode)
+    if ($buildExitCode -ne 0)
+    {
+        throw "OpenCV 5 build failed with exit code $buildExitCode"
+    }
+
+    $installExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakePath `
+        -Arguments @("--install", $opencvBuild) `
+        -ExitCode ([ref]$installExitCode)
+    if ($installExitCode -ne 0)
+    {
+        throw "OpenCV 5 install failed with exit code $installExitCode"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($SourceDir))
@@ -1206,6 +1189,11 @@ if ([string]::IsNullOrWhiteSpace($BuildDir))
     $BuildDir = Join-Path $SourceDir "build\windows-vcpkg-cuda-release"
 }
 $BuildDir = Resolve-FullPath $BuildDir
+if ([string]::IsNullOrWhiteSpace($OpenCvRoot))
+{
+    $OpenCvRoot = Join-Path $SourceDir "build\windows-source-deps-release\install"
+}
+$OpenCvRoot = Resolve-FullPath $OpenCvRoot
 
 $vcpkgWorkDrive = Split-Path -Qualifier $BuildDir
 if ([string]::IsNullOrWhiteSpace($vcpkgWorkDrive))
@@ -1252,7 +1240,6 @@ $vcpkgInstalledCMake = Convert-ToCMakePath $vcpkgInstalled
 $vcpkgBuildtreesRootCMake = Convert-ToCMakePath $VcpkgBuildtreesRoot
 $vcpkgPackagesRootCMake = Convert-ToCMakePath $VcpkgPackagesRoot
 $vcpkgDownloadsRootCMake = Convert-ToCMakePath $VcpkgDownloadsRoot
-$vcpkgOverlayPortsCMake = ""
 $cudaRootCMake = Convert-ToCMakePath $CudaRoot
 $cudaNvccCMake = Convert-ToCMakePath $cudaNvcc
 $tensorRtRootCMake = Convert-ToCMakePath $TensorRtRoot
@@ -1294,7 +1281,7 @@ if ($CTestJobs -le 0)
     }
     else
     {
-        $CTestJobs = [Math]::Max(1, [int] [Math]::Floor([Environment]::ProcessorCount / 2))
+        $CTestJobs = [Math]::Max(1, [Environment]::ProcessorCount)
     }
 }
 
@@ -1357,6 +1344,9 @@ Set-IsolatedBuildEnvironment `
     -CMakePath $CMakeExe `
     -ProjectRoot $SourceDir `
     -VsDevPathEntries $vsDevPathEntries
+$env:CMAKE_PREFIX_PATH = (@($OpenCvRoot) + @($env:CMAKE_PREFIX_PATH -split ';') |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique) -join ';'
 
 $msvcCompilerPathEntries = @(Resolve-MsvcCompilerPathEntries $VcpkgRoot)
 $msvcCudaHostCompiler = ""
@@ -1370,9 +1360,15 @@ if ($msvcCompilerPathEntries.Count -gt 0)
     }
 }
 
-if ($EnableCeresCudaBa)
+if ($InstallDeps)
 {
-    $vcpkgOverlayPortsCMake = Convert-ToCMakePath (Ensure-CeresCuda13OverlayPort -SourceRoot $SourceDir -VcpkgPath $VcpkgRoot)
+    Install-PinnedOpenCv5 `
+        -ProjectRoot $SourceDir `
+        -OpenCvRoot $OpenCvRoot `
+        -CMakePath $CMakeExe `
+        -NinjaPath $ninjaExe `
+        -ParallelJobs $Jobs `
+        -MsvcCompiler $msvcCudaHostCompiler
 }
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
@@ -1381,17 +1377,13 @@ Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
 Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
 Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
 Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
+Sync-OpenCvRuntime -BuildPath $BuildDir -OpenCvRoot $OpenCvRoot
 Remove-StaleCudnnRuntime -BuildPath $BuildDir
 if (-not $InstallDeps)
 {
     Assert-VcpkgInstalledPackages $vcpkgTripletRoot
-    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
-    if ($EnableCeresCudaBa)
-    {
-        Assert-CeresCudaFeatures $vcpkgTripletRoot
-    }
 }
+Assert-OpenCv5CpuOnly $OpenCvRoot
 
 Write-Host "PlaScan Windows CUDA build"
 Write-Host "  SourceDir: $SourceDir"
@@ -1403,16 +1395,12 @@ Write-Host "  Packages:   $VcpkgPackagesRoot"
 Write-Host "  Downloads:  $VcpkgDownloadsRoot"
 Write-Host "  CUDA:      $CudaRoot"
 Write-Host "  TensorRT:  $TensorRtRoot"
-if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))
-{
-    Write-Host "  Overlay:   $vcpkgOverlayPortsCMake"
-}
+Write-Host "  OpenCV 5: $OpenCvRoot"
 if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompiler))
 {
     Write-Host "  CUDA host: $msvcCudaHostCompiler"
 }
 Write-Host "  Prefix:    $env:CMAKE_PREFIX_PATH"
-Write-Host "  Ceres BA CUDA: $(if ($EnableCeresCudaBa) { 'enabled' } else { 'disabled' })"
 Write-Host "  OpenCV DNN: CPU-only"
 Write-Host "  U2Net GPU: TensorRT"
 
@@ -1445,6 +1433,8 @@ if (-not $BuildOnly)
         "-DVCPKG_MANIFEST_INSTALL=$(if ($InstallDeps) { 'ON' } else { 'OFF' })",
         "-DVCPKG_INSTALL_OPTIONS=$vcpkgInstallOptions",
         "-DCMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH",
+        "-DOpenCV_DIR=$(Convert-ToCMakePath (Join-Path $OpenCvRoot 'x64\vc17\lib'))",
+        "-DPLASCAN_SOURCE_DEPENDENCY_PREFIX=$(Convert-ToCMakePath $OpenCvRoot)",
         "-DVCPKG_APPLOCAL_DEPS=OFF",
         "-DPLASCAN_BUNDLE_RUNTIME=ON",
         "-DPLASCAN_BUNDLE_BIREFNET_DYNAMIC=ON",
@@ -1464,36 +1454,13 @@ if (-not $BuildOnly)
         $configureArgs += "-DCMAKE_CXX_COMPILER=$msvcCudaHostCompiler"
         $configureArgs += "-DCMAKE_CUDA_HOST_COMPILER=$msvcCudaHostCompiler"
     }
-    $manifestFeaturesValue = ""
-    if ($EnableCeresCudaBa)
-    {
-        $manifestFeaturesValue = "ceres-cuda;ceres-reference"
-        $configureArgs += "-DPLASCAN_ENABLE_CERES_REFERENCE=ON"
-    }
-    else
-    {
-        $configureArgs += "-DPLASCAN_ENABLE_CERES_REFERENCE=OFF"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))
-    {
-        $configureArgs += "-DVCPKG_OVERLAY_PORTS=$vcpkgOverlayPortsCMake"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($manifestFeaturesValue))
-    {
-        $configureArgs += "-DVCPKG_MANIFEST_FEATURES=$manifestFeaturesValue"
-    }
-
     $configureExitCode = 0
     Invoke-NativeCommand -FilePath $CMakeExe -Arguments $configureArgs -ExitCode ([ref]$configureExitCode)
     if ($configureExitCode -ne 0)
     {
         throw "CMake configure failed with exit code $configureExitCode"
     }
-    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
-    if ($EnableCeresCudaBa)
-    {
-        Assert-CeresCudaFeatures $vcpkgTripletRoot
-    }
+    Assert-OpenCv5CpuOnly $OpenCvRoot
 }
 
 if (-not $ConfigureOnly)
@@ -1503,9 +1470,9 @@ if (-not $ConfigureOnly)
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
     Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-    Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
+    Sync-OpenCvRuntime -BuildPath $BuildDir -OpenCvRoot $OpenCvRoot
     Remove-StaleCudnnRuntime -BuildPath $BuildDir
-    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
+    Assert-OpenCv5CpuOnly $OpenCvRoot
 
     $buildArgs = @("--build", $BuildDir, "--config", "Release", "--parallel", "$Jobs")
     if (-not [string]::IsNullOrWhiteSpace($Target))
@@ -1525,7 +1492,7 @@ if (-not $ConfigureOnly)
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
     Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-    Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
+    Sync-OpenCvRuntime -BuildPath $BuildDir -OpenCvRoot $OpenCvRoot
     Remove-StaleCudnnRuntime -BuildPath $BuildDir
     Assert-U2NetTensorRtDeployment -BuildPath $BuildDir
 }

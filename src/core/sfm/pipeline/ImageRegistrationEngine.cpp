@@ -10,7 +10,6 @@
 #include "log/Logger.h"
 
 #include "DeterministicOpenCvRansac.h"
-#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -892,7 +891,7 @@ bool IncrementalSfm::registerImage(ImageId imageId,
             pnpOptions.minInlierRatio);
         pnpOptions.allowRelaxedInlierRatio = false;
     }
-    pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
+    pnpOptions.ransacSeed = opencv_utils::stableRansacSeed(
         imageId,
         static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
         static_cast<std::uint32_t>(worldPts.size()));

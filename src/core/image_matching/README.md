@@ -12,6 +12,10 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 - `sift/` 是 SIFT 的唯一维护边界，包含 `auto_sift` 注册入口、CPU/CUDA/OpenCL/Metal 提取与匹配后端、
   RootSIFT、尺度自适应、空间均匀化、匹配过滤和基础矩阵引导重匹配。提取结果只保存在一次
   `MatchPhotosTask` 的有界内存缓存中。
+  CUDA 提取复用输入显存、页锁定上传缓冲、金字塔临时显存和特征缓冲，避免逐图及逐瓦片
+  `cudaMalloc/cudaFree`；影像级流水线使受保护的 GPU 提取段与另一影像的 CPU 后处理重叠。
+  CUDA 描述子匹配为每个 worker 建立非阻塞 stream 和可增长复用缓冲，一次上传完成双向最近邻匹配；
+  已完成 RootSIFT/L2 归一化的描述子不会在每个像对内重复克隆和归一化。
 - `lightglue/` 负责本机 TensorRT engine 执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
 - `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
 - `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。

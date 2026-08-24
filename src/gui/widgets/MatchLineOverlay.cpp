@@ -4,20 +4,15 @@
 #include <QGraphicsView>
 #include <QDebug>
 
-#include <algorithm>
-#include <cmath>
-
 MatchLineOverlay::MatchLineOverlay(QWidget *parent)
     : QRhiWidget(parent)
     , _leftView(nullptr)
     , _rightView(nullptr)
-    , _lineColor(Qt::yellow)
     , _lineWidth(1.5)
     , _opacity(0.7)
     , _maxDisplayCount(5000)
     , _showOnlyInliers(false)
     , _showEndPoints(true)
-    , _rainbowMode(false)
     , _showOnlyHighlighted(false)
     , _visibilityCacheValid(false)
     , _renderCacheValid(false)
@@ -105,13 +100,6 @@ void MatchLineOverlay::setInlierMask(const QVector<bool> &inlierMask)
     emit visibleMatchesChanged();
 }
 
-void MatchLineOverlay::setLineColor(const QColor &color)
-{
-    _lineColor = color;
-    ++_gpuGeneration;
-    update();
-}
-
 void MatchLineOverlay::setLineWidth(qreal width)
 {
     _lineWidth = width;
@@ -144,18 +132,6 @@ void MatchLineOverlay::setShowOnlyInliers(bool onlyInliers)
 void MatchLineOverlay::setShowEndPoints(bool show)
 {
     _showEndPoints = show;
-    ++_gpuGeneration;
-    update();
-}
-
-void MatchLineOverlay::setRainbowMode(bool enabled)
-{
-    if (_rainbowMode == enabled)
-    {
-        return;
-    }
-    _rainbowMode = enabled;
-    _renderCacheValid = false;
     ++_gpuGeneration;
     update();
 }
@@ -301,11 +277,6 @@ void MatchLineOverlay::rebuildRenderCache() const
     _defaultLines.clear();
     _inlierLines.clear();
     _outlierLines.clear();
-    for (QVector<QLineF> &lines : _rainbowLines)
-    {
-        lines.clear();
-    }
-
     const QVector<int> visible_matches = getVisibleMatches();
     const QTransform left_transform = sceneToOverlayTransform(_leftView);
     const QTransform right_transform = sceneToOverlayTransform(_rightView);
@@ -318,16 +289,7 @@ void MatchLineOverlay::rebuildRenderCache() const
         const QLineF line(left_point, right_point);
 
         QVector<QLineF> *lines = &_defaultLines;
-        if (_rainbowMode)
-        {
-            const int batch = visible_matches.size() > 1
-                ? std::min(RainbowBatchCount - 1,
-                           static_cast<int>(position * RainbowBatchCount
-                                            / visible_matches.size()))
-                : 0;
-            lines = &_rainbowLines.at(batch);
-        }
-        else if (has_validity_mask && index < _inlierMask.size())
+        if (has_validity_mask && index < _inlierMask.size())
         {
             lines = _inlierMask.at(index) ? &_inlierLines : &_outlierLines;
         }
@@ -346,22 +308,9 @@ void MatchLineOverlay::invalidateGeometryCache()
 QVector<MatchGpuLineBatch> MatchLineOverlay::gpuBatches() const
 {
     QVector<MatchGpuLineBatch> batches;
-    if (_rainbowMode)
-    {
-        batches.reserve(RainbowBatchCount);
-        for (int batch = 0; batch < RainbowBatchCount; ++batch)
-        {
-            if (!_rainbowLines.at(batch).isEmpty())
-            {
-                const qreal hue = static_cast<qreal>(batch) / RainbowBatchCount;
-                batches.append({&_rainbowLines.at(batch), QColor::fromHsvF(hue, 1.0, 1.0)});
-            }
-        }
-        return batches;
-    }
     if (!_defaultLines.isEmpty())
     {
-        batches.append({&_defaultLines, _lineColor});
+        batches.append({&_defaultLines, QColor(Qt::yellow)});
     }
     if (!_inlierLines.isEmpty())
     {

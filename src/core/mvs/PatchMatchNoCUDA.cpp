@@ -8,80 +8,94 @@
 #include "PatchMatchCUDA.h"
 #include "DensePointCloudCUDA.h"
 
-namespace xjw {
-namespace mvs {
-
-// ── PatchMatchDepthEstimator ──────────────────────────────────────────────────
-
-bool PatchMatchDepthEstimator::isCudaAvailable()
+namespace xjw
 {
-    return false;
-}
+    namespace mvs
+    {
 
-int PatchMatchDepthEstimator::cudaDeviceCount()
-{
-    return 0;
-}
+        // ── PatchMatchDepthEstimator ──────────────────────────────────────────────────
 
-std::string PatchMatchDepthEstimator::cudaDeviceName(int)
-{
-    return {};
-}
+        bool PatchMatchDepthEstimator::isCudaAvailable()
+        {
+            return false;
+        }
 
-std::string PatchMatchDepthEstimator::cudaDeviceIdentity(int)
-{
-    return {};
-}
+        int PatchMatchDepthEstimator::cudaDeviceCount()
+        {
+            return 0;
+        }
 
-void PatchMatchDepthEstimator::cleanupGpuImageCache()
-{
-    // 无 CUDA 构建中无缓存，空操作
-}
+        std::string PatchMatchDepthEstimator::cudaDeviceName(int)
+        {
+            return {};
+        }
 
-bool PatchMatchDepthEstimator::reserveGpuWorkspace(std::size_t,
-                                                   int,
-                                                   bool,
-                                                   bool,
-                                                   std::string *,
-                                                   int)
-{
-    return true;
-}
+        std::string PatchMatchDepthEstimator::cudaDeviceIdentity(int)
+        {
+            return {};
+        }
 
-bool PatchMatchDepthEstimator::estimateGPU(
-    const cv::Mat &,
-    const std::vector<cv::Mat> &,
-    const FramePinholeCamera &,
-    const std::vector<FramePinholeCamera> &,
-    float, float,
-    const PatchMatchConfig &,
-    cv::Mat &, cv::Mat *,
-    std::string *errorMsg,
-    const cv::Mat *,
-    const cv::Mat *,
-    const cv::Mat *,
-    const std::vector<cv::Mat> *,
-    const PatchMatchAuxiliaryInput *,
-    PatchMatchAuxiliaryOutput *)
-{
-    if (errorMsg) *errorMsg = "CUDA 不可用（编译时未启用）";
-    return false;
-}
+        void PatchMatchDepthEstimator::cleanupGpuImageCache()
+        {
+            // 无 CUDA 构建中无缓存，空操作
+        }
 
-// ── DensePointCloudCUDA ───────────────────────────────────────────────────────
+        bool PatchMatchDepthEstimator::reserveGpuWorkspace(std::size_t, int, bool, bool, std::string*, int)
+        {
+            return true;
+        }
 
-std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
-    const cv::Mat &,
-    const cv::Mat &,
-    const FramePinholeCamera &,
-    const cv::Mat &,
-    float, float,
-    std::string *errorMsg,
-    const DenseCloudOptions *)
-{
-    if (errorMsg) *errorMsg = "CUDA 不可用（编译时未启用）";
-    return {};
-}
+        bool PatchMatchDepthEstimator::estimateGPU(const cv::Mat&,
+                                                   const std::vector<cv::Mat>&,
+                                                   const FramePinholeCamera&,
+                                                   const std::vector<FramePinholeCamera>&,
+                                                   float,
+                                                   float,
+                                                   const PatchMatchConfig&,
+                                                   cv::Mat&,
+                                                   cv::Mat*,
+                                                   std::string* errorMsg,
+                                                   const cv::Mat*,
+                                                   const cv::Mat*,
+                                                   const cv::Mat*,
+                                                   const std::vector<cv::Mat>*,
+                                                   const PatchMatchAuxiliaryInput*,
+                                                   PatchMatchAuxiliaryOutput*)
+        {
+            if (errorMsg)
+                *errorMsg = "CUDA 不可用（编译时未启用）";
+            return false;
+        }
 
-} // namespace mvs
+        // ── DensePointCloudCUDA ───────────────────────────────────────────────────────
+
+        bool DensePointCloudCUDA::isAvailable(int, std::string* errorMsg)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "CUDA 不可用（编译时未启用）";
+            }
+            return false;
+        }
+
+        std::string DensePointCloudCUDA::deviceName(int)
+        {
+            return {};
+        }
+
+        std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(const cv::Mat&,
+                                                                  const cv::Mat&,
+                                                                  const FramePinholeCamera&,
+                                                                  const cv::Mat&,
+                                                                  float,
+                                                                  float,
+                                                                  std::string* errorMsg,
+                                                                  const DenseCloudOptions*)
+        {
+            if (errorMsg)
+                *errorMsg = "CUDA 不可用（编译时未启用）";
+            return {};
+        }
+
+    } // namespace mvs
 } // namespace xjw

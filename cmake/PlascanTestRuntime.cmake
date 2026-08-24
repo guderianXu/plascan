@@ -11,6 +11,15 @@ function(plascan_get_windows_test_runtime_path out_var)
             list(APPEND runtime_dirs "${_plascan_tensorrt_dir}")
         endif()
 
+        if(PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY AND
+           EXISTS "${PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY}")
+            get_filename_component(
+                _plascan_onnxruntime_dir
+                "${PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY}"
+                DIRECTORY)
+            list(APPEND runtime_dirs "${_plascan_onnxruntime_dir}")
+        endif()
+
         if(DEFINED CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}")
             list(APPEND runtime_dirs "${CUDAToolkit_BIN_DIR}")
         elseif(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/bin")
@@ -27,6 +36,16 @@ function(plascan_get_windows_test_runtime_path out_var)
         if(EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
             list(APPEND runtime_dirs "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
         endif()
+
+        if(PLASCAN_SOURCE_DEPENDENCY_PREFIX)
+            if(EXISTS "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/bin")
+                list(APPEND runtime_dirs "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/bin")
+            endif()
+            file(GLOB _plascan_opencv_runtime_dirs
+                LIST_DIRECTORIES true
+                "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/*/*/bin")
+            list(APPEND runtime_dirs ${_plascan_opencv_runtime_dirs})
+        endif()
     endif()
 
     list(REMOVE_DUPLICATES runtime_dirs)
@@ -35,6 +54,16 @@ endfunction()
 
 function(plascan_gtest_discover_tests target_name)
     include(GoogleTest)
+
+    if(WIN32 AND PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY AND
+       EXISTS "${PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY}")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY}"
+                "$<TARGET_FILE_DIR:${target_name}>/"
+            VERBATIM
+            COMMENT "Deploying pinned ONNX Runtime for ${target_name}")
+    endif()
 
     plascan_get_windows_test_runtime_path(_plascan_runtime_path)
     if(WIN32 AND _plascan_runtime_path)

@@ -5,7 +5,9 @@
  * @brief PlaMatrix BA 使用的固定/共享 Brown 内参重投影解析线性化。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustProblem.h"
+#include "BundleAdjustTypes.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 

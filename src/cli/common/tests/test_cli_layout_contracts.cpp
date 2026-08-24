@@ -1,5 +1,7 @@
 #include "CliTestSupport.h"
 
+#include <QDirIterator>
+
 TEST(CliModuleLayoutTest, GroupsTargetsByDomainAndBuildsSharedPhotogrammetrySupportOnce)
 {
     const QString rootCmake = readSourceFile(QStringLiteral("src/cli/CMakeLists.txt"));
@@ -14,6 +16,7 @@ TEST(CliModuleLayoutTest, GroupsTargetsByDomainAndBuildsSharedPhotogrammetrySupp
         "add_subdirectory(reconstruction)",
         "add_subdirectory(workflows)",
         "add_subdirectory(quality)",
+        "PLASCAN_VERSION=\"${CMAKE_PROJECT_VERSION}\"",
     });
     expectNotContainsAll(rootCmake, {
         "cli_feature_extract.cpp",
@@ -39,6 +42,32 @@ TEST(CliModuleLayoutTest, GroupsTargetsByDomainAndBuildsSharedPhotogrammetrySupp
         QStringLiteral("src/cli/workflows/tests/test_workflow_cli.cpp"))));
     EXPECT_TRUE(QFileInfo::exists(QDir(repoRoot()).filePath(
         QStringLiteral("src/cli/quality/tests/test_quality_cli.cpp"))));
+}
+
+TEST(CliModuleLayoutTest, EveryCli11EntryUsesTheSharedApplicationShell)
+{
+    const QDir cliDirectory(QDir(repoRoot()).filePath(QStringLiteral("src/cli")));
+    QDirIterator iterator(cliDirectory.path(),
+                          QStringList{QStringLiteral("*.cpp")},
+                          QDir::Files,
+                          QDirIterator::Subdirectories);
+
+    int cli_entry_count = 0;
+    while (iterator.hasNext())
+    {
+        const QString path = iterator.next();
+        const QString source = readTextFile(path);
+        if (!source.contains(QStringLiteral("CLI::App app")))
+        {
+            continue;
+        }
+
+        ++cli_entry_count;
+        EXPECT_TRUE(source.contains(QStringLiteral("cli::configureApp(app);")))
+            << qPrintable(QDir(repoRoot()).relativeFilePath(path));
+    }
+
+    EXPECT_GE(cli_entry_count, 19);
 }
 
 TEST(WindowsCudaBuildScriptContractTest, UsesShortVcpkgWorkRootsForManifestInstall)

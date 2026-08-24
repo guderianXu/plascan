@@ -14,7 +14,7 @@
 
 void CameraSceneWidget::drawRotationGizmo(QPainter &painter) const
 {
-    if (!_showGizmo)
+    if (!_showGizmo || cameraImageNavigationLocked())
     {
         return;
     }
@@ -116,12 +116,12 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         const CameraPose &pose = _poses.at(pose_index);
         const QString composition =
             _cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground
-            ? tr("原图/网格 50% 表面投影")
-            : tr("原图网格表面投影");
+            ? tr("在前景中显示")
+            : tr("在后景中显示");
         const QString lock_state = _cameraImageLocked
             ? tr("已锁定")
             : tr("自动匹配");
-        const QString label = tr("模型视角影像配准 · %1 · %2 · %3")
+        const QString label = tr("显示图像 · %1 · %2 · %3")
             .arg(QFileInfo(pose.imagePath).fileName(), lock_state, composition);
         QRectF label_rect(painter.fontMetrics().boundingRect(label));
         label_rect = label_rect.adjusted(-8.0, -5.0, 8.0, 5.0);
@@ -135,17 +135,13 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
     else if (_showCameraImage && !_poses.isEmpty())
     {
         QString label;
-        if (!_meshHasFaces || _meshIsPointPreview)
+        if (displayedCameraImagePoseIndex() < 0)
         {
-            label = tr("影像配准不可用：请加载带三角面的网格模型");
-        }
-        else if (displayedCameraImagePoseIndex() < 0)
-        {
-            label = tr("影像配准：当前视角没有方向相近的 SfM 照片，请旋转模型（阈值 30°）");
+            label = tr("显示图像：当前视角没有方向相近的 SfM 照片，请旋转场景（阈值 30°）");
         }
         else
         {
-            label = tr("影像配准：正在载入匹配照片...");
+            label = tr("显示图像：正在载入匹配照片...");
         }
         QRectF label_rect(painter.fontMetrics().boundingRect(label));
         label_rect = label_rect.adjusted(-8.0, -5.0, 8.0, 5.0);
@@ -235,7 +231,10 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
     // 操控球是交互前景层，必须在点云和相机标注之后绘制，避免缩小时
     // 被高密度点云遮挡而无法识别或拖动。
     drawRotationGizmo(painter);
-    drawFloorPivotCross(painter);
+    if (!cameraImageNavigationLocked())
+    {
+        drawFloorPivotCross(painter);
+    }
     painter.restore();
 
     if (!interactive_camera_motion)
@@ -275,16 +274,49 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         painter.setBrush(QColor(255, 90, 90, 40));
         if (!_manualSelectRect.isNull())
         {
-            painter.drawRect(_manualSelectRect.normalized());
+            if (_manualSelectionShape == ScreenSelectionShape::Ellipse)
+            {
+                painter.drawEllipse(_manualSelectRect.normalized());
+            }
+            else if (_manualSelectionShape == ScreenSelectionShape::Polygon
+                     && _manualSelectPolygon.size() >= 2)
+            {
+                if (_manualSelecting)
+                {
+                    painter.drawPolyline(_manualSelectPolygon);
+                }
+                else
+                {
+                    painter.drawPolygon(_manualSelectPolygon);
+                }
+            }
+            else
+            {
+                painter.drawRect(_manualSelectRect.normalized());
+            }
         }
 
         painter.setPen(QColor(235, 80, 80));
+        QString tool_name = tr("导航");
+        if (_pointInteractionMode == PointInteractionMode::RectangleSelection)
+        {
+            tool_name = tr("矩形选择");
+        }
+        else if (_pointInteractionMode == PointInteractionMode::CircleSelection)
+        {
+            tool_name = tr("圆选");
+        }
+        else if (_pointInteractionMode == PointInteractionMode::FreehandSelection)
+        {
+            tool_name = tr("自由选择");
+        }
         QString manual_status = tr(
-            "手动剔除：左键框选，右键/中键平移，中央轨迹球旋转，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
+            "%1：左键操作，右键/中键平移，Delete 删除，Ctrl+Z 撤销（已选 %2）")
+            .arg(tool_name)
             .arg(static_cast<int>(_manualPreviewIndices.size()));
         if (_manualSelectionRunning)
         {
-            manual_status = tr("正在后台计算框选点...");
+            manual_status = tr("正在后台计算选择点...");
         }
         else if (_manualEditRunning)
         {

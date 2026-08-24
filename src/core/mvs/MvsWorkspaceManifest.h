@@ -8,10 +8,14 @@
 #include <QStringList>
 #include <QVector>
 
+#include <vector>
+
 namespace xjw::mvs
 {
 
 struct DepthGenConfig;
+struct CameraView;
+struct SparseCloud;
 
 struct MvsDepthFrameQualification
 {
@@ -28,7 +32,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 45;
+inline constexpr int kMvsDepthAlgorithmRevision = 47;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -80,6 +84,15 @@ inline constexpr int kMvsCausalAdmissionEvidenceRevision = 44;
 /// and a frozen-source-depth geometric guidance pass. The guidance objective
 /// remains separate from independent geometric confidence.
 inline constexpr int kMvsJointViewAndGeometricGuidanceRevision = 45;
+/// Revision 46 fingerprints the effective image and mask contents, validates
+/// persisted evidence before reuse, restores the adaptive backend's auxiliary
+/// source-mask/source-depth contract, and keeps observed consistency retention
+/// separate from any diagnostic publication fallback.
+inline constexpr int kMvsCacheAndConsistencyAuditRevision = 46;
+/// Revision 47 makes the initial write a non-publishable checkpoint, records
+/// whether consistency and frozen-depth guidance were expected and actually
+/// completed, and preserves the unavailable single-view consistency state.
+inline constexpr int kMvsDurableDepthPublicationRevision = 47;
 
 struct MvsDepthFrameRecord
 {
@@ -98,6 +111,9 @@ struct MvsDepthFrameRecord
     int requestedSourceViewCount = 0;
     int sourceViewShortfall = 0;
     QString sourceViewShortfallReason;
+    bool consistencyPublicationExpected = false;
+    bool geometricGuidancePassExpected = false;
+    bool geometricGuidancePassApplied = false;
     double meanSourceQualityScore = 0.0;
     double minSourceQualityScore = 0.0;
     double meanDepthConfidence = 0.0;
@@ -203,5 +219,8 @@ private:
 };
 
 QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount);
+QString makeMvsDepthInputHash(const DepthGenConfig &config,
+                              const std::vector<CameraView> &views,
+                              const SparseCloud &sparse);
 
 } // namespace xjw::mvs

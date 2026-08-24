@@ -662,20 +662,43 @@ std::vector<PointVertexIndex> selectPointVertexIndices(
     const QPointF &sceneOffset,
     const std::atomic_bool *cancellationFlag)
 {
+    ScreenSelectionRegion region;
+    region.shape = ScreenSelectionShape::Rectangle;
+    region.bounds = QRectF(screenRect.normalized());
+    return selectPointVertexIndices(vertexData,
+                                    strideBytes,
+                                    region,
+                                    clipMatrix,
+                                    viewportSize,
+                                    sceneOffset,
+                                    cancellationFlag);
+}
+
+std::vector<PointVertexIndex> selectPointVertexIndices(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const ScreenSelectionRegion &region,
+    const QMatrix4x4 &clipMatrix,
+    const QSize &viewportSize,
+    const QPointF &sceneOffset,
+    const std::atomic_bool *cancellationFlag)
+{
     std::vector<PointVertexIndex> indices;
-    const QRect rect = screenRect.normalized();
+    const QRectF bounds = region.bounds.normalized();
+    const bool polygon_valid = region.shape != ScreenSelectionShape::Polygon
+        || region.polygon.size() >= 3;
     if (strideBytes < 3 * int(sizeof(float))
         || strideBytes % int(sizeof(float)) != 0
         || vertexData.isEmpty()
         || vertexData.size() % strideBytes != 0
-        || rect.width() < 3 || rect.height() < 3
+        || bounds.width() < 3.0 || bounds.height() < 3.0
+        || !polygon_valid
         || viewportSize.width() <= 0 || viewportSize.height() <= 0
         || isCancellationRequested(cancellationFlag))
     {
         return indices;
     }
 
-    const QRectF continuous_rect(rect.x(), rect.y(), rect.width(), rect.height());
     const std::size_t point_count = static_cast<std::size_t>(vertexData.size() / strideBytes);
     if (point_count > static_cast<std::size_t>(
             std::numeric_limits<PointVertexIndex>::max()))
@@ -708,7 +731,20 @@ std::vector<PointVertexIndex> selectPointVertexIndices(
             (clip.x() / clip.w() * 0.5f + 0.5f) * viewportSize.width() + sceneOffset.x(),
             (1.0f - (clip.y() / clip.w() * 0.5f + 0.5f)) * viewportSize.height()
                 + sceneOffset.y());
-        if (continuous_rect.contains(screen_point))
+        bool selected = bounds.contains(screen_point);
+        if (selected && region.shape == ScreenSelectionShape::Ellipse)
+        {
+            const qreal radius_x = bounds.width() * 0.5;
+            const qreal radius_y = bounds.height() * 0.5;
+            const qreal normalized_x = (screen_point.x() - bounds.center().x()) / radius_x;
+            const qreal normalized_y = (screen_point.y() - bounds.center().y()) / radius_y;
+            selected = normalized_x * normalized_x + normalized_y * normalized_y <= 1.0;
+        }
+        else if (selected && region.shape == ScreenSelectionShape::Polygon)
+        {
+            selected = region.polygon.containsPoint(screen_point, Qt::OddEvenFill);
+        }
+        if (selected)
         {
             indices.push_back(static_cast<PointVertexIndex>(index));
         }
@@ -731,11 +767,36 @@ PointSelectionPreparation preparePointSelection(
     std::size_t maximumCompactPointCount,
     const std::atomic_bool *cancellationFlag)
 {
+    ScreenSelectionRegion region;
+    region.shape = ScreenSelectionShape::Rectangle;
+    region.bounds = QRectF(screenRect.normalized());
+    return preparePointSelection(vertexData,
+                                 strideBytes,
+                                 scalarData,
+                                 region,
+                                 clipMatrix,
+                                 viewportSize,
+                                 sceneOffset,
+                                 maximumCompactPointCount,
+                                 cancellationFlag);
+}
+
+PointSelectionPreparation preparePointSelection(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const QByteArray &scalarData,
+    const ScreenSelectionRegion &region,
+    const QMatrix4x4 &clipMatrix,
+    const QSize &viewportSize,
+    const QPointF &sceneOffset,
+    std::size_t maximumCompactPointCount,
+    const std::atomic_bool *cancellationFlag)
+{
     PointSelectionPreparation result;
     result.indices = selectPointVertexIndices(
         vertexData,
         strideBytes,
-        screenRect,
+        region,
         clipMatrix,
         viewportSize,
         sceneOffset,

@@ -1,5 +1,6 @@
 #include "SfmReconstruction.h"
 
+#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 
@@ -236,11 +237,39 @@ void SfmReconstruction::deletePoint3D(Point3DId id)
     point3DMap.erase(it);
 }
 
+bool SfmReconstruction::removeObservation(Point3DId id, ImageId imageId, FeatureIdx featureIdx)
+{
+    auto pointIt = point3DMap.find(id);
+    if (pointIt == point3DMap.end())
+    {
+        return false;
+    }
+
+    auto& elements = pointIt->second.track.elements;
+    const auto elementIt = std::find_if(elements.begin(),
+                                        elements.end(),
+                                        [imageId, featureIdx](const TrackElement& element)
+                                        { return element.imageId == imageId && element.featureIdx == featureIdx; });
+    if (elementIt == elements.end())
+    {
+        return false;
+    }
+
+    auto imageIt = imageDataMap.find(imageId);
+    if (imageIt != imageDataMap.end() && featureIdx < imageIt->second.point3DIds.size() &&
+        imageIt->second.point3DIds[featureIdx] == id)
+    {
+        imageIt->second.point3DIds[featureIdx] = kInvalidPoint3DId;
+    }
+    elements.erase(elementIt);
+    return true;
+}
+
 std::vector<Point3DId> SfmReconstruction::allPoint3DIds() const
 {
     std::vector<Point3DId> ids;
     ids.reserve(point3DMap.size());
-    for (auto &[id, point] : point3DMap)
+    for (auto& [id, point] : point3DMap)
     {
         (void)point;
         ids.push_back(id);

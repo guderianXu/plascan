@@ -14,7 +14,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <future>
 #include <limits>
+#include <vector>
 
 namespace xjw::image_matching
 {
@@ -24,6 +26,7 @@ namespace xjw::image_matching
         FeatureSet makeSiftFeatures(int count)
         {
             FeatureSet features;
+            features.descriptorsL2Normalized = true;
             features.imageWidth = 1024;
             features.imageHeight = 1024;
             features.sourceAlgorithm = "sift";
@@ -176,8 +179,7 @@ namespace xjw::image_matching
         TEST(AutoSiftBackendTest, CpuRuntimeDisplayIsExplicitAndHasNoHardwareName)
         {
             EXPECT_TRUE(siftBackendDeviceName(SiftComputeBackend::Cpu).isEmpty());
-            EXPECT_EQ(siftBackendRuntimeDisplayName(SiftComputeBackend::Cpu),
-                      QStringLiteral("OpenCV CPU"));
+            EXPECT_EQ(siftBackendRuntimeDisplayName(SiftComputeBackend::Cpu), QStringLiteral("OpenCV CPU"));
         }
 
         TEST(AutoSiftBackendTest, AvailableCudaDeviceHasAuditableRuntimeName)
@@ -188,8 +190,8 @@ namespace xjw::image_matching
             }
 
             EXPECT_FALSE(siftBackendDeviceName(SiftComputeBackend::Cuda, 0).isEmpty());
-            EXPECT_TRUE(siftBackendRuntimeDisplayName(SiftComputeBackend::Cuda, 0)
-                            .startsWith(QStringLiteral("CUDA · ")));
+            EXPECT_TRUE(
+                siftBackendRuntimeDisplayName(SiftComputeBackend::Cuda, 0).startsWith(QStringLiteral("CUDA · ")));
         }
 
         TEST(AutoSiftGuidedMatcherTest, RecoversMutualDescriptorsInsideEpipolarBand)
@@ -224,10 +226,8 @@ namespace xjw::image_matching
             FeatureSet features1 = makeSiftFeatures(query_count + distractor_count);
             for (int index = 0; index < query_count; ++index)
             {
-                features0.keypoints[static_cast<std::size_t>(index)].pt =
-                    cv::Point2f(24.0f + 56.0f * index, 100.0f);
-                features1.keypoints[static_cast<std::size_t>(index)].pt =
-                    cv::Point2f(28.0f + 56.0f * index, 100.5f);
+                features0.keypoints[static_cast<std::size_t>(index)].pt = cv::Point2f(24.0f + 56.0f * index, 100.0f);
+                features1.keypoints[static_cast<std::size_t>(index)].pt = cv::Point2f(28.0f + 56.0f * index, 100.5f);
                 features0.descriptors.row(index).copyTo(features1.descriptors.row(index));
             }
             for (int index = query_count; index < query_count + distractor_count; ++index)
@@ -246,8 +246,7 @@ namespace xjw::image_matching
 
             ASSERT_FALSE(result.canceled);
             ASSERT_EQ(result.matches.size(), static_cast<std::size_t>(query_count));
-            const std::uint64_t full_bidirectional_comparisons =
-                2ULL * query_count * (query_count + distractor_count);
+            const std::uint64_t full_bidirectional_comparisons = 2ULL * query_count * (query_count + distractor_count);
             EXPECT_LT(result.diagnostics.descriptorComparisons, full_bidirectional_comparisons / 8ULL);
             for (const SiftGuidedMatch& match : result.matches)
             {
@@ -277,10 +276,8 @@ namespace xjw::image_matching
             FeatureSet features1 = features0;
             for (int index = 0; index < features0.size(); ++index)
             {
-                features0.keypoints[static_cast<std::size_t>(index)].pt =
-                    cv::Point2f(16.0f + 7.0f * index, 128.0f);
-                features1.keypoints[static_cast<std::size_t>(index)].pt =
-                    cv::Point2f(18.0f + 7.0f * index, 128.5f);
+                features0.keypoints[static_cast<std::size_t>(index)].pt = cv::Point2f(16.0f + 7.0f * index, 128.0f);
+                features1.keypoints[static_cast<std::size_t>(index)].pt = cv::Point2f(18.0f + 7.0f * index, 128.5f);
             }
             const std::array<double, 9> fundamental{{0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0}};
             SiftGuidedMatchOptions options;
@@ -385,18 +382,10 @@ namespace xjw::image_matching
                     }
                     const int left = column * 32;
                     const int top = row * 32;
-                    base.emplace_back(static_cast<float>(left + 18),
-                                      static_cast<float>(top + 18),
-                                      3.0f);
-                    base.emplace_back(static_cast<float>(left + 26),
-                                      static_cast<float>(top + 18),
-                                      3.0f);
-                    base.emplace_back(static_cast<float>(left + 18),
-                                      static_cast<float>(top + 26),
-                                      3.0f);
-                    base.emplace_back(static_cast<float>(left + 26),
-                                      static_cast<float>(top + 26),
-                                      3.0f);
+                    base.emplace_back(static_cast<float>(left + 18), static_cast<float>(top + 18), 3.0f);
+                    base.emplace_back(static_cast<float>(left + 26), static_cast<float>(top + 18), 3.0f);
+                    base.emplace_back(static_cast<float>(left + 18), static_cast<float>(top + 26), 3.0f);
+                    base.emplace_back(static_cast<float>(left + 26), static_cast<float>(top + 26), 3.0f);
                 }
             }
 
@@ -422,24 +411,16 @@ namespace xjw::image_matching
             {
                 for (int x = 20; x < image.cols / 2 - 12; x += 32)
                 {
-                    cv::circle(image,
-                               cv::Point(x, y),
-                               8,
-                               cv::Scalar(((x + y) / 32) % 2 == 0 ? 232 : 28),
-                               -1,
-                               cv::LINE_AA);
+                    cv::circle(
+                        image, cv::Point(x, y), 8, cv::Scalar(((x + y) / 32) % 2 == 0 ? 232 : 28), -1, cv::LINE_AA);
                 }
             }
             for (int y = 20; y < image.rows - 20; y += 32)
             {
                 for (int x = image.cols / 2 + 12; x < image.cols - 20; x += 32)
                 {
-                    cv::circle(image,
-                               cv::Point(x, y),
-                               8,
-                               cv::Scalar(((x + y) / 32) % 2 == 0 ? 119 : 105),
-                               -1,
-                               cv::LINE_AA);
+                    cv::circle(
+                        image, cv::Point(x, y), 8, cv::Scalar(((x + y) / 32) % 2 == 0 ? 119 : 105), -1, cv::LINE_AA);
                 }
             }
 
@@ -459,13 +440,10 @@ namespace xjw::image_matching
             const FeatureSet recovered = SiftFeatureExtractor::extract(input, config);
             const auto rightCount = [&](const FeatureSet& features)
             {
-                return std::count_if(
-                    features.keypoints.cbegin(),
-                    features.keypoints.cend(),
-                    [&](const cv::KeyPoint& keypoint)
-                    {
-                        return keypoint.pt.x >= static_cast<float>(image.cols / 2);
-                    });
+                return std::count_if(features.keypoints.cbegin(),
+                                     features.keypoints.cend(),
+                                     [&](const cv::KeyPoint& keypoint)
+                                     { return keypoint.pt.x >= static_cast<float>(image.cols / 2); });
             };
 
             EXPECT_GT(rightCount(recovered), rightCount(baseline));
@@ -492,6 +470,37 @@ namespace xjw::image_matching
             EXPECT_EQ(result.matches0.size(), 607U);
             EXPECT_EQ(result.matchingScores0.size(), 607U);
             EXPECT_EQ(result.numMatches, 531);
+        }
+
+        TEST(AutoSiftAlgorithmTest, CudaBackendMatchesConcurrentlyOnIndependentStreams)
+        {
+            if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::Cuda, 0))
+            {
+                GTEST_SKIP() << "CUDA SIFT device is unavailable";
+            }
+
+            std::vector<std::future<MatchResult>> futures;
+            for (int worker = 0; worker < 4; ++worker)
+            {
+                futures.push_back(std::async(std::launch::async,
+                                             [worker]()
+                                             {
+                                                 ImageMatchingRuntimeConfig config;
+                                                 config.cudaDevice = 0;
+                                                 config.siftBackend = SiftComputeBackend::Cuda;
+                                                 config.adaptiveSiftRatio = false;
+                                                 AutoSiftAlgorithm algorithm(config);
+                                                 return algorithm.matchFeatures(makeSiftFeatures(1200 + worker * 17),
+                                                                                makeSiftFeatures(1100 + worker * 13));
+                                             }));
+            }
+
+            for (int worker = 0; worker < static_cast<int>(futures.size()); ++worker)
+            {
+                const MatchResult result = futures[static_cast<std::size_t>(worker)].get();
+                EXPECT_EQ(result.matches0.size(), static_cast<std::size_t>(1200 + worker * 17));
+                EXPECT_EQ(result.numMatches, 1100 + worker * 13);
+            }
         }
 
         void expectGpuExtractionWorks(SiftComputeBackend backend)
@@ -526,6 +535,46 @@ namespace xjw::image_matching
             EXPECT_EQ(features.descriptors.type(), CV_32F);
             EXPECT_EQ(features.descriptors.cols, 128);
             EXPECT_TRUE(cv::checkRange(features.descriptors));
+        }
+
+        TEST(AutoSiftFeatureExtractorTest, CudaWorkspaceHandlesGrowthAndReuse)
+        {
+            if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::Cuda, 0))
+            {
+                GTEST_SKIP() << "CUDA SIFT device is unavailable";
+            }
+
+            ImageMatchingRuntimeConfig config;
+            config.siftBackend = SiftComputeBackend::Cuda;
+            config.maxKeypoints = 1000;
+            config.siftDetectionThreshold = 0.003f;
+            const auto extractPattern = [&](int width, int height)
+            {
+                cv::Mat image(height, width, CV_8U, cv::Scalar(24));
+                for (int y = 16; y < height - 16; y += 20)
+                {
+                    for (int x = 16; x < width - 16; x += 20)
+                    {
+                        cv::circle(
+                            image, cv::Point(x, y), 5, cv::Scalar(((x + y) / 20) % 2 == 0 ? 235 : 80), -1, cv::LINE_AA);
+                    }
+                }
+                ImageFeatureInput input;
+                input.grayImage = image;
+                input.originalWidth = width;
+                input.originalHeight = height;
+                return SiftFeatureExtractor::extract(input, config);
+            };
+
+            const FeatureSet initial = extractPattern(320, 256);
+            const FeatureSet grown = extractPattern(512, 384);
+            const FeatureSet reused = extractPattern(300, 220);
+            EXPECT_FALSE(initial.empty());
+            EXPECT_FALSE(grown.empty());
+            EXPECT_FALSE(reused.empty());
+            EXPECT_TRUE(cv::checkRange(initial.descriptors));
+            EXPECT_TRUE(cv::checkRange(grown.descriptors));
+            EXPECT_TRUE(cv::checkRange(reused.descriptors));
         }
 
         TEST(AutoSiftFeatureExtractorTest, MetalBuildsPyramidAndDescriptorsOnGpu)
@@ -598,8 +647,7 @@ namespace xjw::image_matching
         std::filesystem::path dinoImagePath(const char* fileName)
         {
             return std::filesystem::path(TEST_DATA_DIR) /
-                "photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing" /
-                fileName;
+                   "photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing" / fileName;
         }
 
         double inlierGridCoverage(const FeatureSet& features,
@@ -620,22 +668,17 @@ namespace xjw::image_matching
                 const cv::DMatch& match = matches.cvMatches[static_cast<std::size_t>(index)];
                 const int feature_index = firstImage ? match.queryIdx : match.trainIdx;
                 const cv::Point2f point = features.keypoints[static_cast<std::size_t>(feature_index)].pt;
-                const int column = std::clamp(
-                    static_cast<int>(point.x * columns / std::max(1, features.imageWidth)),
-                    0,
-                    columns - 1);
-                const int row = std::clamp(
-                    static_cast<int>(point.y * rows / std::max(1, features.imageHeight)),
-                    0,
-                    rows - 1);
+                const int column =
+                    std::clamp(static_cast<int>(point.x * columns / std::max(1, features.imageWidth)), 0, columns - 1);
+                const int row =
+                    std::clamp(static_cast<int>(point.y * rows / std::max(1, features.imageHeight)), 0, rows - 1);
                 occupied[static_cast<std::size_t>(row * columns + column)] = true;
             }
             return static_cast<double>(std::count(occupied.cbegin(), occupied.cend(), true)) /
-                static_cast<double>(occupied.size());
+                   static_cast<double>(occupied.size());
         }
 
-        DinoBackendMetrics runDinoBackend(SiftComputeBackend backend,
-                                          bool lowTextureRecovery = true)
+        DinoBackendMetrics runDinoBackend(SiftComputeBackend backend, bool lowTextureRecovery = true)
         {
             const cv::Mat image0 = cv::imread(dinoImagePath("dinoSR0001.png").string(), cv::IMREAD_GRAYSCALE);
             const cv::Mat image1 = cv::imread(dinoImagePath("dinoSR0002.png").string(), cv::IMREAD_GRAYSCALE);
@@ -669,8 +712,8 @@ namespace xjw::image_matching
             geometryOptions.model = GeometryModel::Fundamental;
             geometryOptions.minimumInliers = 8;
             geometryOptions.reprojectionThresholdPixels = 2.0;
-            const MatchGeometryResult geometry = MatchGeometryVerifier::verify(
-                matches, features0, features1, geometryOptions);
+            const MatchGeometryResult geometry =
+                MatchGeometryVerifier::verify(matches, features0, features1, geometryOptions);
             const double coverage0 = inlierGridCoverage(features0, matches, geometry, true);
             const double coverage1 = inlierGridCoverage(features1, matches, geometry, false);
             return {features0.size(),
@@ -687,14 +730,12 @@ namespace xjw::image_matching
             {
                 GTEST_SKIP() << "Middlebury DinoSparseRing data is not downloaded";
             }
-            if (backend != SiftComputeBackend::Cpu &&
-                !SiftFeatureExtractor::isBackendAvailable(backend, 0))
+            if (backend != SiftComputeBackend::Cpu && !SiftFeatureExtractor::isBackendAvailable(backend, 0))
             {
                 GTEST_SKIP() << siftBackendName(backend) << " SIFT backend is unavailable";
             }
             const DinoBackendMetrics cpu = runDinoBackend(SiftComputeBackend::Cpu);
-            const DinoBackendMetrics actual = backend == SiftComputeBackend::Cpu
-                ? cpu : runDinoBackend(backend);
+            const DinoBackendMetrics actual = backend == SiftComputeBackend::Cpu ? cpu : runDinoBackend(backend);
             ASSERT_GT(cpu.matchCount, 20);
             ASSERT_GT(cpu.geometryInliers, 12);
             ASSERT_GT(actual.matchCount, 20);
@@ -729,8 +770,7 @@ namespace xjw::image_matching
             EXPECT_GT(recovered.featureCount0, baseline.featureCount0);
             EXPECT_GT(recovered.featureCount1, baseline.featureCount1);
             EXPECT_GE(recovered.geometryInliers, baseline.geometryInliers);
-            EXPECT_GE(recovered.minimumInlierGridCoverage,
-                      baseline.minimumInlierGridCoverage);
+            EXPECT_GE(recovered.minimumInlierGridCoverage, baseline.minimumInlierGridCoverage);
         }
 
         TEST(AutoSiftDinoRegressionTest, MetalIsConsistentWithCpu)
@@ -760,8 +800,7 @@ namespace xjw::image_matching
             {
                 char image_name[32]{};
                 std::snprintf(image_name, sizeof(image_name), "dinoSR%04d.png", image_index);
-                const cv::Mat image = cv::imread(
-                    dinoImagePath(image_name).string(), cv::IMREAD_GRAYSCALE);
+                const cv::Mat image = cv::imread(dinoImagePath(image_name).string(), cv::IMREAD_GRAYSCALE);
                 if (image.empty())
                 {
                     GTEST_SKIP() << "Middlebury DinoSparseRing data is not downloaded";

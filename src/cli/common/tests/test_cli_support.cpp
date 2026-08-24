@@ -2,6 +2,7 @@
 #include "CliOutputPolicy.h"
 #include "CliPathUtils.h"
 #include "CliTokenUtils.h"
+#include "cli_common.h"
 
 #include <gtest/gtest.h>
 
@@ -13,6 +14,18 @@
 
 namespace
 {
+
+TEST(CliSupportTest, ConfiguresConsistentHelpAndExitCodeGuidance)
+{
+    CLI::App app{"测试命令"};
+    cli::configureApp(app);
+
+    ASSERT_NE(app.get_help_ptr(), nullptr);
+    EXPECT_EQ(app.get_help_ptr()->get_description(), "显示帮助信息并退出");
+    EXPECT_NE(app.get_footer().find("0 成功"), std::string::npos);
+    EXPECT_NE(app.get_footer().find("3 算法执行错误"), std::string::npos);
+    EXPECT_EQ(app.get_formatter()->get_column_width(), 36U);
+}
 
 TEST(CliSupportTest, NormalizesTokensAndUtf8Strings)
 {

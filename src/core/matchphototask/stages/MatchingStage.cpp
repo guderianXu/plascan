@@ -1,4 +1,4 @@
-#include "MatchingStage.h"
+﻿#include "MatchingStage.h"
 
 #include "ImageMatchFile.h"
 #include "ImageMatchRepository.h"
@@ -129,7 +129,8 @@ QByteArray rawConfigFingerprint(const MatchPhotosOptions &options,
     object[QStringLiteral("low_texture_recovery")] = plan.lowTextureRecovery;
     object[QStringLiteral("root_sift")] =
         plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
-    object[QStringLiteral("guided_matching")] = options.enableGuidedMatching;
+    object[QStringLiteral("guided_matching_mode")] = guidedMatchingModeName(options.guidedMatchingMode);
+    object[QStringLiteral("guided_reference_poses")] = options.guidedUseReferenceCameraPoses;
     object[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     object[QStringLiteral("matcher_keypoint_budget")] = matcherKeypointBudget;
     object[QStringLiteral("match_threshold")] = static_cast<double>(effectiveMatchThreshold);
@@ -601,11 +602,24 @@ MatchPhotosStageReport MatchingStage::run(
             }
         }
     }
-    const LightGlueParallelismDecision parallelism = resolveLightGlueParallelism(
+    GpuMatchingAlgorithm gpuMatchingAlgorithm = GpuMatchingAlgorithm::CudaSift;
+    int descriptorDimension = 128;
+    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kSiftLightGlueAlgorithmId))
+    {
+        gpuMatchingAlgorithm = GpuMatchingAlgorithm::LightGlue;
+    }
+    else if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
+    {
+        gpuMatchingAlgorithm = GpuMatchingAlgorithm::LoMaR;
+        descriptorDimension = std::max(1, runtime.descriptorDimension);
+    }
+    const GpuMatchingParallelismDecision parallelism = resolveGpuMatchingParallelism(
+        gpuMatchingAlgorithm,
         options.cudaParallelPairs,
         static_cast<int>(work.size()),
         algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda,
         parallelismBudget,
+        descriptorDimension,
         gpuMemory);
     const int workerCount = work.empty() ? 0 : std::max(1, parallelism.effectiveWorkers);
 
@@ -735,108 +749,111 @@ MatchPhotosStageReport MatchingStage::run(
         xjw::common::concurrency::runWorkerGroup(
             static_cast<std::size_t>(workerCount),
             [&](std::stop_token stopToken)
-        {
-            QString createError;
-            std::unique_ptr<image_matching::IImageMatchingAlgorithm> algorithm =
-                image_matching::ImageMatchingRegistry::create(
-                    algorithmPlan.algorithmId,
-                    runtime,
-                    &createError);
-            if (!algorithm)
             {
-                throw std::runtime_error(createError.toStdString());
-            }
-
-            while (!stopToken.stop_requested() &&
-                   !shouldCancelMatchPhotos(context))
-            {
-                const int workIndex = nextWork.fetch_add(1);
-                if (workIndex >= static_cast<int>(work.size()))
+                struct WorkspaceRelease
                 {
-                    break;
-                }
-                const WorkItem &item = work[static_cast<std::size_t>(workIndex)];
-                if (item.pair.image0Path.isEmpty() || item.pair.image1Path.isEmpty())
-                {
-                    ++failedPairs;
-                    ++completed;
-                    continue;
-                }
-
-                const auto features0 = context.featureCache->find(item.pair.image0Path);
-                const auto features1 = context.featureCache->find(item.pair.image1Path);
-                if (!features0 || !features1)
-                {
-                    ++failedPairs;
-                    ++completed;
-                    continue;
-                }
-
-                try
-                {
-                    image_matching::MatchResult raw =
-                        algorithm->matchFeatures(*features0, *features1);
-                    if (raw.cvMatches.empty() && !raw.matches0.empty())
+                    ~WorkspaceRelease()
                     {
-                        raw.buildCvMatchesFromIndices();
+                        image_matching::releaseSiftGpuThreadWorkspaces();
                     }
-                    auto pairData = makePairData(item.pair,
-                                                 *features0,
-                                                 *features1,
-                                                 raw,
-                                                 context,
-                                                 options,
-                                                 algorithmPlan,
-                                                 item.configurationFingerprint,
-                                                 engineFingerprint);
-                    MatchPhotosMatchRecord record = makeRecord(repository,
-                                                                std::move(pairData),
-                                                                algorithmPlan,
-                                                                options,
-                                                                false,
-                                                                false,
-                                                                geometryFingerprint,
-                                                                item.cacheWarning);
+                } workspaceRelease;
+
+                QString createError;
+                std::unique_ptr<image_matching::IImageMatchingAlgorithm> algorithm =
+                    image_matching::ImageMatchingRegistry::create(algorithmPlan.algorithmId, runtime, &createError);
+                if (!algorithm)
+                {
+                    throw std::runtime_error(createError.toStdString());
+                }
+
+                while (!stopToken.stop_requested() && !shouldCancelMatchPhotos(context))
+                {
+                    const int workIndex = nextWork.fetch_add(1);
+                    if (workIndex >= static_cast<int>(work.size()))
+                    {
+                        break;
+                    }
+                    const WorkItem& item = work[static_cast<std::size_t>(workIndex)];
+                    if (item.pair.image0Path.isEmpty() || item.pair.image1Path.isEmpty())
+                    {
+                        ++failedPairs;
+                        ++completed;
+                        continue;
+                    }
+
+                    const auto features0 = context.featureCache->find(item.pair.image0Path);
+                    const auto features1 = context.featureCache->find(item.pair.image1Path);
+                    if (!features0 || !features1)
+                    {
+                        ++failedPairs;
+                        ++completed;
+                        continue;
+                    }
+
+                    try
+                    {
+                        image_matching::MatchResult raw = algorithm->matchFeatures(*features0, *features1);
+                        if (raw.cvMatches.empty() && !raw.matches0.empty())
+                        {
+                            raw.buildCvMatchesFromIndices();
+                        }
+                        auto pairData = makePairData(item.pair,
+                                                     *features0,
+                                                     *features1,
+                                                     raw,
+                                                     context,
+                                                     options,
+                                                     algorithmPlan,
+                                                     item.configurationFingerprint,
+                                                     engineFingerprint);
+                        MatchPhotosMatchRecord record = makeRecord(repository,
+                                                                   std::move(pairData),
+                                                                   algorithmPlan,
+                                                                   options,
+                                                                   false,
+                                                                   false,
+                                                                   geometryFingerprint,
+                                                                   item.cacheWarning);
+                        record.settings[QStringLiteral("gpu_matching_workers")] = workerCount;
+                        record.settings[QStringLiteral("gpu_worker_estimated_mib")] =
+                            static_cast<double>(parallelism.estimatedBytesPerWorker) / (1024.0 * 1024.0);
+                        record.settings[QStringLiteral("gpu_parallelism_reason")] = parallelism.reason;
+                        {
+                            std::lock_guard lock(resultMutex);
+                            records[static_cast<std::size_t>(item.outputIndex)] = std::move(record);
+                            populated[static_cast<std::size_t>(item.outputIndex)] = true;
+                        }
+                    }
+                    catch (const std::exception& error)
                     {
                         std::lock_guard lock(resultMutex);
-                        records[static_cast<std::size_t>(item.outputIndex)] =
-                            std::move(record);
-                        populated[static_cast<std::size_t>(item.outputIndex)] = true;
+                        ++failedPairs;
+                        if (fatalError.isEmpty())
+                        {
+                            fatalError =
+                                QStringLiteral("%1 / %2：%3")
+                                    .arg(item.pair.image0Path, item.pair.image1Path, QString::fromUtf8(error.what()));
+                        }
                     }
-                }
-                catch (const std::exception &error)
-                {
-                    std::lock_guard lock(resultMutex);
-                    ++failedPairs;
-                    if (fatalError.isEmpty())
-                    {
-                        fatalError = QStringLiteral("%1 / %2：%3")
-                            .arg(item.pair.image0Path,
-                                 item.pair.image1Path,
-                                 QString::fromUtf8(error.what()));
-                    }
-                }
 
-                if (stopToken.stop_requested() ||
-                    shouldCancelMatchPhotos(context))
-                {
-                    break;
+                    if (stopToken.stop_requested() || shouldCancelMatchPhotos(context))
+                    {
+                        break;
+                    }
+                    std::lock_guard lock(resultMutex);
+                    const int done = ++completed;
+                    reportMatchPhotosProgress(context,
+                                              QStringLiteral("matching"),
+                                              QStringLiteral("%1 匹配：%2/%3，复用 %4，失败 %5")
+                                                  .arg(algorithmPlan.displayName)
+                                                  .arg(done)
+                                                  .arg(totalPairs)
+                                                  .arg(reusedPairs)
+                                                  .arg(failedPairs.load()),
+                                              done,
+                                              totalPairs);
                 }
-                std::lock_guard lock(resultMutex);
-                const int done = ++completed;
-                reportMatchPhotosProgress(
-                    context,
-                    QStringLiteral("matching"),
-                    QStringLiteral("%1 匹配：%2/%3，复用 %4，失败 %5")
-                        .arg(algorithmPlan.displayName)
-                        .arg(done)
-                        .arg(totalPairs)
-                        .arg(reusedPairs)
-                        .arg(failedPairs.load()),
-                    done,
-                    totalPairs);
-            }
-        });
+            });
     }
     catch (const std::exception &error)
     {

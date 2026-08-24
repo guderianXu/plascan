@@ -1,0 +1,21 @@
+{
+    "coordinate_system": "WGS 84 / UTM zone 40S",
+    "coverage_fraction": 0.9963672484745282,
+    "created_at": "2026-08-23T16:57:09Z",
+    "dem_path": "E:/code/plascan/testData/rpc_stereo_pair/Products/dem.tif",
+    "dom_path": "E:/code/plascan/testData/rpc_stereo_pair/Products/dom.tif",
+    "height": 270,
+    "image_contribution_pixels": [
+        67757,
+        70214
+    ],
+    "images": [
+        "E:/code/plascan/testData/rpc_stereo_pair/Images/img_01.tif",
+        "E:/code/plascan/testData/rpc_stereo_pair/Images/img_02.tif"
+    ],
+    "preview_path": "E:/code/plascan/testData/rpc_stereo_pair/Products/dom_preview.png",
+    "report_path": "E:/code/plascan/testData/rpc_stereo_pair/Products/rpc_dom_report.json",
+    "schema": "plascan.rpc_dom.v1",
+    "valid_pixels": 70214,
+    "width": 261
+}

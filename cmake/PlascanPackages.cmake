@@ -1,5 +1,41 @@
 include_guard(GLOBAL)
 
+include(${CMAKE_CURRENT_LIST_DIR}/PlascanSourceDependencyVersions.cmake)
+
+option(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES
+  "Require the pinned source-built Qt, OpenCV, GDAL, and AprilTag packages" OFF)
+set(PLASCAN_SOURCE_DEPENDENCY_PREFIX "" CACHE PATH
+  "Install prefix containing source-built Qt, OpenCV, GDAL, and AprilTag packages")
+
+function(plascan_assert_source_package package_name package_dir actual_version expected_version)
+  if(NOT PLASCAN_SOURCE_DEPENDENCY_PREFIX)
+    message(FATAL_ERROR
+      "PLASCAN_REQUIRE_SOURCE_DEPENDENCIES requires PLASCAN_SOURCE_DEPENDENCY_PREFIX")
+  endif()
+  if(NOT actual_version VERSION_EQUAL expected_version)
+    message(FATAL_ERROR
+      "PlaScan requires source-built ${package_name} ${expected_version}, "
+      "but found ${actual_version} at ${package_dir}")
+  endif()
+
+  get_filename_component(_plascan_source_prefix
+    "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}" REALPATH)
+  get_filename_component(_plascan_package_dir "${package_dir}" REALPATH)
+  file(TO_CMAKE_PATH "${_plascan_source_prefix}" _plascan_source_prefix)
+  file(TO_CMAKE_PATH "${_plascan_package_dir}" _plascan_package_dir)
+  if(WIN32)
+    string(TOLOWER "${_plascan_source_prefix}" _plascan_source_prefix)
+    string(TOLOWER "${_plascan_package_dir}" _plascan_package_dir)
+  endif()
+  string(FIND "${_plascan_package_dir}" "${_plascan_source_prefix}/" _plascan_prefix_index)
+  if(NOT _plascan_package_dir STREQUAL _plascan_source_prefix AND
+     NOT _plascan_prefix_index EQUAL 0)
+    message(FATAL_ERROR
+      "${package_name} did not come from PLASCAN_SOURCE_DEPENDENCY_PREFIX. "
+      "Expected a package below ${PLASCAN_SOURCE_DEPENDENCY_PREFIX}, found ${package_dir}")
+  endif()
+endfunction()
+
 # ==============================================================================
 # PlaScan 统一依赖查找
 #
@@ -40,6 +76,10 @@ if(PLASCAN_BUILD_GUI)
   set(QT_NO_PRIVATE_MODULE_WARNING ON)
 endif()
 find_package(Qt6 6.7 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
+if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+  plascan_assert_source_package(
+    "Qt" "${Qt6_DIR}" "${Qt6_VERSION}" "${PLASCAN_SOURCE_QT_VERSION}")
+endif()
 if(PLASCAN_BUILD_GUI AND NOT TARGET Qt6::GuiPrivate)
   # Qt's vcpkg package exports private modules as standalone package configs on
   # Linux instead of loading them with the public Qt6 component set.
@@ -62,19 +102,18 @@ if(_PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX EQUAL -1)
 endif()
 
 # ── OpenCV ────────────────────────────────────────────────────────────────────
-find_package(OpenCV REQUIRED)
-if(OpenCV_VERSION VERSION_GREATER_EQUAL "5.0.0")
-  # OpenCV 5 将 calib3d/features2d 能力拆到 geometry/features/stereo 模块。
-  set(PLASCAN_OPENCV_COMPONENTS core imgproc geometry stereo features imgcodecs flann xfeatures2d ximgproc)
-else()
-  set(PLASCAN_OPENCV_COMPONENTS core imgproc calib3d features2d imgcodecs flann)
+# PlaScan directly targets the OpenCV 5 module layout. The OpenCV 4 forwarding
+# headers and calib3d/features2d compatibility path are intentionally unsupported.
+set(PLASCAN_OPENCV_COMPONENTS
+  core imgproc geometry stereo features imgcodecs flann dnn)
+find_package(OpenCV 5.0 REQUIRED COMPONENTS ${PLASCAN_OPENCV_COMPONENTS})
+if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+  plascan_assert_source_package(
+    "OpenCV" "${OpenCV_DIR}" "${OpenCV_VERSION}" "${PLASCAN_SOURCE_OPENCV_VERSION}")
 endif()
-find_package(OpenCV REQUIRED COMPONENTS ${PLASCAN_OPENCV_COMPONENTS})
 message(STATUS "plascan: found OpenCV ${OpenCV_VERSION} (${PLASCAN_OPENCV_COMPONENTS})")
 
-# BiRefNet's ONNX graph uses GatherND and extensive shape operations that are
-# not supported by the OpenCV 4.x importer. Use the same runtime that verifies
-# the released model instead of exposing an unusable OpenCV CPU fallback.
+# BiRefNet inference uses ONNX Runtime independently from the OpenCV DNN module.
 include(PlascanOnnxRuntime)
 
 # ── OpenCL（可选，用于 AMD/Intel/NVIDIA 通用 GPU 计算）─────────────────────────────
@@ -110,16 +149,27 @@ if(PLASCAN_ENABLE_CUDA AND NOT PLASCAN_APPLE_SILICON)
 endif()
 
 # ── GDAL ──────────────────────────────────────────────────────────────────────
-find_package(GDAL REQUIRED)
+if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+  find_package(GDAL ${PLASCAN_SOURCE_GDAL_VERSION} EXACT CONFIG REQUIRED)
+  plascan_assert_source_package(
+    "GDAL" "${GDAL_DIR}" "${GDAL_VERSION}" "${PLASCAN_SOURCE_GDAL_VERSION}")
+else()
+  find_package(GDAL REQUIRED)
+endif()
 if(TARGET GDAL::GDAL)
   set(PLASCAN_GDAL_TARGET GDAL::GDAL CACHE INTERNAL "GDAL CMake target")
 else()
   set(PLASCAN_GDAL_TARGET ${GDAL_LIBRARIES} CACHE INTERNAL "GDAL CMake target")
 endif()
-message(STATUS "plascan: found GDAL, target=${PLASCAN_GDAL_TARGET}")
+message(STATUS "plascan: found GDAL ${GDAL_VERSION}, target=${PLASCAN_GDAL_TARGET}")
 
 # ── AprilTag ─────────────────────────────────────────────────────────────────
-if(WIN32)
+if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+  find_package(apriltag ${PLASCAN_SOURCE_APRILTAG_VERSION} EXACT CONFIG REQUIRED)
+  plascan_assert_source_package(
+    "AprilTag" "${apriltag_DIR}" "${apriltag_VERSION}"
+    "${PLASCAN_SOURCE_APRILTAG_VERSION}")
+elseif(WIN32)
   find_package(apriltag CONFIG REQUIRED)
 else()
   # Ubuntu 24.04's apriltag CMake package exports an invalid duplicated
@@ -168,6 +218,14 @@ if(PLASCAN_APPLE_SILICON)
       message(FATAL_ERROR "plascan: OpenMP is required on macOS; install it with: brew install libomp")
     endif()
   endif()
+elseif(MSVC)
+  # MSVC's baseline /openmp mode does not enable the omp simd and max-reduction
+  # directives used by PlaMatrix. Select the LLVM runtime plus the experimental
+  # SIMD extensions before FindOpenMP creates the imported target so every C++
+  # consumer receives one consistent set of required capabilities.
+  set(OpenMP_CXX_FLAGS "/openmp:llvm /openmp:experimental" CACHE STRING
+    "OpenMP C++ flags with SIMD and reduction support on MSVC" FORCE)
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
 else()
   find_package(OpenMP REQUIRED COMPONENTS CXX)
 endif()

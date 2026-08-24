@@ -19,6 +19,17 @@
       }
     },
     {
+      "name": "source-deps-base",
+      "hidden": true,
+      "inherits": "vcpkg-base",
+      "cacheVariables": {
+        "BUILD_TESTS": "OFF",
+        "PLASCAN_BUNDLE_RUNTIME": "OFF",
+        "PLASCAN_SOURCE_DEPENDENCIES_ONLY": "ON",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/cmake/source-deps"
+      }
+    },
+    {
       "name": "linux-vcpkg-debug",
       "displayName": "Linux vcpkg Debug",
       "inherits": "vcpkg-base",
@@ -53,6 +64,42 @@
       }
     },
     {
+      "name": "linux-source-deps-release",
+      "displayName": "Linux Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "inherits": "source-deps-base",
+      "binaryDir": "${sourceDir}/build/linux-source-deps-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/linux-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-source-deps-release/vcpkg_installed",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic"
+      }
+    },
+    {
+      "name": "linux-source-release",
+      "displayName": "Linux Release with source-built Qt/OpenCV/GDAL",
+      "inherits": "linux-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/linux-source-release",
+      "environment": {
+        "PROJ_DATA": "${sourceDir}/build/linux-source-deps-release/vcpkg_installed/x64-linux-dynamic/share/proj"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/build/linux-source-deps-release/install",
+        "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "ON",
+        "PLASCAN_REQUIRE_SOURCE_DEPENDENCIES": "ON",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/linux-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-source-deps-release/vcpkg_installed",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/cmake/source-deps"
+      }
+    },
+    {
       "name": "linux-vcpkg-cuda-opencl-release",
       "displayName": "Linux vcpkg CUDA 13.1 + OpenCL Release",
       "description": "Builds the local Ubuntu CUDA 13.1 developer configuration with native CUDA and NVIDIA OpenCL",
@@ -68,7 +115,6 @@
         "CUDAToolkit_ROOT": "/usr/local/cuda-13.1",
         "PLASCAN_CUDA_ARCHITECTURES": "89",
         "PLASCAN_ENABLE_CUDA": "ON",
-        "PLASCAN_ENABLE_CERES_REFERENCE": "OFF",
         "PLASCAN_ENABLE_OPENCL": "ON",
         "PLASCAN_ENABLE_TENSORRT": "OFF",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed"
@@ -136,6 +182,41 @@
       }
     },
     {
+      "name": "macos-source-deps-release",
+      "displayName": "macOS Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "inherits": "source-deps-base",
+      "binaryDir": "${sourceDir}/build/macos-source-deps-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/macos-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/macos-source-deps-release/vcpkg_installed",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx"
+      }
+    },
+    {
+      "name": "macos-source-release",
+      "displayName": "macOS Release with source-built Qt/OpenCV/GDAL",
+      "inherits": "macos-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/macos-source-release",
+      "environment": {
+        "PROJ_DATA": "${sourceDir}/build/macos-source-deps-release/vcpkg_installed/arm64-osx/share/proj"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/build/macos-source-deps-release/install",
+        "PLASCAN_REQUIRE_SOURCE_DEPENDENCIES": "ON",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/macos-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/macos-source-deps-release/vcpkg_installed",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/cmake/source-deps"
+      }
+    },
+    {
       "name": "windows-vcpkg-debug",
       "displayName": "Windows vcpkg Debug",
       "inherits": "vcpkg-base",
@@ -167,6 +248,46 @@
       }
     },
     {
+      "name": "windows-source-deps-release",
+      "displayName": "Windows Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "inherits": "source-deps-base",
+      "binaryDir": "${sourceDir}/build/windows-source-deps-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "environment": {
+        "PATH": "${sourceDir}/build/env/sdk/tensorrt/10.15.1.29/bin;$penv{CUDA_PATH}/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/windows-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-source-deps-release/vcpkg_installed",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-source-release",
+      "displayName": "Windows Release with source-built Qt/OpenCV/GDAL",
+      "inherits": "windows-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/windows-source-release",
+      "environment": {
+        "PATH": "${sourceDir}/build/env/sdk/tensorrt/10.15.1.29/bin;$penv{CUDA_PATH}/bin;${sourceDir}/build/windows-source-deps-release/install/bin;${sourceDir}/build/windows-source-deps-release/install/x64/vc17/bin;${sourceDir}/build/windows-source-deps-release/vcpkg_installed/x64-windows/bin;$penv{PATH}",
+        "PROJ_DATA": "${sourceDir}/build/windows-source-deps-release/vcpkg_installed/x64-windows/share/proj"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/build/windows-source-deps-release/install",
+        "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "ON",
+        "PLASCAN_REQUIRE_SOURCE_DEPENDENCIES": "ON",
+        "PLASCAN_SOURCE_DEPENDENCY_PREFIX": "${sourceDir}/build/windows-source-deps-release/install",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-source-deps-release/vcpkg_installed",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/cmake/source-deps"
+      }
+    },
+    {
       "name": "windows-vcpkg-cuda-release",
       "displayName": "Windows vcpkg CUDA Release Packaging",
       "description": "Reuses the CUDA build initialized by scripts/build_win/build_windows_cuda.ps1",
@@ -187,6 +308,36 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "linux-source-deps-release",
+      "configurePreset": "linux-source-deps-release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-source-release",
+      "configurePreset": "linux-source-release",
+      "jobs": 0
+    },
+    {
+      "name": "macos-source-deps-release",
+      "configurePreset": "macos-source-deps-release",
+      "jobs": 0
+    },
+    {
+      "name": "macos-source-release",
+      "configurePreset": "macos-source-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-source-deps-release",
+      "configurePreset": "windows-source-deps-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-source-release",
+      "configurePreset": "windows-source-release",
+      "jobs": 0
+    },
     {
       "name": "linux-vcpkg-debug",
       "configurePreset": "linux-vcpkg-debug",
@@ -282,6 +433,27 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "linux-source-release",
+      "configurePreset": "linux-source-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-source-release",
+      "configurePreset": "macos-source-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-source-release",
+      "configurePreset": "windows-source-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
     {
       "name": "linux-vcpkg-debug",
       "configurePreset": "linux-vcpkg-debug",

@@ -134,11 +134,10 @@ OMP_NUM_THREADS=16 build/linux-vcpkg-cuda-opencl-release/bin/ba_backend_benchmar
 
 ## 生产替代门禁
 
-- 默认 `vcpkg.json` 不包含 Ceres，`PLASCAN_ENABLE_CERES_REFERENCE` 默认关闭。
+- `vcpkg.json` 不包含 Ceres，Ceres 实现和 `PLASCAN_ENABLE_CERES_REFERENCE` 构建开关均已移除。
 - 全新 CUDA 13.1/OpenCL 构建可在 vcpkg 实际移除 Ceres 后完成；GUI、frame BA CLI 和 line-scan BA CLI
   的动态依赖及编译命令均不含 Ceres/glog/gflags/SuiteSparse。
 - 层级 BA、GCP、尺度条、姿态、相机平面、行星激光与 line-scan 流程不再强制选择或失败回退 Ceres。
-- Ceres 对照构建使用 `-DPLASCAN_ENABLE_CERES_REFERENCE=ON` 与可选 manifest feature，仍可重复运行同数据 parity。
 
 ## 自动化验证
 
@@ -147,7 +146,7 @@ OMP_NUM_THREADS=16 build/linux-vcpkg-cuda-opencl-release/bin/ba_backend_benchmar
 - PlaMatrix CUDA 13.1/OpenCL + 原生 CPU：515/515 通过，CUDA/OpenCL 用例在 RTX 4060 上实际执行。
 - 最终无 Ceres 生产构建：3449 项发现，3448 个已执行测试零失败；其中外部模型/数据相关用例按既有条件跳过，
   另有一个既有 PatchMatch benchmark 被显式禁用。
-- BA 同数据测试会在设备存在时同时运行 PlaMatrix CPU/CUDA/OpenCL 和 Ceres，并检查后端身份、
+- BA 同数据测试会在设备存在时同时运行 PlaMatrix CPU/CUDA/OpenCL，并检查后端身份、
   GPU 执行标志、设备名、设备 Schur 装配、迭代/耗时指标及相机、点、RMS、代价的一致性。
 - 完整 Brown 回归覆盖共享 `f/aspect/cx/cy/k1/k2/k3/p1/p2`；联合约束回归覆盖 GCP、LiDAR 平面、
-  比例尺、姿态先验、相机平面、激光测距、激光点先验和激光像点，并与 Ceres 比较。
+  比例尺、姿态先验、相机平面、激光测距、激光点先验和激光像点，并执行跨 PlaMatrix 后端一致性检查。

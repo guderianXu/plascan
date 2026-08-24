@@ -23,6 +23,7 @@
 #pragma once
 
 #include "FramePinholeCamera.h"
+#include "RpcCameraModel.h"
 #include "project/ProjectDocumentModel.h"
 #include "ProjectSessionContext.h"
 #include "ProjectTerrainRequests.h"
@@ -30,6 +31,7 @@
 #include <QObject>
 #include <QString>
 #include <QJsonObject>
+#include <QImage>
 #include <QJsonArray>
 #include <QFuture>
 #include <QMap>
@@ -108,6 +110,10 @@ signals:
     void surveyControlChanged();
     // 照片蒙版生成或清除后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
+    void interactiveMaskSaved(const QString &imagePath, quint64 revision);
+    void interactiveMaskSaveFailed(const QString &imagePath,
+                                   quint64 revision,
+                                   const QString &message);
     /// 每对影像匹配完成时实时发出（在主线程中）
     /// img0/img1: 影像绝对路径; matchFilePath: owner `.pimatch` 分片; numMatches: 内点数
     void matchPairReady(const QString &img0, const QString &img1,
@@ -206,6 +212,10 @@ public slots:
     void openGenerateMaskDialogForImages(const QStringList &selectedImages);
     // 清除照片面板当前选择的蒙版文件及关联元数据。
     void clearMasksForImages(const QStringList &selectedImages);
+    void saveInteractiveMask(const QString &imagePath,
+                             const QImage &mask,
+                             const QString &method,
+                             quint64 revision);
     // 取消正在运行的照片蒙版生成任务。
     void cancelMaskGeneration();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
@@ -358,6 +368,9 @@ public slots:
     // hasCamerasForAll 出参为 true 表示列表中每张影像均有有效相机参数。
     // 返回值： 影像路径 → FramePinholeCamera 的映射（已成功解析的影像）
     QMap<QString, xjw::FramePinholeCamera> getCamerasForImages(
+            const QStringList &images,
+            bool *hasCamerasForAll = nullptr) const;
+    QMap<QString, xjw::RpcCameraModel> getRpcCamerasForImages(
             const QStringList &images,
             bool *hasCamerasForAll = nullptr) const;
     

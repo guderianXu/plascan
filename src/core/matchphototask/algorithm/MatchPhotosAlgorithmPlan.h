@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include "MatchPhotosOptions.h"
 #include "sift/SiftBackendType.h"
 
 #include <cstdint>
@@ -26,7 +27,7 @@ struct MatchPhotosAlgorithmPlan
     bool preferCuda = false;
     bool rotationRobust = false;
     bool requiresColorInput = false;
-    bool enableGuidedMatching = false;
+    GuidedMatchingMode guidedMatchingMode = GuidedMatchingMode::Disabled;
     image_matching::SiftComputeBackend executionBackend =
         image_matching::SiftComputeBackend::Automatic;
     bool backendFallback = false;

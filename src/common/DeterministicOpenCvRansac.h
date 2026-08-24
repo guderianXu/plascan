@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <utility>
 
-namespace xjw::opencv_compat
+namespace xjw::opencv_utils
 {
 
 /**
@@ -61,4 +61,4 @@ decltype(auto) runDeterministicRansac(int seed, Callable &&callable)
     return std::forward<Callable>(callable)();
 }
 
-} // namespace xjw::opencv_compat
+} // namespace xjw::opencv_utils

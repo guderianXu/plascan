@@ -5,13 +5,16 @@
   <property name="minimumSize">
    <size>
     <width>720</width>
-    <height>560</height>
+    <height>360</height>
    </size>
   </property>
   <property name="windowTitle">
    <string>生成 DEM</string>
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
+   <property name="sizeConstraint">
+    <enum>QLayout::SetNoConstraint</enum>
+   </property>
    <property name="spacing">
     <number>10</number>
    </property>
@@ -32,6 +35,11 @@
        <item>
         <property name="text">
          <string>局部平面 DEM</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>影像立体 DEM（自动识别相机）</string>
         </property>
        </item>
        <item>
@@ -108,19 +116,34 @@
          </property>
         </widget>
        </item>
+       <item><spacer name="planarSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="rpcStereoPage">
+      <layout class="QVBoxLayout" name="rpcStereoLayout">
        <item>
-        <spacer name="planarSpacer">
-         <property name="orientation">
-          <enum>Qt::Vertical</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>20</width>
-           <height>220</height>
-          </size>
-         </property>
-        </spacer>
+        <widget class="QLabel" name="rpcNoticeLabel">
+         <property name="styleSheet"><string notr="true">QLabel { color: #23527c; background: #edf6ff; border: 1px solid #9cc9ef; border-radius: 4px; padding: 8px; }</string></property>
+         <property name="text"><string>从当前项目选择两张或更多重叠影像。系统自动识别 RPC 或框幅式相机；RPC 成果保留地理坐标，框幅式相机成果使用项目坐标系。</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
        </item>
+       <item>
+        <layout class="QFormLayout" name="rpcStereoFormLayout">
+         <property name="fieldGrowthPolicy"><enum>QFormLayout::AllNonFixedFieldsGrow</enum></property>
+         <item row="0" column="0"><widget class="QLabel" name="stereoImagesLabel"><property name="text"><string>项目影像：</string></property></widget></item>
+         <item row="0" column="1"><widget class="QListWidget" name="m_stereoImageList"><property name="minimumHeight"><number>150</number></property><property name="alternatingRowColors"><bool>true</bool></property></widget></item>
+         <item row="1" column="1"><layout class="QHBoxLayout" name="stereoSelectionRow"><item><widget class="QLabel" name="m_stereoSelectionLabel"><property name="text"><string>已选择 0 / 0 张</string></property></widget></item><item><spacer name="stereoSelectionSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item><item><widget class="QPushButton" name="m_selectAllImagesBtn"><property name="text"><string>全选</string></property></widget></item><item><widget class="QPushButton" name="m_clearImagesBtn"><property name="text"><string>全不选</string></property></widget></item></layout></item>
+         <item row="2" column="0"><widget class="QLabel" name="rpcResolutionLabel"><property name="text"><string>DEM 分辨率：</string></property></widget></item>
+         <item row="2" column="1"><widget class="QDoubleSpinBox" name="m_rpcResolutionSpin"><property name="decimals"><number>3</number></property><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>100000.000000000000000</double></property><property name="value"><double>2.000000000000000</double></property><property name="suffix"><string> m</string></property></widget></item>
+         <item row="3" column="0"><widget class="QLabel" name="rpcFeaturesLabel"><property name="text"><string>最大特征点：</string></property></widget></item>
+         <item row="3" column="1"><widget class="QSpinBox" name="m_rpcMaximumFeaturesSpin"><property name="minimum"><number>100</number></property><property name="maximum"><number>200000</number></property><property name="singleStep"><number>1000</number></property><property name="value"><number>20000</number></property></widget></item>
+         <item row="4" column="0"><widget class="QLabel" name="rpcErrorLabel"><property name="text"><string>最大重投影误差：</string></property></widget></item>
+         <item row="4" column="1"><widget class="QDoubleSpinBox" name="m_rpcMaximumErrorSpin"><property name="decimals"><number>2</number></property><property name="minimum"><double>0.100000000000000</double></property><property name="maximum"><double>20.000000000000000</double></property><property name="value"><double>1.500000000000000</double></property><property name="suffix"><string> px</string></property></widget></item>
+        </layout>
+       </item>
+       <item><widget class="QLabel" name="rpcOutputNoteLabel"><property name="text"><string>自动输出到项目 assets/dem/image_stereo，并登记 DEM、质量栅格、点云和处理报告。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+       <item><spacer name="rpcStereoSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
       </layout>
      </widget>
      <widget class="QWidget" name="globalPage">

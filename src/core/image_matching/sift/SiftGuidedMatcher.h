@@ -29,8 +29,6 @@ namespace xjw::image_matching
     {
         double epipolarThresholdPixels = 3.0;
         float maximumDescriptorRatio = 0.95f;
-        // 保留该字段以兼容已有配置；空间索引会在整个极线带候选集中计算精确的前两名。
-        int descriptorNeighbors = 8;
         int maximumAdditionalMatches = 5000;
         int spatialCellSizePixels = 64;
         int cancellationCheckInterval = 256;

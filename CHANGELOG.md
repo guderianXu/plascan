@@ -250,7 +250,7 @@
 - TensorRT LightGlue 运行时支持从显式设置、环境变量、本机应用模型目录、源码模型目录和构建缓存自动发现
   固定关键点容量 engine，并按实际 engine 容量限制匹配输入，避免配置上限超过固定 TensorRT profile。
 
-- Ceres BA 会按问题规模选择 Dense/Sparse/Iterative Schur，并在 CUDA 分配前执行显存预算门禁；Native CUDA 明确收敛为显式的固定相机点优化后端并报告真实代价/接受步统计，Legacy 小型法方程和有限中位数统计改由 PlaMatrix 提供。
+- BA 正式后端收敛为 Legacy CPU 与 PlaMatrix CPU/CUDA/OpenCL；移除不会进入 Auto、能力与联合 BA 不等价的实验性固定相机 CUDA 点块后端，Legacy 小型法方程和有限中位数统计改由 PlaMatrix 提供。
 - 正射 GeoTIFF 现在把 OpenCV BGR 正确转换为 R/G/B 波段，并增加有效覆盖 Alpha 波段，避免把无覆盖区误认为真实黑色；同时写入最终网格地理变换和可用的 DEM WKT，`ortho_results` 记录已解析参数、输出范围/像元、相机贡献数、直接覆盖率和孔洞填充像元数。
 - 密集匹配执行逻辑从 `ProjectManager`/`ReconstructionWorkflowController` 拆到 `DenseMatchRunner`，workflow controller 的 `QtConcurrent` worker 不再捕获 `this`，也不再依赖 GUI manager 生命周期。
 - `FeatureExtractionRunner` 和 `FeatureMatchRunner` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被第三方头文件窄化警告刷屏。

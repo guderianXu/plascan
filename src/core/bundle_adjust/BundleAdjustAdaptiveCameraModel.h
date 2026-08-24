@@ -6,10 +6,12 @@
  *
  * 该策略不把工程硬分类为“航测”或“环拍”。它从当前粗解构造内参信息矩阵，
  * 再结合视轴多样性、交会角、多视轨迹率和像面覆盖，为 9 个共享内参分别生成
- * [0, 1] 可靠性和实际优化掩码。底层 Ceres 仍使用同一套 SfM/BA 残差。
+ * [0, 1] 可靠性和实际优化掩码。底层联合求解器使用同一套 SfM/BA 残差。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustOptions.h"
+#include "BundleAdjustProblem.h"
+#include "BundleAdjustTypes.h"
 
 #include <array>
 #include <string>

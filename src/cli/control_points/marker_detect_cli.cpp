@@ -95,6 +95,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication application(argc, argv);
     CLI::App app{"PlaScan 编码/非编码标靶检测工具"};
+    cli::configureApp(app);
 
     std::vector<std::string> imagePaths;
     std::vector<std::string> maskPaths;

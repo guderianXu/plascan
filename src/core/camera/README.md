@@ -1,6 +1,6 @@
 # Camera 与相机模型说明
 
-`src/core/camera` 负责 PlaScan 的公共相机几何、静态针孔与行星线阵模型、ASP/Tsai 文本文件读写、外部相机格式转换、相机基线几何计算，以及面向 MVS 的正深度工作相机生成。
+`src/core/camera` 负责 PlaScan 的公共相机几何、静态针孔、行星线阵与 RPC00B 模型、ASP/Tsai 文本文件读写、GDAL RPC 元数据导入、外部相机格式转换、相机基线几何计算，以及面向 MVS 的正深度工作相机生成。
 
 `CameraBaseline` 统一提供两相机光心距离、指定空间点的三角交会角，以及物理前方条件成立时的平均深度/基线比。SfM、MVS 等上层流程应通过该类共享基线定义，而不是重复实现光心距离与夹角计算。
 
@@ -9,6 +9,7 @@
 - `CameraModel` 是只读公共几何抽象，只统一像点到空间射线、空间点到像点、图像尺寸和世界坐标系名称。公共像点一律使用 OpenCV 零基像素中心 `(0, 0)`。
 - `FramePinholeCamera` 是静态面阵具体实现，直接保存 Tsai/Brown-Conrady 内外参、投影、反投影和文件读写状态。面阵 SfM、BA 和 MVS 使用该值类型。
 - `PlanetaryLineScanCamera` 是时变推扫实现。每个像点的成像射线都包含该行曝光时刻对应的光心、方向和 TDB 秒；其 CSM 像素中心入口仍作为线阵专用 API 保留。
+- `RpcCameraModel` 是 RPC00B 有理多项式模型。它保存 10 个归一化参数和 4 组 20 项系数，支持地面点投影、指定椭球高反投影、局部近似射线和双 RPC 前方交会。
 
 ISIS 控制网常见的左上像素中心 `(1, 1)` 不属于公共接口。导入层应先完成 ISIS/CSM/OpenCV 半像素换算，再调用对应模型，不能在 `CameraModel` 内隐式猜测来源格式。
 
@@ -27,6 +28,13 @@ COLMAP text 内参相对影像左上角建立，其首像素中心是 `(0.5, 0.5
 PlaScan 的首像素中心 `(0, 0)`。
 
 项目的 `project_config.camera_model_policy` 保存当前 Chunk 的模型策略：默认值 `frame_pinhole` 保持旧项目和现有流程兼容，线阵策略使用 `isis_usgscsm_linescan`。当前阶段只建立模型类型、公共几何和项目配置边界；普通“空中三角测量”仍走既有面阵流程，后续需显式接入线阵控制网、初始化和专用 BA 后才能形成完整线阵稀疏重建流程。
+
+RPC 相机可通过 `ProjectCameraIO` 写入 `images[*].camera`，`model` 为 `rpc`。通用读取方使用
+`cameraModelFromJson()` 或 `imageCameraModelFromEntry()`；既有 `cameraFromJson(..., FramePinholeCamera*)`
+保持针孔专用，避免 RPC 被静默降级为虚假的固定光心相机。当前针孔 SfM、BA、极线校正和 MVS 不接受 RPC；
+RPC 稀疏几何应使用 `intersectRpcObservations()`，控制点偏差改正使用 `estimateRpcImageCorrection()`。
+GUI 导入 TIFF 时会尝试读取内嵌 RPC，成功后自动写入对应工程影像条目；普通无 RPC TIFF 保持仅导入影像。
+RPC 立体 DEM/DOM 使用独立的 `src/core/stereo_dem` 流水线，不经过针孔 MVS。
 
 ## 1. 坐标系和单位约定
 
@@ -265,11 +273,73 @@ if (!camera.saveToFile("output.tsai"))
 }
 ```
 
-## 4. 相关文件
+## 4. RPC00B 使用方法
 
-- `CameraModel.h/.cpp`：面阵与线阵共享的只读几何接口。
+RPC 标准输入坐标为经度（度）、纬度（度）和 WGS84 椭球高（米）。公共 `CameraModel` 接口则使用
+WGS84 ECEF 米（`EPSG:4978`），`RpcCameraModel` 会在内部转换，不能把经纬度数组直接传给
+`CameraModel::groundToImage()`。
+
+```cpp
+#include "camera/RpcCameraIO.h"
+
+xjw::RpcCameraModel camera;
+std::string error;
+if (!xjw::loadRpcCameraFromRaster("satellite.tif", &camera, &error))
+{
+    // GeoTIFF/NITF 没有 RPC 域、旁车 RPB 无法发现或参数非法。
+    return;
+}
+
+xjw::CameraImageCoordinate pixel;
+camera.groundToImageGeodetic({108.5, 34.2, 1250.0}, &pixel);
+
+xjw::RpcCameraModel::GeodeticCoordinate ground;
+camera.imageToGroundAtHeight(pixel, 1250.0, &ground);
+```
+
+`loadRpcCameraFromRaster()` 读取 GDAL 的 `RPC` metadata domain，因此支持 GDAL 驱动能够识别的影像内嵌
+RPC 和与影像关联的 RPC/RPB 旁车文件。`LINE/SAMP/LAT/LONG/HEIGHT_OFF`、对应 `SCALE` 及四组
+20 项系数为必需字段；`ERR_BIAS` 和 `ERR_RAND` 可选。
+
+产品级 RPC 可叠加独立的影像空间改正，而不修改厂商提供的 80 个多项式系数。改正以原始 RPC 的
+`SAMP_OFF/SAMP_SCALE` 和 `LINE_OFF/LINE_SCALE` 归一化像点为自变量，分别为 sample、line 增加三项
+`常量 + sample 一次项 + line 一次项`，六个系数的输出单位均为像素。只有常量项非零时就是常用的
+RPC 平移偏差模型；工程 JSON 使用 `image_correction.model = affine_normalized_v1` 保存该参数，旧工程
+缺少此对象时等价于零改正。
+
+已知控制点可通过 `estimateRpcImageCorrection()` 自动估计平移或仿射改正。默认使用 Huber 迭代重加权，
+结果同时报告改正前后 RMS 和最大残差；调用方检查质量后再显式安装到相机：
+
+```cpp
+#include "camera/RpcBiasAdjustment.h"
+
+std::vector<xjw::RpcControlPointObservation> control_points = loadControlPoints();
+xjw::RpcBiasAdjustmentResult adjustment;
+std::string error;
+if (xjw::estimateRpcImageCorrection(camera, control_points, &adjustment, &error))
+{
+    camera.setImageCorrection(adjustment.correction);
+}
+```
+
+仿射模型至少需要三个且影像分布不共线的控制点；只有少量控制点或覆盖范围很小时应改用
+`RpcImageCorrectionModel::Translation`。估计器使用 WGS84 经度、纬度和椭球高，正高必须先做大地水准面转换。
+
+RPC 没有固定物理光心。`rayForPixel()` 用 `HEIGHT_OFF ± HEIGHT_SCALE` 两个高程解构造有效体积内的
+局部弦线，只适合初始化和几何诊断。精确像点反算必须给出椭球高或 DEM。双像交会使用
+`intersectRpcObservations()`，先以两条局部弦线初始化，再在 ECEF 中最小化四个像素残差。
+
+## 5. 相关文件
+
+- `CameraModel.h/.cpp`：面阵、线阵与 RPC 共享的只读几何接口。
 - `FramePinholeCamera.h/.cpp` 与 `FramePinholeCameraModel.cpp`：Tsai/Brown-Conrady 静态面阵状态、投影、反投影、文件读写及 `CameraModel` 公共接口。
 - `PlanetaryLineScanCamera*.h/.cpp`：USGSCSM ISD、逐行时间、时变姿轨和行星固连系投影。
+- `RpcCameraModel.h/.cpp`、`RpcCameraCoordinates.cpp` 与 `RpcCameraImageCorrection.cpp`：RPC00B 参数、WGS84
+  ECEF/大地坐标转换、正反投影、近似射线和影像仿射改正。
+- `RpcCameraIO.h/.cpp`：GDAL RPC metadata domain 和关联旁车参数导入。
+- `RpcBiasAdjustment.h/.cpp`：控制点驱动的 RPC 平移/归一化影像仿射偏差估计与质量统计。
+- `RpcStereoIntersection.h/.cpp`：双 RPC 像点的 ECEF 迭代前方交会。
+- `ProjectCameraIO.h/.cpp` 与 `ProjectRpcCameraIO.cpp`：针孔/RPC 工程 JSON 读写与多态相机工厂。
 - `CameraFormatConverter.h/.cpp`：Middlebury、EPFL、COLMAP、Metashape 等外部格式转换。
 - `../mvs/MvsImagePreprocessor.h/.cpp`：将带畸变原图和 `FramePinholeCamera` 转换为 MVS 使用的无畸变影像及工作相机。
-- `test/`：公共相机几何、面阵、线阵、Tsai 加载和格式转换测试。
+- `test/`：公共相机几何、面阵、线阵、RPC、Tsai 加载和格式转换测试。

@@ -371,6 +371,11 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
         startSmallBodyGlobalAsync(request);
         return;
     }
+    if (request.isImageStereo())
+    {
+        startRpcStereoDemAsync(request);
+        return;
+    }
 
     const QString pointCloudPath = request.sourcePointCloudPath.trimmed();
     if (!QFileInfo::exists(pointCloudPath))
@@ -967,6 +972,11 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     if (!request.validate(&requestError))
     {
         emit orthoPipelineFinished(false, requestError, QJsonObject());
+        return;
+    }
+    if (request.isRpc())
+    {
+        startRpcDomAsync(request);
         return;
     }
 

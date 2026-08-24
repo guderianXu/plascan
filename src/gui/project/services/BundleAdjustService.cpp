@@ -8,7 +8,7 @@
 #include "BundleAdjustService.h"
 
 #include "FramePinholeCamera.h"
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
 #include "PlanetaryLaserBaAdapter.h"
@@ -497,38 +497,12 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_quality_gate_message")] =
         QString::fromUtf8(baResult.qualityGateMessage.c_str());
     saveObj[QStringLiteral("ba_valid_track_ratio")] = baResult.validTrackRatio;
-    saveObj[QStringLiteral("ba_ceres_linear_solver")] =
-        QString::fromStdString(baResult.ceresLinearSolverName);
-    saveObj[QStringLiteral("ba_ceres_estimated_cuda_bytes")] =
-        static_cast<qint64>(baResult.ceresEstimatedCudaBytes);
-    saveObj[QStringLiteral("ba_ceres_cuda_free_bytes")] =
-        static_cast<qint64>(baResult.ceresCudaFreeBytes);
-    saveObj[QStringLiteral("ba_ceres_initial_cost")] = baResult.ceresInitialCost;
-    saveObj[QStringLiteral("ba_ceres_final_cost")] = baResult.ceresFinalCost;
-    saveObj[QStringLiteral("ba_ceres_successful_steps")] = baResult.ceresSuccessfulSteps;
-    saveObj[QStringLiteral("ba_ceres_unsuccessful_steps")] = baResult.ceresUnsuccessfulSteps;
-    saveObj[QStringLiteral("ba_ceres_rejected_initial_tracks")] =
-        baResult.ceresRejectedInitialTracks;
     saveObj[QStringLiteral("ba_setup_seconds")] = baResult.setupSeconds;
     saveObj[QStringLiteral("ba_solve_seconds")] = baResult.solveSeconds;
     saveObj[QStringLiteral("ba_postprocess_seconds")] =
         baResult.postprocessSeconds;
     saveObj[QStringLiteral("ba_total_seconds")] = baResult.totalSeconds;
     saveObj[QStringLiteral("ba_observation_count")] = baResult.observationCount;
-    saveObj[QStringLiteral("ba_native_cuda_initial_cost")] = baResult.nativeCudaInitialCost;
-    saveObj[QStringLiteral("ba_native_cuda_final_cost")] = baResult.nativeCudaFinalCost;
-    saveObj[QStringLiteral("ba_native_cuda_accepted_steps")] = baResult.nativeCudaAcceptedSteps;
-    saveObj[QStringLiteral("ba_native_cuda_rejected_steps")] = baResult.nativeCudaRejectedSteps;
-    saveObj[QStringLiteral("ba_native_cuda_active_cameras")] = baResult.nativeCudaActiveCameras;
-    saveObj[QStringLiteral("ba_native_cuda_active_tracks")] = baResult.nativeCudaActiveTracks;
-    saveObj[QStringLiteral("ba_native_cuda_active_observations")] = baResult.nativeCudaActiveObservations;
-    saveObj[QStringLiteral("ba_native_cuda_upload_seconds")] = baResult.nativeCudaUploadSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_kernel_seconds")] = baResult.nativeCudaKernelSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_download_seconds")] = baResult.nativeCudaDownloadSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_host_cost_seconds")] = baResult.nativeCudaHostCostSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_device_select_seconds")] = baResult.nativeCudaDeviceSelectSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_staging_seconds")] = baResult.nativeCudaStagingSeconds;
-    saveObj[QStringLiteral("ba_native_cuda_release_seconds")] = baResult.nativeCudaReleaseSeconds;
     saveObj[QStringLiteral("ba_plamatrix_initial_cost")] = baResult.plaMatrixInitialCost;
     saveObj[QStringLiteral("ba_plamatrix_final_cost")] = baResult.plaMatrixFinalCost;
     saveObj[QStringLiteral("ba_plamatrix_accepted_steps")] = baResult.plaMatrixAcceptedSteps;
@@ -577,25 +551,14 @@ BaServiceResult BundleAdjustService::run(
         QJsonObject optObj;
         optObj[QStringLiteral("ba_backend")] =
             QString::fromLatin1(xjw::BundleAdjust::backendName(baOptions.backend));
-        optObj[QStringLiteral("ba_cuda_device")] = baOptions.ceresCudaDevice;
         optObj[QStringLiteral("ba_plamatrix_device")] = baOptions.plaMatrixDevice;
         optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minPlaMatrixGpuCameras;
         optObj[QStringLiteral("ba_min_cuda_observations")] =
             baOptions.minPlaMatrixGpuObservations;
-        optObj[QStringLiteral("ba_native_cuda_device")] = baOptions.nativeCudaDevice;
-        optObj[QStringLiteral("ba_native_cuda_max_point_step")] =
-            baOptions.nativeCudaMaxPointStepNorm;
-        optObj[QStringLiteral("ba_min_cpu_observations")] = baOptions.minCeresCpuObservations;
-        optObj[QStringLiteral("ba_max_ceres_point_only_observations")] =
-            baOptions.maxCeresPointOnlyObservations;
-        optObj[QStringLiteral("ba_max_ceres_initial_track_rms")] =
-            baOptions.maxCeresInitialTrackRms;
+        optObj[QStringLiteral("ba_max_initial_track_rms")] =
+            baOptions.maxInitialTrackRms;
         optObj[QStringLiteral("ba_max_dense_schur_cameras")] =
             baOptions.maxDenseSchurCameras;
-        optObj[QStringLiteral("ba_max_sparse_schur_cameras")] =
-            baOptions.maxSparseSchurCameras;
-        optObj[QStringLiteral("ba_max_ceres_cuda_memory_fraction")] =
-            baOptions.maxCeresCudaMemoryFraction;
         optObj[QStringLiteral("ba_allow_backend_fallback")] = baOptions.allowBackendFallback;
         optObj[QStringLiteral("ba_enable_backend_quality_gate")] = baOptions.enableBackendQualityGate;
         optObj[QStringLiteral("ba_max_accepted_rms_growth")] = baOptions.maxAcceptedRmsGrowth;
@@ -1170,30 +1133,7 @@ BaServiceResult BundleAdjustService::run(
                << "\n";
             ts << "实际使用 GPU: "   << (baResult.usedGpu ? QStringLiteral("是") : QStringLiteral("否"))
                << "\n";
-            ts << "Ceres 线性求解器: " << QString::fromStdString(baResult.ceresLinearSolverName) << "\n";
-            ts << "Ceres CUDA 显存估算/空闲(bytes): "
-               << baResult.ceresEstimatedCudaBytes << "/"
-               << baResult.ceresCudaFreeBytes << "\n";
-            ts << "Ceres 目标函数: " << baResult.ceresInitialCost << " -> "
-               << baResult.ceresFinalCost << "\n";
-            ts << "Ceres 接受/拒绝步: " << baResult.ceresSuccessfulSteps << "/"
-               << baResult.ceresUnsuccessfulSteps << "\n";
-            ts << "Ceres 初始粗差剔除 track: " << baResult.ceresRejectedInitialTracks << "\n";
             ts << "观测数量: "       << baResult.observationCount          << "\n";
-            ts << "native CUDA 活动相机/轨迹/观测: "
-               << baResult.nativeCudaActiveCameras << "/"
-               << baResult.nativeCudaActiveTracks << "/"
-               << baResult.nativeCudaActiveObservations << "\n";
-            ts << "native CUDA 点块代价: " << baResult.nativeCudaInitialCost
-               << " -> " << baResult.nativeCudaFinalCost
-               << ", 接受步: " << baResult.nativeCudaAcceptedSteps
-               << ", 拒绝步: " << baResult.nativeCudaRejectedSteps << "\n";
-            ts << "native CUDA 分解耗时(s): 上传 " << baResult.nativeCudaUploadSeconds
-               << ", kernel " << baResult.nativeCudaKernelSeconds
-               << ", 下载 " << baResult.nativeCudaDownloadSeconds
-               << ", host cost " << baResult.nativeCudaHostCostSeconds
-               << ", staging " << baResult.nativeCudaStagingSeconds
-               << ", release " << baResult.nativeCudaReleaseSeconds << "\n";
             ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
             ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
             ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";

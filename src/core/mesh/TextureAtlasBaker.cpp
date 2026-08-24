@@ -8,6 +8,7 @@
 #include <plapoint/io/obj_io.h>
 #include <plamatrix/dense/dense_matrix.h>
 
+#include <opencv2/geometry/2d.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <QDir>

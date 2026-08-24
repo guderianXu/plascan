@@ -9,7 +9,6 @@
 #include "log/Logger.h"
 
 #include "DeterministicOpenCvRansac.h"
-#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -221,25 +220,24 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         inputMultiViewTrackCount = trackStats.inputLongTracks;
         createdLongTrackCount = trackStats.createdLongTracks;
         longTrackTwoViewOnlyCount = trackStats.longTrackTwoViewOnly;
-        Logger::instance()->infof(
-            "[SFM] Known-pose multiview tracks: pairs=%d matches=%d rawMatches=%d "
-            "geometryRejected=%d components=%d accepted=%d rejectedConflict=%d "
-            "rejectedConflictEdges=%d qualityPruned=%d hist=%s created=%d addedObservations=%d",
-            indexedPairCount,
-            indexedMatchCount,
-            rawIndexedMatchCount,
-            geometryRejectedMatchCount,
-            multiViewTracks.totalComponents,
-            multiViewTracks.acceptedComponents,
-            multiViewTracks.rejectedConflictComponents,
-            multiViewTracks.rejectedConflictEdges,
-            multiViewTracks.prunedByQualityThinning,
-            trackLengthHistogram.str().c_str(),
-            trackStats.numCreated,
-            trackStats.numContinued);
+        Logger::instance()->infof("[SFM] Known-pose multiview tracks: pairs=%d matches=%d rawMatches=%d "
+                                  "geometryRejected=%d components=%d accepted=%d rejectedConflict=%d "
+                                  "rejectedConflictEdges=%d qualityPruned=%d hist=%s created=%d addedObservations=%d",
+                                  indexedPairCount,
+                                  indexedMatchCount,
+                                  rawIndexedMatchCount,
+                                  geometryRejectedMatchCount,
+                                  multiViewTracks.totalComponents,
+                                  multiViewTracks.acceptedComponents,
+                                  multiViewTracks.rejectedConflictComponents,
+                                  multiViewTracks.rejectedConflictEdges,
+                                  multiViewTracks.prunedByQualityThinning,
+                                  trackLengthHistogram.str().c_str(),
+                                  trackStats.numCreated,
+                                  trackStats.numContinued);
         Logger::instance()->infof(
             "[SFM] Known-pose triangulation stats: inputTracks=%d inputLong=%d unusable=%d "
-            "noCandidate=%d createdTwoView=%d createdLong=%d seedTests=%d seedRejected=%d "
+            "noCandidate=%d createdTwoView=%d createdLong=%d deferredPureTwoView=%d seedTests=%d seedRejected=%d "
             "depthRejected=%d reprojRejected=%d longTwoView=%d rejectedExtraSamples=%d "
             "rejectedExtraAvg=%.3f rejectedExtraMax=%.3f rejectedExtraHist=<=5:%d,<=10:%d,<=25:%d,>25:%d",
             trackStats.inputTracks,
@@ -248,6 +246,7 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
             trackStats.noCandidateTracks,
             trackStats.createdTwoViewTracks,
             trackStats.createdLongTracks,
+            trackStats.deferredPureTwoViewTracks,
             trackStats.seedPairTests,
             trackStats.seedPairRejected,
             trackStats.depthObservationRejected,

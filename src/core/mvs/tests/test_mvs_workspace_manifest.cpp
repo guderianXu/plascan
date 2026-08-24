@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include <QDateTime>
+
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
@@ -141,21 +143,53 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     return record;
 }
 
-void touchFile(const QString &path)
+void touchFile(const QString& path)
 {
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     file.write("x");
 }
 
-void writeJson(const QString &path, const QJsonObject &object)
+void writeFileContents(const QString& path, const QByteArray& contents)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(file.write(contents), contents.size());
+}
+
+void writeFastMat(const QString& path, int type, int rows = 2, int cols = 3, double value = 1.0)
+{
+    const cv::Mat matrix(rows, cols, type, cv::Scalar::all(value));
+    const xjw::common::OperationResult result = xjw::core::project::writeDepthMatStorage(path, matrix);
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+}
+
+void writeFastFloatMat(const QString& path)
+{
+    writeFastMat(path, CV_32FC1);
+}
+
+void writePng(const QString& path, int rows = 2, int cols = 3)
+{
+    ASSERT_TRUE(xjw::common::io::writeImage(path, cv::Mat(rows, cols, CV_8UC1, cv::Scalar(255))));
+}
+
+void setFixedModificationTime(const QString& path)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(file.setFileTime(QDateTime::fromMSecsSinceEpoch(1'700'000'000'000LL, Qt::UTC),
+                                 QFileDevice::FileModificationTime));
+}
+
+void writeJson(const QString& path, const QJsonObject& object)
 {
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     ASSERT_GT(file.write(QJsonDocument(object).toJson()), 0);
 }
 
-QJsonArray doubleArray(const double *values, int count)
+QJsonArray doubleArray(const double* values, int count)
 {
     QJsonArray result;
     for (int index = 0; index < count; ++index)
@@ -165,58 +199,70 @@ QJsonArray doubleArray(const double *values, int count)
     return result;
 }
 
-QJsonObject cameraJson(const xjw::FramePinholeCamera &camera)
+QJsonObject cameraJson(const xjw::FramePinholeCamera& camera)
 {
     const auto intrinsics = camera.intrinsics();
     const auto rotation = camera.worldToCameraRotation();
     const auto translation = camera.worldToCameraTranslation();
     const auto center = camera.cameraCenter();
-    return QJsonObject{
-        {QStringLiteral("fx"), intrinsics.focalX},
-        {QStringLiteral("fy"), intrinsics.focalY},
-        {QStringLiteral("cx"), intrinsics.principalX},
-        {QStringLiteral("cy"), intrinsics.principalY},
-        {QStringLiteral("rotation_world_to_camera"),
-         doubleArray(rotation.data(), 9)},
-        {QStringLiteral("translation_world_to_camera"),
-         doubleArray(translation.data(), 3)},
-        {QStringLiteral("camera_center"), doubleArray(center.data(), 3)}};
+    return QJsonObject{{QStringLiteral("fx"), intrinsics.focalX},
+                       {QStringLiteral("fy"), intrinsics.focalY},
+                       {QStringLiteral("cx"), intrinsics.principalX},
+                       {QStringLiteral("cy"), intrinsics.principalY},
+                       {QStringLiteral("rotation_world_to_camera"), doubleArray(rotation.data(), 9)},
+                       {QStringLiteral("translation_world_to_camera"), doubleArray(translation.data(), 3)},
+                       {QStringLiteral("camera_center"), doubleArray(center.data(), 3)}};
 }
 
 xjw::FramePinholeCamera makeBrownCamera()
 {
     xjw::FramePinholeCamera camera;
     camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
+    camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
     camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
     camera.setImageSize(xjw::CameraImageSize{64, 48});
     return camera;
 }
 
-void attachPreparedArtifactFiles(const QTemporaryDir &temporaryDirectory,
-                                 MvsDepthFrameRecord *record)
+void attachPreparedArtifactFiles(const QTemporaryDir& temporaryDirectory, MvsDepthFrameRecord* record)
 {
     ASSERT_NE(record, nullptr);
-    record->preparedImage = QDir(temporaryDirectory.path()).filePath(
-        QStringLiteral("prepared_%1.png").arg(record->refIndex));
-    record->preparedValidMaskPath = QDir(temporaryDirectory.path()).filePath(
-        QStringLiteral("prepared_%1_valid.png").arg(record->refIndex));
+    record->gridWidth = 3;
+    record->gridHeight = 2;
+    record->preparedImage =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("prepared_%1.png").arg(record->refIndex));
+    record->preparedValidMaskPath =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("prepared_%1_valid.png").arg(record->refIndex));
     record->preparedCameraModel = record->cameraModel;
     record->rawPhotometricSourceMaskPath =
-        QDir(temporaryDirectory.path()).filePath(
-            QStringLiteral("photometric_source_mask_%1.bin")
-                .arg(record->refIndex));
-    touchFile(record->preparedImage);
-    touchFile(record->preparedValidMaskPath);
-    touchFile(record->rawPhotometricSourceMaskPath);
-}
+        QDir(temporaryDirectory.path())
+            .filePath(QStringLiteral("photometric_source_mask_%1.bin").arg(record->refIndex));
+    record->rawConfidencePath =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("confidence_%1.bin").arg(record->refIndex));
+    record->validMaskPath =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("valid_%1.png").arg(record->refIndex));
+    record->supportMaskPath =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("support_%1.png").arg(record->refIndex));
+    writePng(record->preparedImage);
+    writePng(record->preparedValidMaskPath);
+    writeFastMat(record->rawPhotometricSourceMaskPath, CV_32SC1);
+    writeFastFloatMat(record->rawConfidencePath);
+    writePng(record->validMaskPath);
+    writePng(record->supportMaskPath);
 }
 
-TEST(DepthFrameUtils,
-     FastDepthMatStorageHasDeterministicHeaderAndReadsLegacyPadding)
+void attachCompletedConsistencyDiagnostics(MvsDepthFrameRecord* record, int pre_count = 6, int post_count = 5)
+{
+    ASSERT_NE(record, nullptr);
+    record->consistencyPublicationExpected = true;
+    record->depthCompleteness = QJsonObject{{QStringLiteral("pre_consistency_valid_count"), pre_count},
+                                            {QStringLiteral("post_consistency_valid_count"), post_count},
+                                            {QStringLiteral("published_post_consistency_valid_count"), post_count},
+                                            {QStringLiteral("consistency_publication_fallback_applied"), false}};
+}
+} // namespace
+
+TEST(DepthFrameUtils, FastDepthMatStorageHasDeterministicHeaderAndReadsLegacyPadding)
 {
     QTemporaryDir temporary_directory;
     ASSERT_TRUE(temporary_directory.isValid());
@@ -511,12 +557,12 @@ TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
     completed.depthProvenancePath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_003_provenance.png"));
     attachPreparedArtifactFiles(tempDir, &completed);
-    touchFile(completed.depthPng);
-    touchFile(completed.rawDepthPath);
-    touchFile(completed.rawGeometrySupportPath);
-    touchFile(completed.rawInverseDepthSpreadPath);
-    touchFile(completed.rawGeometrySourceMaskPath);
-    touchFile(completed.depthProvenancePath);
+    writePng(completed.depthPng);
+    writeFastFloatMat(completed.rawDepthPath);
+    writeFastMat(completed.rawGeometrySupportPath, CV_16UC1);
+    writeFastFloatMat(completed.rawInverseDepthSpreadPath);
+    writeFastMat(completed.rawGeometrySourceMaskPath, CV_16UC1);
+    writePng(completed.depthProvenancePath);
     manifest.markCompleted(completed);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-a")));
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-b")));
@@ -1451,21 +1497,16 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
 
     const QString manifest_path = QDir(temp_dir.path()).filePath(
         QStringLiteral("mvs_manifest.json"));
-    MvsDepthFrameRecord record = makeRecord(
-        10,
-        QStringLiteral("image_010.jpg"),
-        QStringLiteral("completed"));
-    record.qualityDecision = QJsonObject{
-        {QStringLiteral("acceptance"), QStringLiteral("accepted")},
-        {QStringLiteral("calibrated_confidence"), 0.72}
-    };
-    record.depthCompleteness = QJsonObject{
-        {QStringLiteral("available"), true},
-        {QStringLiteral("mask_pixel_count"), 1000},
-        {QStringLiteral("valid_within_mask_count"), 875},
-        {QStringLiteral("valid_within_mask_ratio"), 0.875},
-        {QStringLiteral("output_filter_retention_ratio"), 0.91}
-    };
+    MvsDepthFrameRecord record = makeRecord(10, QStringLiteral("image_010.jpg"), QStringLiteral("completed"));
+    record.qualityDecision = QJsonObject{{QStringLiteral("acceptance"), QStringLiteral("accepted")},
+                                         {QStringLiteral("calibrated_confidence"), 0.72}};
+    record.depthCompleteness = QJsonObject{{QStringLiteral("available"), true},
+                                           {QStringLiteral("mask_pixel_count"), 1000},
+                                           {QStringLiteral("valid_within_mask_count"), 875},
+                                           {QStringLiteral("valid_within_mask_ratio"), 0.875},
+                                           {QStringLiteral("output_filter_retention_ratio"), 0.91}};
+    record.geometricGuidancePassExpected = true;
+    record.geometricGuidancePassApplied = true;
     record.sceneProfile = QStringLiteral(" Orbital_Object ");
     record.filterMode = QStringLiteral("mild");
     record.acceptance = QStringLiteral("accepted");
@@ -1476,28 +1517,20 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
     record.pyramidRequestedLevelCount = 3;
     record.pyramidActiveLevelCount = 2;
     record.pyramidMinimumShortSide = 160;
-    record.pyramidDegradedReason = QStringLiteral(
-        "image short side 480 cannot keep three pyramid levels above 160 pixels");
-    record.pyramidLevels = QJsonArray{
-        QJsonObject{
-            {QStringLiteral("level"), 3},
-            {QStringLiteral("downsample_factor"), 4},
-            {QStringLiteral("valid_coverage"), 0.58},
-            {QStringLiteral("mean_support_views"), 3.25},
-            {QStringLiteral("depth_discontinuity_ratio"), 0.04}
-        },
-        QJsonObject{
-            {QStringLiteral("level"), 2},
-            {QStringLiteral("downsample_factor"), 2},
-            {QStringLiteral("valid_coverage"), 0.61},
-            {QStringLiteral("mean_support_views"), 3.75},
-            {QStringLiteral("depth_discontinuity_ratio"), 0.07}
-        },
-        QJsonObject{
-            {QStringLiteral("level"), 1},
-            {QStringLiteral("downsample_factor"), 1}
-        }
-    };
+    record.pyramidDegradedReason =
+        QStringLiteral("image short side 480 cannot keep three pyramid levels above 160 pixels");
+    record.pyramidLevels =
+        QJsonArray{QJsonObject{{QStringLiteral("level"), 3},
+                               {QStringLiteral("downsample_factor"), 4},
+                               {QStringLiteral("valid_coverage"), 0.58},
+                               {QStringLiteral("mean_support_views"), 3.25},
+                               {QStringLiteral("depth_discontinuity_ratio"), 0.04}},
+                   QJsonObject{{QStringLiteral("level"), 2},
+                               {QStringLiteral("downsample_factor"), 2},
+                               {QStringLiteral("valid_coverage"), 0.61},
+                               {QStringLiteral("mean_support_views"), 3.75},
+                               {QStringLiteral("depth_discontinuity_ratio"), 0.07}},
+                   QJsonObject{{QStringLiteral("level"), 1}, {QStringLiteral("downsample_factor"), 1}}};
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
@@ -1509,23 +1542,22 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
     MvsWorkspaceManifest loaded;
     ASSERT_TRUE(loaded.load(manifest_path, &error)) << error.toStdString();
     ASSERT_EQ(loaded.frames().size(), 1);
-    EXPECT_EQ(loaded.frames().front().qualityDecision
-                  .value(QStringLiteral("acceptance"))
-                  .toString(),
+    EXPECT_EQ(loaded.frames().front().qualityDecision.value(QStringLiteral("acceptance")).toString(),
               QStringLiteral("accepted"));
-    EXPECT_DOUBLE_EQ(loaded.frames().front().depthCompleteness
-                         .value(QStringLiteral("valid_within_mask_ratio"))
-                         .toDouble(),
-                     0.875);
-    EXPECT_DOUBLE_EQ(loaded.frames().front().toJson()
+    EXPECT_DOUBLE_EQ(
+        loaded.frames().front().depthCompleteness.value(QStringLiteral("valid_within_mask_ratio")).toDouble(), 0.875);
+    EXPECT_TRUE(loaded.frames().front().geometricGuidancePassExpected);
+    EXPECT_TRUE(loaded.frames().front().geometricGuidancePassApplied);
+    EXPECT_DOUBLE_EQ(loaded.frames()
+                         .front()
+                         .toJson()
                          .value(QStringLiteral("depth_completeness"))
                          .toObject()
                          .value(QStringLiteral("output_filter_retention_ratio"))
                          .toDouble(),
                      0.91);
     ASSERT_EQ(loaded.frames().front().pyramidLevels.size(), 3);
-    EXPECT_EQ(loaded.frames().front().sceneProfile,
-              QStringLiteral("orbital_object"));
+    EXPECT_EQ(loaded.frames().front().sceneProfile, QStringLiteral("orbital_object"));
     EXPECT_EQ(loaded.frames().front().filterMode, QStringLiteral("mild"));
     EXPECT_EQ(loaded.frames().front().acceptance, QStringLiteral("accepted"));
     EXPECT_EQ(loaded.frames().front().maskSource, QStringLiteral("project"));
@@ -1628,6 +1660,130 @@ TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
+TEST(MvsWorkspaceManifest, CurrentFrameRequiresValidCoreArtifacts)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    MvsDepthFrameRecord record = makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed"));
+    record.sceneProfile = QStringLiteral("aerial_terrain");
+    record.geometrySourceIndices.clear();
+    record.rawGeometrySourceMaskPath.clear();
+    record.depthPng = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004.png"));
+    record.rawDepthPath = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawGeometrySupportPath = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath =
+        QDir(temp_dir.path()).filePath(QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.depthProvenancePath = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004_provenance.png"));
+    attachPreparedArtifactFiles(temp_dir, &record);
+    writePng(record.depthPng);
+    writeFastFloatMat(record.rawDepthPath);
+    writeFastMat(record.rawGeometrySupportPath, CV_16UC1);
+    writeFastFloatMat(record.rawInverseDepthSpreadPath);
+    writePng(record.depthProvenancePath);
+    manifest.upsertFrame(record);
+    ASSERT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    record.gridWidth = 0;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.gridWidth = 3;
+    record.gridHeight = -1;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.gridHeight = 2;
+    record.gridWidth = 4;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.gridWidth = 3;
+    manifest.upsertFrame(record);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    writeFileContents(record.preparedImage, QByteArrayLiteral("not-a-png"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(record.preparedImage);
+    writePng(record.preparedValidMaskPath, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(record.preparedValidMaskPath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString raw_depth_path = record.rawDepthPath;
+    record.rawDepthPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.rawDepthPath = QDir(temp_dir.path()).filePath(QStringLiteral("missing_depth.bin"));
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.rawDepthPath = raw_depth_path;
+    writeFileContents(raw_depth_path, QByteArray());
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFileContents(raw_depth_path, QByteArrayLiteral("not-a-fast-mat"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(raw_depth_path, CV_16UC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(raw_depth_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString raw_confidence_path = record.rawConfidencePath;
+    record.rawConfidencePath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.rawConfidencePath = raw_confidence_path;
+    writeFileContents(raw_confidence_path, QByteArray());
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(raw_confidence_path, CV_16UC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(raw_confidence_path, CV_32FC1, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(raw_confidence_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    writeFileContents(record.depthPng, QByteArrayLiteral("not-a-png"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(record.depthPng, 3, 3);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "The preview may be resized independently from the raw depth grid";
+    writePng(record.depthPng);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString valid_mask_path = record.validMaskPath;
+    record.validMaskPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.validMaskPath = valid_mask_path;
+    writeFileContents(valid_mask_path, QByteArray());
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(valid_mask_path, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(valid_mask_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString support_mask_path = record.supportMaskPath;
+    record.supportMaskPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.supportMaskPath = support_mask_path;
+    writeFileContents(support_mask_path, QByteArrayLiteral("not-a-png"));
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(support_mask_path, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(support_mask_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    writeFileContents(record.depthProvenancePath, QByteArrayLiteral("not-a-png"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(record.depthProvenancePath, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(record.depthProvenancePath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+}
+
 TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpread)
 {
     QTemporaryDir tempDir;
@@ -1635,44 +1791,57 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
-    MvsDepthFrameRecord record = makeRecord(
-        4,
-        QStringLiteral("image_004.jpg"),
-        QStringLiteral("completed"));
+    MvsDepthFrameRecord record = makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed"));
     record.sceneProfile = QStringLiteral("aerial_terrain");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
-    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_support.bin"));
-    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_inverse_depth_spread.bin"));
-    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_source_mask.bin"));
-    record.depthProvenancePath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_provenance.png"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_source_mask.bin"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_provenance.png"));
+    attachCompletedConsistencyDiagnostics(&record);
     attachPreparedArtifactFiles(tempDir, &record);
-    touchFile(record.depthPng);
-    touchFile(record.rawDepthPath);
-    touchFile(record.depthProvenancePath);
-    touchFile(record.rawGeometrySourceMaskPath);
+    writePng(record.depthPng);
+    writeFastFloatMat(record.rawDepthPath);
+    writePng(record.depthProvenancePath);
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_16UC1);
     manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
         << "A current frame without geometry support must not be reused";
 
-    touchFile(record.rawGeometrySupportPath);
+    writeFastMat(record.rawGeometrySupportPath, CV_16UC1);
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
         << "A current frame without inverse-depth spread must not be reused";
 
-    touchFile(record.rawInverseDepthSpreadPath);
+    writeFastFloatMat(record.rawInverseDepthSpreadPath);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 
-    const QString photometric_source_mask_path =
-        record.rawPhotometricSourceMaskPath;
+    writeFileContents(record.rawGeometrySupportPath, QByteArrayLiteral("not-a-fast-mat"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(record.rawGeometrySupportPath);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(record.rawGeometrySupportPath, CV_16UC1);
+    writeFastMat(record.rawInverseDepthSpreadPath, CV_32FC1, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(record.rawInverseDepthSpreadPath);
+    writeFastMat(record.rawPhotometricSourceMaskPath, CV_16UC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(record.rawPhotometricSourceMaskPath, CV_32SC1);
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_32SC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_16UC1, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_16UC1);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString photometric_source_mask_path = record.rawPhotometricSourceMaskPath;
     record.rawPhotometricSourceMaskPath.clear();
     manifest.upsertFrame(record);
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
-        << "A revision-45 frame without its photometric source mask must not be reused";
+        << "A revision-45+ photometric-contract frame without its source mask must not be reused";
     record.rawPhotometricSourceMaskPath = photometric_source_mask_path;
     manifest.upsertFrame(record);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
@@ -1682,25 +1851,20 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
         << "A source mask path without its exact ordinal table must not be reused";
 
-    const QString geometry_source_mask_path =
-        record.rawGeometrySourceMaskPath;
+    const QString geometry_source_mask_path = record.rawGeometrySourceMaskPath;
     record.rawGeometrySourceMaskPath.clear();
     manifest.upsertFrame(record);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
         << "A current frame may explicitly omit both the all-zero source mask "
            "and its empty ordinal table";
-    const QString zero_source_manifest_path = QDir(tempDir.path()).filePath(
-        QStringLiteral("zero_source_manifest.json"));
+    const QString zero_source_manifest_path =
+        QDir(tempDir.path()).filePath(QStringLiteral("zero_source_manifest.json"));
     QString manifest_error;
-    ASSERT_TRUE(manifest.saveAtomic(
-        zero_source_manifest_path, &manifest_error))
-        << manifest_error.toStdString();
+    ASSERT_TRUE(manifest.saveAtomic(zero_source_manifest_path, &manifest_error)) << manifest_error.toStdString();
     MvsWorkspaceManifest reloaded_zero_source_manifest;
-    ASSERT_TRUE(reloaded_zero_source_manifest.load(
-        zero_source_manifest_path, &manifest_error))
+    ASSERT_TRUE(reloaded_zero_source_manifest.load(zero_source_manifest_path, &manifest_error))
         << manifest_error.toStdString();
-    EXPECT_TRUE(reloaded_zero_source_manifest.hasReusableCompletedFrame(
-        4, QStringLiteral("cfg-a")));
+    EXPECT_TRUE(reloaded_zero_source_manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 
     record.rawGeometrySourceMaskPath = geometry_source_mask_path;
     record.geometrySourceIndices = {7, 7};
@@ -1713,6 +1877,68 @@ TEST(MvsWorkspaceManifest, CurrentFrameRequiresGeometrySupportAndInverseDepthSpr
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
+TEST(MvsWorkspaceManifest, CurrentFrameWithoutApplicableConsistencyReusesCoreArtifacts)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    MvsDepthFrameRecord record = makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed"));
+    record.sceneProfile = QStringLiteral("aerial_terrain");
+    record.geometrySourceIndices.clear();
+    record.rawGeometrySourceMaskPath.clear();
+    record.rawGeometrySupportPath.clear();
+    record.rawInverseDepthSpreadPath.clear();
+    record.depthPng = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004.png"));
+    record.rawDepthPath = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.depthProvenancePath = QDir(temp_dir.path()).filePath(QStringLiteral("depth_004_provenance.png"));
+    attachPreparedArtifactFiles(temp_dir, &record);
+    writePng(record.depthPng);
+    writeFastFloatMat(record.rawDepthPath);
+    writePng(record.depthProvenancePath);
+    record.status = QStringLiteral("running");
+    manifest.upsertFrame(record);
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A fully written initial checkpoint is not a durable publication";
+    record.status = QStringLiteral("completed");
+    manifest.upsertFrame(record);
+
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "Single-view and pre-consistency rejected frames have no geometry artifacts";
+
+    record.geometricGuidancePassExpected = true;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A memory-skipped geometric guidance pass must not masquerade as a complete cache";
+    record.geometricGuidancePassApplied = true;
+    manifest.upsertFrame(record);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.geometricGuidancePassExpected = false;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "Applied guidance without a matching expectation is an invalid cache state";
+    record.geometricGuidancePassExpected = false;
+    record.geometricGuidancePassApplied = false;
+
+    record.consistencyPublicationExpected = true;
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A multi-view frame cannot reuse an all-unavailable consistency sentinel";
+    record.consistencyPublicationExpected = false;
+
+    record.depthCompleteness.insert(QStringLiteral("pre_consistency_valid_count"), 6);
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A partially populated consistency publication must fail closed";
+
+    record.depthCompleteness = QJsonObject{{QStringLiteral("consistency_publication_fallback_applied"), true}};
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")))
+        << "A fallback flag without its observed counts is not an unavailable stage";
+}
+
 TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMatch)
 {
     QTemporaryDir tempDir;
@@ -1720,35 +1946,30 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
-    MvsDepthFrameRecord record = makeRecord(
-        4,
-        QStringLiteral("image_004.jpg"),
-        QStringLiteral("completed"));
+    MvsDepthFrameRecord record = makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed"));
     record.algorithmRevision = xjw::mvs::kMvsAdaptiveGeometryEvidenceRevision;
     record.sceneProfile = QStringLiteral("orbital_object");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
-    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_support.bin"));
-    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_inverse_depth_spread.bin"));
-    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_source_mask.bin"));
-    record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
-    record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
-    record.depthProvenancePath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_provenance.png"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_source_mask.bin"));
+    record.rawAdaptiveGeometrySupportWeightPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
+    record.rawAdaptiveGeometryEffectiveViewCountPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_provenance.png"));
     attachPreparedArtifactFiles(tempDir, &record);
-    touchFile(record.depthPng);
-    touchFile(record.rawDepthPath);
-    touchFile(record.rawGeometrySupportPath);
-    touchFile(record.rawInverseDepthSpreadPath);
-    touchFile(record.rawGeometrySourceMaskPath);
-    touchFile(record.rawAdaptiveGeometrySupportWeightPath);
-    touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
-    touchFile(record.depthProvenancePath);
+    writePng(record.depthPng);
+    writeFastFloatMat(record.rawDepthPath);
+    writeFastMat(record.rawGeometrySupportPath, CV_16UC1);
+    writeFastFloatMat(record.rawInverseDepthSpreadPath);
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_16UC1);
+    writeFastFloatMat(record.rawAdaptiveGeometrySupportWeightPath);
+    writeFastFloatMat(record.rawAdaptiveGeometryEffectiveViewCountPath);
+    writePng(record.depthProvenancePath);
     manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
@@ -1761,42 +1982,82 @@ TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
-    MvsDepthFrameRecord record = makeRecord(
-        4,
-        QStringLiteral("image_004.jpg"),
-        QStringLiteral("completed"));
+    MvsDepthFrameRecord record = makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed"));
     record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sceneProfile = QStringLiteral("orbital_object");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
-    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_support.bin"));
-    record.rawInverseDepthSpreadPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_inverse_depth_spread.bin"));
-    record.rawGeometrySourceMaskPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_geometry_source_mask.bin"));
-    record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
-    record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
-    record.rawAdaptiveGeometryConflictRatioPath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_adaptive_geometry_conflict_ratio.bin"));
-    record.depthProvenancePath = QDir(tempDir.path()).filePath(
-        QStringLiteral("depth_004_provenance.png"));
+    record.rawGeometrySupportPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_support.bin"));
+    record.rawInverseDepthSpreadPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_inverse_depth_spread.bin"));
+    record.rawGeometrySourceMaskPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_geometry_source_mask.bin"));
+    record.rawAdaptiveGeometrySupportWeightPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
+    record.rawAdaptiveGeometryEffectiveViewCountPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
+    record.rawAdaptiveGeometryConflictRatioPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_adaptive_geometry_conflict_ratio.bin"));
+    record.rawInverseDepthMeanPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_inverse_depth_mean.bin"));
+    record.crossViewRepairedMaskPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("depth_004_cross_view_repaired.png"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004_provenance.png"));
+    attachCompletedConsistencyDiagnostics(&record);
     attachPreparedArtifactFiles(tempDir, &record);
-    touchFile(record.depthPng);
-    touchFile(record.rawDepthPath);
-    touchFile(record.rawGeometrySupportPath);
-    touchFile(record.rawInverseDepthSpreadPath);
-    touchFile(record.rawGeometrySourceMaskPath);
-    touchFile(record.rawAdaptiveGeometrySupportWeightPath);
-    touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
-    touchFile(record.depthProvenancePath);
+    writePng(record.depthPng);
+    writeFastFloatMat(record.rawDepthPath);
+    writeFastMat(record.rawGeometrySupportPath, CV_16UC1);
+    writeFastFloatMat(record.rawInverseDepthSpreadPath);
+    writeFastMat(record.rawGeometrySourceMaskPath, CV_16UC1);
+    writeFastFloatMat(record.rawAdaptiveGeometrySupportWeightPath);
+    writeFastFloatMat(record.rawAdaptiveGeometryEffectiveViewCountPath);
+    writeFastFloatMat(record.rawInverseDepthMeanPath);
+    writePng(record.crossViewRepairedMaskPath);
+    writePng(record.depthProvenancePath);
     manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 
-    touchFile(record.rawAdaptiveGeometryConflictRatioPath);
+    writeFastFloatMat(record.rawAdaptiveGeometryConflictRatioPath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString inverse_depth_mean_path = record.rawInverseDepthMeanPath;
+    record.rawInverseDepthMeanPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.rawInverseDepthMeanPath = inverse_depth_mean_path;
+    writeFileContents(inverse_depth_mean_path, QByteArrayLiteral("not-a-fast-mat"));
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(inverse_depth_mean_path, CV_16UC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastMat(inverse_depth_mean_path, CV_32FC1, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(inverse_depth_mean_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    const QString repaired_mask_path = record.crossViewRepairedMaskPath;
+    record.crossViewRepairedMaskPath.clear();
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    record.crossViewRepairedMaskPath = repaired_mask_path;
+    writeFileContents(repaired_mask_path, QByteArrayLiteral("not-a-png"));
+    manifest.upsertFrame(record);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(repaired_mask_path, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writePng(repaired_mask_path);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    writeFastMat(record.rawAdaptiveGeometrySupportWeightPath, CV_16UC1);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(record.rawAdaptiveGeometrySupportWeightPath);
+    writeFastMat(record.rawAdaptiveGeometryEffectiveViewCountPath, CV_32FC1, 3, 3);
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(record.rawAdaptiveGeometryEffectiveViewCountPath);
+    writeFileContents(record.rawAdaptiveGeometryConflictRatioPath, QByteArrayLiteral("not-a-fast-mat"));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    writeFastFloatMat(record.rawAdaptiveGeometryConflictRatioPath);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
@@ -1830,7 +2091,9 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.patchMatch.bilateralSigmaColor += 1.0f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
-        changed.patchMatch.bilateralSigmaSpace += 1.0f;
+        changed.patchMatch.bilateralSigmaSpace += 1.0f; });
+    expect_hash_change([](xjw::mvs::DepthGenConfig& changed)
+                       { changed.patchMatch.minimumMaskedPatchSupportRatio += 0.05f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.cudaUseParallelSweep = !changed.patchMatch.cudaUseParallelSweep;
@@ -1938,6 +2201,149 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.inputSignature = "at-generation-2";
     });
+
+    xjw::mvs::DepthGenConfig pose_config = config;
+    pose_config.depthPoseRefinement.enabled = true;
+    const QString pose_hash = xjw::mvs::makeMvsDepthConfigHash(pose_config, 444);
+    const auto expect_pose_hash_change = [&pose_config, &pose_hash](const auto& mutator)
+    {
+        xjw::mvs::DepthGenConfig changed = pose_config;
+        mutator(changed);
+        EXPECT_NE(pose_hash, xjw::mvs::makeMvsDepthConfigHash(changed, 444));
+    };
+    expect_pose_hash_change([](xjw::mvs::DepthGenConfig& changed)
+                            { changed.depthPoseRefinement.optimizer.damping *= 2.0; });
+    expect_pose_hash_change([](xjw::mvs::DepthGenConfig& changed)
+                            { changed.depthPoseRefinement.optimizer.convergenceTranslation *= 2.0; });
+    expect_pose_hash_change([](xjw::mvs::DepthGenConfig& changed)
+                            { changed.depthPoseRefinement.optimizer.convergenceRotationRadians *= 2.0; });
+}
+
+TEST(MvsWorkspaceManifest, DepthConfigHashIgnoresSchedulingOnlySettings)
+{
+    xjw::mvs::DepthGenConfig config;
+    const QString expected_hash = xjw::mvs::makeMvsDepthConfigHash(config, 12);
+
+    config.patchMatch.cpuThreadCount += 3;
+    config.patchMatch.cudaBlockW = 8;
+    config.patchMatch.cudaBlockH = 32;
+    config.patchMatch.cudaBlockSweep = 64;
+
+    EXPECT_EQ(expected_hash, xjw::mvs::makeMvsDepthConfigHash(config, 12));
+}
+
+TEST(MvsWorkspaceManifest, DepthInputHashTracksRasterAndMaskContents)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString original_image_path = QDir(temp_dir.path()).filePath(QStringLiteral("original.png"));
+    const QString prepared_image_path = QDir(temp_dir.path()).filePath(QStringLiteral("prepared.png"));
+    const QString prepared_mask_path = QDir(temp_dir.path()).filePath(QStringLiteral("prepared_mask.png"));
+    const QString project_mask_path = QDir(temp_dir.path()).filePath(QStringLiteral("project_mask.png"));
+    writeFileContents(original_image_path, QByteArrayLiteral("original-a"));
+    writeFileContents(prepared_image_path, QByteArrayLiteral("prepared-a"));
+    writeFileContents(prepared_mask_path, QByteArrayLiteral("prep-mask-a"));
+    writeFileContents(project_mask_path, QByteArrayLiteral("proj-mask-a"));
+
+    xjw::mvs::CameraView view;
+    view.imagePath = xjw::common::io::toUtf8Path(original_image_path);
+    view.preparedImagePath = xjw::common::io::toUtf8Path(prepared_image_path);
+    view.preparedValidMaskPath = xjw::common::io::toUtf8Path(prepared_mask_path);
+    view.preparedValidMaskSource = "project";
+    view.validRegionMaskPath = xjw::common::io::toUtf8Path(project_mask_path);
+    view.imageWidth = 64;
+    view.imageHeight = 48;
+    view.camera = makeBrownCamera();
+
+    xjw::mvs::DepthGenConfig config;
+    xjw::mvs::SparseCloud sparse;
+    sparse.points.push_back({1.0f, 2.0f, 3.0f});
+    sparse.minPt = {1.0f, 2.0f, 3.0f};
+    sparse.maxPt = sparse.minPt;
+    const std::vector<xjw::mvs::CameraView> views{view};
+
+    QString previous_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_FALSE(previous_hash.isEmpty());
+    EXPECT_EQ(previous_hash, xjw::mvs::makeMvsDepthInputHash(config, views, sparse));
+
+    writeFileContents(prepared_mask_path, QByteArrayLiteral("prep-mask-b"));
+    QString current_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(previous_hash, current_hash) << "Changing the prepared valid-mask content must invalidate depth reuse";
+    previous_hash = current_hash;
+
+    writeFileContents(project_mask_path, QByteArrayLiteral("proj-mask-b"));
+    current_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(previous_hash, current_hash) << "Changing the original project mask content must invalidate depth reuse";
+    previous_hash = current_hash;
+
+    writeFileContents(prepared_image_path, QByteArrayLiteral("prepared-b"));
+    current_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(previous_hash, current_hash) << "Changing the prepared raster content must invalidate depth reuse";
+}
+
+TEST(MvsWorkspaceManifest, DepthInputHashIncludesNormalizedMaskPath)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    xjw::mvs::CameraView first_view;
+    first_view.validRegionMaskPath =
+        xjw::common::io::toUtf8Path(QDir(temp_dir.path()).filePath(QStringLiteral("missing_mask_a.png")));
+    xjw::mvs::CameraView second_view = first_view;
+    second_view.validRegionMaskPath =
+        xjw::common::io::toUtf8Path(QDir(temp_dir.path()).filePath(QStringLiteral("missing_mask_b.png")));
+
+    const xjw::mvs::DepthGenConfig config;
+    const xjw::mvs::SparseCloud sparse;
+    EXPECT_NE(xjw::mvs::makeMvsDepthInputHash(config, {first_view}, sparse),
+              xjw::mvs::makeMvsDepthInputHash(config, {second_view}, sparse));
+}
+
+TEST(MvsWorkspaceManifest, DepthInputHashTracksLearnedCandidateArtifacts)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    xjw::mvs::DepthGenConfig config;
+    config.enableLearnedMvsCandidates = true;
+    config.learnedMvsCandidateDirectory = xjw::common::io::toUtf8Path(temp_dir.path());
+    const std::vector<xjw::mvs::CameraView> views(2);
+    const xjw::mvs::SparseCloud sparse;
+    const QString missing_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+
+    const QDir candidate_directory(temp_dir.path());
+    const QString depth_0 = candidate_directory.filePath(QStringLiteral("learned_depth_0.bin"));
+    const QString confidence_0 = candidate_directory.filePath(QStringLiteral("learned_depth_0_conf.bin"));
+    writeFastMat(depth_0, CV_32FC1, 2, 3, 1.0);
+    setFixedModificationTime(depth_0);
+    const QString partial_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(missing_hash, partial_hash)
+        << "Creating one candidate artifact must change the missing-state fingerprint";
+
+    writeFastMat(confidence_0, CV_32FC1, 2, 3, 0.8);
+    setFixedModificationTime(confidence_0);
+    const qint64 stable_depth_size = QFileInfo(depth_0).size();
+    const qint64 stable_depth_mtime = QFileInfo(depth_0).lastModified().toMSecsSinceEpoch();
+    const QString complete_frame_0_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(partial_hash, complete_frame_0_hash);
+
+    writeFastMat(depth_0, CV_32FC1, 2, 3, 2.0);
+    setFixedModificationTime(depth_0);
+    ASSERT_EQ(stable_depth_size, QFileInfo(depth_0).size());
+    ASSERT_EQ(stable_depth_mtime, QFileInfo(depth_0).lastModified().toMSecsSinceEpoch());
+    const QString changed_in_place_hash = xjw::mvs::makeMvsDepthInputHash(config, views, sparse);
+    EXPECT_NE(complete_frame_0_hash, changed_in_place_hash)
+        << "Same-size learned depth changes with a fixed mtime must be content-addressed";
+
+    const QString depth_1 = candidate_directory.filePath(QStringLiteral("learned_depth_1.bin"));
+    const QString confidence_1 = candidate_directory.filePath(QStringLiteral("learned_depth_1_conf.bin"));
+    writeFastMat(depth_1, CV_32FC1, 2, 3, 3.0);
+    writeFastMat(confidence_1, CV_32FC1, 2, 3, 0.9);
+    setFixedModificationTime(depth_1);
+    setFixedModificationTime(confidence_1);
+    EXPECT_NE(changed_in_place_hash, xjw::mvs::makeMvsDepthInputHash(config, views, sparse))
+        << "Candidate inputs for every frame must participate in the fingerprint";
 }
 
 TEST(MvsDepthPostprocess, RemovesIsolatedDepthSpikeAndConfidence)
@@ -1946,13 +2352,7 @@ TEST(MvsDepthPostprocess, RemovesIsolatedDepthSpikeAndConfidence)
     cv::Mat confidence(9, 9, CV_32F, cv::Scalar(1.0f));
     depth.at<float>(4, 4) = 100.0f;
 
-    const int removed = DepthMapGenerator::removeLocalDepthOutliers(
-        depth,
-        confidence,
-        3,
-        0.25f,
-        0.20f,
-        4);
+    const int removed = DepthMapGenerator::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.20f, 4);
 
     EXPECT_EQ(removed, 1);
     EXPECT_EQ(depth.at<float>(4, 4), 0.0f);

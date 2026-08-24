@@ -5,7 +5,7 @@ set(CMAKE_AUTOMOC ON)
 
 # ── CUDA（可选）──────────────────────────────────────────────────────────────
 # CUDA 已在根 CMakeLists 中全局启用, 直接判断即可
-if(DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
+if(PLASCAN_ENABLE_CUDA AND DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
     set(MVS_HAS_CUDA TRUE)
     message(STATUS "mvs: CUDA 已启用 (${CMAKE_CUDA_COMPILER})")
 else()
@@ -127,6 +127,7 @@ set(MVS_HEADERS
     PatchMatchPhotometricCost.h
     PatchMatchHostUtils.h
     DensePointCloudCUDA.h
+    DensePointCloudOpenCL.h
     EpipolarRectifier.h
     SparseCloudPreprocessor.h
     DisparityTriangulator.h
@@ -154,9 +155,15 @@ else()
 endif()
 
 if(MVS_HAS_OPENCL)
-    list(APPEND MVS_CXX_SOURCES PatchMatchOpenCL.cpp)
+    list(APPEND MVS_CXX_SOURCES
+        PatchMatchOpenCL.cpp
+        DensePointCloudOpenCL.cpp
+    )
 else()
-    list(APPEND MVS_CXX_SOURCES PatchMatchNoOpenCL.cpp)
+    list(APPEND MVS_CXX_SOURCES
+        PatchMatchNoOpenCL.cpp
+        DensePointCloudNoOpenCL.cpp
+    )
 endif()
 
 add_library(mvs STATIC

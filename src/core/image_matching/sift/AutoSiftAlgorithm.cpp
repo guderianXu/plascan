@@ -5,7 +5,7 @@
 #include "SiftMatchFilter.h"
 #include "../ImageMatchingRegistry.h"
 
-#include <opencv2/features2d.hpp>
+#include <opencv2/features.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,9 +27,13 @@ namespace xjw::image_matching
             }
         }
 
-        cv::Mat normalizedSiftDescriptors(const cv::Mat& descriptors)
+        cv::Mat normalizedSiftDescriptors(const FeatureSet& features)
         {
-            cv::Mat normalized = descriptors.clone();
+            if (features.descriptorsL2Normalized)
+            {
+                return features.descriptors;
+            }
+            cv::Mat normalized = features.descriptors.clone();
             for (int rowIndex = 0; rowIndex < normalized.rows; ++rowIndex)
             {
                 cv::Mat row = normalized.row(rowIndex);
@@ -75,8 +79,7 @@ namespace xjw::image_matching
             indices.reserve(features.keypoints.size());
             for (int index = 0; index < features.size(); ++index)
             {
-                const bool isRecovery =
-                    features.keypoints[static_cast<std::size_t>(index)].class_id == 1;
+                const bool isRecovery = features.keypoints[static_cast<std::size_t>(index)].class_id == 1;
                 if (isRecovery == recovery)
                 {
                     indices.push_back(index);
@@ -111,10 +114,9 @@ namespace xjw::image_matching
                                                cpuNearestMatches(descriptors1, descriptors0),
                                                filterOptions);
             }
-            return filterSiftMutualMatches(
-                matchSiftOnGpu(backend, descriptors0, descriptors1, cudaDevice),
-                matchSiftOnGpu(backend, descriptors1, descriptors0, cudaDevice),
-                filterOptions);
+            SiftBidirectionalMatches matches =
+                matchSiftBidirectionallyOnGpu(backend, descriptors0, descriptors1, cudaDevice);
+            return filterSiftMutualMatches(matches.forward, matches.reverse, filterOptions);
         }
 
         void appendChannelMatches(MatchResult* destination,
@@ -128,8 +130,7 @@ namespace xjw::image_matching
             }
             for (const cv::DMatch& match : source.cvMatches)
             {
-                if (match.queryIdx < 0 || match.trainIdx < 0 ||
-                    match.queryIdx >= static_cast<int>(indices0.size()) ||
+                if (match.queryIdx < 0 || match.trainIdx < 0 || match.queryIdx >= static_cast<int>(indices0.size()) ||
                     match.trainIdx >= static_cast<int>(indices1.size()))
                 {
                     continue;
@@ -149,6 +150,11 @@ namespace xjw::image_matching
 
     AutoSiftAlgorithm::AutoSiftAlgorithm(ImageMatchingRuntimeConfig config) : _config(std::move(config))
     {
+    }
+
+    AutoSiftAlgorithm::~AutoSiftAlgorithm()
+    {
+        releaseSiftGpuThreadWorkspaces();
     }
 
     ImageMatchingAlgorithmDescriptor AutoSiftAlgorithm::descriptor() const
@@ -173,8 +179,8 @@ namespace xjw::image_matching
         validateSiftFeatures(features0);
         validateSiftFeatures(features1);
 
-        const cv::Mat descriptors0 = normalizedSiftDescriptors(features0.descriptors);
-        const cv::Mat descriptors1 = normalizedSiftDescriptors(features1.descriptors);
+        const cv::Mat descriptors0 = normalizedSiftDescriptors(features0);
+        const cv::Mat descriptors1 = normalizedSiftDescriptors(features1);
         SiftMatchFilterOptions filterOptions;
         filterOptions.confidenceThreshold = _config.matchThreshold;
         filterOptions.maximumRatio = _config.siftMaximumRatio;
@@ -185,8 +191,7 @@ namespace xjw::image_matching
         const std::vector<int> recovery1 = channelIndices(features1, true);
         if (recovery0.empty() && recovery1.empty())
         {
-            return matchDescriptorChannel(
-                descriptors0, descriptors1, backend, _config.cudaDevice, filterOptions);
+            return matchDescriptorChannel(descriptors0, descriptors1, backend, _config.cudaDevice, filterOptions);
         }
 
         const std::vector<int> base0 = channelIndices(features0, false);

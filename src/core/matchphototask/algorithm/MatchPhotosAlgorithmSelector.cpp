@@ -1,4 +1,4 @@
-#include "MatchPhotosAlgorithmSelector.h"
+﻿#include "MatchPhotosAlgorithmSelector.h"
 
 #include "ImageMatchingRegistry.h"
 #include "sift/AutoSiftAlgorithm.h"
@@ -139,9 +139,9 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.valid = true;
     plan.preferCuda = shouldPreferCuda(options);
     plan.rotationRobust = true;
-    // 指导匹配是用户可见的显式开关。质量档只调整数值预算，不能覆盖未勾选状态，
+    // 引导策略是用户可见的显式三态。质量档只调整数值预算，不能覆盖该策略，
     // 否则匹配 sidecar 与后续 SfM 的缓存契约会出现同一任务内不一致。
-    plan.enableGuidedMatching = options.enableGuidedMatching;
+    plan.guidedMatchingMode = options.guidedMatchingMode;
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.siftDetectionThreshold = resolveSiftDetectionThreshold(options.profile);

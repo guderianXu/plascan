@@ -46,6 +46,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QAction>
+#include <QApplication>
 
 #include <algorithm>
 #include <atomic>
@@ -1265,7 +1266,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
     workflowOptions.saveAfterEachStep = settings.value(QStringLiteral("save_project_after_each_step")).toBool(false);
     workflowOptions.keypointLimit = settings.value(QStringLiteral("keypoint_limit")).toInt(40000);
-    workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(4000);
+    workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(8000);
     workflowOptions.maskApplyMode =
         settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("keypoints"));
     workflowOptions.excludeFixedTiePoints = settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true);
@@ -1689,7 +1690,22 @@ void MenuWorkflowController::openCreateDemDialog()
         return;
     }
 
+    for (QWidget *widget : QApplication::topLevelWidgets())
+    {
+        auto *existing_dialog = qobject_cast<CreateDemDialog *>(widget);
+        if (!existing_dialog || existing_dialog->parentWidget() != _mainWindow)
+        {
+            continue;
+        }
+        _createDemDialog = existing_dialog;
+        existing_dialog->show();
+        existing_dialog->raise();
+        existing_dialog->activateWindow();
+        return;
+    }
+
     auto *dlg = new CreateDemDialog(_mainWindow);
+    dlg->setAvailableImages(getProjectImages());
     _createDemDialog = dlg;
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &QObject::destroyed, this,
@@ -1777,9 +1793,11 @@ void MenuWorkflowController::openMapProjectDialog()
             }
         }
         dlg->setImageReadiness(cameraMap.keys(), maskReadyCount);
+        dlg->setRpcImageReadiness(_projectManager->getRpcCamerasForImages(images).keys());
 
         const QJsonArray demResults = _projectManager->currentMeta().value(QStringLiteral("dem_results")).toArray();
         QString latestRelativeDem;
+        QString latestRpcDem;
         QString latestAnyDem;
         for (int index = demResults.size() - 1; index >= 0; --index)
         {
@@ -1802,13 +1820,21 @@ void MenuWorkflowController::openMapProjectDialog()
             {
                 latestAnyDem = candidate;
             }
-            if (record.value(QStringLiteral("dem_reference")).toString() == QStringLiteral("relative"))
+            if (latestRpcDem.isEmpty()
+                && record.value(QStringLiteral("terrain_mode")).toString()
+                    == QLatin1String("rpc_stereo"))
+            {
+                latestRpcDem = candidate;
+            }
+            if (latestRelativeDem.isEmpty()
+                && record.value(QStringLiteral("dem_reference")).toString()
+                    == QStringLiteral("relative"))
             {
                 latestRelativeDem = candidate;
-                break;
             }
         }
         dlg->setDefaultDemPath(!latestRelativeDem.isEmpty() ? latestRelativeDem : latestAnyDem);
+        dlg->setDefaultRpcDemPath(latestRpcDem);
 
         const QJsonArray denseResults =
             _projectManager->currentMeta().value(QStringLiteral("dense_cloud_results")).toArray();

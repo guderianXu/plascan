@@ -2,6 +2,8 @@
 
 CLI 源码按业务领域组织，并继续生成独立可执行文件。影像匹配接口不保留旧特征文件参数兼容层；
 这样可以避免单个总入口把 Qt、TensorRT、MVS、网格和质量检查等依赖全部绑定在一起。
+面向用户的 GUI/CLI 对照、参数语义和快速示例见
+[`docs/GUI_CLI_GUIDE.md`](../../docs/GUI_CLI_GUIDE.md)。
 
 ## 模块
 
@@ -14,6 +16,7 @@ CLI 源码按业务领域组织，并继续生成独立可执行文件。影像�
 | `reconstruction/` | 可独立执行的重建阶段与诊断工具 | `bundle_adjust_cli` |
 | `workflows/` | GUI“工作流程”菜单对应的无界面编排入口 | `aerial_triangulation_cli`, `mesh_reconstruct_cli`, `texture_map_cli`, `three_d_reconstruction_cli`, `reconstruct_pipeline_cli` |
 | `quality/` | 模型影像质量验收 | `model_quality_cli` |
+| `terrain/` | RPC 立体 DEM/DOM | `rpc_stereo_products_cli` |
 | `common/` | CLI 共享路径、token、UTF-8 控制台、JSON、输出目录策略与摄影测量列表解析 | 内部静态库，不生成可执行文件 |
 | `third_party/` | CLI11 单头文件依赖 | 不生成可执行文件 |
 
@@ -122,6 +125,8 @@ confidence、源数、基线方向数和动作，便于在固定 GT 域中复核
 4. 公共参数解析和输出约定放进 `common/`，不要在多个入口复制实现。
 5. 新增参数时在当前领域的 `tests/` 中补充契约或端到端测试，并由模块自己的 `CMakeLists.txt`
    注册；不要把 CLI 测试放回顶层 `tests/`。
+6. CLI11 入口必须调用 `cli::configureApp(app)`，统一 `--help`、`--version`、帮助布局和退出码说明；
+   参数说明使用中文，稳定枚举值仍使用英文 ID。
 
 跨模块复用的进程启动、临时文件、JSON 和测试数据构造工具集中在
 `common/tests/CliTestSupport.h`，测试用例本身仍归属具体领域。

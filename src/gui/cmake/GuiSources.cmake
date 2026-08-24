@@ -31,6 +31,7 @@ set(GUI_SOURCES
   platform/ProjectFileIntegration.cpp
   platform/TaskbarProgressController.cpp
   runtime/PythonRuntimeManager.cpp
+  runtime/GeospatialRuntimePaths.cpp
   project/services/MetashapeCameraReferenceImporter.cpp
   reference/CameraReferenceController.cpp
   reference/CameraReferenceCsvExporter.cpp
@@ -73,6 +74,8 @@ set(GUI_SOURCES
   views/ObjStreamingLoaderAssembly.cpp
   views/TiePointVisualization.cpp
   widgets/CanvasWidget.cpp
+  widgets/MaskEditor.cpp
+  widgets/MaskEditor.h
   widgets/DataTreeWidget.cpp
   widgets/DataTreeContextMenu.cpp
   widgets/DataTreeModel.cpp
@@ -93,7 +96,6 @@ set(GUI_SOURCES
   widgets/MatchSpatialIndex.cpp
   widgets/MatchGpuRenderer.cpp
   widgets/MatchLineOverlay.cpp
-  widgets/DisparityHeatmapOverlay.cpp
   widgets/TaskStatusWidget.cpp
   widgets/DualImageViewer.cpp
   widgets/DualImageViewer.ui
@@ -134,5 +136,6 @@ set(GUI_PROJECT_SOURCES
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
+  project/manager/ProjectTerrainRpcProducts.cpp
   project/manager/ProjectCameraSetupManager.cpp
 )

@@ -10,8 +10,8 @@
  * - `depthAxisFlipped` 决定相机前方是局部 +Z 还是 -Z；
  * - 像素投影包含 u/v 轴符号和 Brown-Conrady 畸变。
  *
- * 模板函数必须同时支持 double 与 Ceres Jet，禁止在此处加入破坏自动微分的
- * 非模板数学调用或与 FramePinholeCamera::projectWorldPoint 不一致的坐标变换。
+ * 模板函数支持标量类型复用，禁止在此处加入破坏连续性的非模板数学调用或与
+ * FramePinholeCamera::projectWorldPoint 不一致的坐标变换。
  */
 
 #include "FramePinholeCamera.h"
@@ -23,7 +23,7 @@ namespace xjw::ba
 {
 
 /**
- * @brief Ceres BA 使用的轻量相机参数快照。
+ * @brief 联合 BA 使用的轻量相机参数快照。
  *
  * 这里复制 FramePinholeCamera 的运行态内外参，使残差函数可以用模板标量 T
  * 完成投影计算，避免固定相机场景仍走 NumericDiff。
@@ -154,7 +154,7 @@ bool project(const ProjectionCamera &camera, const T *world, T *pixel)
  * @brief 将 3 维轴角增量转换为旋转矩阵。
  *
  * 小角度分支使用 Rodrigues 一阶展开，避免 theta 接近零时除零，同时保持
- * Ceres Jet 的连续导数。
+ * 参数空间的连续导数。
  */
 template <typename T>
 void poseDeltaRotation(const T *cameraDelta, T *deltaRotation)

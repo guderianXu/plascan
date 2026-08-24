@@ -8,11 +8,20 @@ if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER)
     message(STATUS "dense_match: CUDA enabled (${CMAKE_CUDA_COMPILER})")
 else()
     set(DM_HAS_CUDA FALSE)
-    message(STATUS "dense_match: CUDA unavailable, CPU-only")
+    message(STATUS "dense_match: CUDA unavailable")
+endif()
+
+if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
+    set(DM_HAS_OPENCL TRUE)
+    message(STATUS "dense_match: OpenCL enabled")
+else()
+    set(DM_HAS_OPENCL FALSE)
+    message(STATUS "dense_match: OpenCL unavailable")
 endif()
 
 set(DM_CXX_SOURCES
     CostFunctions.cpp
+    DenseMatchBackend.cpp
     BlockMatcher.cpp
     SgmMatcher.cpp
     SubpixelRefiner.cpp
@@ -24,6 +33,7 @@ set(DM_CXX_SOURCES
 set(DM_HEADERS
     DenseMatchTypes.h
     DenseMatchConfig.h
+    DenseMatchBackend.h
     CostFunctions.h
     BlockMatcher.h
     SgmMatcher.h
@@ -32,6 +42,15 @@ set(DM_HEADERS
     DenseMatchService.h
     opencv/OpenCVSgbmWrapper.h
 )
+
+if(DM_HAS_OPENCL)
+    list(APPEND DM_CXX_SOURCES
+        OpenClCostFunctions.cpp
+    )
+    list(APPEND DM_HEADERS
+        OpenClCostKernels.h
+    )
+endif()
 
 if(DM_HAS_CUDA)
     set(DM_CUDA_SOURCES
@@ -58,6 +77,11 @@ if(DM_HAS_CUDA)
     )
 endif()
 
+if(DM_HAS_OPENCL)
+    target_compile_definitions(dense_match PUBLIC DM_ENABLE_OPENCL=1)
+    target_link_libraries(dense_match PRIVATE OpenCL::OpenCL)
+endif()
+
 target_include_directories(dense_match PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
@@ -81,6 +105,7 @@ if(BUILD_TESTS)
     if(GTest_FOUND)
         include(GoogleTest)
         add_executable(test_dense_match_unit
+            tests/DenseMatchBackendTest.cpp
             tests/CostFunctionTest.cpp
             tests/BlockMatcherTest.cpp
             tests/SgmMatcherTest.cpp

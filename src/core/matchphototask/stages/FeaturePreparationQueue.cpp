@@ -14,13 +14,39 @@ FeaturePreparationQueue::FeaturePreparationQueue(
     std::vector<FeaturePreparationRequest> requests,
     int capacity,
     std::atomic_bool *cancelFlag,
-    FeaturePrepareFunction prepareFunction)
+    FeaturePrepareFunction prepareFunction,
+    int workerCount)
     : _requests(std::move(requests)),
       _capacity(std::max(1, capacity)),
+      _workerCount(std::clamp(workerCount, 1, std::max(1, capacity))),
       _cancelFlag(cancelFlag),
       _prepareFunction(std::move(prepareFunction)),
-      _producer(&FeaturePreparationQueue::produce, this)
+      _activeProducerCount(_workerCount)
 {
+    _producers.reserve(static_cast<std::size_t>(_workerCount));
+    try
+    {
+        for (int worker = 0; worker < _workerCount; ++worker)
+        {
+            _producers.emplace_back(&FeaturePreparationQueue::produce, this);
+        }
+    }
+    catch (...)
+    {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _stopRequested = true;
+        }
+        _notFull.notify_all();
+        for (std::thread &producer : _producers)
+        {
+            if (producer.joinable())
+            {
+                producer.join();
+            }
+        }
+        throw;
+    }
 }
 
 FeaturePreparationQueue::~FeaturePreparationQueue()
@@ -36,7 +62,8 @@ bool FeaturePreparationQueue::take(PreparedFeatureImage *prepared)
     }
 
     std::unique_lock<std::mutex> lock(_mutex);
-    while (_buffer.empty() && !_finished && !_stopRequested)
+    while (_preparedByPosition.find(_nextTakePosition) == _preparedByPosition.end() &&
+           !_finished && !_stopRequested)
     {
         if (cancellationRequested())
         {
@@ -50,11 +77,12 @@ bool FeaturePreparationQueue::take(PreparedFeatureImage *prepared)
     if (cancellationRequested())
     {
         _stopRequested = true;
-        _buffer.clear();
+        _preparedByPosition.clear();
         _notFull.notify_all();
         return false;
     }
-    if (_buffer.empty())
+    const auto preparedIt = _preparedByPosition.find(_nextTakePosition);
+    if (preparedIt == _preparedByPosition.end())
     {
         const std::exception_ptr producerFailure = _producerFailure;
         lock.unlock();
@@ -65,9 +93,10 @@ bool FeaturePreparationQueue::take(PreparedFeatureImage *prepared)
         return false;
     }
 
-    *prepared = std::move(_buffer.front());
-    _buffer.pop_front();
-    _notFull.notify_one();
+    *prepared = std::move(preparedIt->second);
+    _preparedByPosition.erase(preparedIt);
+    ++_nextTakePosition;
+    _notFull.notify_all();
     return true;
 }
 
@@ -76,19 +105,27 @@ void FeaturePreparationQueue::stop()
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _stopRequested = true;
-        _buffer.clear();
+        _preparedByPosition.clear();
     }
     _notEmpty.notify_all();
     _notFull.notify_all();
-    if (_producer.joinable())
+    for (std::thread &producer : _producers)
     {
-        _producer.join();
+        if (producer.joinable())
+        {
+            producer.join();
+        }
     }
 }
 
 int FeaturePreparationQueue::capacity() const
 {
     return _capacity;
+}
+
+int FeaturePreparationQueue::workerCount() const
+{
+    return _workerCount;
 }
 
 int FeaturePreparationQueue::peakBufferedCount() const
@@ -106,8 +143,10 @@ void FeaturePreparationQueue::produce()
 {
     try
     {
-        for (const FeaturePreparationRequest &request : _requests)
+        while (true)
         {
+            std::size_t requestPosition = 0;
+            FeaturePreparationRequest request;
             {
                 std::unique_lock<std::mutex> lock(_mutex);
                 _notFull.wait(lock,
@@ -115,12 +154,17 @@ void FeaturePreparationQueue::produce()
                               {
                                   return _stopRequested ||
                                       cancellationRequested() ||
-                                      static_cast<int>(_buffer.size()) < _capacity;
+                                      _nextRequestPosition >= _requests.size() ||
+                                      _nextRequestPosition - _nextTakePosition <
+                                          static_cast<std::size_t>(_capacity);
                               });
-                if (_stopRequested || cancellationRequested())
+                if (_stopRequested || cancellationRequested() ||
+                    _nextRequestPosition >= _requests.size())
                 {
                     break;
                 }
+                requestPosition = _nextRequestPosition++;
+                request = _requests[requestPosition];
             }
 
             PreparedFeatureImage prepared;
@@ -149,11 +193,11 @@ void FeaturePreparationQueue::produce()
                 {
                     break;
                 }
-                _buffer.push_back(std::move(prepared));
+                _preparedByPosition.emplace(requestPosition, std::move(prepared));
                 _peakBufferedCount =
-                    std::max(_peakBufferedCount, static_cast<int>(_buffer.size()));
+                    std::max(_peakBufferedCount, static_cast<int>(_preparedByPosition.size()));
             }
-            _notEmpty.notify_one();
+            _notEmpty.notify_all();
         }
     }
     catch (...)
@@ -162,13 +206,16 @@ void FeaturePreparationQueue::produce()
         // rethrows at the owning stage boundary after already-buffered work.
         std::lock_guard<std::mutex> lock(_mutex);
         _producerFailure = std::current_exception();
+        _stopRequested = true;
     }
 
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        _finished = true;
+        --_activeProducerCount;
+        _finished = _activeProducerCount == 0;
     }
     _notEmpty.notify_all();
+    _notFull.notify_all();
 }
 
 } // namespace matchphotos

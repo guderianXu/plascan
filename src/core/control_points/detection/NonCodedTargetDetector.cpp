@@ -1,7 +1,8 @@
 #include "NonCodedTargetDetector.h"
 
 #include "DetectionMerger.h"
-
+#include <opencv2/features.hpp>
+#include <opencv2/geometry.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <QLineF>

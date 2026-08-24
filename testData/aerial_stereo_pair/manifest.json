@@ -1,0 +1,80 @@
+{
+  "dataset_id": "agisoft_geoscan_aerial_stereo_pair_210_211",
+  "title": "GeoScan aerial nadir stereo pair 210/211",
+  "source": {
+    "provider": "GeoScan LLC",
+    "catalog_url": "https://www.agisoft.com/downloads/sample-data/",
+    "archive_url": "https://download.agisoft.com/datasets/aerial_images_with_gcps.zip",
+    "source_dataset": "Agisoft Aerial images (with GCPs)",
+    "redistribution_note": "The public sample page does not state a separate redistribution license; confirm terms before public redistribution."
+  },
+  "image_transform": {
+    "source_width": 6000,
+    "source_height": 4000,
+    "output_width": 1600,
+    "output_height": 1067,
+    "scale_x": 0.26666666666666666,
+    "scale_y": 0.26675,
+    "camera_intrinsics_scaled_to_output": true
+  },
+  "camera_model": {
+    "format": "ASP/Vision Workbench TSAI",
+    "type": "PINHOLE",
+    "distortion": "Brown radial-tangential",
+    "pose_frame": "solved local reconstruction frame",
+    "rpc_available": false
+  },
+  "georeference": {
+    "format": "external tab-separated camera reference file",
+    "horizontal_datum": "WGS84",
+    "height_type": "ellipsoidal height",
+    "horizontal_baseline_m": 25.1808,
+    "three_dimensional_baseline_m": 25.1951
+  },
+  "validation": {
+    "opencv_version": "5.0.0",
+    "feature": "SIFT",
+    "maximum_features_per_image": 8000,
+    "lowe_ratio": 0.75,
+    "fundamental_ransac_threshold_px": 1.5,
+    "ratio_matches": 1539,
+    "fundamental_inliers": 1496,
+    "inlier_rate_percent": 97.2,
+    "occupied_grid_cells_8x6": {
+      "image_210": 39,
+      "image_211": 42
+    }
+  },
+  "files": [
+    {
+      "path": "Images/2019_08_06_PUTI_SonyRX1_g201b20286_f001_210.JPG",
+      "bytes": 1233240,
+      "sha256": "95c7d9951fece0e9aeadddada6dbf48d17d87d5a4c3f3f5ccf11628e25609646"
+    },
+    {
+      "path": "Images/2019_08_06_PUTI_SonyRX1_g201b20286_f001_211.JPG",
+      "bytes": 1237655,
+      "sha256": "3c1cd2240e46a7c1f1573b599a4b762f33616033c475b73a6e9c3270c1bde054"
+    },
+    {
+      "path": "cameras/2019_08_06_PUTI_SonyRX1_g201b20286_f001_210.tsai",
+      "bytes": 475,
+      "sha256": "24b2f5b65624b134f0a9a34306d6fcc28015cdf8e819fadd8506cc1f06a27a0f"
+    },
+    {
+      "path": "cameras/2019_08_06_PUTI_SonyRX1_g201b20286_f001_211.tsai",
+      "bytes": 475,
+      "sha256": "9ab865c3d2532645969be0bae7ba31dd1c28e0a72a1a4c60eb8158f29c9ada7c"
+    },
+    {
+      "path": "Metadata/Cameras_WGS84.txt",
+      "bytes": 416,
+      "sha256": "5f10e1272676b9b5a1d8cbda976c9a543ba58c8921a80c3b0b73c2852e3deb2a"
+    },
+    {
+      "path": "Metadata/GNSS_offset.txt",
+      "bytes": 31,
+      "sha256": "18b27a8732cf19c9898f0e36a7b555b728054cbea714b5fa906d45ce6493d4bf"
+    }
+  ]
+}

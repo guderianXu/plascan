@@ -1,7 +1,7 @@
 #include "VocabularyOverlapRetriever.h"
 
 #include "HierarchicalVocabularyTree.h"
-#include "OpenCvCompat.h"
+#include <opencv2/geometry.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -67,10 +67,12 @@ cv::Mat sampleTrainingDescriptors(const std::vector<cv::Mat> &descriptors,
         return cv::Mat();
     }
 
-    cv::Mat training;
-    training.reserve(target_count);
+    const auto first_non_empty = std::find_if(
+        descriptors.begin(), descriptors.end(), [](const cv::Mat &value) { return !value.empty(); });
+    cv::Mat training(target_count, first_non_empty->cols, first_non_empty->type());
     std::int64_t candidates_seen = 0;
     int samples_emitted = 0;
+    int output_row = 0;
     for (std::size_t image_index = 0; image_index < descriptors.size(); ++image_index)
     {
         const cv::Mat &image_descriptors = descriptors[image_index];
@@ -89,10 +91,11 @@ cv::Mat sampleTrainingDescriptors(const std::vector<cv::Mat> &descriptors,
         {
             const int row = std::min(image_descriptors.rows - 1,
                                      static_cast<int>(std::floor(sample * step)));
-            training.push_back(image_descriptors.row(row));
+            image_descriptors.row(row).copyTo(training.row(output_row));
+            ++output_row;
         }
     }
-    return training;
+    return training.rowRange(0, output_row);
 }
 
 bool reportProgress(const xjw::VocabularyOverlapConfig &config,
@@ -230,8 +233,7 @@ cv::Mat sampleDescriptorRows(const cv::Mat &descriptors, int maxRows, std::vecto
         return descriptors;
     }
 
-    cv::Mat sampled;
-    sampled.reserve(maxRows);
+    cv::Mat sampled(maxRows, descriptors.cols, descriptors.type());
     if (sourceRows)
     {
         sourceRows->reserve(static_cast<std::size_t>(maxRows));
@@ -241,7 +243,7 @@ cv::Mat sampleDescriptorRows(const cv::Mat &descriptors, int maxRows, std::vecto
     for (int i = 0; i < maxRows; ++i)
     {
         const int row = std::min(descriptors.rows - 1, static_cast<int>(std::floor(i * step)));
-        sampled.push_back(descriptors.row(row));
+        descriptors.row(row).copyTo(sampled.row(i));
         if (sourceRows)
         {
             sourceRows->push_back(row);
@@ -861,6 +863,7 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
     planner_options.minSimilarity = config.minSimilarity;
     planner_options.mutualTopK = config.mutualTopK;
     planner_options.keepOneWayTopK = config.keepOneWayTopK;
+    planner_options.cycleClosureMaxPairsPerImage = config.cycleClosureMaxPairsPerImage;
     planner_options.connectComponents = config.connectComponents;
     planner_options.useSequenceFallback = config.useSequenceFallback;
     planner_options.sequenceWindow = config.sequenceWindow;
@@ -986,23 +989,19 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
     }
 
     std::ostringstream detail;
-    detail << "images=" << image_count
-           << " vocabulary=" << result->vocabularySize
+    detail << "images=" << image_count << " vocabulary=" << result->vocabularySize
            << " vocabulary_tree_nodes=" << result->vocabularyTreeNodeCount
            << " vocabulary_tree_depth=" << result->vocabularyTreeDepth
-           << " vocabulary_tree_branch=" << std::max(2, config.branchFactor)
-           << " descriptor_dims=" << descriptor_cols
+           << " vocabulary_tree_branch=" << std::max(2, config.branchFactor) << " descriptor_dims=" << descriptor_cols
            << " descriptors_total=" << result->totalDescriptorCount
            << " descriptors_assigned=" << result->assignedDescriptorCount
-           << " assignment_limit_per_image=" << config.maxDescriptorsPerImage
-           << " candidates=" << result->candidates.size()
-           << " accepted=" << result->acceptedPairs.size()
-           << ' ' << graph_plan.detail
-           << " assignment=hierarchical_kmeans_tree"
-           << " pair_scoring=" << (use_inverted_index ? "inverted" : "dense")
-           << " threads=" << thread_count
-           << " cuda_requested=" << (config.useCuda ? 1 : 0)
-           << " cuda_used=0";
+           << " assignment_limit_per_image=" << config.maxDescriptorsPerImage << " pair_top_k=" << config.topK
+           << " min_pairs_per_image=" << config.minPairsPerImage
+           << " cycle_closure_budget_per_image=" << config.cycleClosureMaxPairsPerImage
+           << " candidates=" << result->candidates.size() << " accepted=" << result->acceptedPairs.size() << ' '
+           << graph_plan.detail << " assignment=hierarchical_kmeans_tree"
+           << " pair_scoring=" << (use_inverted_index ? "inverted" : "dense") << " threads=" << thread_count
+           << " cuda_requested=" << (config.useCuda ? 1 : 0) << " cuda_used=0";
     result->detail = detail.str();
 
     return true;

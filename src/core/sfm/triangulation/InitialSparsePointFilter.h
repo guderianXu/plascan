@@ -10,7 +10,7 @@
 //   - 供 GUI 层和后续无头流程统一复用。
 // ============================================================
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 
 #include <array>

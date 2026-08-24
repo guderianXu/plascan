@@ -402,6 +402,28 @@ if(PLASCAN_BUNDLE_RUNTIME AND WIN32)
   )
   install(SCRIPT "${PLASCAN_WINDOWS_INSTALL_BUNDLE_SCRIPT}"
     COMPONENT Runtime)
+
+  set(_plascan_windows_gdal_data_candidates
+    "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/share/gdal"
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/gdal")
+  foreach(_plascan_gdal_data_dir IN LISTS _plascan_windows_gdal_data_candidates)
+    if(IS_DIRECTORY "${_plascan_gdal_data_dir}")
+      install(DIRECTORY "${_plascan_gdal_data_dir}/"
+        DESTINATION share/gdal
+        COMPONENT Runtime)
+      break()
+    endif()
+  endforeach()
+
+  set(_plascan_windows_proj_data_dir
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/proj")
+  if(EXISTS "${_plascan_windows_proj_data_dir}/proj.db")
+    install(DIRECTORY "${_plascan_windows_proj_data_dir}/"
+      DESTINATION share/proj
+      COMPONENT Runtime
+      PATTERN "*.cmake" EXCLUDE
+      PATTERN "vcpkg.*" EXCLUDE)
+  endif()
 endif()
 
 if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
@@ -447,6 +469,13 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
       list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES
         "${_vcpkg_runtime_prefix}")
     endif()
+  endif()
+  if(PLASCAN_SOURCE_DEPENDENCY_PREFIX AND
+     EXISTS "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}")
+    get_filename_component(_plascan_source_runtime_prefix
+      "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}" REALPATH)
+    list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES
+      "${_plascan_source_runtime_prefix}")
   endif()
   list(REMOVE_DUPLICATES PLASCAN_LINUX_RUNTIME_PREFIXES)
 

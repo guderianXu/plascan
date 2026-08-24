@@ -1,6 +1,6 @@
 #include "OpenCvCameraAdapter.h"
 
-#include <opencv2/calib3d.hpp>
+#include <opencv2/geometry.hpp>
 
 namespace xjw
 {

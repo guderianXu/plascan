@@ -30,6 +30,7 @@
 #include "PointCloudWorkflowConfig.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "runtime/PythonRuntimeLocator.h"
+#include "runtime/GeospatialRuntimePaths.h"
 #include "json/JsonObjectMerge.h"
 #include "io/JsonObjectFile.h"
 #include "ImageViewRotationSettings.h"
@@ -49,7 +50,6 @@
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
 #include "CanvasWidget.h"
-#include "DisparityHeatmapOverlay.h"
 #include "DualImageViewer.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
@@ -3662,47 +3662,6 @@ TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList expectedMembers = {
-        QStringLiteral("cv::Mat _disparity;"),
-        QStringLiteral("QImage  _heatmapImage;"),
-        QStringLiteral("QPixmap _heatmap;"),
-        QStringLiteral("float   _opacity     = 0.6f;"),
-        QStringLiteral("float   _dispMin     = 0.0f;"),
-        QStringLiteral("float   _dispMax     = 256.0f;"),
-        QStringLiteral("bool    _autoRange   = true;"),
-        QStringLiteral("int     _colormap    = 2;"),
-        QStringLiteral("bool    _showInvalid = false;"),
-    };
-    for (const QString &expectedMember : expectedMembers)
-    {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_disparity"),
-        QStringLiteral("m_heatmapImage"),
-        QStringLiteral("m_heatmap"),
-        QStringLiteral("m_opacity"),
-        QStringLiteral("m_dispMin"),
-        QStringLiteral("m_dispMax"),
-        QStringLiteral("m_autoRange"),
-        QStringLiteral("m_colormap"),
-        QStringLiteral("m_showInvalid"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
-    }
-}
-
 TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.h"));
@@ -3716,13 +3675,11 @@ TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QVector<QPointF> _ptsA;"),
         QStringLiteral("QVector<QPointF> _ptsB;"),
         QStringLiteral("QVector<bool> _inlierMask;"),
-        QStringLiteral("QColor _lineColor;"),
         QStringLiteral("qreal _lineWidth;"),
         QStringLiteral("qreal _opacity;"),
         QStringLiteral("int _maxDisplayCount;"),
         QStringLiteral("bool _showOnlyInliers;"),
         QStringLiteral("bool _showEndPoints;"),
-        QStringLiteral("bool _rainbowMode;"),
         QStringLiteral("bool _showOnlyHighlighted;"),
         QStringLiteral("QVector<int> _highlightIndices;"),
         QStringLiteral("mutable QVector<int> _cachedVisibleMatches;"),
@@ -3740,13 +3697,11 @@ TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_ptsA"),
         QStringLiteral("m_ptsB"),
         QStringLiteral("m_inlierMask"),
-        QStringLiteral("m_lineColor"),
         QStringLiteral("m_lineWidth"),
         QStringLiteral("m_opacity"),
         QStringLiteral("m_maxDisplayCount"),
         QStringLiteral("m_showOnlyInliers"),
         QStringLiteral("m_showEndPoints"),
-        QStringLiteral("m_rainbowMode"),
         QStringLiteral("m_showOnlyHighlighted"),
         QStringLiteral("m_highlightIndices"),
         QStringLiteral("m_cachedVisibleMatches"),
@@ -3812,8 +3767,6 @@ TEST(CodeStyleTest, DualImageViewerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QPointer<ImageViewWidget> _leftView;"),
         QStringLiteral("QPointer<ImageViewWidget> _rightView;"),
         QStringLiteral("QPointer<MatchLineOverlay> _overlay;"),
-        QStringLiteral("QPointer<DisparityHeatmapOverlay> _disparityOverlay;"),
-        QStringLiteral("int _overlayMode = 0;"),
         QStringLiteral("bool _syncEnabled;"),
         QStringLiteral("bool _syncing;"),
         QStringLiteral("QVector<QPointF> _matchPtsA;"),
@@ -3829,8 +3782,6 @@ TEST(CodeStyleTest, DualImageViewerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_leftView"),
         QStringLiteral("m_rightView"),
         QStringLiteral("m_overlay"),
-        QStringLiteral("m_disparityOverlay"),
-        QStringLiteral("m_overlayMode"),
         QStringLiteral("m_syncEnabled"),
         QStringLiteral("m_syncing"),
         QStringLiteral("m_matchPtsA"),
@@ -5349,129 +5300,6 @@ TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
         << "The final consistency-filtered depth maps should still overwrite the provisional artifacts.";
 }
 
-TEST(DisparityHeatmapOverlayTest, InvalidPixelsUseAlphaMask)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("QImage::Format_RGBA8888")))
-        << "Heatmap storage should carry alpha so invalid disparity can be transparent.";
-    EXPECT_TRUE(source.contains(QStringLiteral(
-        "pixel[3] = settings.showInvalid || validRow[col] ? 255 : 0")))
-        << "Invalid disparity pixels should be masked out, not colorized as low disparity.";
-    EXPECT_TRUE(source.contains(QStringLiteral("if (_showInvalid)")))
-        << "setShowInvalid() must affect the rendered invalid-pixel state.";
-    EXPECT_TRUE(header.contains(QStringLiteral("QImage heatmapImage() const")))
-        << "Tests and callers need a mask-aware image accessor.";
-}
-
-TEST(DisparityHeatmapOverlayTest, BuildsMaskAwareHeatmapOffTheGuiCallbackPath)
-{
-    DisparityHeatmapOverlay overlay;
-    QSignalSpy ready_spy(&overlay, &DisparityHeatmapOverlay::heatmapReady);
-    QSignalSpy failure_spy(&overlay, &DisparityHeatmapOverlay::loadFailed);
-
-    cv::Mat disparity(1, 3, CV_32FC1);
-    disparity.at<float>(0, 0) = 0.0f;
-    disparity.at<float>(0, 1) = 1.0f;
-    disparity.at<float>(0, 2) = 2.0f;
-    ASSERT_TRUE(overlay.loadDisparity(disparity));
-
-    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 1, 5000);
-    ASSERT_EQ(failure_spy.count(), 0);
-    const QImage masked_image = overlay.heatmapImage();
-    ASSERT_EQ(masked_image.size(), QSize(3, 1));
-    EXPECT_EQ(masked_image.pixelColor(0, 0).alpha(), 0);
-    EXPECT_EQ(masked_image.pixelColor(1, 0).alpha(), 255);
-    EXPECT_EQ(masked_image.pixelColor(2, 0).alpha(), 255);
-
-    overlay.setShowInvalid(true);
-    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 2, 5000);
-    EXPECT_EQ(overlay.heatmapImage().pixelColor(0, 0).alpha(), 255);
-}
-
-TEST(DisparityHeatmapOverlayTest, LatestDisparityRequestWins)
-{
-    DisparityHeatmapOverlay overlay;
-    QSignalSpy ready_spy(&overlay, &DisparityHeatmapOverlay::heatmapReady);
-
-    const cv::Mat large_disparity(2048, 2048, CV_32FC1, cv::Scalar(10.0f));
-    const cv::Mat latest_disparity(2, 4, CV_32FC1, cv::Scalar(20.0f));
-    ASSERT_TRUE(overlay.loadDisparity(large_disparity));
-    ASSERT_TRUE(overlay.loadDisparity(latest_disparity));
-
-    QTRY_COMPARE_WITH_TIMEOUT(overlay.heatmapImage().size(), QSize(4, 2), 5000);
-    QTest::qWait(100);
-    EXPECT_EQ(overlay.heatmapImage().size(), QSize(4, 2));
-    EXPECT_GE(ready_spy.count(), 1);
-}
-
-TEST(DisparityHeatmapOverlayTest, TracksExplicitImageViewportTransform)
-{
-    DualImageViewer viewer;
-    viewer.resize(900, 600);
-    viewer.show();
-    QCoreApplication::processEvents();
-
-    DisparityHeatmapOverlay *overlay = viewer.disparityOverlay();
-    ASSERT_NE(overlay, nullptr);
-    viewer.setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage);
-    viewer.setOverlayMode(1);
-    QCoreApplication::processEvents();
-    EXPECT_TRUE(overlay->isVisible());
-    EXPECT_FALSE(viewer.overlay()->isVisible());
-    ASSERT_EQ(overlay->targetView(), viewer.leftView());
-    ASSERT_EQ(overlay->parentWidget(), viewer.leftView()->view()->viewport());
-    EXPECT_EQ(overlay->geometry(), viewer.leftView()->view()->viewport()->rect());
-
-    viewer.leftView()->view()->scene()->setSceneRect(0.0, 0.0, 1200.0, 800.0);
-    viewer.leftView()->setTransform(QTransform::fromScale(2.0, 2.0));
-    viewer.leftView()->view()->centerOn(QPointF(450.0, 300.0));
-    QCoreApplication::processEvents();
-
-    const QPointF scene_point(420.25, 275.75);
-    const QPoint expected_left = viewer.leftView()->view()->mapFromScene(scene_point);
-    const QPointF mapped_left = overlay->mapSceneToOverlay(scene_point);
-    EXPECT_NEAR(mapped_left.x(), expected_left.x(), 1.0);
-    EXPECT_NEAR(mapped_left.y(), expected_left.y(), 1.0);
-
-    viewer.setDisparityTarget(DualImageViewer::DisparityTarget::RightImage);
-    ASSERT_EQ(overlay->targetView(), viewer.rightView());
-    ASSERT_EQ(overlay->parentWidget(), viewer.rightView()->view()->viewport());
-    EXPECT_EQ(overlay->geometry(), viewer.rightView()->view()->viewport()->rect());
-    EXPECT_TRUE(overlay->isVisible());
-    EXPECT_FALSE(viewer.overlay()->isVisible());
-}
-
-TEST(DisparityHeatmapOverlayTest, PaintUsesSceneTransformWithoutPerFramePixmapScaling)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("painter.setWorldTransform(sceneToOverlayTransform())")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_heatmap.scaled(")))
-        << "Heatmap resampling must not allocate a new pixmap in every paint event.";
-    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run(")))
-        << "Disparity decoding and colorization should stay off the GUI thread.";
-}
-
-TEST(DisparityHeatmapOverlayTest, DenseTabKeepsSharedImageViewerVisible)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("new QVBoxLayout(_denseTab)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("target_layout->addWidget(_viewer)")))
-        << "The dense tab must host the image viewer instead of showing an empty tab.";
-    EXPECT_TRUE(source.contains(QStringLiteral(
-        "setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage)")))
-        << "Dense disparity coordinates are defined against the first/reference image.";
-}
-
 TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
 {
     QJsonArray points;
@@ -6454,6 +6282,41 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     EXPECT_EQ(batchImportSpy.count(), 1);
 }
 
+TEST(CameraCalibrationDialogTest, ShowsRpcGeolocationParametersInsteadOfPinholeIntrinsics)
+{
+    const QJsonObject rpcCamera{{QStringLiteral("model"), QStringLiteral("rpc")},
+                                {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
+                                {QStringLiteral("image_samples"), 1024},
+                                {QStringLiteral("image_lines"), 768},
+                                {QStringLiteral("line_off"), 383.5},
+                                {QStringLiteral("samp_off"), 511.5},
+                                {QStringLiteral("lat_off"), 34.5},
+                                {QStringLiteral("long_off"), 113.5},
+                                {QStringLiteral("height_off"), 120.0},
+                                {QStringLiteral("line_scale"), 384.0},
+                                {QStringLiteral("samp_scale"), 512.0},
+                                {QStringLiteral("lat_scale"), 0.1},
+                                {QStringLiteral("long_scale"), 0.1},
+                                {QStringLiteral("height_scale"), 500.0}};
+    const QJsonObject metadata{{QStringLiteral("images"), QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/rpc.tif")},
+                    {QStringLiteral("camera"), rpcCamera}}}}};
+
+    CameraCalibrationDialog dialog(metadata, QString());
+    auto *tabs = dialog.findChild<QTabWidget *>(QStringLiteral("cameraCalibrationTabs"));
+    auto *parametersTable = dialog.findChild<QTableWidget *>(QStringLiteral("initialCalibrationParameters"));
+    auto *photoTable = dialog.findChild<QTableWidget *>(QStringLiteral("cameraCalibrationPhotos"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_NE(parametersTable, nullptr);
+    ASSERT_NE(photoTable, nullptr);
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("定位模型"));
+    EXPECT_FALSE(tabs->isTabEnabled(1));
+    EXPECT_TRUE(parametersTable->item(0, 0)->text().contains(QStringLiteral("LINE_OFF")));
+    EXPECT_EQ(parametersTable->item(0, 1)->text(), QStringLiteral("383.5"));
+    EXPECT_EQ(photoTable->item(0, 1)->text(), QStringLiteral("1024×768"));
+    EXPECT_EQ(photoTable->item(0, 3)->text(), QStringLiteral("RPC00B 定位模型已就绪"));
+}
+
 TEST(ProjectWorkflowReportsTest, PreservesCompleteCalibrationSnapshots)
 {
     const QString imagePath = QStringLiteral("D:/images/camera_001.jpg");
@@ -6504,7 +6367,7 @@ TEST(ProjectBundleAdjustWorkflowTest, BuildsActionableReferenceTerrainPreview)
         {QStringLiteral("mean_rms_before"), 2.5},
         {QStringLiteral("mean_rms_after"), 0.75},
         {QStringLiteral("ba_requested_backend"), QStringLiteral("auto")},
-        {QStringLiteral("ba_used_backend"), QStringLiteral("ceres_cpu")},
+        {QStringLiteral("ba_used_backend"), QStringLiteral("plamatrix_cpu")},
         {QStringLiteral("ba_valid_track_ratio"), 0.8},
         {QStringLiteral("ba_total_seconds"), 1.25},
         {QStringLiteral("reference_terrain_prior_summary"), terrainSummary},
@@ -6518,7 +6381,7 @@ TEST(ProjectBundleAdjustWorkflowTest, BuildsActionableReferenceTerrainPreview)
     EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("4 台相机")));
     EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("2.500000 px → 0.750000 px")));
     EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("尚未写回项目")));
-    EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("计算后端: auto → ceres_cpu")));
+    EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("计算后端: auto → plamatrix_cpu")));
     EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("参考 DEM 关联: 96 / 120")));
     EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("D:/output/ba_run_summary.json")));
 }
@@ -6909,7 +6772,7 @@ TEST(MainMenuToolbarTemplateTest, UsesOneCompactTemplateForEveryToolbarCommand)
         QStringLiteral("toolButtonSaveProject"),
         QStringLiteral("toolButtonZoomIn"),
         QStringLiteral("toolButtonZoomOut"),
-        QStringLiteral("toolButtonManualPointCloudPrune")
+        QStringLiteral("toolButtonModelNavigation")
     };
     for (const QString &name : compactButtonNames)
     {
@@ -6922,7 +6785,8 @@ TEST(MainMenuToolbarTemplateTest, UsesOneCompactTemplateForEveryToolbarCommand)
 
     const QStringList splitButtonNames = {
         QStringLiteral("toolButtonModelCameraVisibility"),
-        QStringLiteral("toolButtonModelCameraImageVisibility")
+        QStringLiteral("toolButtonModelCameraImageVisibility"),
+        QStringLiteral("toolButtonPointSelection")
     };
     for (const QString &name : splitButtonNames)
     {
@@ -6935,6 +6799,13 @@ TEST(MainMenuToolbarTemplateTest, UsesOneCompactTemplateForEveryToolbarCommand)
 
     EXPECT_FALSE(toolBar->actions().contains(menu.saveAction()));
     EXPECT_FALSE(toolBar->actions().contains(menu.manualPointCloudPruneAction()));
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(
+                  QStringLiteral("toolButtonManualPointCloudPrune")),
+              nullptr);
+    EXPECT_TRUE(menu.navigationAction()->isChecked());
+    EXPECT_TRUE(menu.rectangleSelectionAction()->isCheckable());
+    EXPECT_TRUE(menu.circleSelectionAction()->isCheckable());
+    EXPECT_TRUE(menu.freehandSelectionAction()->isCheckable());
 }
 
 TEST(MainMenuImageOverlayToolbarTest, ExposesImageOnlyPointMaskAndResetCommands)
@@ -8557,6 +8428,7 @@ TEST(TiePointsDialogTest, MetashapeStyleDefaultsAreExposed)
     EXPECT_TRUE(createDialog.useGenericPreselection());
     EXPECT_FALSE(createDialog.useReferencePreselection());
     EXPECT_FALSE(createDialog.useGuidedMatching());
+    EXPECT_EQ(createDialog.guidedMatchingMode(), QStringLiteral("off"));
     EXPECT_TRUE(createDialog.excludePinnedTiePoints());
     EXPECT_EQ(createDialog.maskApplyMode(), QStringLiteral("none"));
 
@@ -8583,16 +8455,19 @@ TEST(TiePointsDialogTest, MetashapeStyleDefaultsAreExposed)
 TEST(TiePointsDialogTest, GuidedMatchingSwitchesKeypointLimitToPerMegapixelDisplay)
 {
     CreateTiePointsDialog dialog;
-    auto *guidedCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_guidedMatchingCheck"));
+    auto *guidedCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_guidedMatchingCombo"));
     auto *keypointLabel = dialog.findChild<QLabel *>(QStringLiteral("m_keypointLimitLabel"));
 
-    ASSERT_NE(guidedCheck, nullptr);
+    ASSERT_NE(guidedCombo, nullptr);
     ASSERT_NE(keypointLabel, nullptr);
 
     EXPECT_EQ(keypointLabel->text(), QStringLiteral("关键点限制:"));
-    guidedCheck->setChecked(true);
+    const int automaticIndex = guidedCombo->findData(QStringLiteral("auto"));
+    ASSERT_GE(automaticIndex, 0);
+    guidedCombo->setCurrentIndex(automaticIndex);
 
     EXPECT_TRUE(dialog.useGuidedMatching());
+    EXPECT_EQ(dialog.guidedMatchingMode(), QStringLiteral("auto"));
     EXPECT_EQ(dialog.keypointLimitPerMegapixel(), 1000);
     EXPECT_EQ(keypointLabel->text(), QStringLiteral("每百万像素的关键点限制:"));
 }
@@ -8682,7 +8557,7 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleGizmoAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
-    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("模型视角影像配准"));
+    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("显示图像"));
     ASSERT_NE(imageMenu, nullptr);
     EXPECT_TRUE(imageMenu->actions().contains(menu.toggleCameraImagesAction()));
     EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInForegroundAction()));
@@ -8700,16 +8575,16 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     menu.toggleCameraThumbnailsAction()->setChecked(false);
     EXPECT_FALSE(menu.toggleCameraThumbnailsAction()->isChecked());
 
-    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("影像配准"));
+    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("显示图像"));
     EXPECT_TRUE(menu.toggleCameraImagesAction()->isCheckable());
     EXPECT_FALSE(menu.toggleCameraImagesAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("半透明表面叠加"));
+    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("在前景中显示"));
     EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isCheckable());
-    EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isChecked());
-    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("原图表面投影"));
+    EXPECT_FALSE(menu.showCameraImagesInForegroundAction()->isChecked());
+    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("在后景中显示"));
     EXPECT_TRUE(menu.showCameraImagesInBackgroundAction()->isCheckable());
-    EXPECT_FALSE(menu.showCameraImagesInBackgroundAction()->isChecked());
-    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定当前影像"));
+    EXPECT_TRUE(menu.showCameraImagesInBackgroundAction()->isChecked());
+    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定图像"));
     EXPECT_TRUE(menu.lockCameraImageAction()->isCheckable());
     EXPECT_FALSE(menu.lockCameraImageAction()->isChecked());
 }
@@ -9142,7 +9017,7 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleCameraVisibilityButton)
     EXPECT_TRUE(menu.toggleLocalAxesAction()->isChecked());
 }
 
-TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
+TEST(MainMenuTest, ToolbarExposesMetashapeStyleViewMatchedImageButton)
 {
     QMainWindow window;
     MainMenu menu(&window);
@@ -9156,7 +9031,7 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
     EXPECT_EQ(imageButton->defaultAction(), menu.toggleCameraImagesAction());
     EXPECT_EQ(imageButton->popupMode(), QToolButton::MenuButtonPopup);
     EXPECT_EQ(imageButton->toolTip(),
-              QStringLiteral("按当前模型视角自动匹配并配准 SfM 原始影像"));
+              QStringLiteral("按当前三维视角自动匹配并对齐显示 SfM 原始照片"));
     EXPECT_EQ(imageButton->iconSize(), QSize(26, 26));
     EXPECT_EQ(imageButton->size(), QSize(50, 36));
     EXPECT_TRUE(imageButton->styleSheet().isEmpty());
@@ -9405,7 +9280,7 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnQrhiGpu)
         "std::copy_n(mvp.constData(), 16, uniforms.mvp.begin())")));
     const qsizetype scene_uniform_start = header.indexOf(QStringLiteral("struct alignas(16) SceneUniforms"));
     const qsizetype scene_uniform_end = header.indexOf(
-        QStringLiteral("struct alignas(16) ProjectedImageUniforms"), scene_uniform_start);
+        QStringLiteral("struct alignas(16) ImagePlaneUniforms"), scene_uniform_start);
     ASSERT_GE(scene_uniform_start, 0);
     ASSERT_GT(scene_uniform_end, scene_uniform_start);
     EXPECT_FALSE(header.mid(scene_uniform_start, scene_uniform_end - scene_uniform_start)
@@ -9467,8 +9342,7 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_FALSE(source.contains(QStringLiteral("registeredCameraImagePlaneCorners()")));
-    EXPECT_FALSE(source.contains(QStringLiteral("calibratedImagePlaneCorners(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("calibratedCameraView(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners(")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));
     EXPECT_FALSE(source.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
@@ -9913,7 +9787,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(resetAlignmentCheck->isChecked());
     EXPECT_FALSE(saveAfterEachStepCheck->isChecked());
     EXPECT_EQ(keypointLimitSpin->value(), 40000);
-    EXPECT_EQ(tiepointLimitSpin->value(), 4000);
+    EXPECT_EQ(tiepointLimitSpin->value(), 8000);
     EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(excludeFixedTiePointsCheck->isChecked());
     EXPECT_FALSE(guidedImageMatchingCheck->isChecked());
@@ -9933,7 +9807,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(settings.value(QStringLiteral("generic_preselection")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("reference_preselection")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
-    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
+    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 8000);
     EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("reuse_existing_matches")).toBool());
@@ -11556,7 +11430,8 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
         QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     const QString projectManagerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString bundleAdjustHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString bundleAdjustHeader =
+        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustOptions.h"));
     const QString bundleAdjustSource = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
     const QString serviceSource = readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     ASSERT_FALSE(mainWindowSource.isEmpty());
@@ -12089,13 +11964,10 @@ TEST(CanvasWidgetResponsivenessTest, ExistingInvalidMatchObservationShardStillWa
     ASSERT_EQ(invalid_file.write("not-a-pimatch"), 13);
     invalid_file.close();
 
-    testing::internal::CaptureStderr();
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("读取影像匹配分片失败:.*invalid\\.pimatch")));
     const auto keypoints = xjw::gui::views::loadMatchedKeypointsFromFile(invalid_path);
-    const std::string diagnostics = testing::internal::GetCapturedStderr();
 
     EXPECT_TRUE(keypoints.empty());
-    EXPECT_NE(diagnostics.find("读取影像匹配分片失败"), std::string::npos)
-        << diagnostics;
 }
 
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDoesNotRetainStitchedPairDebugOutput)
@@ -12303,7 +12175,7 @@ TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetada
 
 TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
 {
-    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustProblem.h"));
     const QString baValidation =
         readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustValidation.cpp"));
     const QString baInputBuilder =
@@ -12327,7 +12199,7 @@ TEST(SfmSparseResultMetadataTest, BundleAdjustAutoEnablesSurveyControlConstraint
 {
     const QString execution = readProjectSourceFile(
         QStringLiteral("src/gui/project/support/ProjectBundleAdjustExecution.cpp"));
-    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustProblem.h"));
     const QString baService = readProjectSourceFile(
         QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     ASSERT_FALSE(execution.isEmpty());
@@ -12577,6 +12449,88 @@ TEST(MatchPairSelectorTrackValidityTest, ShowsMetashapeStyleCounts)
         << "几何验证内点不是 Metashape View Matches 里的有效连接点。";
 }
 
+TEST(MatchPairSelectorSortingTest, UsesClickableBidirectionalMetricSorting)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("int _sortColumn = 0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("Qt::SortOrder _sortOrder = Qt::AscendingOrder;")))
+        << "The default table order must be ascending by filename.";
+    EXPECT_TRUE(source.contains(QStringLiteral("QHeaderView::sectionClicked")));
+    EXPECT_TRUE(source.contains(QStringLiteral("column < 0 || column > 3")))
+        << "Only filename and the three requested count columns should be sortable.";
+    EXPECT_TRUE(source.contains(QStringLiteral("_sortOrder = Qt::DescendingOrder;")))
+        << "A newly selected sort rule must start from largest to smallest.";
+    EXPECT_TRUE(source.contains(QStringLiteral("filename_collator.setNumericMode(true)")))
+        << "Filename ordering should compare embedded numbers naturally.";
+}
+
+TEST(MatchViewerNavigationTest, RemovesDenseTabAndSupportsPairSwitching)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
+    const QString ui = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.ui"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(ui.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("struct MatchPairOption")));
+    EXPECT_TRUE(header.contains(QStringLiteral("setAvailablePairs")));
+    EXPECT_TRUE(source.contains(QStringLiteral("leftImageCombo")));
+    EXPECT_TRUE(source.contains(QStringLiteral("rightImageCombo")));
+    EXPECT_TRUE(source.contains(QStringLiteral("applySelectedPair()")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("密集匹配")));
+    EXPECT_FALSE(source.contains(QStringLiteral("DisparityHeatmapOverlay")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("m_lineColorBtn")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("m_rainbowChk")));
+}
+
+TEST(MatchViewerLayoutTest, KeepsChromeCompactAndGivesViewerRemainingHeight)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
+    const QString ui = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.ui"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(ui.isEmpty());
+
+    EXPECT_TRUE(ui.contains(QStringLiteral("name=\"mainLayout\" stretch=\"0,1,0\"")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("name=\"toolbarWidget\"")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("name=\"viewerWidget\"")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("name=\"statusWidget\"")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("vsizetype=\"Fixed\"")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("<height>48</height>")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("<height>28</height>")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "image_selection_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_leftImageCombo->setMaximumWidth(180)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_rightImageCombo->setMaximumWidth(180)")));
+}
+
+TEST(MatchViewerResponsivenessTest, CoalescesTransformsWithoutFixedFrameDelay)
+{
+    const QString dual_viewer = readProjectSourceFile(
+        QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
+    const QString image_view = readProjectSourceFile(
+        QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    ASSERT_FALSE(dual_viewer.isEmpty());
+    ASSERT_FALSE(image_view.isEmpty());
+
+    EXPECT_TRUE(dual_viewer.contains(QStringLiteral("_overlayUpdateTimer->setInterval(0)")));
+    EXPECT_FALSE(dual_viewer.contains(QStringLiteral("_overlayUpdateTimer->setInterval(16)")));
+    EXPECT_FALSE(image_view.contains(QStringLiteral(
+        "this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection")))
+        << "Scrollbar changes should reach the coalescing timer without an extra queued hop.";
+}
+
 TEST(MatchPairSelectorResponsivenessTest, DefersHeavyMatchScanToBackgroundWorker)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));
@@ -12738,7 +12692,9 @@ TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
     EXPECT_TRUE(source.contains(QStringLiteral("bestVariantIndex")));
     EXPECT_TRUE(source.contains(QStringLiteral("const QString base = imageBaseToken(imgPath);")));
     EXPECT_TRUE(source.contains(QStringLiteral("baseToPath.insert(base, imgPath)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("setMatchVariants(info.variants, info.matchFilePath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("option.variants = match.variants")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "setAvailablePairs(pair_options, _currentImage, info.imagePath)")));
     EXPECT_TRUE(source.contains(QStringLiteral("const QStringList current_project_images")));
     EXPECT_TRUE(source.contains(QStringLiteral("resolveProjectImagePathFromToken(\n"
                                                "                                      match.imagePath")));
@@ -12805,7 +12761,8 @@ TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
     EXPECT_FALSE(gpuRendererSource.contains(QStringLiteral("QRhiGraphicsPipeline::Points")));
     EXPECT_EQ(overlaySource.count(QStringLiteral("mapToGlobal")), 1);
     EXPECT_EQ(overlaySource.count(QStringLiteral("mapFromGlobal")), 1);
-    EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("setInterval(16)")));
+    EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("setInterval(0)")))
+        << "Sparse lines should coalesce updates without an extra fixed-frame delay.";
     EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("QtConcurrent::run")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("_maxDisplayCount(5000)")))
         << "Sparse match lines should have a finite default draw budget.";
@@ -12934,37 +12891,28 @@ TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
 
     const QStringList expectedMembers = {
         QStringLiteral("DualImageViewer *_viewer = nullptr;"),
-        QStringLiteral("QTabWidget *_tabWidget = nullptr;"),
-        QStringLiteral("QWidget *_sparseTab = nullptr;"),
-        QStringLiteral("QWidget *_denseTab = nullptr;"),
-        QStringLiteral("int _initialTab = 0;"),
-        QStringLiteral("QString _disparityFile;"),
         QStringLiteral("bool _sparseMatchFileMissing = false;"),
         QStringLiteral("QCheckBox *_syncModeChk = nullptr;"),
         QStringLiteral("QPushButton *_fitBtn = nullptr;"),
         QStringLiteral("QPushButton *_resetBtn = nullptr;"),
         QStringLiteral("QPushButton *_zoomInBtn = nullptr;"),
         QStringLiteral("QPushButton *_zoomOutBtn = nullptr;"),
+        QStringLiteral("QComboBox *_leftImageCombo = nullptr;"),
+        QStringLiteral("QComboBox *_rightImageCombo = nullptr;"),
         QStringLiteral("QComboBox *_variantCombo = nullptr;"),
-        QStringLiteral("QPushButton *_lineColorBtn = nullptr;"),
         QStringLiteral("QDoubleSpinBox *_lineWidthSpin = nullptr;"),
         QStringLiteral("QSlider *_opacitySlider = nullptr;"),
         QStringLiteral("QSpinBox *_maxCountSpin = nullptr;"),
         QStringLiteral("QCheckBox *_showEndPointsChk = nullptr;"),
         QStringLiteral("QCheckBox *_showOnlyInliersChk = nullptr;"),
-        QStringLiteral("QCheckBox *_rainbowChk = nullptr;"),
-        QStringLiteral("QSlider *_denseOpacitySlider = nullptr;"),
-        QStringLiteral("QComboBox *_denseColormapCombo = nullptr;"),
-        QStringLiteral("QCheckBox *_denseAutoRangeChk = nullptr;"),
-        QStringLiteral("QDoubleSpinBox *_denseMinSpin = nullptr;"),
-        QStringLiteral("QDoubleSpinBox *_denseMaxSpin = nullptr;"),
-        QStringLiteral("QGroupBox *_denseDisplayGroup = nullptr;"),
         QStringLiteral("QLabel *_statusLabel = nullptr;"),
         QStringLiteral("QString _matchFile;"),
         QStringLiteral("int _totalMatches = 0;"),
         QStringLiteral("int _validMatches = -1;"),
         QStringLiteral("int _invalidMatches = -1;"),
         QStringLiteral("QVector<xjw::aerial_triangulation::MatchVariant> _matchVariants;"),
+        QStringLiteral("QVector<MatchPairOption> _pairOptions;"),
+        QStringLiteral("bool _updatingImageSelectors = false;"),
         QStringLiteral("DialogSettingStore *_setting = nullptr;"),
     };
     for (const QString &expectedMember : expectedMembers)
@@ -15964,6 +15912,70 @@ TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
     EXPECT_EQ(valueFor(QStringLiteral("严格的体积掩模")), QStringLiteral("否"));
     EXPECT_EQ(valueFor(QStringLiteral("软件版本")), QStringLiteral("1.1.7"));
     EXPECT_EQ(valueFor(QStringLiteral("文件大小")), QStringLiteral("2.0 MB"));
+}
+
+TEST(SelectionPropertiesWidgetTest, ShowsDemAndDomPixelResolution)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString dem_path = temporary_directory.filePath(QStringLiteral("dem.tif"));
+    const QString dom_path = temporary_directory.filePath(QStringLiteral("dom.tif"));
+    for (const QString &path : {dem_path, dom_path})
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    }
+
+    const QJsonObject metadata{
+        {QStringLiteral("dem_results"),
+         QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), dem_path},
+                                {QStringLiteral("dem_resolution"), 0.5}}}},
+        {QStringLiteral("ortho_results"),
+         QJsonArray{QJsonObject{{QStringLiteral("output_path"), dom_path},
+                                {QStringLiteral("dem_path"), dem_path}}}}};
+
+    SelectionPropertiesWidget widget;
+    const auto resolution_value = [&widget]()
+    {
+        auto *table = widget.findChild<QTableWidget *>();
+        if (!table)
+        {
+            return QString();
+        }
+        for (int row = 0; row < table->rowCount(); ++row)
+        {
+            const QTableWidgetItem *name_item = table->item(row, 0);
+            if (name_item && name_item->text() == QStringLiteral("像元分辨率"))
+            {
+                const QTableWidgetItem *value_item = table->item(row, 1);
+                return value_item ? value_item->text() : QString();
+            }
+        }
+        return QString();
+    };
+
+    widget.showResourceProperties(metadata, QStringLiteral("DEM"), dem_path);
+    EXPECT_EQ(resolution_value(), QStringLiteral("0.500 m/px"));
+    widget.showResourceProperties(metadata, QStringLiteral("正射影像"), dom_path);
+    EXPECT_EQ(resolution_value(), QStringLiteral("0.500 m/px"));
+}
+
+TEST(GeospatialRuntimePathsTest, FindsProjDatabaseInVcpkgBuildTree)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString application_directory = temporary_directory.filePath(QStringLiteral("bin"));
+    const QString proj_directory = temporary_directory.filePath(
+        QStringLiteral("vcpkg_installed/x64-windows/share/proj"));
+    ASSERT_TRUE(QDir().mkpath(application_directory));
+    ASSERT_TRUE(QDir().mkpath(proj_directory));
+    QFile proj_database(QDir(proj_directory).filePath(QStringLiteral("proj.db")));
+    ASSERT_TRUE(proj_database.open(QIODevice::WriteOnly));
+    proj_database.close();
+
+    const xjw::gui::runtime::GeospatialDataPaths paths =
+        xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, QProcessEnvironment());
+    EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(proj_directory));
 }
 
 namespace

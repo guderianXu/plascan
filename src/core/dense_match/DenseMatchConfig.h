@@ -10,38 +10,46 @@
 namespace xjw::dense_match
 {
 
-struct DenseMatchConfig
-{
-    StereoAlgorithm algorithm  = StereoAlgorithm::MoreGlobalMatch;
-    CostFunction    costFunc   = CostFunction::CensusTransform;
-    SubpixelMode    subpixel   = SubpixelMode::Parabola;
+    struct DenseMatchConfig
+    {
+        StereoAlgorithm algorithm = StereoAlgorithm::MoreGlobalMatch;
+        CostFunction costFunc = CostFunction::CensusTransform;
+        SubpixelMode subpixel = SubpixelMode::Parabola;
 
-    // Left-reference convention: d = x_left - x_right.  The configured
-    // search interval is [minDisparity, maxDisparity).
-    int minDisparity = 0;
-    int maxDisparity = 256;
+        // Left-reference convention: d = x_left - x_right.  The configured
+        // search interval is [minDisparity, maxDisparity).
+        int minDisparity = 0;
+        int maxDisparity = 256;
 
-    int corrKernelW = 15;
-    int corrKernelH = 15;
+        int corrKernelW = 15;
+        int corrKernelH = 15;
 
-    int p1            = 8;
-    int p2            = 32;
-    int sgmDirections = 8;
+        int p1 = 8;
+        int p2 = 32;
+        int sgmDirections = 8;
 
-    int pyramidLevels = 2;
+        int pyramidLevels = 2;
 
-    float lrCheckThreshold = 1.0f;
-    int   medianFilterSize = 3;
-    int   supportIntensityThreshold = 5;
-    bool  enableLRCheck = false;
+        float lrCheckThreshold = 1.0f;
+        int medianFilterSize = 3;
+        int supportIntensityThreshold = 5;
+        bool enableLRCheck = false;
 
-    bool useCuda     = true;
-    int  cudaDevice  = 0;
-    int  numThreads  = 4;
+        // Automatic prefers CUDA, then an OpenCL GPU, and finally CPU.  An
+        // explicitly requested accelerator is strict: an unavailable backend is
+        // reported as an error instead of silently falling back to CPU.
+        DenseMatchComputeBackend computeBackend = DenseMatchComputeBackend::Automatic;
 
-    std::string leftImagePath;
-    std::string rightImagePath;
-    std::string outputDisparityPath;
-};
+        // Legacy compatibility switch.  When computeBackend is Automatic, false
+        // forces CPU and true keeps automatic accelerator selection enabled.
+        bool useCuda = true;
+        int cudaDevice = 0;
+        int openClDevice = 0;
+        int numThreads = 4;
+
+        std::string leftImagePath;
+        std::string rightImagePath;
+        std::string outputDisparityPath;
+    };
 
 } // namespace xjw::dense_match

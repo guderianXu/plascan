@@ -135,7 +135,7 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
     return build(BuildOptions{});
 }
 
-MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &options) const
+MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions& options) const
 {
     MultiViewTrackBuildResult result;
 
@@ -144,7 +144,7 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
     detail::DisjointSet disjointSet;
     std::map<ObservationKey, int> indexByKey;
     std::vector<ObservationKey> keys;
-    const auto observationIndex = [&](const ObservationKey &key)
+    const auto observationIndex = [&](const ObservationKey& key)
     {
         const auto existing = indexByKey.find(key);
         if (existing != indexByKey.end())
@@ -159,12 +159,57 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
 
     std::vector<std::pair<int, int>> indexedEdges;
     indexedEdges.reserve(_edges.size());
-    for (const auto &edge : _edges)
+    for (const auto& edge : _edges)
     {
         const int left = observationIndex(edge.first);
         const int right = observationIndex(edge.second);
         indexedEdges.emplace_back(left, right);
     }
+
+    // 预先建立无重复的观测邻接表。它表示所有通过像对几何验证的直接对应，后续
+    // 合并时既可检测精确三角闭环，也可统计两个组件间是否存在第二条独立支持边。
+    std::vector<std::vector<int>> neighbors(keys.size());
+    for (const auto& [left, right] : indexedEdges)
+    {
+        neighbors[static_cast<std::size_t>(left)].push_back(right);
+        neighbors[static_cast<std::size_t>(right)].push_back(left);
+    }
+    for (std::vector<int>& row : neighbors)
+    {
+        std::sort(row.begin(), row.end());
+        row.erase(std::unique(row.begin(), row.end()), row.end());
+    }
+
+    const auto commonNeighborCount = [&neighbors](int left, int right, int limit)
+    {
+        const std::vector<int>& leftNeighbors = neighbors[static_cast<std::size_t>(left)];
+        const std::vector<int>& rightNeighbors = neighbors[static_cast<std::size_t>(right)];
+        std::size_t leftIndex = 0;
+        std::size_t rightIndex = 0;
+        int count = 0;
+        while (leftIndex < leftNeighbors.size() && rightIndex < rightNeighbors.size())
+        {
+            if (leftNeighbors[leftIndex] < rightNeighbors[rightIndex])
+            {
+                ++leftIndex;
+            }
+            else if (rightNeighbors[rightIndex] < leftNeighbors[leftIndex])
+            {
+                ++rightIndex;
+            }
+            else
+            {
+                ++count;
+                if (count >= limit)
+                {
+                    break;
+                }
+                ++leftIndex;
+                ++rightIndex;
+            }
+        }
+        return count;
+    };
 
     // 每个并查集根维护 imageId -> featureIdx，用于在合并前 O(component images)
     // 检查“一条物点轨迹中同一影像只能有一个观测”的硬约束。
@@ -182,19 +227,26 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
     }
     // 阶段 2：高置信匹配优先合并；同分时保留输入顺序。这样冲突环路中优先留下
     // 更可靠边，同时保证相同输入每次构建结果一致。
-    std::sort(order.begin(), order.end(), [&](int left, int right)
-    {
-        const Edge &leftEdge = _edges[static_cast<size_t>(left)];
-        const Edge &rightEdge = _edges[static_cast<size_t>(right)];
-        if (leftEdge.score != rightEdge.score)
-        {
-            return leftEdge.score > rightEdge.score;
-        }
-        return leftEdge.insertionOrder < rightEdge.insertionOrder;
-    });
+    std::sort(order.begin(),
+              order.end(),
+              [&](int left, int right)
+              {
+                  const Edge& leftEdge = _edges[static_cast<size_t>(left)];
+                  const Edge& rightEdge = _edges[static_cast<size_t>(right)];
+                  if (leftEdge.score != rightEdge.score)
+                  {
+                      return leftEdge.score > rightEdge.score;
+                  }
+                  return leftEdge.insertionOrder < rightEdge.insertionOrder;
+              });
 
     std::vector<double> edgeScoreSumByRoot(keys.size(), 0.0);
     std::vector<int> edgeScoreCountByRoot(keys.size(), 0);
+    std::vector<std::vector<int>> membersByRoot(keys.size());
+    for (int index = 0; index < static_cast<int>(keys.size()); ++index)
+    {
+        membersByRoot[static_cast<std::size_t>(index)].push_back(index);
+    }
 
     for (int edgeIndex : order)
     {
@@ -206,10 +258,10 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
             continue;
         }
 
-        const auto &leftFeatures = featureByImageByRoot[static_cast<size_t>(leftRoot)];
-        const auto &rightFeatures = featureByImageByRoot[static_cast<size_t>(rightRoot)];
+        const auto& leftFeatures = featureByImageByRoot[static_cast<size_t>(leftRoot)];
+        const auto& rightFeatures = featureByImageByRoot[static_cast<size_t>(rightRoot)];
         bool hasConflict = false;
-        for (const auto &entry : rightFeatures)
+        for (const auto& entry : rightFeatures)
         {
             const auto it = leftFeatures.find(entry.first);
             if (it != leftFeatures.end() && it->second != entry.second)
@@ -227,25 +279,92 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
             continue;
         }
 
-        const detail::DisjointSet::MergeResult mergeResult =
-            disjointSet.unite(leftRoot, rightRoot);
+        const int minimumComponentSize = std::max(2, options.bridgeCheckMinComponentSize);
+        const std::size_t leftComponentSize = membersByRoot[static_cast<std::size_t>(leftRoot)].size();
+        const std::size_t rightComponentSize = membersByRoot[static_cast<std::size_t>(rightRoot)].size();
+        if (options.enableBridgeConsistencyCheck &&
+            leftComponentSize >= static_cast<std::size_t>(minimumComponentSize) &&
+            rightComponentSize >= static_cast<std::size_t>(minimumComponentSize))
+        {
+            const int minimumCycleSupport = std::max(1, options.minimumBridgeCycleSupport);
+            const bool cycleSupported =
+                commonNeighborCount(leftIndex, rightIndex, minimumCycleSupport) >= minimumCycleSupport;
+
+            int crossEdgeCount = 0;
+            const int minimumCrossEdges = std::max(2, options.minimumBridgeCrossEdges);
+            const std::vector<int>& smallerComponent = leftComponentSize <= rightComponentSize
+                                                           ? membersByRoot[static_cast<std::size_t>(leftRoot)]
+                                                           : membersByRoot[static_cast<std::size_t>(rightRoot)];
+            const int oppositeRoot = leftComponentSize <= rightComponentSize ? rightRoot : leftRoot;
+            for (int member : smallerComponent)
+            {
+                for (int neighbor : neighbors[static_cast<std::size_t>(member)])
+                {
+                    if (disjointSet.find(neighbor) == oppositeRoot)
+                    {
+                        ++crossEdgeCount;
+                        if (crossEdgeCount >= minimumCrossEdges)
+                        {
+                            break;
+                        }
+                    }
+                }
+                if (crossEdgeCount >= minimumCrossEdges)
+                {
+                    break;
+                }
+            }
+            const bool crossEdgeSupported = crossEdgeCount >= minimumCrossEdges;
+
+            const auto componentMeanScore = [&](int root)
+            {
+                const int count = edgeScoreCountByRoot[static_cast<std::size_t>(root)];
+                return count > 0 ? edgeScoreSumByRoot[static_cast<std::size_t>(root)] / static_cast<double>(count)
+                                 : 0.0;
+            };
+            const double internalScore = std::min(componentMeanScore(leftRoot), componentMeanScore(rightRoot));
+            const double minimumScoreRatio =
+                std::clamp(static_cast<double>(options.unsupportedBridgeMinScoreRatio), 0.0, 1.0);
+            const bool confidenceSupported =
+                internalScore <= 0.0 || static_cast<double>(_edges[static_cast<std::size_t>(edgeIndex)].score) >=
+                                            internalScore * minimumScoreRatio;
+            const int matureComponentSize = std::max(minimumComponentSize, options.matureBridgeComponentSize);
+            const bool matureComponents = leftComponentSize >= static_cast<std::size_t>(matureComponentSize) &&
+                                          rightComponentSize >= static_cast<std::size_t>(matureComponentSize);
+
+            // 两个成熟多视组件之间的单边关系即使分数较高也不足以证明同一物点；
+            // 小组件则保留高置信桥接逃生口，避免连续影像只形成链式对应时被过度拆分。
+            if (!cycleSupported && !crossEdgeSupported && (matureComponents || !confidenceSupported))
+            {
+                ++result.rejectedInconsistentBridgeEdges;
+                continue;
+            }
+            if (cycleSupported || crossEdgeSupported)
+            {
+                ++result.acceptedSupportedBridgeEdges;
+            }
+        }
+
+        const detail::DisjointSet::MergeResult mergeResult = disjointSet.unite(leftRoot, rightRoot);
         const int newRoot = mergeResult.root;
         const int mergedRoot = mergeResult.absorbedRoot;
         if (newRoot != mergedRoot)
         {
-            edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=
-                edgeScoreSumByRoot[static_cast<size_t>(mergedRoot)];
-            edgeScoreCountByRoot[static_cast<size_t>(newRoot)] +=
-                edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)];
+            edgeScoreSumByRoot[static_cast<size_t>(newRoot)] += edgeScoreSumByRoot[static_cast<size_t>(mergedRoot)];
+            edgeScoreCountByRoot[static_cast<size_t>(newRoot)] += edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)];
             edgeScoreSumByRoot[static_cast<size_t>(mergedRoot)] = 0.0;
             edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)] = 0;
+            auto& newMembers = membersByRoot[static_cast<std::size_t>(newRoot)];
+            auto& oldMembers = membersByRoot[static_cast<std::size_t>(mergedRoot)];
+            newMembers.insert(newMembers.end(), oldMembers.begin(), oldMembers.end());
+            oldMembers.clear();
         }
         edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=
             std::max(0.0f, _edges[static_cast<size_t>(edgeIndex)].score);
         ++edgeScoreCountByRoot[static_cast<size_t>(newRoot)];
 
-        auto &newFeatures = featureByImageByRoot[static_cast<size_t>(newRoot)];
-        auto &oldFeatures = featureByImageByRoot[static_cast<size_t>(mergedRoot)];
+        auto& newFeatures = featureByImageByRoot[static_cast<size_t>(newRoot)];
+        auto& oldFeatures = featureByImageByRoot[static_cast<size_t>(mergedRoot)];
         if (newRoot != mergedRoot)
         {
             newFeatures.insert(oldFeatures.begin(), oldFeatures.end());

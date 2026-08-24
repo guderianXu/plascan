@@ -11,6 +11,8 @@
 #include "DepthPyramidEstimator.h"
 #include "DepthPyramidPropagation.h"
 #include "DenseCloudBuilder.h"
+#include "DensePointCloudCUDA.h"
+#include "DensePointCloudOpenCL.h"
 #include "DepthPyramidPolicy.h"
 #include "DepthFrameQualityGate.h"
 #include "DepthEvidenceConfidence.h"
@@ -20,6 +22,7 @@
 #include "MvsSceneClassifier.h"
 #include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
+#include "PatchMatchPhotometricCost.h"
 #include "SparseCloudPreprocessor.h"
 #include "FramePinholeCamera.h"
 
@@ -37,6 +40,22 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace xjw
+{
+namespace mvs
+{
+namespace detail
+{
+
+bool estimateAdaptivePatchMatchLevel(int reference_index,
+                                     const PatchMatchBackendRequest& request,
+                                     DepthLevelResult& result,
+                                     std::string* error_message);
+
+} // namespace detail
+} // namespace mvs
+} // namespace xjw
 
 namespace
 {
@@ -1400,14 +1419,130 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
     cv::Mat restored_depth;
     cv::Mat restored_confidence;
     cv::resize(native_depth, restored_depth, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
-    cv::resize(native_confidence,
-               restored_confidence,
-               conf.size(),
-               0.0,
-               0.0,
-               cv::INTER_NEAREST);
+    cv::resize(native_confidence, restored_confidence, conf.size(), 0.0, 0.0, cv::INTER_NEAREST);
     EXPECT_EQ(cv::countNonZero(restored_depth != depth), 0);
     EXPECT_EQ(cv::countNonZero(restored_confidence != conf), 0);
+}
+
+TEST(MvsPipelineTest, AdaptivePatchMatchCpuPreservesAuxiliarySourceEvidence)
+{
+    constexpr int width = 80;
+    constexpr int height = 60;
+    constexpr double focal = 64.0;
+    constexpr double baseline = 1.0;
+    constexpr int disparity = 6;
+    constexpr float expected_depth = static_cast<float>(focal * baseline / disparity);
+
+    const cv::Mat reference = makeSyntheticGray(width, height);
+    const std::vector<cv::Mat> sources{makeShifted(reference, disparity), makeShifted(reference, -disparity)};
+    const double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const double reference_center[3] = {0.0, 0.0, 0.0};
+    const double right_center[3] = {baseline, 0.0, 0.0};
+    const double left_center[3] = {-baseline, 0.0, 0.0};
+
+    xjw::mvs::PatchMatchBackendRequest request;
+    request.referenceImage = reference;
+    request.sourceImages = sources;
+    request.referenceCamera = makeMvsCamera(focal, focal, width * 0.5, height * 0.5, identity, reference_center);
+    request.sourceCameras = {makeMvsCamera(focal, focal, width * 0.5, height * 0.5, identity, right_center),
+                             makeMvsCamera(focal, focal, width * 0.5, height * 0.5, identity, left_center)};
+    request.sourceDepthMaps = {cv::Mat(height, width, CV_32F, cv::Scalar(expected_depth)),
+                               cv::Mat(height, width, CV_32F, cv::Scalar(expected_depth))};
+    request.zNear = 5.0f;
+    request.zFar = 15.0f;
+    request.levelConfig.level = 1;
+    request.levelConfig.patchMatch.backend = xjw::mvs::PatchMatchBackend::Cpu;
+    request.levelConfig.patchMatch.downsampleFactor = 1;
+    request.levelConfig.patchMatch.numIterations = 2;
+    request.levelConfig.patchMatch.patchHalf = 2;
+    request.levelConfig.patchMatch.confidenceThresh = 0.05f;
+    request.levelConfig.patchMatch.cpuThreadCount = 1;
+    request.levelConfig.patchMatch.doMedianBlur = false;
+    request.levelConfig.patchMatch.doBilateralFilter = false;
+    request.levelConfig.patchMatch.geometricGuidanceWeight = 1.0f;
+    request.levelConfig.patchMatch.geometricGuidanceMaxErrorPixels = 2.0f;
+
+    xjw::mvs::DepthSearchPrior prior;
+    prior.center = cv::Mat(height, width, CV_32F, cv::Scalar(expected_depth));
+    prior.radius = cv::Mat(height, width, CV_32F, cv::Scalar(0.75f));
+    request.prior = &prior;
+
+    xjw::mvs::DepthLevelResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::detail::estimateAdaptivePatchMatchLevel(0, request, result, &error)) << error;
+
+    ASSERT_EQ(result.depth.type(), CV_32FC1);
+    ASSERT_EQ(result.depth.size(), reference.size());
+    ASSERT_EQ(result.photometricSourceMask.type(), CV_32SC1);
+    ASSERT_EQ(result.photometricSourceMask.size(), result.depth.size());
+    ASSERT_EQ(result.supportCount.type(), CV_16UC1);
+    ASSERT_EQ(result.supportCount.size(), result.depth.size());
+
+    int valid_pixel_count = 0;
+    int selected_source_pixel_count = 0;
+    for (int row = 0; row < result.depth.rows; ++row)
+    {
+        const float* depth_row = result.depth.ptr<float>(row);
+        const std::int32_t* source_mask_row = result.photometricSourceMask.ptr<std::int32_t>(row);
+        const std::uint16_t* support_row = result.supportCount.ptr<std::uint16_t>(row);
+        for (int column = 0; column < result.depth.cols; ++column)
+        {
+            if (!(depth_row[column] > 0.0f))
+            {
+                EXPECT_EQ(support_row[column], 0);
+                continue;
+            }
+
+            ++valid_pixel_count;
+            const std::uint32_t source_mask = static_cast<std::uint32_t>(source_mask_row[column]);
+            EXPECT_EQ(source_mask & ~0x3u, 0u);
+            const int selected_source_count = xjw::mvs::selectedSourceCount(source_mask);
+            EXPECT_EQ(support_row[column], selected_source_count);
+            selected_source_pixel_count += selected_source_count > 0 ? 1 : 0;
+        }
+    }
+    EXPECT_GT(valid_pixel_count, 0);
+    EXPECT_GT(selected_source_pixel_count, 0);
+
+    xjw::mvs::PatchMatchBackendRequest invalid_request = request;
+    invalid_request.sourceDepthMaps.pop_back();
+    xjw::mvs::DepthLevelResult invalid_result;
+    error.clear();
+    EXPECT_FALSE(xjw::mvs::detail::estimateAdaptivePatchMatchLevel(0, invalid_request, invalid_result, &error));
+    EXPECT_EQ(error, "source depth map count does not match source frame count");
+}
+
+TEST(MvsPipelineTest, PostConsistencyArtifactsAreRequiredOnlyAfterConsistencyCompletes)
+{
+    xjw::mvs::DepthFrameResult frame;
+    EXPECT_FALSE(xjw::mvs::detail::hasCompletedConsistencyPublication(frame));
+
+    frame.depthCompleteness.preConsistencyValidCount = 100;
+    EXPECT_FALSE(xjw::mvs::detail::hasCompletedConsistencyPublication(frame));
+
+    frame.depthCompleteness.postConsistencyValidCount = 95;
+    EXPECT_FALSE(xjw::mvs::detail::hasCompletedConsistencyPublication(frame));
+
+    frame.depthCompleteness.publishedPostConsistencyValidCount = 95;
+    EXPECT_TRUE(xjw::mvs::detail::hasCompletedConsistencyPublication(frame));
+}
+
+TEST(MvsPipelineTest, ConsistencyExpectationUsesImmutableInitialAdmission)
+{
+    xjw::mvs::DepthFrameResult frame;
+    frame.success = true;
+    frame.initialQualityAcceptanceAvailable = true;
+    frame.initialQualityAcceptance = xjw::mvs::DepthFrameAcceptance::Accepted;
+
+    EXPECT_FALSE(xjw::mvs::detail::expectsConsistencyPublication(frame, 1));
+    EXPECT_TRUE(xjw::mvs::detail::expectsConsistencyPublication(frame, 2));
+
+    frame.qualityDecision.acceptance = xjw::mvs::DepthFrameAcceptance::Rejected;
+    EXPECT_TRUE(xjw::mvs::detail::expectsConsistencyPublication(frame, 2))
+        << "A later rejection must not erase missing consistency evidence";
+
+    frame.initialQualityAcceptance = xjw::mvs::DepthFrameAcceptance::Rejected;
+    EXPECT_FALSE(xjw::mvs::detail::expectsConsistencyPublication(frame, 2));
 }
 
 TEST(MvsPipelineTest, PatchMatchRejectsNonPositiveIterationCount)
@@ -1430,10 +1565,8 @@ TEST(MvsPipelineTest, PatchMatchRejectsNonPositiveIterationCount)
     EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::estimate(
         reference,
         {source},
-        makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5,
-                      identity, reference_center),
-        {makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5,
-                       identity, source_center)},
+        makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5, identity, reference_center),
+        {makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5, identity, source_center)},
         1.0f,
         10.0f,
         config,
@@ -1752,20 +1885,22 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
 TEST(MvsPipelineTest, StreamingPixelReleasePreservesSupportRegionMask)
 {
     xjw::mvs::DepthFrameResult result;
-    result.depthMap =
-        QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(8.0f));
-    result.confidence =
-        QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(0.8f));
-    result.validMask =
-        QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
-    result.supportRegionMask =
-        QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
+    result.depthMap = QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(8.0f));
+    result.confidence = QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(0.8f));
+    result.photometricConfidence = QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(0.7f));
+    result.geometricConfidence = QSharedPointer<cv::Mat>::create(3, 4, CV_32F, cv::Scalar(0.6f));
+    result.targetedGapRecoveredMaskExpected = true;
+    result.validMask = QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
+    result.supportRegionMask = QSharedPointer<cv::Mat>::create(3, 4, CV_8U, cv::Scalar(255));
     result.supportRegionMask->at<std::uint8_t>(1, 2) = 0;
 
     result.releaseStreamingPixelStorage();
 
     EXPECT_TRUE(result.depthMap.isNull());
     EXPECT_TRUE(result.confidence.isNull());
+    EXPECT_TRUE(result.photometricConfidence.isNull());
+    EXPECT_TRUE(result.geometricConfidence.isNull());
+    EXPECT_TRUE(result.targetedGapRecoveredMaskExpected);
     EXPECT_TRUE(result.validMask.isNull());
     ASSERT_FALSE(result.supportRegionMask.isNull());
     EXPECT_EQ(result.supportRegionMask->size(), cv::Size(4, 3));
@@ -1851,6 +1986,8 @@ TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath
 
     ASSERT_TRUE(ok) << err;
     EXPECT_GT(static_cast<int>(pts.size()), 0);
+    EXPECT_EQ(fusion.unprojectionExecutionReport().requestedBackend, xjw::mvs::DenseCloudComputeBackend::Auto);
+    EXPECT_EQ(fusion.unprojectionExecutionReport().actualBackend, xjw::mvs::DenseCloudComputeBackend::Cpu);
     EXPECT_TRUE(std::any_of(stages.begin(), stages.end(), [](const std::string &stage) {
         return stage.find("快速并行融合") != std::string::npos;
     }));
@@ -3696,6 +3833,7 @@ TEST(MvsPipelineTest, DenseCloudBuilderUnprojectBasic)
     auto cam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
 
     xjw::mvs::DenseCloudOptions opt;
+    opt.useGPU = false;
     opt.minDepth = 0.1f;
     opt.maxDepth = 100.0f;
 
@@ -3755,6 +3893,7 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
     ASSERT_TRUE(ok);
 
     xjw::mvs::DenseCloudOptions opt;
+    opt.useGPU = false;
     opt.minDepth = 1.0f;
     opt.maxDepth = 50.0f;
     auto pts = xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), refCam, cv::Mat(), opt);
@@ -3769,3 +3908,206 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
         EXPECT_LT(p.z, 50.0f);
     }
 }
+
+TEST(DenseCloudBackendTest, BackendIdsRemainStable)
+{
+    using xjw::mvs::DenseCloudComputeBackend;
+    EXPECT_STREQ(xjw::mvs::denseCloudComputeBackendId(DenseCloudComputeBackend::Auto), "auto");
+    EXPECT_STREQ(xjw::mvs::denseCloudComputeBackendId(DenseCloudComputeBackend::Cpu), "cpu");
+    EXPECT_STREQ(xjw::mvs::denseCloudComputeBackendId(DenseCloudComputeBackend::Cuda), "cuda");
+    EXPECT_STREQ(xjw::mvs::denseCloudComputeBackendId(DenseCloudComputeBackend::OpenCl), "opencl");
+}
+
+TEST(DenseCloudBackendTest, AutoMatchesCpuAndReportsActualBackend)
+{
+    constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {1.0, -2.0, 3.0};
+    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
+    cv::Mat color(4, 4, CV_8UC3);
+    for (int row = 0; row < color.rows; ++row)
+    {
+        for (int column = 0; column < color.cols; ++column)
+        {
+            color.at<cv::Vec3b>(row, column) = cv::Vec3b(static_cast<std::uint8_t>(column),
+                                                         static_cast<std::uint8_t>(row),
+                                                         static_cast<std::uint8_t>(row + column));
+        }
+    }
+
+    xjw::mvs::DenseCloudOptions cpuOptions;
+    cpuOptions.useGPU = false;
+    cpuOptions.subsample = 2;
+    const std::vector<xjw::mvs::DensePoint> cpu =
+        xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), camera, color, cpuOptions);
+
+    xjw::mvs::DenseCloudOptions autoOptions = cpuOptions;
+    autoOptions.useGPU = true;
+    autoOptions.computeBackend = xjw::mvs::DenseCloudComputeBackend::Auto;
+    std::vector<xjw::mvs::DensePoint> accelerated;
+    xjw::mvs::DenseCloudExecutionReport report;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
+        depth, cv::Mat(), camera, color, autoOptions, &accelerated, &report, &error))
+        << error;
+    ASSERT_EQ(accelerated.size(), cpu.size());
+    for (std::size_t index = 0; index < cpu.size(); ++index)
+    {
+        EXPECT_NEAR(accelerated[index].x, cpu[index].x, 1.0e-5f);
+        EXPECT_NEAR(accelerated[index].y, cpu[index].y, 1.0e-5f);
+        EXPECT_NEAR(accelerated[index].z, cpu[index].z, 1.0e-5f);
+        EXPECT_EQ(accelerated[index].r, cpu[index].r);
+        EXPECT_EQ(accelerated[index].g, cpu[index].g);
+        EXPECT_EQ(accelerated[index].b, cpu[index].b);
+    }
+    EXPECT_EQ(report.requestedBackend, xjw::mvs::DenseCloudComputeBackend::Auto);
+}
+
+TEST(DenseCloudBackendTest, ExplicitInvalidAcceleratorDoesNotFallBack)
+{
+    constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
+
+    for (const xjw::mvs::DenseCloudComputeBackend backend :
+         {xjw::mvs::DenseCloudComputeBackend::Cuda, xjw::mvs::DenseCloudComputeBackend::OpenCl})
+    {
+        xjw::mvs::DenseCloudOptions options;
+        options.computeBackend = backend;
+        options.cudaDeviceIndex = std::numeric_limits<int>::max();
+        options.openClDeviceIndex = std::numeric_limits<int>::max();
+        std::vector<xjw::mvs::DensePoint> cloud;
+        xjw::mvs::DenseCloudExecutionReport report;
+        std::string error;
+        EXPECT_FALSE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
+            depth, cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error));
+        EXPECT_TRUE(cloud.empty());
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(report.requestedBackend, backend);
+        EXPECT_FALSE(report.fallbackUsed);
+    }
+}
+
+TEST(DenseCloudBackendTest, AutoFallsBackToCpuWhenAcceleratorsAreUnavailable)
+{
+    constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
+
+    xjw::mvs::DenseCloudOptions options;
+    options.computeBackend = xjw::mvs::DenseCloudComputeBackend::Auto;
+    options.cudaDeviceIndex = std::numeric_limits<int>::max();
+    options.openClDeviceIndex = std::numeric_limits<int>::max();
+    std::vector<xjw::mvs::DensePoint> cloud;
+    xjw::mvs::DenseCloudExecutionReport report;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
+        depth, cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error))
+        << error;
+    EXPECT_EQ(cloud.size(), 16U);
+    EXPECT_EQ(report.requestedBackend, xjw::mvs::DenseCloudComputeBackend::Auto);
+    EXPECT_EQ(report.actualBackend, xjw::mvs::DenseCloudComputeBackend::Cpu);
+    EXPECT_TRUE(report.workSubmitted);
+    EXPECT_TRUE(report.fallbackUsed);
+    EXPECT_FALSE(report.fallbackReason.empty());
+}
+
+TEST(DenseCloudBackendTest, EmptyInputIsSuccessfulNoOpForExplicitBackend)
+{
+    constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+
+    xjw::mvs::DenseCloudOptions options;
+    options.computeBackend = xjw::mvs::DenseCloudComputeBackend::Cuda;
+    options.cudaDeviceIndex = std::numeric_limits<int>::max();
+    std::vector<xjw::mvs::DensePoint> cloud;
+    xjw::mvs::DenseCloudExecutionReport report;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
+        cv::Mat(), cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error))
+        << error;
+    EXPECT_TRUE(cloud.empty());
+    EXPECT_EQ(report.requestedBackend, xjw::mvs::DenseCloudComputeBackend::Cuda);
+    EXPECT_EQ(report.actualBackend, xjw::mvs::DenseCloudComputeBackend::Cpu);
+    EXPECT_FALSE(report.workSubmitted);
+    EXPECT_FALSE(report.fallbackUsed);
+}
+
+class DenseCloudAcceleratorParityTest : public testing::TestWithParam<xjw::mvs::DenseCloudComputeBackend>
+{
+};
+
+TEST_P(DenseCloudAcceleratorParityTest, MatchesCpuWithSubsamplingColorAndAabb)
+{
+    const xjw::mvs::DenseCloudComputeBackend backend = GetParam();
+    std::string availabilityError;
+    const bool available = backend == xjw::mvs::DenseCloudComputeBackend::Cuda
+                               ? xjw::mvs::DensePointCloudCUDA::isAvailable(0, &availabilityError)
+                               : xjw::mvs::DensePointCloudOpenCL::isAvailable(0, &availabilityError);
+    if (!available)
+    {
+        GTEST_SKIP() << availabilityError;
+    }
+
+    constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {1.0, -2.0, 3.0};
+    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    cv::Mat depth(6, 6, CV_32FC1, cv::Scalar(2.0f));
+    depth.at<float>(0, 0) = 0.0f;
+    cv::Mat mask(6, 6, CV_8UC1, cv::Scalar(255));
+    mask.at<std::uint8_t>(2, 2) = 0;
+    cv::Mat color(6, 6, CV_8UC3);
+    for (int row = 0; row < color.rows; ++row)
+    {
+        for (int column = 0; column < color.cols; ++column)
+        {
+            color.at<cv::Vec3b>(row, column) = cv::Vec3b(static_cast<std::uint8_t>(column),
+                                                         static_cast<std::uint8_t>(row),
+                                                         static_cast<std::uint8_t>(row + column));
+        }
+    }
+
+    xjw::mvs::DenseCloudOptions cpuOptions;
+    cpuOptions.useGPU = false;
+    cpuOptions.subsample = 2;
+    cpuOptions.clipAABB = true;
+    cpuOptions.minX = 0.0f;
+    cpuOptions.maxX = 2.0f;
+    cpuOptions.minY = -3.0f;
+    cpuOptions.maxY = -1.0f;
+    cpuOptions.minZ = 4.0f;
+    cpuOptions.maxZ = 6.0f;
+    const std::vector<xjw::mvs::DensePoint> cpu =
+        xjw::mvs::DenseCloudBuilder::unproject(depth, mask, camera, color, cpuOptions);
+
+    xjw::mvs::DenseCloudOptions acceleratorOptions = cpuOptions;
+    acceleratorOptions.useGPU = true;
+    acceleratorOptions.computeBackend = backend;
+    std::vector<xjw::mvs::DensePoint> accelerated;
+    xjw::mvs::DenseCloudExecutionReport report;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
+        depth, mask, camera, color, acceleratorOptions, &accelerated, &report, &error))
+        << error;
+    ASSERT_EQ(accelerated.size(), cpu.size());
+    for (std::size_t index = 0; index < cpu.size(); ++index)
+    {
+        EXPECT_NEAR(accelerated[index].x, cpu[index].x, 1.0e-5f);
+        EXPECT_NEAR(accelerated[index].y, cpu[index].y, 1.0e-5f);
+        EXPECT_NEAR(accelerated[index].z, cpu[index].z, 1.0e-5f);
+        EXPECT_EQ(accelerated[index].r, cpu[index].r);
+        EXPECT_EQ(accelerated[index].g, cpu[index].g);
+        EXPECT_EQ(accelerated[index].b, cpu[index].b);
+    }
+    EXPECT_EQ(report.requestedBackend, backend);
+    EXPECT_EQ(report.actualBackend, backend);
+    EXPECT_FALSE(report.fallbackUsed);
+}
+
+INSTANTIATE_TEST_SUITE_P(CudaAndOpenCl,
+                         DenseCloudAcceleratorParityTest,
+                         testing::Values(xjw::mvs::DenseCloudComputeBackend::Cuda,
+                                         xjw::mvs::DenseCloudComputeBackend::OpenCl));

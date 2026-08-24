@@ -3,7 +3,9 @@
 #include <QByteArray>
 #include <QMatrix4x4>
 #include <QPointF>
+#include <QPolygonF>
 #include <QRect>
+#include <QRectF>
 #include <QSize>
 #include <QVector>
 #include <QVector3D>
@@ -91,6 +93,20 @@ struct PointSelectionPreparation
     }
 };
 
+enum class ScreenSelectionShape
+{
+    Rectangle,
+    Ellipse,
+    Polygon
+};
+
+struct ScreenSelectionRegion
+{
+    ScreenSelectionShape shape = ScreenSelectionShape::Rectangle;
+    QRectF bounds;
+    QPolygonF polygon;
+};
+
 CloudSpatialSummary prepareCloudSpatialSummary(
     const SceneRenderCloud &cloud,
     const std::atomic_bool *cancellationFlag = nullptr);
@@ -130,11 +146,32 @@ std::vector<PointVertexIndex> selectPointVertexIndices(
     const QPointF &sceneOffset,
     const std::atomic_bool *cancellationFlag = nullptr);
 
+std::vector<PointVertexIndex> selectPointVertexIndices(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const ScreenSelectionRegion &region,
+    const QMatrix4x4 &clipMatrix,
+    const QSize &viewportSize,
+    const QPointF &sceneOffset,
+    const std::atomic_bool *cancellationFlag = nullptr);
+
 PointSelectionPreparation preparePointSelection(
     const QByteArray &vertexData,
     int strideBytes,
     const QByteArray &scalarData,
     const QRect &screenRect,
+    const QMatrix4x4 &clipMatrix,
+    const QSize &viewportSize,
+    const QPointF &sceneOffset,
+    std::size_t maximumCompactPointCount =
+        std::numeric_limits<std::size_t>::max(),
+    const std::atomic_bool *cancellationFlag = nullptr);
+
+PointSelectionPreparation preparePointSelection(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const QByteArray &scalarData,
+    const ScreenSelectionRegion &region,
     const QMatrix4x4 &clipMatrix,
     const QSize &viewportSize,
     const QPointF &sceneOffset,

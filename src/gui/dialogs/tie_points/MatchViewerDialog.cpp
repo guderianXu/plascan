@@ -4,14 +4,13 @@
 // 职责:
 //   - 绑定 .ui 中的工具栏、显示选项控件组、状态栏
 //   - 通过 DualImageViewer 加载并展示两张影像及匹配连线
-//   - 将用户操作（同步缩放、颜色、宽度等）实时转发给 MatchLineOverlay
+//   - 将用户操作（同步缩放、线宽、透明度等）实时转发给 MatchLineOverlay
 //   - 通过 project_dialog.json 持久化显示配置（项目级）
 // =============================================================================
 #include "tie_points/MatchViewerDialog.h"
 #include "DualImageViewer.h"        // 双图并列查看器
 #include "ImageViewWidget.h"        // 单张影像可缩放/平移控件
 #include "MatchLineOverlay.h"       // 匹配连线覆盖层（负责绘制连接线）
-#include "DisparityHeatmapOverlay.h" // 视差热力图覆盖层
 #include "settings/DialogSettingStore.h" // 项目级记忆化
 #include "settings/DialogSettingKeys.h"
 #include "ui_MatchViewerDialog.h"
@@ -22,16 +21,13 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
-#include <QColorDialog>
 #include <QFileInfo>
 #include <QDir>
-#include <QStatusBar>
-#include <QGroupBox>
-#include <QTabWidget>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QSizePolicy>
+#include <QSet>
 #include <QSignalBlocker>
-#include <QVBoxLayout>
 
 namespace
 {
@@ -89,9 +85,6 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     Ui::MatchViewerDialog form;
     form.setupUi(this);
 
-    _tabWidget = form.m_tabWidget;
-    _sparseTab = form.m_sparseTab;
-    _denseTab = form.m_denseTab;
     _statusLabel = form.m_statusLabel;
 
     _syncModeChk = form.m_syncModeChk;
@@ -100,38 +93,52 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     _zoomInBtn = form.m_zoomInBtn;
     _zoomOutBtn = form.m_zoomOutBtn;
 
+    auto *image_selection_widget = new QWidget(this);
+    image_selection_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    auto *image_selection_layout = new QHBoxLayout(image_selection_widget);
+    image_selection_layout->setContentsMargins(0, 0, 0, 0);
+    image_selection_layout->setSpacing(4);
+    _leftImageCombo = new QComboBox(image_selection_widget);
+    _rightImageCombo = new QComboBox(image_selection_widget);
+    _leftImageCombo->setObjectName(QStringLiteral("leftImageCombo"));
+    _rightImageCombo->setObjectName(QStringLiteral("rightImageCombo"));
+    _leftImageCombo->setMinimumWidth(120);
+    _leftImageCombo->setMaximumWidth(180);
+    _rightImageCombo->setMinimumWidth(120);
+    _rightImageCombo->setMaximumWidth(180);
+    _leftImageCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    _rightImageCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    image_selection_layout->addWidget(new QLabel(tr("左影像:"), image_selection_widget));
+    image_selection_layout->addWidget(_leftImageCombo);
+    image_selection_layout->addWidget(new QLabel(tr("右影像:"), image_selection_widget));
+    image_selection_layout->addWidget(_rightImageCombo);
+    form.toolbarLayout->insertWidget(0, image_selection_widget);
+
     _variantCombo = new QComboBox(this);
     _variantCombo->setToolTip(tr("选择稀疏匹配算法结果"));
     _variantCombo->setMinimumContentsLength(24);
     _variantCombo->setMinimumWidth(240);
     _variantCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     _variantCombo->setVisible(false);
-    form.toolbarLayout->insertWidget(7, _variantCombo);
+    int spacer_index = form.toolbarLayout->count();
+    for (int index = 0; index < form.toolbarLayout->count(); ++index)
+    {
+        if (form.toolbarLayout->itemAt(index)->spacerItem())
+        {
+            spacer_index = index;
+            break;
+        }
+    }
+    form.toolbarLayout->insertWidget(spacer_index, _variantCombo);
 
-    _lineColorBtn = form.m_lineColorBtn;
     _lineWidthSpin = form.m_lineWidthSpin;
     _opacitySlider = form.m_opacitySlider;
     _maxCountSpin = form.m_maxCountSpin;
     _showEndPointsChk = form.m_showEndPointsChk;
     _showOnlyInliersChk = form.m_showOnlyInliersChk;
-    _rainbowChk = form.m_rainbowChk;
 
-    _denseDisplayGroup = form.m_denseDisplayGroup;
-    _denseOpacitySlider = form.m_denseOpacitySlider;
-    _denseColormapCombo = form.m_denseColormapCombo;
-    _denseAutoRangeChk = form.m_denseAutoRangeChk;
-    _denseMinSpin = form.m_denseMinSpin;
-    _denseMaxSpin = form.m_denseMaxSpin;
-
-    _denseColormapCombo->clear();
-    _denseColormapCombo->addItem(tr("Jet"), 2);
-    _denseColormapCombo->addItem(tr("Hot"), 11);
-    _denseColormapCombo->addItem(tr("Turbo"), 20);
-
-    _viewer = new DualImageViewer(_sparseTab);
-    form.sparseLayout->addWidget(_viewer);
-    auto *dense_view_layout = new QVBoxLayout(_denseTab);
-    dense_view_layout->setContentsMargins(0, 0, 0, 0);
+    _viewer = new DualImageViewer(this);
+    form.viewerLayout->addWidget(_viewer);
 
     connect(_syncModeChk, &QCheckBox::toggled, this, &MatchViewerDialog::onSyncModeToggled);
     connect(_fitBtn, &QPushButton::clicked, this, &MatchViewerDialog::onFitToView);
@@ -140,8 +147,11 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     connect(_zoomOutBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomOut);
     connect(_variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MatchViewerDialog::onVariantChanged);
+    connect(_leftImageCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MatchViewerDialog::onImageSelectionChanged);
+    connect(_rightImageCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MatchViewerDialog::onImageSelectionChanged);
 
-    connect(_lineColorBtn, &QPushButton::clicked, this, &MatchViewerDialog::onLineColorChanged);
     connect(_lineWidthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &MatchViewerDialog::onLineWidthChanged);
     connect(_opacitySlider, &QSlider::valueChanged, this, &MatchViewerDialog::onOpacityChanged);
@@ -149,43 +159,6 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
             this, &MatchViewerDialog::onMaxCountChanged);
     connect(_showEndPointsChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowEndPointsToggled);
     connect(_showOnlyInliersChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowOnlyInliersToggled);
-    connect(_rainbowChk, &QCheckBox::toggled, this, &MatchViewerDialog::onRainbowToggled);
-
-    connect(_denseOpacitySlider, &QSlider::valueChanged, this,
-            &MatchViewerDialog::onDenseOpacityChanged);
-    connect(_denseColormapCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MatchViewerDialog::onDenseColormapChanged);
-    connect(_denseAutoRangeChk, &QCheckBox::toggled, this, [this](bool checked)
-    {
-        _denseMinSpin->setEnabled(!checked);
-        _denseMaxSpin->setEnabled(!checked);
-        if (_viewer && _viewer->disparityOverlay())
-        {
-            _viewer->disparityOverlay()->setAutoRange(checked);
-        }
-    });
-    connect(_denseMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &MatchViewerDialog::onDenseRangeChanged);
-    connect(_denseMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &MatchViewerDialog::onDenseRangeChanged);
-
-    // 标签页切换处理
-    connect(_tabWidget, &QTabWidget::currentChanged, this,
-            [this, sparse_view_layout = form.sparseLayout, dense_view_layout](int idx)
-    {
-        if (_viewer)
-        {
-            QVBoxLayout *target_layout = idx == 1 ? dense_view_layout : sparse_view_layout;
-            target_layout->addWidget(_viewer);
-            _viewer->setOverlayMode(idx);
-            // 切换密集显示选项可见性
-            if (_denseDisplayGroup)
-                _denseDisplayGroup->setVisible(idx == 1);
-        }
-    });
-    
-    // 设置初始标签页
-    _tabWidget->setCurrentIndex(_initialTab);
 
     // 连接 DualImageViewer 的数据加载信号到本对话框的回调槽
     connect(_viewer, &DualImageViewer::matchDataLoaded,
@@ -194,35 +167,20 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
             this, &MatchViewerDialog::onMatchValidityLoaded);
     connect(_viewer, &DualImageViewer::loadFailed,
             this, &MatchViewerDialog::onLoadFailed);
-    connect(_viewer->disparityOverlay(), &DisparityHeatmapOverlay::loadFailed,
-            this, &MatchViewerDialog::onLoadFailed);
-    
     // 从 project_dialog.json 恢复上次保存的显示参数（若已设置项目路径）
     loadSettings();
     
-    // 异步加载影像对及匹配文件（加载完成后触发 matchDataLoaded/loadFailed 信号）
-    _viewer->loadMatchPair(imgA, imgB, matchFile);
+    MatchPairOption initial_pair;
+    initial_pair.imageA = imgA;
+    initial_pair.imageB = imgB;
+    initial_pair.matchFile = matchFile;
+    setAvailablePairs({initial_pair}, imgA, imgB);
 }
 
 // 析构函数：在对话框关闭前将当前显示参数持久化到 project_dialog.json
 MatchViewerDialog::~MatchViewerDialog()
 {
     saveSettings();
-}
-
-// forDenseMatch: 工厂方法，创建密集匹配查看对话框
-MatchViewerDialog* MatchViewerDialog::forDenseMatch(
-    const QString &imgA, const QString &imgB,
-    const QString &disparityFile, QWidget *parent)
-{
-    auto *dlg = new MatchViewerDialog(imgA, imgB, QString(), parent);
-    dlg->_disparityFile = disparityFile;
-    // 稠密匹配输出以第一张（参考）影像的像素坐标为基准。
-    dlg->_viewer->setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage);
-    dlg->setInitialTab(1);
-    if (!disparityFile.isEmpty())
-        dlg->_viewer->disparityOverlay()->loadDisparity(disparityFile);
-    return dlg;
 }
 
 void MatchViewerDialog::setMatchVariants(const QVector<xjw::aerial_triangulation::MatchVariant> &variants,
@@ -282,12 +240,193 @@ void MatchViewerDialog::setMatchVariants(const QVector<xjw::aerial_triangulation
     }
 }
 
-// setInitialTab: 设置初始显示的标签页索引
-void MatchViewerDialog::setInitialTab(int tabIndex)
+void MatchViewerDialog::setAvailablePairs(const QVector<MatchPairOption> &pairs,
+                                          const QString &selectedImageA,
+                                          const QString &selectedImageB)
 {
-    _initialTab = tabIndex;
-    if (_tabWidget)
-        _tabWidget->setCurrentIndex(tabIndex);
+    _pairOptions = pairs;
+    if (findPairOption(selectedImageA, selectedImageB) < 0)
+    {
+        MatchPairOption selected_pair;
+        selected_pair.imageA = selectedImageA;
+        selected_pair.imageB = selectedImageB;
+        selected_pair.matchFile = _matchFile;
+        _pairOptions.prepend(selected_pair);
+    }
+
+    QStringList images;
+    QSet<QString> seen_images;
+    auto append_image = [&images, &seen_images](const QString &path)
+    {
+        const QString normalized = normalizedMatchPath(path);
+        if (normalized.isEmpty() || seen_images.contains(normalized))
+        {
+            return;
+        }
+        seen_images.insert(normalized);
+        images.append(path);
+    };
+    for (const MatchPairOption &pair : _pairOptions)
+    {
+        append_image(pair.imageA);
+        append_image(pair.imageB);
+    }
+
+    _updatingImageSelectors = true;
+    {
+        const QSignalBlocker left_blocker(_leftImageCombo);
+        const QSignalBlocker right_blocker(_rightImageCombo);
+        _leftImageCombo->clear();
+        _rightImageCombo->clear();
+        for (const QString &image : images)
+        {
+            const QString label = QFileInfo(image).fileName();
+            _leftImageCombo->addItem(label, image);
+            _rightImageCombo->addItem(label, image);
+            const int index = _leftImageCombo->count() - 1;
+            _leftImageCombo->setItemData(index, image, Qt::ToolTipRole);
+            _rightImageCombo->setItemData(index, image, Qt::ToolTipRole);
+        }
+
+        auto select_image = [](QComboBox *combo, const QString &image)
+        {
+            for (int index = 0; index < combo->count(); ++index)
+            {
+                if (sameMatchPath(combo->itemData(index).toString(), image))
+                {
+                    combo->setCurrentIndex(index);
+                    return;
+                }
+            }
+        };
+        select_image(_leftImageCombo, selectedImageA);
+        select_image(_rightImageCombo, selectedImageB);
+    }
+    _updatingImageSelectors = false;
+    applySelectedPair();
+}
+
+int MatchViewerDialog::findPairOption(const QString &imageA, const QString &imageB) const
+{
+    for (int index = 0; index < _pairOptions.size(); ++index)
+    {
+        const MatchPairOption &pair = _pairOptions.at(index);
+        if ((sameMatchPath(pair.imageA, imageA) && sameMatchPath(pair.imageB, imageB)) ||
+            (sameMatchPath(pair.imageA, imageB) && sameMatchPath(pair.imageB, imageA)))
+        {
+            return index;
+        }
+    }
+    return -1;
+}
+
+QString MatchViewerDialog::counterpartForImage(const QString &imagePath) const
+{
+    for (const MatchPairOption &pair : _pairOptions)
+    {
+        if (sameMatchPath(pair.imageA, imagePath))
+        {
+            return pair.imageB;
+        }
+        if (sameMatchPath(pair.imageB, imagePath))
+        {
+            return pair.imageA;
+        }
+    }
+    return {};
+}
+
+void MatchViewerDialog::onImageSelectionChanged()
+{
+    if (_updatingImageSelectors || !_leftImageCombo || !_rightImageCombo)
+    {
+        return;
+    }
+
+    QString left_image = _leftImageCombo->currentData().toString();
+    QString right_image = _rightImageCombo->currentData().toString();
+    if (findPairOption(left_image, right_image) < 0)
+    {
+        QComboBox *changed_combo = qobject_cast<QComboBox *>(sender());
+        _updatingImageSelectors = true;
+        if (changed_combo == _leftImageCombo)
+        {
+            right_image = counterpartForImage(left_image);
+            for (int index = 0; index < _rightImageCombo->count(); ++index)
+            {
+                if (sameMatchPath(_rightImageCombo->itemData(index).toString(), right_image))
+                {
+                    _rightImageCombo->setCurrentIndex(index);
+                    break;
+                }
+            }
+        }
+        else
+        {
+            left_image = counterpartForImage(right_image);
+            for (int index = 0; index < _leftImageCombo->count(); ++index)
+            {
+                if (sameMatchPath(_leftImageCombo->itemData(index).toString(), left_image))
+                {
+                    _leftImageCombo->setCurrentIndex(index);
+                    break;
+                }
+            }
+        }
+        _updatingImageSelectors = false;
+    }
+    applySelectedPair();
+}
+
+void MatchViewerDialog::applySelectedPair()
+{
+    if (!_leftImageCombo || !_rightImageCombo)
+    {
+        return;
+    }
+
+    const QString image_a = _leftImageCombo->currentData().toString();
+    const QString image_b = _rightImageCombo->currentData().toString();
+    const int pair_index = findPairOption(image_a, image_b);
+    if (pair_index < 0)
+    {
+        return;
+    }
+
+    const MatchPairOption &pair = _pairOptions.at(pair_index);
+    _imageA = image_a;
+    _imageB = image_b;
+    _matchFile = pair.matchFile;
+    _sparseMatchFileMissing = _matchFile.trimmed().isEmpty();
+    _totalMatches = 0;
+    _validMatches = -1;
+    _invalidMatches = -1;
+    _currentVariantSummary.clear();
+    _showOnlyInliersChk->setEnabled(false);
+    _showOnlyInliersChk->setChecked(false);
+    setWindowTitle(tr("匹配查看：%1 <-> %2")
+                       .arg(QFileInfo(_imageA).fileName(), QFileInfo(_imageB).fileName()));
+
+    if (!pair.variants.isEmpty())
+    {
+        setMatchVariants(pair.variants, pair.matchFile);
+        if (_variantCombo->count() == 0)
+        {
+            _viewer->loadMatchPair(_imageA, _imageB, _matchFile);
+            updateStatusBar();
+        }
+    }
+    else
+    {
+        _matchVariants.clear();
+        {
+            const QSignalBlocker blocker(_variantCombo);
+            _variantCombo->clear();
+        }
+        _variantCombo->hide();
+        _viewer->loadMatchPair(_imageA, _imageB, _matchFile);
+        updateStatusBar();
+    }
 }
 
 // setProjectPath: 设置项目路径以启用记忆化，并立即加载已保存的设置
@@ -329,27 +468,6 @@ void MatchViewerDialog::onZoomOut()
 {
     if (_viewer->leftView()) _viewer->leftView()->zoomOut();
     if (_viewer->rightView()) _viewer->rightView()->zoomOut();
-}
-
-// onLineColorChanged: 弹出颜色选择对话框，将选定颜色应用到 MatchLineOverlay
-// 同时更新颜色按钮的背景色以直观显示当前颜色
-void MatchViewerDialog::onLineColorChanged()
-{
-    QColor color = QColorDialog::getColor(_viewer->overlay()->lineColor(), this, tr("选择线条颜色"));
-    if (color.isValid()) {
-        _viewer->overlay()->setLineColor(color);
-        // 用内联样式将按钮背景设为所选颜色，方便用户一眼看到当前颜色
-        _lineColorBtn->setStyleSheet(QString("background-color: %1;").arg(color.name()));
-    }
-}
-
-// onRainbowToggled: 切换五彩斑斓（每条线不同颜色）模式
-// 启用时禁用单色颜色按钮，避免与彩虹模式冲突
-void MatchViewerDialog::onRainbowToggled(bool checked)
-{
-    _viewer->overlay()->setRainbowMode(checked);
-    // 当启用五彩斑斓时，将禁用单色选择按钮
-    _lineColorBtn->setEnabled(!checked);
 }
 
 // onLineWidthChanged: 更新 MatchLineOverlay 中连线的绘制宽度
@@ -524,16 +642,6 @@ void MatchViewerDialog::loadSettings()
     bool syncMode = cfg.value(QStringLiteral("syncMode")).toBool(false);
     _syncModeChk->setChecked(syncMode);
     
-    // 颜色从 "#RRGGBB" 字符串反序列化
-    const QString colorStr = cfg.value(QStringLiteral("lineColor")).toString();
-    QColor lineColor = colorStr.isEmpty() ? QColor(Qt::yellow) : QColor(colorStr);
-    _viewer->overlay()->setLineColor(lineColor);
-    _lineColorBtn->setStyleSheet(QString("background-color: %1;").arg(lineColor.name()));
-    bool rainbow = cfg.value(QStringLiteral("rainbowMode")).toBool(false);
-    _rainbowChk->setChecked(rainbow);
-    _viewer->overlay()->setRainbowMode(rainbow);
-    _lineColorBtn->setEnabled(!rainbow);
-    
     double lineWidth = cfg.value(QStringLiteral("lineWidth")).toDouble(1.5);
     _lineWidthSpin->setValue(lineWidth);
     
@@ -559,38 +667,10 @@ void MatchViewerDialog::saveSettings()
 
     QJsonObject cfg;
     cfg[QStringLiteral("syncMode")]      = _syncModeChk->isChecked();
-    cfg[QStringLiteral("lineColor")]     = _viewer->overlay()->lineColor().name();  // "#RRGGBB"
-    cfg[QStringLiteral("rainbowMode")]   = _rainbowChk->isChecked();
     cfg[QStringLiteral("lineWidth")]     = _lineWidthSpin->value();
     cfg[QStringLiteral("opacity")]       = _opacitySlider->value();
     cfg[QStringLiteral("maxCount")]      = _maxCountSpin->value();
     cfg[QStringLiteral("showEndPoints")] = _showEndPointsChk->isChecked();
 
     _setting->save(cfg);
-}
-
-// onDenseOpacityChanged: 密集匹配透明度滑块变化
-void MatchViewerDialog::onDenseOpacityChanged(int value)
-{
-    if (_viewer && _viewer->disparityOverlay())
-        _viewer->disparityOverlay()->setOpacity(value / 100.0f);
-}
-
-// onDenseColormapChanged: 密集匹配色彩映射变化
-void MatchViewerDialog::onDenseColormapChanged(int index)
-{
-    if (_viewer && _viewer->disparityOverlay() && _denseColormapCombo)
-    {
-        int cmap = _denseColormapCombo->itemData(index).toInt();
-        _viewer->disparityOverlay()->setColormap(cmap);
-    }
-}
-
-// onDenseRangeChanged: 密集匹配视差范围微调
-void MatchViewerDialog::onDenseRangeChanged()
-{
-    if (_viewer && _viewer->disparityOverlay() && _denseMinSpin && _denseMaxSpin)
-        _viewer->disparityOverlay()->setDisparityRange(
-            static_cast<float>(_denseMinSpin->value()),
-            static_cast<float>(_denseMaxSpin->value()));
 }

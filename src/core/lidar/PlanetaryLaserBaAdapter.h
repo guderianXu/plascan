@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "PlanetaryLaserShot.h"
 
 #include <string>

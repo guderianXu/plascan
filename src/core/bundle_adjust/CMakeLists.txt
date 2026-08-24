@@ -1,24 +1,14 @@
-if(DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
-    set(BA_HAS_NATIVE_CUDA TRUE)
-    set(BA_NATIVE_CUDA_SOURCES BundleAdjustNativeCuda.cu)
-    message(STATUS "bundle_adjust: native CUDA 后端已启用 (${CMAKE_CUDA_COMPILER})")
-else()
-    set(BA_HAS_NATIVE_CUDA FALSE)
-    set(BA_NATIVE_CUDA_SOURCES)
-    message(STATUS "bundle_adjust: native CUDA 后端未启用")
-endif()
-
 add_library(bundle_adjust STATIC
     BundleAdjust.cpp
+    BundleAdjustOptions.h
+    BundleAdjustProblem.h
+    BundleAdjustResult.h
+    BundleAdjustSolver.h
+    BundleAdjustTypes.h
     BundleAdjustAdaptiveCameraModel.cpp
-    BundleAdjustCeres.cpp
-    BundleAdjustCeresPlanning.cpp
     BundleAdjustProjection.cpp
     BundleAdjustQuality.cpp
     BundleAdjustValidation.cpp
-    BundleAdjustNativeCuda.cpp
-    BundleAdjustNativeCudaMath.cpp
-    BundleAdjustNativeCudaWorkset.cpp
     BundleAdjustPlaMatrix.cpp
     BundleAdjustPlaMatrixProblem.cpp
     BundleAdjustPlaMatrixModel.cpp
@@ -27,7 +17,6 @@ add_library(bundle_adjust STATIC
     BundleAdjustPlaMatrixAssemblySurvey.cpp
     BundleAdjustPlaMatrixProjection.cpp
     BundleAdjustPlaMatrixRuntime.cpp
-    ${BA_NATIVE_CUDA_SOURCES}
 )
 
 target_include_directories(bundle_adjust PUBLIC
@@ -48,30 +37,10 @@ target_link_libraries(bundle_adjust
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
-if(PLASCAN_ENABLE_CERES_REFERENCE)
-    target_link_libraries(bundle_adjust PRIVATE Ceres::ceres)
-    target_compile_definitions(bundle_adjust PRIVATE PLASCAN_BA_HAS_CERES=1)
-    message(STATUS "bundle_adjust: optional Ceres reference backend enabled (${CERES_VERSION})")
-else()
-    message(STATUS "bundle_adjust: production build uses PlaMatrix without Ceres")
-endif()
-
 if(OpenMP_CXX_FOUND)
     message(STATUS "bundle_adjust: OpenMP 并行已启用 (${OpenMP_CXX_VERSION})")
 else()
     message(STATUS "bundle_adjust: OpenMP 未找到，将使用单线程模式")
-endif()
-
-if(BA_HAS_NATIVE_CUDA)
-    set_target_properties(bundle_adjust PROPERTIES
-        CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
-        CUDA_SEPARABLE_COMPILATION ON
-        CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    )
-    target_compile_definitions(bundle_adjust PRIVATE PLASCAN_BA_HAS_NATIVE_CUDA=1)
-    target_compile_options(bundle_adjust PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
-    )
 endif()
 
 add_executable(ba_backend_benchmark

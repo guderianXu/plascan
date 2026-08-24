@@ -299,6 +299,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication application(argc, argv);
     CLI::App app{"PlaScan 模型影像回归验收工具"};
+    cli::configureApp(app);
 
     std::string mesh_path;
     std::string list_path;

@@ -11,10 +11,8 @@
 //   6. 系统求解：自实现带部分主元高斯-约尔当消元，避免外部线性代数依赖
 // ============================================================
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 
-#include "BundleAdjustCeres.h"
-#include "BundleAdjustNativeCuda.h"
 #include "BundleAdjustPlaMatrix.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
@@ -1374,7 +1372,6 @@ BAResult optimizePointsLegacyImpl(const std::vector<FramePinholeCamera> &cameras
     result.totalTracks = static_cast<int>(tracks.size());
     result.observationCount =
         detail::summarizeUsableProblem(cameras, tracks).observationCount;
-    result.ceresLinearSolverName = "none";
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
     const std::vector<FramePinholeCamera> &intrinsicReferenceCameras =
@@ -1656,12 +1653,6 @@ const char *BundleAdjust::backendName(BABackend backend)
         return "plamatrix_cuda";
     case BABackend::PlaMatrixOpenCl:
         return "plamatrix_opencl";
-    case BABackend::CeresCpu:
-        return "ceres_cpu";
-    case BABackend::CeresCuda:
-        return "ceres_cuda";
-    case BABackend::NativeCuda:
-        return "native_cuda";
     }
     return "unknown";
 }
@@ -1702,12 +1693,6 @@ BABackendCapabilities BundleAdjust::backendCapabilities(BABackend backend)
     case BABackend::PlaMatrixCuda:
     case BABackend::PlaMatrixOpenCl:
         return {true, true, true, true, true, true, true, true};
-    case BABackend::CeresCpu:
-    case BABackend::CeresCuda:
-        return {true, true, true, true, true, true, true, true};
-    case BABackend::NativeCuda:
-        // 当前 native CUDA kernel 只联合调度各 track 的三维点更新，尚未求解相机块。
-        return {true, false, false, false, false, false, false, false};
     }
     return {};
 }
@@ -1727,15 +1712,6 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
     {
         std::string message;
         return detail::isPlaMatrixBackendAvailable(backend, 0, &message);
-    }
-    case BABackend::CeresCpu:
-        return detail::isCeresBackendCompiled();
-    case BABackend::CeresCuda:
-        return detail::isCeresCudaBackendCompiled();
-    case BABackend::NativeCuda:
-    {
-        std::string message;
-        return detail::isNativeCudaRuntimeAvailable(0, &message);
     }
     }
     return false;
@@ -1902,24 +1878,6 @@ BAResult BundleAdjust::optimizePoints(const std::vector<FramePinholeCamera> &cam
         result.backendSelectionReason = fallbackMessage;
         updateDerivedResultStats(result);
         return result;
-    };
-
-    auto pointOnlyCeresTooLarge = [&]() {
-        if (options.refineCameraPose ||
-            options.enableLaserRangeConstraints)
-        {
-            return false;
-        }
-        for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
-        {
-            if (sharedIntrinsicParameterEnabled(
-                    options, static_cast<BAIntrinsicParameter>(index)))
-            {
-                return false;
-            }
-        }
-        const BAProblemStats stats = summarizeProblem(cameras, tracks);
-        return stats.observationCount > std::max(1, options.maxCeresPointOnlyObservations);
     };
 
     if (options.backend == BABackend::Auto)
@@ -2137,254 +2095,6 @@ BAResult BundleAdjust::optimizePoints(const std::vector<FramePinholeCamera> &cam
             fallback.totalSeconds += result.totalSeconds;
             return fallback;
         }
-        return result;
-    }
-
-    if (options.backend == BABackend::NativeCuda)
-    {
-        const BABackendCapabilities capabilities = backendCapabilities(BABackend::NativeCuda);
-        const bool unsupportedConfiguration =
-            (options.refineCameraPose && !capabilities.refinesCameraPose) ||
-            !options.fixedTrackIndices.empty() ||
-            (sharedIntrinsicParameterEnabled(
-                 options, BAIntrinsicParameter::FocalLength) &&
-             !capabilities.refinesSharedFocalLength) ||
-            (sharedIntrinsicParameterEnabled(
-                 options, BAIntrinsicParameter::FocalAspectRatio) &&
-             !capabilities.refinesSharedFocalAspectRatio) ||
-            ((sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::PrincipalPointX) ||
-              sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::PrincipalPointY)) &&
-             !capabilities.refinesSharedPrincipalPoint) ||
-            ((sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::RadialK1) ||
-              sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::RadialK2) ||
-              sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::RadialK3) ||
-              sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::TangentialP1) ||
-              sharedIntrinsicParameterEnabled(
-                  options, BAIntrinsicParameter::TangentialP2)) &&
-             !capabilities.refinesSharedRadialDistortion) ||
-             ((options.enableLaserPlaneConstraints ||
-               options.enableControlPointConstraints ||
-               options.enableScaleBarConstraints ||
-              options.cameraPlaneConstraint.enabled ||
-              !options.cameraPosePriors.empty()) &&
-              !capabilities.supportsSoftConstraints) ||
-             (options.enableLaserRangeConstraints &&
-              !capabilities.supportsLaserRangeConstraints);
-        if (unsupportedConfiguration)
-        {
-            const std::string message =
-                "native_cuda 当前仅支持全部三维点可变的固定相机优化，"
-                "不能执行请求的联合 BA 或固定轨迹配置";
-            if (!options.allowBackendFallback)
-            {
-                BAResult result;
-                result.requestedBackend = BABackend::NativeCuda;
-                result.usedBackend = BABackend::NativeCuda;
-                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
-                result.backendMessage = message + "，且当前禁止回退";
-                result.totalTracks = static_cast<int>(tracks.size());
-                result.refinedCameras = cameras;
-                updateDerivedResultStats(result);
-                return result;
-            }
-            return runLegacy(message + "，已回退到 legacy_cpu");
-        }
-
-        std::string message;
-        if (!detail::isNativeCudaRuntimeAvailable(options.nativeCudaDevice, &message))
-        {
-            if (!options.allowBackendFallback)
-            {
-                BAResult result;
-                result.requestedBackend = BABackend::NativeCuda;
-                result.usedBackend = BABackend::NativeCuda;
-                result.solveStatus = BASolveStatus::BackendUnavailable;
-                result.backendMessage = message + "，且禁止回退";
-                updateDerivedResultStats(result);
-                return result;
-            }
-            return runLegacy(message);
-        }
-
-        BAResult result = detail::optimizePointsWithNativeCuda(cameras, tracks, options);
-        result.requestedBackend = BABackend::NativeCuda;
-        updateDerivedResultStats(result);
-        const bool nativeCudaFailed =
-            !result.solutionUsable ||
-            !result.usedGpu ||
-            result.optimizedTracks == 0 ||
-            !std::isfinite(result.meanRmsAfter);
-        if (nativeCudaFailed &&
-            result.solveStatus != BASolveStatus::Cancelled &&
-            options.allowBackendFallback)
-        {
-            const std::string message = result.backendMessage.empty()
-                                            ? "native_cuda 求解失败，已回退到 legacy_cpu"
-                                            : result.backendMessage + "，已回退到 legacy_cpu";
-            BAResult fallback = runLegacy(message);
-            fallback.setupSeconds += result.setupSeconds;
-            fallback.solveSeconds += result.solveSeconds;
-            fallback.postprocessSeconds += result.postprocessSeconds;
-            fallback.totalSeconds += result.totalSeconds;
-            return fallback;
-        }
-        if (nativeCudaFailed && !options.allowBackendFallback && result.backendMessage.empty())
-        {
-            result.backendMessage = "native_cuda 求解失败，且当前禁止回退";
-        }
-        return result;
-    }
-
-    if (options.backend == BABackend::CeresCpu)
-    {
-        if (pointOnlyCeresTooLarge())
-        {
-            const std::string message =
-                "point-only Ceres BA 观测数超过安全阈值，已回退到 legacy_cpu";
-            if (!options.allowBackendFallback)
-            {
-                BAResult result;
-                result.requestedBackend = BABackend::CeresCpu;
-                result.usedBackend = BABackend::CeresCpu;
-                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
-                result.backendMessage = message + "，但当前禁止回退";
-                updateDerivedResultStats(result);
-                return result;
-            }
-            return runLegacy(message);
-        }
-        if (detail::isCeresBackendCompiled())
-        {
-            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, options, false);
-            result.requestedBackend = BABackend::CeresCpu;
-            result.usedBackend = BABackend::CeresCpu;
-            result.usedGpu = false;
-            updateDerivedResultStats(result);
-            if (!result.solutionUsable &&
-                result.solveStatus != BASolveStatus::Cancelled &&
-                options.allowBackendFallback)
-            {
-                const std::string message = result.backendMessage.empty()
-                                                ? "Ceres CPU 求解失败，已回退到 legacy_cpu"
-                                                : result.backendMessage + "，已回退到 legacy_cpu";
-                BAResult fallback = runLegacy(message);
-                fallback.setupSeconds += result.setupSeconds;
-                fallback.solveSeconds += result.solveSeconds;
-                fallback.postprocessSeconds += result.postprocessSeconds;
-                fallback.totalSeconds += result.totalSeconds;
-                return fallback;
-            }
-            return result;
-        }
-        BAResult result;
-        result.requestedBackend = BABackend::CeresCpu;
-        result.usedBackend = BABackend::CeresCpu;
-        result.solveStatus = BASolveStatus::BackendUnavailable;
-        result.backendMessage =
-            "Ceres CPU 仅在 PLASCAN_ENABLE_CERES_REFERENCE=ON 的参考构建中可用";
-        updateDerivedResultStats(result);
-        return result;
-    }
-
-    if (options.backend == BABackend::CeresCuda)
-    {
-        if (pointOnlyCeresTooLarge())
-        {
-            const std::string message =
-                "point-only Ceres CUDA BA 观测数超过安全阈值，已回退到 legacy_cpu";
-            if (!options.allowBackendFallback)
-            {
-                BAResult result;
-                result.requestedBackend = BABackend::CeresCuda;
-                result.usedBackend = BABackend::CeresCuda;
-                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
-                result.backendMessage = message + "，但当前禁止回退";
-                updateDerivedResultStats(result);
-                return result;
-            }
-            return runLegacy(message);
-        }
-        if (detail::isCeresCudaBackendCompiled() &&
-            static_cast<int>(cameras.size()) >= std::max(1, options.minCeresCudaCameras))
-        {
-            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, options, true);
-            result.requestedBackend = BABackend::CeresCuda;
-            updateDerivedResultStats(result);
-            if (!result.solutionUsable &&
-                result.solveStatus != BASolveStatus::Cancelled &&
-                options.allowBackendFallback)
-            {
-                const std::string message = result.backendMessage.empty()
-                                                ? "Ceres CUDA 求解失败，已回退到 legacy_cpu"
-                                                : result.backendMessage + "，已回退到 legacy_cpu";
-                BAResult fallback = runLegacy(message);
-                fallback.setupSeconds += result.setupSeconds;
-                fallback.solveSeconds += result.solveSeconds;
-                fallback.postprocessSeconds += result.postprocessSeconds;
-                fallback.totalSeconds += result.totalSeconds;
-                return fallback;
-            }
-            return result;
-        }
-
-        if (detail::isCeresBackendCompiled())
-        {
-            if (!options.allowBackendFallback)
-            {
-                BAResult result;
-                result.requestedBackend = BABackend::CeresCuda;
-                result.usedBackend = BABackend::CeresCuda;
-                result.solveStatus = BASolveStatus::BackendUnavailable;
-                result.backendMessage =
-                    "Ceres CUDA 后端不可用或未达到 GPU 求解阈值，且禁止回退";
-                updateDerivedResultStats(result);
-                return result;
-            }
-            BAOptions cpuOptions = options;
-            cpuOptions.backend = BABackend::CeresCpu;
-            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, cpuOptions, false);
-            result.requestedBackend = BABackend::CeresCuda;
-            result.usedBackend = BABackend::CeresCpu;
-            result.usedGpu = false;
-            result.backendFallback = true;
-            if (!detail::isCeresCudaBackendCompiled())
-            {
-                result.backendMessage = "Ceres 未启用 CUDA，已回退到 ceres_cpu；" + result.backendMessage;
-            }
-            else
-            {
-                result.backendMessage = "相机数量低于 Ceres CUDA 阈值，已回退到 ceres_cpu；" + result.backendMessage;
-            }
-            updateDerivedResultStats(result);
-            if (!result.solutionUsable &&
-                result.solveStatus != BASolveStatus::Cancelled &&
-                options.allowBackendFallback)
-            {
-                const std::string message = result.backendMessage.empty()
-                                                ? "Ceres CPU 回退求解失败，已继续回退到 legacy_cpu"
-                                                : result.backendMessage + "，已继续回退到 legacy_cpu";
-                BAResult fallback = runLegacy(message);
-                fallback.setupSeconds += result.setupSeconds;
-                fallback.solveSeconds += result.solveSeconds;
-                fallback.postprocessSeconds += result.postprocessSeconds;
-                fallback.totalSeconds += result.totalSeconds;
-                return fallback;
-            }
-            return result;
-        }
-        BAResult result;
-        result.requestedBackend = BABackend::CeresCuda;
-        result.usedBackend = BABackend::CeresCuda;
-        result.solveStatus = BASolveStatus::BackendUnavailable;
-        result.backendMessage =
-            "Ceres CUDA 仅在 PLASCAN_ENABLE_CERES_REFERENCE=ON 的参考构建中可用";
-        updateDerivedResultStats(result);
         return result;
     }
 

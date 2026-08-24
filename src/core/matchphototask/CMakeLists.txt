@@ -30,8 +30,12 @@ add_library(matchphototask STATIC
     stages/GeometryVerifyStage.h
     stages/GuidedMatchStage.cpp
     stages/GuidedMatchStage.h
+    stages/GuidedMatchPolicy.cpp
+    stages/GuidedMatchPolicy.h
     stages/MatchingStage.cpp
     stages/MatchingStage.h
+    stages/ReferencePoseEpipolarGeometry.cpp
+    stages/ReferencePoseEpipolarGeometry.h
     stages/TrackBuildStage.cpp
     stages/TrackBuildStage.h
     tie_points/TiePointTrackManager.cpp

@@ -80,6 +80,8 @@ QString recordPath(const QJsonObject &record)
              QStringLiteral("mesh_ply"),
              QStringLiteral("dense_cloud_xyz"),
              QStringLiteral("dem_tif"),
+             QStringLiteral("output_path"),
+             QStringLiteral("dom_path"),
              QStringLiteral("ortho_tif"),
              QStringLiteral("path")})
     {
@@ -162,6 +164,85 @@ QString creationTimeText(const QString &text)
         return text.isEmpty() ? QStringLiteral("不可用") : text;
     }
     return parsed.toLocalTime().toString(QStringLiteral("yyyy.MM.dd HH:mm:ss"));
+}
+
+struct RasterResolution
+{
+    double x = 0.0;
+    double y = 0.0;
+    QString unit;
+
+    bool isValid() const
+    {
+        return x > 0.0 && y > 0.0;
+    }
+};
+
+double positiveValue(const QJsonObject &object, const QStringList &keys)
+{
+    for (const QString &key : keys)
+    {
+        const double value = object.value(key).toDouble(0.0);
+        if (value > 0.0)
+        {
+            return value;
+        }
+    }
+    return 0.0;
+}
+
+RasterResolution resolutionFromRecord(const QJsonObject &record)
+{
+    RasterResolution resolution;
+    resolution.x = positiveValue(record,
+                                 {QStringLiteral("pixel_size_x"),
+                                  QStringLiteral("output_resolution"),
+                                  QStringLiteral("resolution"),
+                                  QStringLiteral("dem_resolution"),
+                                  QStringLiteral("grid_resolution_m"),
+                                  QStringLiteral("angular_resolution_deg")});
+    resolution.y = positiveValue(record, {QStringLiteral("pixel_size_y")});
+
+    const QJsonObject rpc_result = record.value(QStringLiteral("rpc_result")).toObject();
+    if (!(resolution.x > 0.0))
+    {
+        resolution.x = positiveValue(rpc_result,
+                                     {QStringLiteral("pixel_size_x"),
+                                      QStringLiteral("grid_resolution_m")});
+    }
+    if (!(resolution.y > 0.0))
+    {
+        resolution.y = positiveValue(rpc_result, {QStringLiteral("pixel_size_y")});
+    }
+    if (!(resolution.y > 0.0))
+    {
+        resolution.y = resolution.x;
+    }
+
+    const QString unit = record.value(QStringLiteral("resolution_unit")).toString().toLower();
+    resolution.unit = unit == QStringLiteral("degree") ||
+                              record.contains(QStringLiteral("angular_resolution_deg"))
+        ? QStringLiteral("°/px")
+        : QStringLiteral("m/px");
+    return resolution;
+}
+
+QString resolutionText(const RasterResolution &resolution)
+{
+    if (!resolution.isValid())
+    {
+        return {};
+    }
+    const auto number = [](double value)
+    {
+        return QLocale().toString(value, 'f', value < 1.0 ? 3 : 2);
+    };
+    if (qFuzzyCompare(resolution.x + 1.0, resolution.y + 1.0))
+    {
+        return QStringLiteral("%1 %2").arg(number(resolution.x), resolution.unit);
+    }
+    return QStringLiteral("X %1 × Y %2 %3")
+        .arg(number(resolution.x), number(resolution.y), resolution.unit);
 }
 
 bool pathBelongsToDirectory(const QString &path, const QString &directory)
@@ -264,6 +345,31 @@ void SelectionPropertiesWidget::showResourceProperties(const QJsonObject &meta,
     rows.push_back({tr("名称"), info.fileName().isEmpty() ? section : info.fileName()});
     rows.push_back({tr("路径"), resourcePath});
     rows.push_back({tr("扩展名"), info.suffix().isEmpty() ? tr("无") : info.suffix().toLower()});
+
+    RasterResolution resolution = resolutionFromRecord(record);
+    if (!resolution.isValid() && section.contains(tr("正射")))
+    {
+        const QString dem_path = record.value(QStringLiteral("dem_path")).toString();
+        if (!dem_path.isEmpty())
+        {
+            const QJsonArray dem_records = meta.value(QStringLiteral("dem_results")).toArray();
+            for (qsizetype index = dem_records.size() - 1; index >= 0; --index)
+            {
+                const QJsonObject dem_record = dem_records.at(index).toObject();
+                if (samePathText(recordPath(dem_record), dem_path))
+                {
+                    resolution = resolutionFromRecord(dem_record);
+                    break;
+                }
+            }
+        }
+    }
+    const QString raster_resolution = resolutionText(resolution);
+    if (!raster_resolution.isEmpty() &&
+        (section.contains(QStringLiteral("DEM")) || section.contains(tr("正射"))))
+    {
+        rows.push_back({tr("像元分辨率"), raster_resolution});
+    }
     appendFileRows(&rows, resourcePath);
 
     if (section.contains(tr("点云")) || section.contains(tr("连接点")))

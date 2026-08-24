@@ -16,9 +16,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools \
     qt6-shadertools-dev qt6-shader-baker \
     libvulkan-dev vulkan-tools glslang-tools \
-    libopencv-dev libgdal-dev libtiff-dev libzip-dev zipcmp zipmerge ziptool \
+    libgdal-dev libjpeg-dev libpng-dev libtiff-dev libzip-dev zlib1g-dev \
+    zipcmp zipmerge ziptool \
     libgtest-dev libomp-dev unzip pkg-config python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ── 1a. OpenCV 5.0.0（PlaScan 不再接受 Ubuntu 自带的 OpenCV 4）──
+ARG OPENCV_VERSION=5.0.0
+ARG OPENCV_COMMIT=40738fb16ceddb5fb3fea747585f7ce6abb0605b
+RUN git clone --branch "${OPENCV_VERSION}" --depth 1 https://github.com/opencv/opencv.git /tmp/opencv && \
+    test "$(git -C /tmp/opencv rev-parse HEAD)" = "${OPENCV_COMMIT}" && \
+    cmake -S /tmp/opencv -B /tmp/opencv-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_TESTS=OFF \
+        -DBUILD_PERF_TESTS=OFF \
+        -DBUILD_EXAMPLES=OFF \
+        -DBUILD_opencv_apps=OFF \
+        -DBUILD_opencv_python2=OFF \
+        -DBUILD_opencv_python3=OFF \
+        -DBUILD_opencv_world=OFF \
+        -DWITH_CUDA=OFF \
+        -DWITH_QT=OFF && \
+    cmake --build /tmp/opencv-build --parallel && \
+    cmake --install /tmp/opencv-build && \
+    rm -rf /tmp/opencv /tmp/opencv-build
+ENV OpenCV_ROOT=/usr/local
 
 # ── 1b. NVIDIA GL/Vulkan 用户态库 (从本地 .deb 安装, 精确匹配宿主 580.126.09) ──
 COPY docker/debs/libnvidia-gl-580_580.126.09-0ubuntu0.24.04.2_amd64.deb /tmp/

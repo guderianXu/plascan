@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "BundleAdjustService.h"
 #include "ReferenceDatasetWorkflow.h"
 

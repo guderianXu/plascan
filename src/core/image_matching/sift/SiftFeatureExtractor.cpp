@@ -3,7 +3,7 @@
 #include "SiftComputeBackend.h"
 #include "SiftLowTextureRecovery.h"
 
-#include <opencv2/features2d.hpp>
+#include <opencv2/features.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -157,9 +157,8 @@ namespace xjw::image_matching
             const int minimumSide = std::min(input.grayImage.cols, input.grayImage.rows);
             const int maxDimension =
                 runtime.maxImageDimension > 0 ? std::max(512, runtime.maxImageDimension) : maximumSide;
-            const int target = targetOverride > 0
-                ? targetOverride
-                : adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
+            const int target =
+                targetOverride > 0 ? targetOverride : adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
             const auto runPass = [&](const cv::Mat& image, const cv::Mat& mask, int requested, int passTarget)
             {
                 if (backend != SiftComputeBackend::Cpu)
@@ -255,8 +254,7 @@ namespace xjw::image_matching
                 keypoint.class_id = 0;
             }
             const int target = adaptiveTarget(input.grayImage.size(), runtime.maxKeypoints);
-            const auto recoveryPlan = planSiftLowTextureRecovery(
-                input, runtime, combined.keypoints, target);
+            const auto recoveryPlan = planSiftLowTextureRecovery(input, runtime, combined.keypoints, target);
             if (!recoveryPlan || !recoveryPlan->isValid())
             {
                 return combined;
@@ -270,10 +268,9 @@ namespace xjw::image_matching
             recoveryRuntime.maxKeypoints = recoveryPlan->maximumFeatures;
             recoveryRuntime.siftDetectionThreshold *= recoveryPlan->thresholdScale;
             recoveryRuntime.siftContrastThreshold *= recoveryPlan->thresholdScale;
-            SiftRawFeatures recovered = extractAdaptiveBase(
-                enhancedInput, recoveryRuntime, backend, recoveryPlan->targetFeatures);
-            recovered = filterRecoveredSiftFeatures(
-                combined, recovered, recoveryPlan->recoveryMask);
+            SiftRawFeatures recovered =
+                extractAdaptiveBase(enhancedInput, recoveryRuntime, backend, recoveryPlan->targetFeatures);
+            recovered = filterRecoveredSiftFeatures(combined, recovered, recoveryPlan->recoveryMask);
             appendRawFeatures(&combined, std::move(recovered), 1.0);
             return combined;
         }
@@ -330,8 +327,7 @@ namespace xjw::image_matching
                              ranked.end(),
                              [&](int left, int right)
                              {
-                                 const bool leftRecovery =
-                                     raw.keypoints[static_cast<std::size_t>(left)].class_id == 1;
+                                 const bool leftRecovery = raw.keypoints[static_cast<std::size_t>(left)].class_id == 1;
                                  const bool rightRecovery =
                                      raw.keypoints[static_cast<std::size_t>(right)].class_id == 1;
                                  if (leftRecovery != rightRecovery)
@@ -392,36 +388,49 @@ namespace xjw::image_matching
             }
 
             FeatureSet features;
+            features.descriptorsL2Normalized = runtime.rootSift;
             features.computeBackend = siftBackendName(backend);
             features.imageWidth = input.originalWidth > 0 ? input.originalWidth : input.grayImage.cols;
             features.imageHeight = input.originalHeight > 0 ? input.originalHeight : input.grayImage.rows;
-            features.keypoints.reserve(selected.size());
-            features.scores.reserve(selected.size());
+            features.keypoints.resize(selected.size());
+            features.scores.resize(selected.size());
             if (!raw.descriptors.empty())
             {
                 features.descriptors.create(static_cast<int>(selected.size()), raw.descriptors.cols, CV_32F);
             }
-            for (int outputIndex = 0; outputIndex < static_cast<int>(selected.size()); ++outputIndex)
-            {
-                const int sourceIndex = selected[static_cast<std::size_t>(outputIndex)];
-                cv::KeyPoint keypoint = raw.keypoints[static_cast<std::size_t>(sourceIndex)];
-                if (input.coordinateScale > 0.0 && input.coordinateScale != 1.0)
-                {
-                    const float scale = static_cast<float>(input.coordinateScale);
-                    keypoint.pt *= scale;
-                    keypoint.size *= scale;
-                }
-                features.keypoints.push_back(keypoint);
-                features.scores.push_back(keypoint.response);
-                if (!features.descriptors.empty())
-                {
-                    raw.descriptors.row(sourceIndex).convertTo(features.descriptors.row(outputIndex), CV_32F);
-                    if (runtime.rootSift)
-                    {
-                        rootNormalize(features.descriptors.row(outputIndex));
-                    }
-                }
-            }
+            cv::parallel_for_(cv::Range(0, static_cast<int>(selected.size())),
+                              [&](const cv::Range& range)
+                              {
+                                  for (int outputIndex = range.start; outputIndex < range.end; ++outputIndex)
+                                  {
+                                      const int sourceIndex = selected[static_cast<std::size_t>(outputIndex)];
+                                      cv::KeyPoint keypoint = raw.keypoints[static_cast<std::size_t>(sourceIndex)];
+                                      if (input.coordinateScale > 0.0 && input.coordinateScale != 1.0)
+                                      {
+                                          const float scale = static_cast<float>(input.coordinateScale);
+                                          keypoint.pt *= scale;
+                                          keypoint.size *= scale;
+                                      }
+                                      features.keypoints[static_cast<std::size_t>(outputIndex)] = keypoint;
+                                      features.scores[static_cast<std::size_t>(outputIndex)] = keypoint.response;
+                                      if (!features.descriptors.empty())
+                                      {
+                                          cv::Mat destination = features.descriptors.row(outputIndex);
+                                          if (raw.descriptors.type() == CV_32F)
+                                          {
+                                              raw.descriptors.row(sourceIndex).copyTo(destination);
+                                          }
+                                          else
+                                          {
+                                              raw.descriptors.row(sourceIndex).convertTo(destination, CV_32F);
+                                          }
+                                          if (runtime.rootSift)
+                                          {
+                                              rootNormalize(destination);
+                                          }
+                                      }
+                                  }
+                              });
             return features;
         }
 

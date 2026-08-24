@@ -1,4 +1,4 @@
-#include "workflow/AerialTriangulationWorkflow.h"
+﻿#include "workflow/AerialTriangulationWorkflow.h"
 #include "search/SfmSearchPolicy.h"
 
 #include <gtest/gtest.h>
@@ -65,12 +65,31 @@ TEST(AerialTriangulationWorkflowTest, ResolvesFrontendAndPreparedSfmSettingsSepa
     EXPECT_TRUE(resolved.pipelineInput.useInitialPairHint);
     EXPECT_EQ(resolved.pipelineInput.initialImageId1, 0u);
     EXPECT_EQ(resolved.pipelineInput.initialImageId2, 2u);
-    EXPECT_TRUE(resolved.tiePointOptions.enableGuidedMatching);
+    EXPECT_EQ(resolved.tiePointOptions.guidedMatchingMode, xjw::matchphotos::GuidedMatchingMode::Automatic);
     EXPECT_EQ(resolved.tiePointOptions.maxKeypoints, 40000);
     EXPECT_EQ(resolved.tiePointOptions.keypointLimitPerMegapixel, 0);
     EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerImage, 4000);
-    EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerGridCell, 62);
+    EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerGridCell, 63);
+    EXPECT_EQ(resolved.pipelineInput.maxTracksPerImage, 4000);
+    EXPECT_EQ(resolved.pipelineInput.maxTracksPerGridCell, 63);
+    EXPECT_EQ(resolved.pipelineInput.trackThinningGridColumns, 8);
+    EXPECT_EQ(resolved.pipelineInput.trackThinningGridRows, 8);
     EXPECT_EQ(resolved.tiePointContext.workingDirectory, options.assetsDir);
+}
+
+TEST(AerialTriangulationWorkflowTest, DefaultsPreserveMoreMultiViewTracks)
+{
+    QTemporaryDir tempDir;
+    const auto options = makeBaseOptions(tempDir.path());
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_EQ(options.tiepointLimit, 8000);
+    EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerImage, 8000);
+    EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerGridCell, 125);
+    EXPECT_EQ(resolved.pipelineInput.maxTracksPerImage, 8000);
+    EXPECT_EQ(resolved.pipelineInput.maxTracksPerGridCell, 125);
 }
 
 TEST(AerialTriangulationWorkflowTest, ResolvesZeroThreadRequestAutomatically)
@@ -224,6 +243,24 @@ TEST(AerialTriangulationWorkflowTest, SequenceModeUsesLinearPairWindow)
                      .toBool());
 }
 
+TEST(AerialTriangulationWorkflowTest, HighestSequenceModeExpandsMultiViewPairCoverage)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.referencePreselection = true;
+    options.referenceMode = QStringLiteral("sequence");
+    options.quality = QStringLiteral("highest");
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.mode,
+              xjw::matchphotos::PairSelectionMode::Sequence);
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.sequenceWindow, 16);
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("sequence_pair_window")).toInt(),
+              16);
+}
+
 TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAndVocabularyPairs)
 {
     QTemporaryDir tempDir;
@@ -238,8 +275,8 @@ TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAn
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
 
     EXPECT_TRUE(resolved.tiePointOptions.useReferencePreselection);
-    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.cameraOverlapTopKPerImage, 24);
-    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.vocabularyTopKPerImage, 4);
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.cameraOverlapTopKPerImage, 48);
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.vocabularyTopKPerImage, 8);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("pair_planning_mode")).toString(),
               QStringLiteral("estimated"));
     EXPECT_EQ(resolved.tiePointOptions.referencePreselectionGeometry,
@@ -413,7 +450,7 @@ TEST(AerialTriangulationWorkflowTest, ExplicitGuidedMatchingRefreshesExistingTie
             const xjw::matchphotos::MatchPhotosContext &)
         {
             tiePointRunnerCalled = true;
-            EXPECT_TRUE(matchOptions.enableGuidedMatching);
+            EXPECT_EQ(matchOptions.guidedMatchingMode, xjw::matchphotos::GuidedMatchingMode::Automatic);
             EXPECT_TRUE(matchOptions.reuseExistingMatches);
             xjw::matchphotos::MatchPhotosResult tiePointResult;
             tiePointResult.success = true;

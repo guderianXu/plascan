@@ -1,6 +1,7 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustOptions.h"
+#include "BundleAdjustProblem.h"
 
 #include <array>
 

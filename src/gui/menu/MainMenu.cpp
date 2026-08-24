@@ -372,9 +372,9 @@ QIcon makeSaveToolbarIcon()
     return QIcon(pixmap);
 }
 
-QIcon makePointCloudPruneToolbarIcon()
+QIcon makeNavigationToolbarIcon()
 {
-    QPixmap pixmap(32, 32);
+    QPixmap pixmap(56, 56);
     pixmap.fill(Qt::transparent);
 
     QPainter painter(&pixmap);
@@ -382,16 +382,84 @@ QIcon makePointCloudPruneToolbarIcon()
     const QColor iconColor(135, 140, 145);
     painter.setPen(Qt::NoPen);
     painter.setBrush(iconColor);
-    for (const QPointF &point : {QPointF(6.0, 7.0), QPointF(15.0, 5.0), QPointF(24.0, 8.0),
-                                 QPointF(8.0, 16.0), QPointF(17.0, 14.0), QPointF(25.0, 18.0),
-                                 QPointF(6.0, 25.0), QPointF(15.0, 23.0)})
-    {
-        painter.drawEllipse(point, 2.2, 2.2);
-    }
-    painter.setPen(QPen(iconColor, 3.0, Qt::SolidLine, Qt::RoundCap));
-    painter.drawLine(QPointF(20.0, 22.0), QPointF(29.0, 31.0));
-    painter.drawLine(QPointF(29.0, 22.0), QPointF(20.0, 31.0));
+    painter.drawPolygon(QPolygonF{
+        QPointF(11.0, 6.0), QPointF(44.0, 31.0), QPointF(29.0, 34.0),
+        QPointF(22.0, 50.0), QPointF(11.0, 6.0)});
+    return QIcon(pixmap);
+}
 
+QIcon makeMaskEditingToolIcon(int tool)
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor color(132, 136, 140);
+    painter.setPen(QPen(color, 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    if (tool == 0)
+    {
+        QPen dashed(color, 3.0, Qt::DashLine);
+        dashed.setDashPattern({2.0, 1.5});
+        painter.setPen(dashed);
+        painter.drawRect(QRectF(8.0, 8.0, 40.0, 40.0));
+    }
+    else if (tool == 1)
+    {
+        QPainterPath path;
+        path.moveTo(8.0, 38.0);
+        path.cubicTo(7.0, 16.0, 31.0, 7.0, 45.0, 19.0);
+        path.cubicTo(51.0, 25.0, 42.0, 37.0, 29.0, 39.0);
+        painter.drawPath(path);
+        painter.drawEllipse(QPointF(8.0, 38.0), 3.5, 3.5);
+        painter.drawEllipse(QPointF(45.0, 19.0), 3.5, 3.5);
+    }
+    else if (tool == 2)
+    {
+        painter.drawEllipse(QRectF(7.0, 8.0, 31.0, 31.0));
+        painter.drawLine(QPointF(31.0, 33.0), QPointF(49.0, 50.0));
+        painter.setPen(QPen(color, 1.8, Qt::DotLine));
+        painter.drawEllipse(QRectF(13.0, 14.0, 19.0, 19.0));
+    }
+    else
+    {
+        painter.drawLine(QPointF(11.0, 10.0), QPointF(45.0, 45.0));
+        painter.drawLine(QPointF(8.0, 22.0), QPointF(16.0, 18.0));
+        painter.drawLine(QPointF(20.0, 8.0), QPointF(18.0, 16.0));
+        painter.drawLine(QPointF(34.0, 47.0), QPointF(41.0, 40.0));
+        painter.drawLine(QPointF(42.0, 33.0), QPointF(49.0, 31.0));
+    }
+    return QIcon(pixmap);
+}
+
+QIcon makePointSelectionToolbarIcon(int shape)
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor icon_color(135, 140, 145);
+    painter.setPen(QPen(icon_color, 3.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    if (shape == 1)
+    {
+        painter.drawEllipse(QRectF(8.0, 8.0, 40.0, 40.0));
+    }
+    else if (shape == 2)
+    {
+        QPainterPath path;
+        path.moveTo(9.0, 36.0);
+        path.cubicTo(5.0, 15.0, 24.0, 5.0, 34.0, 13.0);
+        path.cubicTo(51.0, 9.0, 53.0, 33.0, 42.0, 42.0);
+        path.cubicTo(28.0, 53.0, 15.0, 49.0, 9.0, 36.0);
+        painter.drawPath(path);
+    }
+    else
+    {
+        painter.drawRect(QRectF(8.0, 8.0, 40.0, 40.0));
+    }
     return QIcon(pixmap);
 }
 
@@ -549,12 +617,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                            QStringLiteral("actionToggleCameraThumbnails"),
                                                            tr("显示缩略图"),
                                                            true);
-        _toggleCameraThumbnailsAct->setToolTip(tr("在相机平面上显示项目缩略图"));
+        _toggleCameraThumbnailsAct->setToolTip(
+            tr("在相机平面上显示项目缩略图"));
 
         QMenu *imageMenu = ensureSubMenu(_mainWindow,
                                          displayMenu,
                                          QStringLiteral("menuModelDisplayImages"),
-                                         tr("模型视角影像配准"));
+                                         tr("显示图像"));
         if (!imageMenu)
         {
             return;
@@ -564,10 +633,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                        imageMenu,
                                                        imageMenu,
                                                        QStringLiteral("actionToggleCameraImages"),
-                                                       tr("自动匹配影像"),
+                                                       tr("显示图像"),
                                                        false);
         _toggleCameraImagesAct->setToolTip(
-            tr("根据当前模型观察方向自动选择最接近的 SfM 照片，并调整照片大小和方向完成配准"));
+            tr("根据当前三维视角自动选择方向相近的 SfM 照片，并与点云或模型对齐显示"));
 
         imageMenu->addSeparator();
 
@@ -575,19 +644,19 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInForeground"),
-                                                                 tr("半透明表面叠加"),
-                                                                 true);
+                                                                 tr("在前景中显示"),
+                                                                 false);
         _showCameraImagesInForegroundAct->setToolTip(
-            tr("将自动匹配的照片按 SfM 相机投影到真实网格表面，并以 50% 透明度叠加"));
+            tr("在点云或模型前方显示当前匹配照片"));
 
         _showCameraImagesInBackgroundAct = ensureCheckableAction(_mainWindow,
                                                                  imageMenu,
                                                                  imageMenu,
                                                                  QStringLiteral("actionShowCameraImagesInBackground"),
-                                                                 tr("原图表面投影"),
-                                                                 false);
+                                                                 tr("在后景中显示"),
+                                                                 true);
         _showCameraImagesInBackgroundAct->setToolTip(
-            tr("将自动匹配的照片不透明投影到真实网格表面"));
+            tr("在点云或模型后方显示当前匹配照片"));
 
         auto *displayLayerGroup =
             imageMenu->findChild<QActionGroup *>(QStringLiteral("actionGroupCameraImageDisplayLayer"));
@@ -612,10 +681,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     imageMenu,
                                                     imageMenu,
                                                     QStringLiteral("actionLockCameraImage"),
-                                                    tr("锁定当前影像"),
+                                                    tr("锁定图像"),
                                                     false);
         _lockCameraImageAct->setToolTip(
-            tr("固定当前匹配照片；模型仍可自由旋转、平移和缩放"));
+            tr("固定当前匹配照片并切换为二维平移、缩放；取消锁定后恢复三维导航"));
 
         QMenu *viewModeMenu = ensureSubMenu(_mainWindow,
                                             modelMenu,
@@ -885,20 +954,22 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     auto installCameraImageToolbarButton = [this]()
     {
-        if (!_toolBar || !_toggleCameraImagesAct ||
-            !_showCameraImagesInForegroundAct || !_showCameraImagesInBackgroundAct || !_lockCameraImageAct)
-        {
-            return;
-        }
-        if (_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")))
+        if (!_toolBar || !_toggleCameraImagesAct
+            || !_showCameraImagesInForegroundAct
+            || !_showCameraImagesInBackgroundAct
+            || !_lockCameraImageAct)
         {
             return;
         }
 
         _toggleCameraImagesAct->setIcon(makeCameraImageToolbarIcon());
-        _toggleCameraImagesAct->setText(tr("影像配准"));
+        _toggleCameraImagesAct->setText(tr("显示图像"));
         _toggleCameraImagesAct->setToolTip(
-            tr("按当前模型视角自动匹配并配准 SfM 原始影像"));
+            tr("按当前三维视角自动匹配并对齐显示 SfM 原始照片"));
+        if (_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")))
+        {
+            return;
+        }
 
         auto *imageMenu = new QMenu(_toolBar);
         imageMenu->setObjectName(QStringLiteral("menuToolbarCameraImageVisibility"));
@@ -942,12 +1013,73 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                       _rotateImageRightToolbarWidgetAct);
     };
 
-    auto installImageOverlayToolbarButtons = [this]()
+    auto installMaskEditingActions = [this]()
     {
+        if (_rectangleMaskAct)
+        {
+            return;
+        }
+        auto createToolAction = [this](const QString &objectName,
+                                       const QString &text,
+                                       const QString &toolTip,
+                                       const QKeySequence &shortcut,
+                                       const QIcon &icon)
+        {
+            auto *action = new QAction(icon, text, _mainWindow);
+            action->setObjectName(objectName);
+            action->setToolTip(toolTip);
+            action->setShortcut(shortcut);
+            action->setCheckable(true);
+            return action;
+        };
+
+        _rectangleMaskAct = createToolAction(
+            QStringLiteral("actionRectangleMask"), tr("矩形蒙版"),
+            tr("拖动矩形添加或擦除照片蒙版（M）"), QKeySequence(Qt::Key_M),
+            makeMaskEditingToolIcon(0));
+        _scissorsMaskAct = createToolAction(
+            QStringLiteral("actionScissorsMask"), tr("智能剪刀"),
+            tr("沿边缘逐点放置选区，双击闭合（L）"), QKeySequence(Qt::Key_L),
+            makeMaskEditingToolIcon(1));
+        _smartPaintMaskAct = createToolAction(
+            QStringLiteral("actionSmartPaintMask"), tr("智能绘画"),
+            tr("按颜色边界绘制照片蒙版（P）"), QKeySequence(Qt::Key_P),
+            makeMaskEditingToolIcon(2));
+        _magicWandMaskAct = createToolAction(
+            QStringLiteral("actionMagicWandMask"), tr("魔棒"),
+            tr("选择与点击位置相连的相似颜色区域（W）"), QKeySequence(Qt::Key_W),
+            makeMaskEditingToolIcon(3));
+
+        _maskEditingToolGroup = new QActionGroup(this);
+        _maskEditingToolGroup->setObjectName(QStringLiteral("maskEditingToolActionGroup"));
+        _maskEditingToolGroup->setExclusive(true);
+        for (QAction *action : {_rectangleMaskAct,
+                                _scissorsMaskAct,
+                                _smartPaintMaskAct,
+                                _magicWandMaskAct})
+        {
+            _maskEditingToolGroup->addAction(action);
+        }
+        _rectangleMaskAct->setChecked(true);
+
+        _maskEditorSettingsAct = new QAction(tr("蒙版设置..."), _mainWindow);
+        _maskEditorSettingsAct->setObjectName(QStringLiteral("actionMaskEditorSettings"));
+        _maskEditorSettingsAct->setToolTip(tr("设置添加/擦除方式、画笔、颜色容差和叠加透明度"));
+        _resetMaskSelectionAct = new QAction(tr("重置蒙版选区"), _mainWindow);
+        _resetMaskSelectionAct->setObjectName(QStringLiteral("actionResetMaskSelection"));
+        _resetMaskSelectionAct->setToolTip(tr("取消当前尚未完成的矩形、笔画或剪刀选区"));
+        _resetMaskSelectionAct->setEnabled(false);
+    };
+
+    auto installImageOverlayToolbarButtons = [this, &installMaskEditingActions]()
+    {
+        installMaskEditingActions();
         if (!_toolBar || !_showFeaturePointsAct || !_showFeatureResidualsAct
             || !_showMaskOverlayAct || !_showDepthOverlayAct || !_depthOverlayAllLevelsAct
             || !_depthOverlayLevel1Act || !_depthOverlayLevel2Act || !_depthOverlayLevel3Act
-            || !_showDepthIntensityAct || !_resetViewAct || !_featureVisualizationAct)
+            || !_showDepthIntensityAct || !_resetViewAct || !_featureVisualizationAct
+            || !_rectangleMaskAct || !_scissorsMaskAct || !_smartPaintMaskAct
+            || !_magicWandMaskAct || !_maskEditorSettingsAct || !_resetMaskSelectionAct)
         {
             return;
         }
@@ -974,6 +1106,37 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _showMaskOverlayToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
                 _toolBar, _showMaskOverlayAct, QStringLiteral("toolButtonShowMaskOverlay"),
                 _toolbarEditingSeparatorAct);
+        }
+        if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonMaskEditor")))
+        {
+            auto *maskMenu = new QMenu(_toolBar);
+            maskMenu->setObjectName(QStringLiteral("menuToolbarMaskEditor"));
+            maskMenu->addAction(_rectangleMaskAct);
+            maskMenu->addAction(_scissorsMaskAct);
+            maskMenu->addAction(_smartPaintMaskAct);
+            maskMenu->addAction(_magicWandMaskAct);
+            maskMenu->addSeparator();
+            maskMenu->addAction(_maskEditorSettingsAct);
+            maskMenu->addAction(_resetMaskSelectionAct);
+            _maskEditingToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+                _toolBar,
+                _rectangleMaskAct,
+                maskMenu,
+                QStringLiteral("toolButtonMaskEditor"),
+                _toolbarEditingSeparatorAct);
+            if (auto *button = _toolBar->findChild<QToolButton *>(
+                    QStringLiteral("toolButtonMaskEditor")))
+            {
+                connect(_maskEditingToolGroup,
+                        &QActionGroup::triggered,
+                        button,
+                        [button, maskMenu](QAction *action)
+                        {
+                            button->setDefaultAction(action);
+                            button->setMenu(maskMenu);
+                            button->setPopupMode(QToolButton::MenuButtonPopup);
+                        });
+            }
         }
         if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonShowDepthOverlay")))
         {
@@ -1018,6 +1181,45 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installButton(_zoomOutAct, QStringLiteral("toolButtonZoomOut"), _zoomOutToolbarWidgetAct);
     };
 
+    auto installPointInteractionActions = [this]()
+    {
+        if (_pointInteractionGroup)
+        {
+            return;
+        }
+        _pointInteractionGroup = new QActionGroup(this);
+        _pointInteractionGroup->setExclusive(true);
+        auto create_action = [this](const QString &object_name,
+                                    const QString &text,
+                                    const QString &tool_tip,
+                                    const QIcon &icon)
+        {
+            auto *action = new QAction(icon, text, _mainWindow);
+            action->setObjectName(object_name);
+            action->setToolTip(tool_tip);
+            action->setCheckable(true);
+            _pointInteractionGroup->addAction(action);
+            return action;
+        };
+        _navigationAct = create_action(
+            QStringLiteral("actionNavigateModel"), tr("导航"),
+            tr("导航：左键旋转，右键或中键平移，滚轮缩放"),
+            makeNavigationToolbarIcon());
+        _rectangleSelectionAct = create_action(
+            QStringLiteral("actionRectanglePointSelection"), tr("矩形选择"),
+            tr("矩形选择点云；框选后按 Delete 删除"),
+            makePointSelectionToolbarIcon(0));
+        _circleSelectionAct = create_action(
+            QStringLiteral("actionCirclePointSelection"), tr("圆选"),
+            tr("圆形选择点云；选择后按 Delete 删除"),
+            makePointSelectionToolbarIcon(1));
+        _freehandSelectionAct = create_action(
+            QStringLiteral("actionFreehandPointSelection"), tr("自由选择"),
+            tr("自由绘制选择点云；选择后按 Delete 删除"),
+            makePointSelectionToolbarIcon(2));
+        _navigationAct->setChecked(true);
+    };
+
     auto initializeToolbar = [this, &installZoomToolbarButtons]()
     {
         if (!_toolBar)
@@ -1036,16 +1238,36 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         _toolBar->addSeparator();
         installZoomToolbarButtons();
-        _toolbarEditingSeparatorAct = _toolBar->addSeparator();
-        if (_manualPointCloudPruneAct)
+        _navigationToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
+            _toolBar,
+            _navigationAct,
+            QStringLiteral("toolButtonModelNavigation"));
+        auto *selection_menu = new QMenu(_toolBar);
+        selection_menu->setObjectName(QStringLiteral("menuToolbarPointSelection"));
+        selection_menu->addAction(_rectangleSelectionAct);
+        selection_menu->addAction(_circleSelectionAct);
+        selection_menu->addAction(_freehandSelectionAct);
+        _pointSelectionToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+            _toolBar,
+            _rectangleSelectionAct,
+            selection_menu,
+            QStringLiteral("toolButtonPointSelection"));
+        auto *selection_button = _toolBar->findChild<QToolButton *>(
+            QStringLiteral("toolButtonPointSelection"));
+        if (selection_button)
         {
-            _manualPointCloudPruneAct->setIcon(makePointCloudPruneToolbarIcon());
-            _manualPointCloudPruneAct->setToolTip(tr("手动点云剔除"));
-            _manualPointCloudPruneToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
-                _toolBar,
-                _manualPointCloudPruneAct,
-                QStringLiteral("toolButtonManualPointCloudPrune"));
+            for (QAction *action : {_rectangleSelectionAct,
+                                    _circleSelectionAct,
+                                    _freehandSelectionAct})
+            {
+                connect(action, &QAction::triggered, selection_button,
+                        [selection_button, action]()
+                {
+                    selection_button->setDefaultAction(action);
+                });
+            }
         }
+        _toolbarEditingSeparatorAct = _toolBar->addSeparator();
     };
 
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
@@ -1694,6 +1916,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 action->setIcon(QIcon());
             }
         }
+        installPointInteractionActions();
         initializeToolbar();
         installCameraToolbarButton();
         installCameraImageToolbarButton();
@@ -1957,6 +2180,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toolBar = _mainWindow->addToolBar(tr("工具"));
     if (_toolBar)
     {
+        installPointInteractionActions();
         initializeToolbar();
         installCameraToolbarButton();
         installCameraImageToolbarButton();
@@ -2067,11 +2291,14 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
 
     setButtonVisible(_cameraToolbarWidgetAct, showModelTools);
     setButtonVisible(_cameraImageToolbarWidgetAct, showModelTools);
+    setButtonVisible(_navigationToolbarWidgetAct, showModelTools);
+    setButtonVisible(_pointSelectionToolbarWidgetAct, showModelTools);
     setButtonVisible(_rotateImageLeftToolbarWidgetAct, showImageTools);
     setButtonVisible(_rotateImageRightToolbarWidgetAct, showImageTools);
     setButtonVisible(_resetImageViewToolbarWidgetAct, showImageTools);
     setButtonVisible(_showFeaturePointsToolbarWidgetAct, showImageTools);
     setButtonVisible(_showMaskOverlayToolbarWidgetAct, showImageTools);
+    setButtonVisible(_maskEditingToolbarWidgetAct, showImageTools);
     setButtonVisible(_showDepthOverlayToolbarWidgetAct, showImageTools);
     const bool zoomEnabled = showModelTools || showImageTools;
     _zoomInAct->setEnabled(zoomEnabled);
@@ -2081,6 +2308,12 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
 void MainMenu::setImageDisplayReady(bool ready)
 {
     _imageDisplayReady = ready;
+    updateImageActionAvailability();
+}
+
+void MainMenu::setMaskSelectionActive(bool active)
+{
+    _maskSelectionActive = active;
     updateImageActionAvailability();
 }
 
@@ -2159,12 +2392,22 @@ void MainMenu::updateImageActionAvailability()
                             _rotateImageRightAct,
                             _showFeaturePointsAct,
                             _showFeatureResidualsAct,
-                            _showMaskOverlayAct})
+                            _showMaskOverlayAct,
+                            _rectangleMaskAct,
+                            _scissorsMaskAct,
+                            _smartPaintMaskAct,
+                            _magicWandMaskAct,
+                            _maskEditorSettingsAct})
     {
         if (action)
         {
             action->setEnabled(imageReady);
         }
+    }
+
+    if (_resetMaskSelectionAct)
+    {
+        _resetMaskSelectionAct->setEnabled(imageReady && _maskSelectionActive);
     }
 
     if (_featureVisualizationAct)
@@ -2268,6 +2511,12 @@ QAction *MainMenu::rotateImageRightAction() const { return _rotateImageRightAct;
 QAction *MainMenu::showFeaturePointsAction() const { return _showFeaturePointsAct; }
 QAction *MainMenu::showFeatureResidualsAction() const { return _showFeatureResidualsAct; }
 QAction *MainMenu::showMaskOverlayAction() const { return _showMaskOverlayAct; }
+QAction *MainMenu::rectangleMaskAction() const { return _rectangleMaskAct; }
+QAction *MainMenu::scissorsMaskAction() const { return _scissorsMaskAct; }
+QAction *MainMenu::smartPaintMaskAction() const { return _smartPaintMaskAct; }
+QAction *MainMenu::magicWandMaskAction() const { return _magicWandMaskAct; }
+QAction *MainMenu::maskEditorSettingsAction() const { return _maskEditorSettingsAct; }
+QAction *MainMenu::resetMaskSelectionAction() const { return _resetMaskSelectionAct; }
 QAction *MainMenu::showDepthOverlayAction() const { return _showDepthOverlayAct; }
 QAction *MainMenu::depthOverlayAllLevelsAction() const { return _depthOverlayAllLevelsAct; }
 QAction *MainMenu::depthOverlayLevel1Action() const { return _depthOverlayLevel1Act; }
@@ -2324,6 +2573,10 @@ QAction *MainMenu::thinTiePointsAction() const             { return _thinTiePoin
 QAction *MainMenu::cleanTiePointsAction() const            { return _cleanTiePointsAct; }
 QAction *MainMenu::viewTiePointMatchesAction() const       { return _viewTiePointMatchesAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return _manualPointCloudPruneAct; }
+QAction *MainMenu::navigationAction() const                 { return _navigationAct; }
+QAction *MainMenu::rectangleSelectionAction() const         { return _rectangleSelectionAct; }
+QAction *MainMenu::circleSelectionAction() const            { return _circleSelectionAct; }
+QAction *MainMenu::freehandSelectionAction() const          { return _freehandSelectionAct; }
 QAction *MainMenu::cameraCalibrationAction() const          { return _cameraCalibrationAct; }
 QAction *MainMenu::cameraConvertAction() const              { return _cameraConvertAct; }
 QAction *MainMenu::generateMaskAction() const               { return _generateMaskAct; }

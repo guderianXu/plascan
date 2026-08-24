@@ -3,6 +3,10 @@
 本目录用于在 Windows 原生环境下构建 PlaScan，不使用 WSL。当前推荐入口是
 `build_windows_cuda.ps1`。
 
+日常开发优先使用 `scripts\env\configure_with_env.py --source-deps`：它默认探测 CUDA、自动发现或安装固定的
+TensorRT SDK，并在能力缺失时回退。这里的 `build_windows_cuda.ps1` 面向严格的 CUDA/TensorRT
+发布包，不能把缺少 TensorRT 的构建静默标记为 GPU 发布包，因此仍要求完整 SDK。
+
 脚本目标是固定一套自洽的 Windows CUDA Release 构建环境：
 
 - 主构建目录：`E:\code\plascan\build\windows-vcpkg-cuda-release`
@@ -11,6 +15,7 @@
   `E:\vbt`（buildtrees）、`E:\vpk`（packages）、`E:\vdl`（downloads）
 - CUDA：`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
 - TensorRT：通过 `TensorRT_ROOT` 或 CMake 参数指定与 CUDA 匹配的 SDK
+- OpenCV：仓库锁定的 5.0.0 源码包，默认安装到 `build\windows-source-deps-release\install`
 
 脚本会设置统一的 `PATH`、`CMAKE_PREFIX_PATH`、
 `CUDA_PATH` 和 Qt plugin 环境，并将 `CMAKE_PREFIX_PATH` 写入 CMake 缓存，保证 Ninja
@@ -26,6 +31,7 @@ TensorRT/CUDA 运行时 DLL，避免 CMake/CTest 混用旧 vcpkg 或其它项目
 - `C:\BuildTools\VC\vcpkg`
 - `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
 - Vulkan SDK，或等效的 Vulkan loader/header，使 vcpkg 构建的 `qtbase` 启用 Vulkan feature
+- `3rdparty\opencv` 的固定 5.0.0 checkout；使用 `-InstallDeps` 时脚本会自动构建
 - `E:\code\plascan\build\windows-vcpkg-cuda-release\vcpkg_installed\x64-windows`
 
 脚本会把 Qt 平台、图像格式和 TLS 插件同步到 `build/bin` 与 `build/tests`。
@@ -35,8 +41,8 @@ TensorRT/CUDA 运行时 DLL，避免 CMake/CTest 混用旧 vcpkg 或其它项目
 如果路径不同，用参数覆盖，见“参数速查”。
 
 默认不会自动运行 vcpkg manifest install；脚本会先检查自己的
-`vcpkg_installed\x64-windows` 里是否已有 Qt6、OpenCV、GDAL、GTest、libzip 和 TIFF。
-需要自动补依赖时再显式加 `-InstallDeps`。
+`vcpkg_installed\x64-windows` 里是否已有 Qt6、GDAL、GTest、libzip 和 TIFF，并单独校验 CPU-only
+OpenCV 5 安装前缀。需要自动补依赖和构建固定 OpenCV 5 时再显式加 `-InstallDeps`。
 
 相机模型 3D 视图使用 Qt RHI 的 Vulkan 后端，不再链接 Qt OpenGLWidgets。
 当前 `vcpkg.json` 要求 `vulkan` 和 `qtshadertools`，并在 CMake 配置阶段检查
@@ -114,7 +120,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\build_windows_cuda.ps1 -BuildOnly -RunTests -Jobs 8
 ```
 
-`-RunTests` 默认以逻辑核数量的一半并行运行 CTest；例如 32 个逻辑核默认使用 16 个测试 worker。
+`-RunTests` 默认使用全部逻辑线程并行运行 CTest；例如 32 个逻辑线程默认使用 32 个测试 worker。
 需要控制测试并发时使用 `-CTestJobs <n>`，它与只控制编译并发的 `-Jobs <n>` 相互独立。
 
 ## 输出位置
@@ -174,10 +180,11 @@ cmake --workflow --preset windows-package-release
 | `-CMakeExe <path>` | CMake 可执行文件路径。 |
 | `-CudaRoot <path>` | CUDA Toolkit 根目录，默认 CUDA 13.1。 |
 | `-TensorRtRoot <path>` | TensorRT SDK 根目录；未指定时读取 `TENSORRT_ROOT`。必须包含 ONNX parser 和全部 builder resource。 |
+| `-OpenCvRoot <path>` | OpenCV 5 安装前缀，默认 `build\windows-source-deps-release\install`。 |
 | `-Target <name>` | 只构建指定 CMake target，例如 `plascan_gui`。 |
 | `-CTestRegex <regex>` | `ctest -R` 过滤表达式。 |
 | `-Jobs <n>` | 并行构建线程数，默认 CPU 核心数。 |
-| `-CTestJobs <n>` | CTest 并发数，默认逻辑核数量的一半；`CTEST_PARALLEL_LEVEL` 可覆盖默认值。 |
+| `-CTestJobs <n>` | CTest 并发数，默认使用全部逻辑线程；`CTEST_PARALLEL_LEVEL` 可覆盖默认值。 |
 | `-ConfigureOnly` | 只配置，不构建。 |
 | `-BuildOnly` | 只构建，不配置。 |
 | `-RunTests` | 构建后运行 CTest。 |
@@ -185,7 +192,7 @@ cmake --workflow --preset windows-package-release
 | `-RunU2NetCudaDeploymentTest` | 旧名称兼容入口；会输出弃用警告并执行同一 TensorRT smoke test。 |
 | `-CleanConfigure` | 清理当前构建目录中除 `vcpkg_installed` 外的 CMake/编译产物。 |
 | `-CleanRootCache` | 清理根 `build` 目录旧 CMake/Ninja/Linux 残留。 |
-| `-InstallDeps` | 允许 CMake/vcpkg 自动执行 manifest install。 |
+| `-InstallDeps` | 构建固定 OpenCV 5，并允许 CMake/vcpkg 自动执行 manifest install。 |
 | `-SkipVsDevCmd` | 跳过加载 VS Build Tools 环境，仅在当前 shell 已配置好编译器时使用。 |
 
 发布前建议运行：
@@ -195,7 +202,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_win\build_wind
   -Target test_mask_generation -RunU2NetTensorRtDeploymentTest
 ```
 
-脚本强制校验 vcpkg OpenCV ABI 只包含 CPU DNN，不允许 `cuda`、`cudnn` 或 `dnn-cuda` feature；旧构建
+脚本强制校验源码安装包是 OpenCV 5、包含 CPU DNN 且不携带 CUDA/cuDNN 模块；旧构建
 目录中的 `cudnn*.dll` 会从运行目录移除。随后脚本复制并校验 TensorRT runtime、ONNX parser、plugin、
 全部 builder resource，以及 CUDA runtime、cuBLAS、NVRTC 和 nvFatbin。在清空外部 SDK/vcpkg PATH 的
 子进程中，测试会使用全新用户缓存从便携 ONNX 首次构建 engine 并执行真实 GPU 推理；用例跳过也会失败。

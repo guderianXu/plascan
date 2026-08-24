@@ -51,7 +51,7 @@ void ThinTiePointsDialog::buildUi()
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
-    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox, tr("稀释"));
     connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);

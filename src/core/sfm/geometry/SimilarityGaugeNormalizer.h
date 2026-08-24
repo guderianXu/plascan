@@ -9,7 +9,7 @@
  * 原位置；它不假设相机沿圆轨迹运动。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 
 #include <string>

@@ -44,7 +44,13 @@ class RepoHygieneTest(unittest.TestCase):
 
         self.assertTrue(workflow_path.exists(), "GitHub Actions CI workflow is missing")
         text = workflow_path.read_text(encoding="utf-8")
-        self.assertIn("submodules: recursive", text)
+        self.assertIn("submodules: false", text)
+        self.assertNotIn("submodules: recursive", text)
+        self.assertIn(
+            "git submodule update --init --depth 1 3rdparty/plamatrix "
+            "3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon",
+            text,
+        )
         self.assertIn("cmake -S . -B build", text)
         self.assertIn("cmake --build build", text)
         self.assertIn("python3 scripts/env/run_tests.py --test-dir build", text)
@@ -134,15 +140,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("libgfortran5", root_cmake_text)
         self.assertEqual([], manifest["default-features"])
         self.assertNotIn("ceres", manifest["dependencies"])
-        self.assertIn("ceres-reference", manifest["features"])
-        self.assertNotIn("ceres-suitesparse", manifest["features"])
-        reference_ceres_dependency = manifest["features"]["ceres-reference"]["dependencies"][0]
-        reference_ceres_features = reference_ceres_dependency[
-            "features"
-        ]
-        self.assertEqual("ceres", reference_ceres_dependency["name"])
-        self.assertFalse(reference_ceres_dependency["default-features"])
-        self.assertEqual(["eigensparse"], reference_ceres_features)
+        self.assertNotIn("features", manifest)
 
         presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
         linux_cuda_opencl = next(
@@ -162,7 +160,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertEqual("ON", cuda_cache["PLASCAN_ENABLE_OPENCL"])
         self.assertEqual("OFF", cuda_cache["PLASCAN_ENABLE_TENSORRT"])
         self.assertNotIn("VCPKG_MANIFEST_FEATURES", cuda_cache)
-        self.assertEqual("OFF", cuda_cache["PLASCAN_ENABLE_CERES_REFERENCE"])
+        self.assertNotIn("PLASCAN_ENABLE_CERES_REFERENCE", cuda_cache)
         self.assertEqual(
             "${sourceDir}/build/linux-vcpkg-cuda-opencl-release/vcpkg_installed",
             cuda_cache["VCPKG_INSTALLED_DIR"],
@@ -178,13 +176,139 @@ class RepoHygieneTest(unittest.TestCase):
         cuda_manifest = json.loads((cuda_overlay / "vcpkg.json").read_text(encoding="utf-8"))
         self.assertEqual(14, cuda_manifest["port-version"])
 
-        ceres_overlay = ROOT / "cmake" / "vcpkg-overlays" / "ceres"
-        self.assertTrue(ceres_overlay.is_dir())
-        ceres_portfile = (ceres_overlay / "portfile.cmake").read_text(encoding="utf-8")
-        self.assertIn("OUT_CUDA_COMPILER cuda_compiler", ceres_portfile)
-        self.assertIn("-DCMAKE_CUDA_COMPILER=${cuda_compiler}", ceres_portfile)
-        self.assertIn("-DCMAKE_CUDA_HOST_COMPILER=$ENV{CUDAHOSTCXX}", ceres_portfile)
-        self.assertNotIn("-DCMAKE_CUDA_COMPILER=${NVCC}", ceres_portfile)
+        self.assertFalse((ROOT / "cmake" / "vcpkg-overlays" / "ceres").exists())
+
+    def test_pinned_qt_opencv_source_build_is_self_contained(self):
+        modules = (ROOT / ".gitmodules").read_text(encoding="utf-8")
+        for path in (
+            "3rdparty/qt",
+            "3rdparty/opencv",
+            "3rdparty/gdal",
+            "3rdparty/apriltag",
+            "3rdparty/PoissonRecon",
+        ):
+            self.assertIn(f"path = {path}", modules)
+
+        versions = (ROOT / "cmake" / "PlascanSourceDependencyVersions.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('PLASCAN_SOURCE_QT_VERSION "6.11.2"', versions)
+        self.assertIn('PLASCAN_SOURCE_OPENCV_VERSION "5.0.0"', versions)
+        self.assertIn('PLASCAN_SOURCE_APRILTAG_VERSION "3.4.5"', versions)
+        self.assertIn('PLASCAN_SOURCE_GDAL_VERSION "3.12.4"', versions)
+        self.assertIn("713a36536903d172f9e6737584d428753c119496", versions)
+        self.assertIn("40738fb16ceddb5fb3fea747585f7ce6abb0605b", versions)
+        self.assertIn("94be783968e5091bcc9972c72c84fd63efce2935", versions)
+        self.assertIn("0e3e27c90f57130232d215d783ff49cc332cd950", versions)
+        self.assertIn("262b0f539d404057d1f36e1adc07fc9388678899", versions)
+
+        source_manifest = json.loads(
+            (ROOT / "cmake" / "source-deps" / "vcpkg.json").read_text(encoding="utf-8")
+        )
+        source_dependency_names = {
+            dependency if isinstance(dependency, str) else dependency["name"]
+            for dependency in source_manifest["dependencies"]
+        }
+        self.assertTrue(
+            {"json-c", "libgeotiff", "proj", "tiff", "zlib", "libzip"}.issubset(
+                source_dependency_names
+            )
+        )
+        self.assertTrue(
+            {"qtbase", "opencv", "gdal", "apriltag"}.isdisjoint(source_dependency_names)
+        )
+
+        presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+        configure_preset_names = {
+            preset["name"] for preset in presets["configurePresets"]
+        }
+        for platform in ("linux", "macos", "windows"):
+            self.assertIn(f"{platform}-source-deps-release", configure_preset_names)
+            self.assertIn(f"{platform}-source-release", configure_preset_names)
+
+        superbuild = (ROOT / "cmake" / "PlascanSourceDependencies.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ExternalProject_Add(plascan_qt_source", superbuild)
+        self.assertIn("ExternalProject_Add(plascan_opencv_source", superbuild)
+        self.assertIn("ExternalProject_Add(plascan_apriltag_source", superbuild)
+        self.assertIn("ExternalProject_Add(plascan_gdal_source", superbuild)
+        self.assertIn('"-DOGR_ENABLE_DRIVER_GPKG:BOOL=OFF"', superbuild)
+        self.assertIn("-submodules qtbase,qtshadertools", superbuild)
+        self.assertIn('"-UOPENCV_EXTRA_MODULES_PATH"', superbuild)
+        self.assertIn('"-UBUILD_opencv_x*"', superbuild)
+
+        mesh_cmake = (ROOT / "src" / "core" / "mesh" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"${CMAKE_SOURCE_DIR}/3rdparty/PoissonRecon"', mesh_cmake)
+        self.assertNotIn("FetchContent_Declare(plascan_poisson_recon", mesh_cmake)
+
+        onnxruntime = (ROOT / "cmake" / "PlascanOnnxRuntime.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('PLASCAN_ONNXRUNTIME_VERSION "1.29.0"', onnxruntime)
+        self.assertIn('PLASCAN_ONNXRUNTIME_API_VERSION "29"', onnxruntime)
+        self.assertIn("PLASCAN_ONNXRUNTIME_CACHE_DIR", onnxruntime)
+        self.assertIn("PLASCAN_ONNXRUNTIME_ARCHIVE", onnxruntime)
+
+        test_runtime = (ROOT / "cmake" / "PlascanTestRuntime.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PLASCAN_ONNXRUNTIME_RUNTIME_LIBRARY", test_runtime)
+        self.assertIn("copy_if_different", test_runtime)
+
+        gui_install = (ROOT / "src" / "gui" / "cmake" / "GuiInstall.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('DESTINATION share/gdal', gui_install)
+        self.assertIn('DESTINATION share/proj', gui_install)
+
+        gui_main = (ROOT / "src" / "gui" / "main.cpp").read_text(encoding="utf-8")
+        self.assertIn("configureGeospatialDataPaths", gui_main)
+        geospatial_runtime = (
+            ROOT / "src" / "gui" / "runtime" / "GeospatialRuntimePaths.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn('qputenv("GDAL_DATA"', geospatial_runtime)
+        self.assertIn('qputenv("PROJ_DATA"', geospatial_runtime)
+        self.assertIn('QStringLiteral("vcpkg_installed")', geospatial_runtime)
+        self.assertIn('QStringLiteral("proj.db")', geospatial_runtime)
+
+        configure_script = (ROOT / "scripts" / "env" / "configure_with_env.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"--source-deps"', configure_script)
+        self.assertIn('"--build-dir"', configure_script)
+        self.assertIn('dependencies_dir = main_dir / "source-deps"', configure_script)
+        self.assertIn('middle = "source-deps" if dependencies else "source"', configure_script)
+        self.assertIn('"--accept-tensorrt-license"', configure_script)
+        self.assertIn("prepare_tensorrt_sdk", configure_script)
+
+        tensorrt_setup = (ROOT / "scripts" / "env" / "setup_tensorrt_sdk.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('TENSORRT_VERSION = "10.15.1.29"', tensorrt_setup)
+        self.assertIn("TensorRT-10.15.1.29.Windows.amd64.cuda-13.1.zip", tensorrt_setup)
+        self.assertIn("83304c1f9ab86534f083bc4864691b38", tensorrt_setup)
+        self.assertIn('"--continue-at"', tensorrt_setup)
+        self.assertIn("PLASCAN_ACCEPT_TENSORRT_LICENSE", tensorrt_setup)
+
+        windows_source = next(
+            preset
+            for preset in presets["configurePresets"]
+            if preset["name"] == "windows-source-release"
+        )
+        self.assertEqual("ON", windows_source["cacheVariables"]["PLASCAN_ENABLE_CUDA"])
+        self.assertEqual("ON", windows_source["cacheVariables"]["PLASCAN_ENABLE_TENSORRT"])
+        self.assertIn("build/env/sdk/tensorrt/10.15.1.29/bin", windows_source["environment"]["PATH"])
+        self.assertIn("$penv{CUDA_PATH}/bin", windows_source["environment"]["PATH"])
+
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("option(PLASCAN_ENABLE_TENSORRT", root_cmake)
+        self.assertIn("find_package(TensorRT QUIET)", root_cmake)
+        self.assertIn("falling back to CUDA backends plus ONNX Runtime CPU inference", root_cmake)
+        core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertNotIn("find_package(TensorRT REQUIRED)", core_cmake)
 
     def test_release_packages_are_gated_by_platform_tests(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
@@ -378,16 +502,38 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("(void)min_z;", icp_source)
         self.assertIn("(void)max_z;", icp_source)
 
-    def test_vcpkg_manifest_keeps_opencv_dnn_cpu_only(self):
+    def test_opencv5_is_the_only_supported_api(self):
         manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
-        base_opencv_dependency = next(
-            dependency for dependency in manifest.get("dependencies", [])
-            if isinstance(dependency, dict) and dependency.get("name") == "opencv"
+        dependency_names = {
+            dependency if isinstance(dependency, str) else dependency["name"]
+            for dependency in manifest.get("dependencies", [])
+        }
+        self.assertNotIn("opencv", dependency_names)
+
+        package_config = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(
+            encoding="utf-8"
         )
-        opencv_features = set(base_opencv_dependency.get("features", []))
-        self.assertIn("dnn", opencv_features)
-        self.assertTrue({"cuda", "cudnn", "dnn-cuda"}.isdisjoint(opencv_features))
-        self.assertNotIn("opencv-dnn-cuda", manifest.get("features", {}))
+        self.assertIn("find_package(OpenCV 5.0 REQUIRED COMPONENTS", package_config)
+        for component in ("geometry", "stereo", "features"):
+            self.assertIn(component, package_config)
+        self.assertNotIn("CV_VERSION_MAJOR", package_config)
+        self.assertNotIn("calib3d features2d", package_config)
+
+        source_config = (ROOT / "cmake" / "PlascanSourceDependencies.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("opencv_contrib", source_config)
+        self.assertNotIn("xfeatures2d", source_config)
+        self.assertNotIn("ximgproc", source_config)
+        self.assertFalse((ROOT / "src" / "common" / "OpenCvCompat.h").exists())
+
+        forbidden = ("OpenCvCompat.h", "CV_VERSION_MAJOR", "opencv_compat")
+        for path in (ROOT / "src").rglob("*"):
+            if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".cu", ".cuh"}:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, source, str(path))
 
         presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
         for preset in presets.get("configurePresets", []):
@@ -431,31 +577,19 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("EnableOpenCvDnnCuda", text)
         self.assertNotIn("Sync-CudnnRuntime", text)
         self.assertNotIn("CUDNN_ROOT_DIR", text)
-        self.assertIn("EnableCeresCudaBa", text)
+        self.assertNotIn("Ceres", text)
         self.assertIn("-UVCPKG_MANIFEST_FEATURES", text)
         self.assertIn("-UVCPKG_OVERLAY_PORTS", text)
-        self.assertIn("manifestFeaturesValue", text)
-        self.assertIn('$manifestFeaturesValue = "ceres-cuda;ceres-reference"', text)
-        self.assertIn("[bool] $EnableCeresCudaBa = $false", text)
-        self.assertIn("-DPLASCAN_ENABLE_CERES_REFERENCE=OFF", text)
-        self.assertIn("Assert-OpenCvCpuOnlyFeatures", text)
-        self.assertIn("Assert-CeresCudaFeatures", text)
-        self.assertIn(
-            "if ($EnableCeresCudaBa)\n{\n    $vcpkgOverlayPortsCMake = Convert-ToCMakePath "
-            "(Ensure-CeresCuda13OverlayPort",
-            text,
-        )
+        self.assertIn("Assert-OpenCv5CpuOnly", text)
         self.assertIn("TensorRtRoot", text)
         self.assertIn("TensorRT_ROOT", text)
-        self.assertIn("Ensure-CeresCuda13OverlayPort", text)
-        self.assertIn("vcpkg-overlay-ports-ceres", text)
         self.assertNotIn('"build\\env\\vcpkg-overlay-ports"', text)
-        self.assertIn("CMAKE_CUDA_STANDARD=17", text)
-        self.assertIn("CMAKE_CUDA_FLAGS=--std=c++17", text)
-        self.assertIn("CMAKE_CUDA_ARCHITECTURES=75\\;86\\;89\\;120", text)
+        self.assertIn("PLASCAN_CUDA_ARCHITECTURES=75;86;89;120", text)
+        self.assertNotIn("CMAKE_CUDA_FLAGS=--std=c++17", text)
+        self.assertNotIn("CMAKE_CUDA_ARCHITECTURES=75\\;86\\;89\\;120", text)
         self.assertNotIn("Ensure-OpenCvCuda13OverlayPort", text)
         self.assertIn("VCPKG_OVERLAY_PORTS", text)
-        self.assertIn('if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))', text)
+        self.assertNotIn("vcpkgOverlayPortsCMake", text)
         self.assertIn("OpenCV DNN: CPU-only", text)
 
         deployment_test = (
@@ -712,6 +846,9 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("defined(_OPENMP) && _OPENMP >= 200805", dense_costs)
         self.assertIn("-diag-suppress=940,1394", mvs_cmake)
         self.assertIn("QT_NO_PRIVATE_MODULE_WARNING ON", packages)
+        self.assertIn(
+            'OpenMP_CXX_FLAGS "/openmp:llvm /openmp:experimental"', packages
+        )
         self.assertIn("target_compile_options(plamatrix PRIVATE", packages)
         self.assertIn("$<$<COMPILE_LANGUAGE:CXX>:/wd4849>", packages)
         self.assertIn("target_compile_options(plapoint PRIVATE", packages)

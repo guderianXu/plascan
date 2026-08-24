@@ -13,11 +13,9 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
 
         for option in (
             "--ba-backend",
-            "--ba-cuda-device",
             "--ba-min-cuda-cameras",
             "--ba-min-cuda-observations",
-            "--ba-min-cpu-observations",
-            "--ba-max-ceres-point-only-observations",
+            "--ba-max-initial-track-rms",
             "--ba-quality-gate",
             "--ba-max-rms-growth",
             "--ba-min-valid-track-ratio",

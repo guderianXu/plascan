@@ -70,9 +70,9 @@ void ImageViewWidget::setupView()
     
     // 连接滚动条信号以检测视图变化
     connect(_view->horizontalScrollBar(), &QScrollBar::valueChanged,
-        this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection);
+        this, &ImageViewWidget::onViewChanged);
     connect(_view->verticalScrollBar(), &QScrollBar::valueChanged,
-        this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection);
+        this, &ImageViewWidget::onViewChanged);
     
 }
 

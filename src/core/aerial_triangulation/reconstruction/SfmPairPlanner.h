@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 /**
  * @file SfmPairPlanner.h
@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -221,22 +222,64 @@ inline bool hasCompleteKnownCameraViewingDirections(
 
 struct SfmPairGeometryScores
 {
-    double baselineScore = 0.0; ///< d/(d+1)，用于排序而非摄影测量基高比。
+    double baselineScore = 0.0; ///< 相对典型相机间距的带通分数，用于排序而非摄影测量基高比。
     double orientationScore = 0.0; ///< max(0, cos(theta))，反向观察不会获得奖励。
     double centerDistance = -1.0; ///< 原始相机中心距离。
     double orientationAngleDeg = -1.0; ///< 原始视线夹角，单位度。
 };
 
+inline double typicalNearestCameraSpacing(const SfmPairPlannerOptions &options, int imageCount)
+{
+    if (!hasCompleteKnownCameraCenters(imageCount, options.knownCameraCenters))
+    {
+        return -1.0;
+    }
+
+    std::vector<double> nearestDistances;
+    nearestDistances.reserve(static_cast<std::size_t>(imageCount));
+    for (int i = 0; i < imageCount; ++i)
+    {
+        double nearestSquared = std::numeric_limits<double>::infinity();
+        for (int j = 0; j < imageCount; ++j)
+        {
+            if (i == j)
+            {
+                continue;
+            }
+            const double distanceSquared =
+                squaredCenterDistance(options.knownCameraCenters[static_cast<std::size_t>(i)],
+                                      options.knownCameraCenters[static_cast<std::size_t>(j)]);
+            if (std::isfinite(distanceSquared) && distanceSquared > 1.0e-24)
+            {
+                nearestSquared = std::min(nearestSquared, distanceSquared);
+            }
+        }
+        if (std::isfinite(nearestSquared))
+        {
+            nearestDistances.push_back(std::sqrt(nearestSquared));
+        }
+    }
+    if (nearestDistances.empty())
+    {
+        return -1.0;
+    }
+
+    const std::size_t middle = nearestDistances.size() / 2U;
+    std::nth_element(nearestDistances.begin(), nearestDistances.begin() + middle, nearestDistances.end());
+    return nearestDistances[middle];
+}
+
 /**
  * @brief 计算一对已知相机的轻量调度分数。
  *
- * 该分数不替代重叠检测、基线质量评估或本质矩阵验证。距离归一化中的常数 1
- * 取决于输入坐标尺度，因此只作为同一数据集内部的弱排序项。
+ * 该分数不替代重叠检测、基线质量评估或本质矩阵验证。距离相对数据集典型
+ * 最近邻间距归一化，只作为同一数据集内部的弱排序项。
  */
 inline SfmPairGeometryScores computeSfmPairGeometryScores(const SfmPairPlannerOptions &options,
                                                           int imageCount,
                                                           int indexA,
-                                                          int indexB)
+                                                          int indexB,
+                                                          double typicalSpacing = -1.0)
 {
     SfmPairGeometryScores scores;
     if (indexA < 0 || indexB < 0 || indexA >= imageCount || indexB >= imageCount || indexA == indexB)
@@ -249,9 +292,14 @@ inline SfmPairGeometryScores computeSfmPairGeometryScores(const SfmPairPlannerOp
         scores.centerDistance = std::sqrt(std::max(0.0,
             squaredCenterDistance(options.knownCameraCenters[static_cast<std::size_t>(indexA)],
                                   options.knownCameraCenters[static_cast<std::size_t>(indexB)])));
-        scores.baselineScore = scores.centerDistance > 0.0
-            ? std::clamp(scores.centerDistance / (scores.centerDistance + 1.0), 0.0, 1.0)
-            : 0.0;
+        if (scores.centerDistance > 0.0 && typicalSpacing > 0.0)
+        {
+            // 目标约为典型最近邻间距的 1.5 倍；对过小基线和远距离低重叠像对
+            // 都连续降权。对数域带通不依赖工程坐标的米/千米尺度。
+            const double ratio = scores.centerDistance / typicalSpacing;
+            const double logOffset = std::log(std::max(1.0e-9, ratio / 1.5));
+            scores.baselineScore = std::exp(-0.5 * std::pow(logOffset / 0.8, 2.0));
+        }
     }
 
     if (hasCompleteKnownCameraViewingDirections(imageCount, options.knownCameraViewingDirections))
@@ -495,6 +543,7 @@ inline SfmPairPlan planSfmMatchPairs(
 {
     SfmPairPlan plan;
     const int imageCount = images.size();
+    const double typicalSpacing = typicalNearestCameraSpacing(options, imageCount);
     plan.allPairCount = imageCount > 1 ? (imageCount * (imageCount - 1)) / 2 : 0;
 
     if (options.restrictPairs)
@@ -540,7 +589,7 @@ inline SfmPairPlan planSfmMatchPairs(
             continue;
         }
         const SfmPairGeometryScores geometry =
-            computeSfmPairGeometryScores(options, imageCount, indexA, indexB);
+            computeSfmPairGeometryScores(options, imageCount, indexA, indexB, typicalSpacing);
         addOrUpdateSfmPairCandidate(&plan,
                                     images,
                                     indexA,
@@ -585,7 +634,7 @@ inline SfmPairPlan planSfmMatchPairs(
             const double sequenceScore =
                 static_cast<double>(window - sequenceDistance + 1) / static_cast<double>(window);
             const SfmPairGeometryScores geometry =
-                computeSfmPairGeometryScores(options, imageCount, i, j);
+                computeSfmPairGeometryScores(options, imageCount, i, j, typicalSpacing);
             addOrUpdateSfmPairCandidate(&plan,
                                         images,
                                         i,
@@ -630,7 +679,7 @@ inline SfmPairPlan planSfmMatchPairs(
                 const double sequenceScore =
                     static_cast<double>(loopWindow - distance + 1) / static_cast<double>(loopWindow);
                 const SfmPairGeometryScores geometry =
-                    computeSfmPairGeometryScores(options, imageCount, i, j);
+                    computeSfmPairGeometryScores(options, imageCount, i, j, typicalSpacing);
                 addOrUpdateSfmPairCandidate(&plan,
                                             images,
                                             i,
@@ -689,7 +738,7 @@ inline SfmPairPlan planSfmMatchPairs(
                 const double spatialScore =
                     static_cast<double>(keep - n) / static_cast<double>(std::max(1, keep));
                 const SfmPairGeometryScores geometry =
-                    computeSfmPairGeometryScores(options, imageCount, i, neighbor.second);
+                    computeSfmPairGeometryScores(options, imageCount, i, neighbor.second, typicalSpacing);
                 addOrUpdateSfmPairCandidate(&plan,
                                             images,
                                             i,

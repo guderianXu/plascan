@@ -3,7 +3,6 @@
 #include "ModelImageQualityTypes.h"
 
 #include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
 
 namespace xjw::qc
 {

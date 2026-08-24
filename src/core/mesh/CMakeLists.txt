@@ -1,18 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
 
-include(FetchContent)
+include(${CMAKE_SOURCE_DIR}/cmake/PlascanSourceDependencyVersions.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/PlascanVerifySourceCheckout.cmake)
 
-set(PLASCAN_POISSON_RECON_COMMIT
-    262b0f539d404057d1f36e1adc07fc9388678899)
-FetchContent_Declare(plascan_poisson_recon
-    GIT_REPOSITORY https://github.com/mkazhdan/PoissonRecon.git
-    GIT_TAG ${PLASCAN_POISSON_RECON_COMMIT}
-    GIT_SHALLOW FALSE
-    GIT_SUBMODULES ""
-    UPDATE_DISCONNECTED TRUE
-    EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(plascan_poisson_recon)
+set(plascan_poisson_recon_SOURCE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/PoissonRecon")
+plascan_verify_source_checkout(
+    "PoissonRecon"
+    "${plascan_poisson_recon_SOURCE_DIR}"
+    "${PLASCAN_SOURCE_POISSON_RECON_COMMIT}"
+    "Src/Reconstructors.h")
 if(NOT EXISTS "${plascan_poisson_recon_SOURCE_DIR}/Src/Reconstructors.h")
     message(FATAL_ERROR
         "Pinned PoissonRecon source is missing Reconstructors.h: "
@@ -23,6 +19,22 @@ add_library(plascan_poisson_recon_headers INTERFACE)
 target_include_directories(plascan_poisson_recon_headers SYSTEM INTERFACE
     "${plascan_poisson_recon_SOURCE_DIR}/Src"
 )
+
+if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER)
+    set(MESH_VISUAL_HULL_CUDA_SOURCE VisualHullFieldCUDA.cu)
+    set(MESH_HAS_CUDA TRUE)
+else()
+    set(MESH_VISUAL_HULL_CUDA_SOURCE VisualHullFieldNoCUDA.cpp)
+    set(MESH_HAS_CUDA FALSE)
+endif()
+
+if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
+    set(MESH_VISUAL_HULL_OPENCL_SOURCE VisualHullFieldOpenCL.cpp)
+    set(MESH_HAS_OPENCL TRUE)
+else()
+    set(MESH_VISUAL_HULL_OPENCL_SOURCE VisualHullFieldNoOpenCL.cpp)
+    set(MESH_HAS_OPENCL FALSE)
+endif()
 
 add_library(meshing STATIC
     SurfaceReconstructor.cpp
@@ -69,6 +81,9 @@ add_library(meshing STATIC
     SparseTgvSolver.cpp
     VisualHullReconstructor.cpp
     VisualHullFieldEvaluator.cpp
+    VisualHullFieldBackend.cpp
+    ${MESH_VISUAL_HULL_CUDA_SOURCE}
+    ${MESH_VISUAL_HULL_OPENCL_SOURCE}
     RobustSurfaceDisplacementSolver.cpp
     VisualHullDepthRefiner.cpp
     DepthConstrainedSurfaceRefiner.cpp
@@ -101,6 +116,22 @@ add_library(meshing STATIC
     ModelOutputPolicy.cpp
     ModelWorkflowService.cpp
 )
+
+if(MESH_HAS_CUDA)
+    set_target_properties(meshing PROPERTIES
+        CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+        CUDA_SEPARABLE_COMPILATION ON
+    )
+    target_compile_definitions(meshing PRIVATE MESHING_ENABLE_CUDA=1)
+    target_compile_options(meshing PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+    )
+endif()
+
+if(MESH_HAS_OPENCL)
+    target_compile_definitions(meshing PRIVATE MESHING_ENABLE_OPENCL=1)
+    target_link_libraries(meshing PRIVATE OpenCL::OpenCL)
+endif()
 
 # PoissonRecon is pinned third-party code. Its templates still use
 # std::is_pod, which is deprecated in C++20 and emits diagnostics when they are
@@ -167,4 +198,21 @@ if(NOT MSVC)
     # Meshing explicitly rejects NaN/Inf inputs. -ffast-math permits the
     # compiler to assume those values do not exist and invalidates the guards.
     target_compile_options(meshing PRIVATE -funroll-loops)
+endif()
+
+if(BUILD_TESTS)
+    find_package(GTest QUIET)
+    if(GTest_FOUND)
+        include(GoogleTest)
+        add_executable(test_visual_hull_field_backend
+            tests/test_visual_hull_field_backend.cpp
+        )
+        target_link_libraries(test_visual_hull_field_backend PRIVATE
+            meshing
+            plapoint::plapoint
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        gtest_discover_tests(test_visual_hull_field_backend)
+    endif()
 endif()

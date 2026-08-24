@@ -54,6 +54,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication qt_application(argc, argv);
     CLI::App app{"PlaScan GUI 等价模型生成工具"};
+    cli::configureApp(app);
 
     std::string source_data;
     std::string point_cloud;

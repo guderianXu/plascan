@@ -10,7 +10,7 @@
     <height>800</height>
    </rect>
   </property>
-  <layout class="QVBoxLayout" name="mainLayout">
+  <layout class="QVBoxLayout" name="mainLayout" stretch="0,1,0">
    <property name="spacing">
     <number>0</number>
    </property>
@@ -28,21 +28,33 @@
    </property>
    <item>
     <widget class="QWidget" name="toolbarWidget" native="true">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>48</height>
+      </size>
+     </property>
      <layout class="QHBoxLayout" name="toolbarLayout">
       <property name="spacing">
-       <number>6</number>
+       <number>4</number>
       </property>
       <property name="leftMargin">
-       <number>6</number>
+       <number>4</number>
       </property>
       <property name="topMargin">
-       <number>4</number>
+       <number>2</number>
       </property>
       <property name="rightMargin">
-       <number>6</number>
+       <number>4</number>
       </property>
       <property name="bottomMargin">
-       <number>4</number>
+       <number>2</number>
       </property>
       <item>
        <widget class="QCheckBox" name="m_syncModeChk">
@@ -137,49 +149,29 @@
        </spacer>
       </item>
       <item>
-       <widget class="QGroupBox" name="displayOptionsGroup">
-        <property name="title">
-         <string>显示选项</string>
+       <widget class="QWidget" name="displayOptionsWidget" native="true">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
         </property>
         <layout class="QHBoxLayout" name="displayOptionsLayout">
          <property name="spacing">
-          <number>6</number>
+          <number>4</number>
          </property>
          <property name="leftMargin">
-          <number>6</number>
+          <number>0</number>
          </property>
          <property name="topMargin">
-          <number>4</number>
+          <number>0</number>
          </property>
          <property name="rightMargin">
-          <number>6</number>
+          <number>0</number>
          </property>
          <property name="bottomMargin">
-          <number>4</number>
+          <number>0</number>
          </property>
-         <item>
-          <widget class="QLabel" name="lineColorLabel">
-           <property name="text">
-            <string>线条颜色:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="m_lineColorBtn">
-           <property name="maximumSize">
-            <size>
-             <width>50</width>
-             <height>16777215</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string notr="true">background-color: yellow;</string>
-           </property>
-           <property name="text">
-            <string/>
-           </property>
-          </widget>
-         </item>
          <item>
           <widget class="QLabel" name="lineWidthLabel">
            <property name="text">
@@ -272,16 +264,6 @@
           </widget>
          </item>
          <item>
-          <widget class="QCheckBox" name="m_rainbowChk">
-           <property name="toolTip">
-            <string>启用后每条匹配线使用不同颜色，有助于区分重叠匹配</string>
-           </property>
-           <property name="text">
-            <string>五彩斑斓</string>
-           </property>
-          </widget>
-         </item>
-         <item>
           <widget class="QCheckBox" name="m_showOnlyInliersChk">
            <property name="enabled">
             <bool>false</bool>
@@ -294,119 +276,18 @@
         </layout>
        </widget>
       </item>
-      <item>
-       <widget class="QGroupBox" name="m_denseDisplayGroup">
-        <property name="visible">
-         <bool>false</bool>
-        </property>
-        <property name="title">
-         <string>密集显示</string>
-        </property>
-        <layout class="QHBoxLayout" name="denseDisplayLayout">
-         <property name="spacing">
-          <number>6</number>
-         </property>
-         <property name="leftMargin">
-          <number>6</number>
-         </property>
-         <property name="topMargin">
-          <number>4</number>
-         </property>
-         <property name="rightMargin">
-          <number>6</number>
-         </property>
-         <property name="bottomMargin">
-          <number>4</number>
-         </property>
-         <item>
-          <widget class="QLabel" name="denseOpacityLabel">
-           <property name="text">
-            <string>透明度:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QSlider" name="m_denseOpacitySlider">
-           <property name="maximum">
-            <number>100</number>
-           </property>
-           <property name="value">
-            <number>60</number>
-           </property>
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="denseColorLabel">
-           <property name="text">
-            <string>色彩:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QComboBox" name="m_denseColormapCombo"/>
-         </item>
-         <item>
-          <widget class="QCheckBox" name="m_denseAutoRangeChk">
-           <property name="text">
-            <string>自动范围</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="denseRangeLabel">
-           <property name="text">
-            <string>范围:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QDoubleSpinBox" name="m_denseMinSpin">
-           <property name="enabled">
-            <bool>false</bool>
-           </property>
-           <property name="maximum">
-            <double>1024.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QDoubleSpinBox" name="m_denseMaxSpin">
-           <property name="enabled">
-            <bool>false</bool>
-           </property>
-           <property name="minimum">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>2048.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>256.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
      </layout>
     </widget>
    </item>
    <item>
-    <widget class="QTabWidget" name="m_tabWidget">
-     <property name="currentIndex">
-      <number>0</number>
-     </property>
-     <widget class="QWidget" name="m_sparseTab">
-      <attribute name="title">
-       <string>稀疏匹配</string>
-      </attribute>
-      <layout class="QVBoxLayout" name="sparseLayout">
+    <widget class="QWidget" name="viewerWidget" native="true">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>1</verstretch>
+       </sizepolicy>
+      </property>
+      <layout class="QVBoxLayout" name="viewerLayout">
        <property name="leftMargin">
         <number>0</number>
        </property>
@@ -420,17 +301,35 @@
         <number>0</number>
        </property>
       </layout>
-     </widget>
-     <widget class="QWidget" name="m_denseTab">
-      <attribute name="title">
-       <string>密集匹配</string>
-      </attribute>
-     </widget>
     </widget>
    </item>
    <item>
     <widget class="QWidget" name="statusWidget">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>28</height>
+      </size>
+     </property>
      <layout class="QHBoxLayout" name="statusLayout">
+      <property name="leftMargin">
+       <number>2</number>
+      </property>
+      <property name="topMargin">
+       <number>2</number>
+      </property>
+      <property name="rightMargin">
+       <number>2</number>
+      </property>
+      <property name="bottomMargin">
+       <number>2</number>
+      </property>
       <item>
        <widget class="QLabel" name="m_statusLabel">
         <property name="text">

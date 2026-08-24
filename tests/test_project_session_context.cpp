@@ -10,6 +10,7 @@ namespace
 
 using xjw::gui::project::ProjectSessionContext;
 using xjw::gui::project::DemGenerationRequest;
+using xjw::gui::project::DemGenerationMode;
 
 TEST(ProjectSessionContextTest, MatchesEquivalentProjectPaths)
 {
@@ -66,6 +67,19 @@ TEST(DemGenerationRequestTest, RequiresExistingSourceFieldsAtBoundary)
     request.dataType = QStringLiteral("float32");
     EXPECT_TRUE(request.validate(&error));
     EXPECT_TRUE(error.isEmpty());
+}
+
+TEST(DemGenerationRequestTest, ValidatesImageStereoProductMode)
+{
+    DemGenerationRequest request;
+    request.mode = DemGenerationMode::ImageStereo;
+    request.imageStereoOptions.sourceImages = {QStringLiteral("left.tif"), QStringLiteral("right.tif")};
+    QString error;
+
+    EXPECT_TRUE(request.validate(&error));
+    request.imageStereoOptions.sourceImages = {QStringLiteral("left.tif"), QStringLiteral("left.tif")};
+    EXPECT_FALSE(request.validate(&error));
+    EXPECT_FALSE(error.isEmpty());
 }
 
 } // namespace

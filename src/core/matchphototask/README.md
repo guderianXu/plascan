@@ -29,15 +29,19 @@
   全图粗尺度，再在原分辨率重叠瓦片补充细节。候选经 8×8 空间配额、近邻去重和 RootSIFT 归一化后进入匹配。
 - 特征阶段不再写入或读取独立特征文件。一次任务内每幅影像最多提取一次，描述子在最后一个相关像对完成后释放；
   多尺度和瓦片提取都会把关键点坐标还原到原始影像坐标。
+- 特征阶段使用有界、保序的多 worker CPU 预取完成影像解码、缩放和蒙版准备。CUDA SIFT 使用两个影像
+  流水线 worker：第三方 CUDA SIFT 的设备全局计数器仍由设备锁保护，但上一张影像的 CPU 筛选与
+  RootSIFT 后处理可和下一张影像的 GPU 提取重叠。结果记录包含准备、流水线 worker、队列等待和提取耗时。
 - `maskApplyMode=keypoints` 时，特征阶段只裁掉高置信度排除区内部的关键点，保留分割边界；
   `maskApplyMode=tiepoints` 时，匹配阶段把蒙版灰度作为软权重，仅硬裁确定排除区。蒙版约定为
   `0` 有效、`255` 确定排除，中间值表示排除概率。
 - `maxKeypoints` 对应每张影像的关键点总量限制；调用方设置 `useExplicitKeypointLimit=true` 时，
   `0` 表示不限制。空中三角测量界面的“关键点限制”始终使用这一语义，不会因启用指导匹配而按像素数放大。
 - `keypointLimitPerMegapixel` 是底层调用方可显式启用的独立限制。设置后，每张影像的关键点上限按
-  `每百万像素关键点限制 * 影像百万像素数` 计算；它不由 `enableGuidedMatching` 自动开启。
-- `enableGuidedMatching` 是显式用户开关，质量档位不能把未勾选状态自动改为开启；实际值写入
-  `.pimatch` 配置指纹，后续 SfM 只消费同一结果变体。
+  `每百万像素关键点限制 * 影像百万像素数` 计算；它不由引导匹配策略自动开启。
+- `guidedMatchingMode` 提供 `Disabled / Automatic / Forced` 三态。自动模式只补救几何支持度、
+  内点率或空间覆盖偏弱的像对；强制模式处理全部具备可靠基础矩阵或可信参考位姿的像对。
+  实际模式和参考位姿使用状态写入 `.pimatch` 配置指纹，后续 SfM 只消费同一结果变体。
 - 设备为 `Auto` 时 SIFT 按 CUDA、Metal、OpenCL、CPU 选择；LightGlue 固定使用 TensorRT/CUDA；选择 CPU、CUDA
   不可用或 engine 不兼容时会返回明确错误，不做 TorchScript/CPU 回退。
 - LightGlue ONNX 可通过 `lightGlueTensorRtEnginePath` 显式传入，也可由
@@ -51,11 +55,15 @@
   置信度和残差，避免不同特征编号空间互相覆盖。
 - 几何验证阶段使用统一 `MatchGeometryVerifier` 的 USAC/MAGSAC 基础矩阵内点。为抑制重复结构伪造的弱几何边，
   少于 64 个内点的像对还必须达到 70% 内点率；强支持像对仍按最小内点数通过。原始匹配数、内点数和内点率会记入像对设置。
-- TensorRT 匹配并发按显存和 engine 固定关键点桶限制解析；检测到 OOM 时释放并发上下文并串行重试
-  未完成像对。流程不会切换到另一匹配算法，也不会生成第二种缓存格式。
+- GPU 匹配并发按算法独立解析：CUDA SIFT 使用与关键点数线性相关的双描述子缓冲模型，LightGlue 使用
+  自身的二次 attention/相似度模型，LoMa-R 使用独立的 score 张量、描述子与 TensorRT workspace 模型。
+  三者不共享经验公式。CUDA SIFT 每个像对 worker 使用独立非阻塞 stream，并在一次描述子上传后完成
+  双向匹配；有效 worker 数、单 worker 估算显存和选择原因写入匹配记录。
 - 轨迹阶段通过 `TiePointTrackManager` 管理最终多视图连接点，并复用 `MultiViewTrackBuilder` 合并 track。
-- 轨迹阶段成功后会写出 `assets/tie_points/latest_tie_points.json`，记录影像、track、观测点、
-  参数摘要和统计信息，供项目下次打开或后续空三流程复用。
+- 轨迹阶段成功后会写出 `assets/tie_points/latest_tie_points.json`。当前 v2 格式除影像、track、
+  观测点、参数摘要和统计信息外，还为每条 track 保存几何验证后的 `direct_edges`；空三据此区分
+  原始像对匹配与多视轨迹的传递闭包，避免把未经直接验证的观测对用于两视三角化。v1 文件仍可读取，
+  但会按旧版闭包语义兼容处理，因此升级后应重新生成一次连接点文件。
 - `maxTiePointsPerImage` 对应连接点限制；
   `0` 表示关闭连接点数量稀疏。
 - `excludeStationaryTiePoints` 会剔除在多张影像中像方坐标几乎固定的 track，用于过滤转台背景、
@@ -63,7 +71,8 @@
 - `PairSelector` 合并来自手动输入、全量匹配、序列窗口、相机重叠、词汇召回和未来引导重匹配的候选影像对。
 - 无相机通用预选由 `VocabularyOverlapRetriever` 调用 `OverlapPairGraphPlanner`，
   在词汇相似度候选上保留互选 TopK、补足单向 TopK、桥接连通分量，并固定补充序列窗口邻接候选，
-  避免 BoW 图看似连通但实际匹配/SfM 有效图断裂。
+  避免 BoW 图看似连通但实际匹配/SfM 有效图断裂。高精度和困难纹理模式使用更高的每图候选覆盖，
+  额外候选必须与已接受像对共享邻居、形成影像级三角闭环，随后仍经过完整匹配和 USAC 几何门控。
 - 通用预选与最终匹配使用不同预算：词汇分配默认从每张影像均匀抽取最多 4096 条描述子，
   最终匹配仍消费任务缓存中的完整特征。SIFT 128 维和 LoMa-R 256 维描述子只在各自任务内训练词汇，
   不跨算法复用词汇中心；LoMa-R 的最高 3840 关键点档默认不会被预选预算截断。
@@ -71,8 +80,10 @@
   逐层选择最近分支直到叶词。默认分支因子 10、深度 3，每条描述子约比较 30 个节点中心；不再构建
   1000 个扁平中心，也不使用 FLANN KD-tree 冒充词汇树。训练节点和影像批次之间均可响应取消。
 - `MatchPhotosTask` 执行算法选择、影像对选择、特征提取、两两匹配、几何验证、引导重匹配和轨迹构建。
-  引导阶段在初始基础矩阵的极线带内检查描述子 top-k 候选，执行双向一致性和宽松 ratio 门控，新增对应后重新
-  运行 USAC，再把结果交给多视轨迹构建。
+  引导阶段用空间网格枚举初始基础矩阵极线带内的候选边，每条边只计算一次 RootSIFT 距离并同时维护双向
+  top-2，随后执行互选和 ratio 门控。新增对应与原对应合并后只运行一次 USAC，并删除新增外点再更新统计。
+  参考相机索引、可靠观测邻接和软蒙版在任务级缓存；最终日志分别报告 graph、policy、descriptor、mask、
+  filter 和 geometry 累计耗时，便于判断瓶颈来自候选搜索还是几何验证。
 
 `src/core/overlap` 保持为可复用的候选生成模块，由 `PairSelector` 调用；
 它不会被改名，也不会被嵌入到本模块目录下。

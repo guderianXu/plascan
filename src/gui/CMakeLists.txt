@@ -157,6 +157,10 @@ if(TARGET aerial_triangulation)
   target_link_libraries(gui_project PRIVATE aerial_triangulation)
 endif()
 
+if(TARGET stereo_dem)
+  target_link_libraries(gui_project PRIVATE stereo_dem)
+endif()
+
 if(PLASCAN_BUILD_GUI)
   if(GDAL_INCLUDE_DIRS)
     target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
@@ -221,6 +225,7 @@ endif()
 plascan_deploy_qt_tls_runtime(plascan_gui)
 plascan_deploy_tensorrt_runtime(plascan_gui)
 plascan_deploy_vcpkg_runtime(plascan_gui)
+plascan_deploy_source_dependency_runtime(plascan_gui)
 plascan_deploy_onnxruntime(plascan_gui)
 
   include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiInstall.cmake)

@@ -1,17 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(PlaScanCore VERSION 1.1.7 LANGUAGES CXX)
 
-set(_PLASCAN_TENSORRT_DEFAULT OFF)
-if(CMAKE_CUDA_COMPILER)
-  set(_PLASCAN_TENSORRT_DEFAULT ON)
-endif()
-option(PLASCAN_ENABLE_TENSORRT "Build PlaScan TensorRT inference backends"
-       ${_PLASCAN_TENSORRT_DEFAULT})
-unset(_PLASCAN_TENSORRT_DEFAULT)
-
 if(PLASCAN_ENABLE_TENSORRT)
-  find_package(TensorRT REQUIRED)
-  find_package(CUDAToolkit REQUIRED)
+  if(NOT TARGET TensorRT::nvinfer OR NOT TARGET TensorRT::nvonnxparser OR
+     NOT CUDAToolkit_FOUND)
+    message(FATAL_ERROR
+      "Internal configuration error: TensorRT was enabled without its validated SDK targets")
+  endif()
 endif()
 
 
@@ -36,6 +31,7 @@ plascan_core_add_optional_module(qc "QualityControl")
 plascan_core_add_optional_module(control_points "ControlPoints")
 plascan_core_add_optional_module(mask "Mask")
 plascan_core_add_optional_module(terrain "Terrain")
+plascan_core_add_optional_module(stereo_dem "RPC Stereo DEM/DOM")
 plascan_core_add_optional_module(sfm "SfM")
 plascan_core_add_optional_module(matchphototask "MatchPhotoTask")
 plascan_core_add_optional_module(aerial_triangulation "AerialTriangulation")

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file AerialTriangulationWorkflow.cpp
  * @brief “对齐照片”外部参数到连接点任务和 SfM 管线的统一编排实现。
  *
@@ -61,7 +61,9 @@ QualityPreset presetForQuality(const QString &quality)
 int sequenceWindowForQuality(const QString &quality)
 {
     const QString token = normalizedToken(quality, QStringLiteral("high"));
-    if (token == QStringLiteral("highest")) return 8;
+    // highest 面向完整生产重建。16 帧局部邻域可形成更多三视及以上长轨迹，
+    // 同时仍远小于大型工程的全量 O(N^2) 配对。
+    if (token == QStringLiteral("highest")) return 16;
     if (token == QStringLiteral("high")) return 6;
     if (token == QStringLiteral("medium") || token == QStringLiteral("standard")) return 4;
     if (token == QStringLiteral("low")) return 3;
@@ -443,7 +445,9 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.geometryMinInlierRatio = std::clamp(options.geometryMinInlierRatio, 0.01, 0.95);
     tieOptions.geometryMinGridCoverage = std::clamp(options.geometryMinGridCoverage, 0.01, 1.0);
     tieOptions.geometryMaxIterations = std::max(100, options.geometryMaxIterations);
-    tieOptions.enableGuidedMatching = options.guidedImageMatching;
+    tieOptions.guidedMatchingMode = options.guidedImageMatching
+        ? matchphotos::GuidedMatchingMode::Automatic
+        : matchphotos::GuidedMatchingMode::Disabled;
     tieOptions.useExplicitKeypointLimit = true;
     tieOptions.maxKeypoints = std::max(0, options.keypointLimit);
     tieOptions.keypointLimitPerMegapixel = 0;
@@ -454,8 +458,17 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.maxTiePointsPerGridCell = options.maxTiePointsPerGridCell > 0
         ? options.maxTiePointsPerGridCell
         : (options.tiepointLimit > 0
-               ? std::max(1, options.tiepointLimit / std::max(1, tiePointGridCellCount))
+               ? std::max(1,
+                          (options.tiepointLimit + std::max(1, tiePointGridCellCount) - 1) /
+                              std::max(1, tiePointGridCellCount))
                : 0);
+    // MatchPhotosTask 已在完整多视轨迹形成后执行一次按影像/网格的质量优先稀疏化。
+    // SfM 仍保留自己的输入保护，但必须使用同一上限；否则扩大前端配额后会被内部
+    // 默认 6000/图再次静默截断，破坏 GUI/CLI 所显示参数的真实性。
+    pipeline.maxTracksPerImage = tieOptions.maxTiePointsPerImage;
+    pipeline.maxTracksPerGridCell = tieOptions.maxTiePointsPerGridCell;
+    pipeline.trackThinningGridColumns = tieOptions.tiePointGridColumns;
+    pipeline.trackThinningGridRows = tieOptions.tiePointGridRows;
     tieOptions.useGenericPreselection = options.genericPreselection;
     tieOptions.useReferencePreselection = options.referencePreselection;
     tieOptions.excludeStationaryTiePoints = options.excludeFixedTiePoints;
@@ -474,6 +487,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
         : matchphotos::ReferencePreselectionGeometry::GroundFootprint;
     const bool hasReference = !options.referenceCameras.isEmpty() ||
         (!options.cameraPaths.isEmpty() && options.cameraPaths.size() == options.images.size());
+    tieOptions.guidedUseReferenceCameraPoses = options.guidedImageMatching &&
+        options.referencePreselection && hasReference && referenceMode != QStringLiteral("estimated");
     QString pairPlanningMode = options.genericPreselection ? QStringLiteral("generic")
                                                            : QStringLiteral("all_pairs");
     if (options.referencePreselection && referenceMode == QStringLiteral("sequence"))

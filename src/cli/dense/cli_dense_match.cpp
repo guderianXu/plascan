@@ -2,9 +2,11 @@
 // 文件: cli_dense_match.cpp
 // 功能: 密集匹配 CLI (基于 CLI11)
 // 用法:
-//   dense_match_cli -L imgL.tif -R imgR.tif -o disp.tif [选项]
+//   dense_match_cli -L imgL.tif -R imgR.tif -o disp.tif
+//                   [--device auto|cpu|cuda|opencl] [选项]
 // =============================================================================
 #include "cli_common.h"
+#include "DenseMatchBackend.h"
 #include "DenseMatchService.h"
 #include "DenseMatchConfig.h"
 #include "DenseMatchTypes.h"
@@ -14,13 +16,14 @@
 #include <new>
 #include <string>
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     CLI::App app{"PlaScan 密集匹配工具 — 立体密集匹配 (MGM/SGM/BM)"};
+    cli::configureApp(app);
 
     std::string imgL, imgR, outPath;
-    app.add_option("-L,--left",  imgL,  "左影像路径")->required();
-    app.add_option("-R,--right", imgR,  "右影像路径")->required();
+    app.add_option("-L,--left", imgL, "左影像路径")->required();
+    app.add_option("-R,--right", imgR, "右影像路径")->required();
     app.add_option("-o,--output", outPath, "输出视差图路径 (.tif)")->required();
 
     std::string algoStr = "mgm";
@@ -41,22 +44,28 @@ int main(int argc, char *argv[])
     app.add_option("--kernel-h", kernelH, "相关核高度 (px)");
 
     int p1 = 8, p2 = 32, directions = 8, pyramid = 2;
-    app.add_option("--p1",         p1, "SGM 小惩罚");
-    app.add_option("--p2",         p2, "SGM 大惩罚");
+    app.add_option("--p1", p1, "SGM 小惩罚");
+    app.add_option("--p2", p2, "SGM 大惩罚");
     app.add_option("--directions", directions, "SGM 路径方向数 (4|8)");
-    app.add_option("--pyramid",    pyramid,    "金字塔层数");
+    app.add_option("--pyramid", pyramid, "金字塔层数");
 
-    bool useCuda = true;
-    app.add_flag("--cuda{true}", useCuda, "使用 CUDA 加速 (默认)");
-    app.add_flag("--no-cuda{false}", useCuda, "强制 CPU");
+    std::string deviceStr = "auto";
+    CLI::Option* deviceOption = app.add_option("--device", deviceStr, "计算设备: auto, cpu, cuda, opencl")
+                                    ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl"}));
 
-    int gpu = 0, threads = 4;
-    app.add_option("--gpu",     gpu,     "CUDA 设备 ID");
+    bool legacyCuda = false;
+    bool legacyNoCuda = false;
+    app.add_flag("--cuda", legacyCuda, "兼容选项：等价于 --device cuda");
+    app.add_flag("--no-cuda", legacyNoCuda, "兼容选项：等价于 --device cpu");
+
+    int gpu = 0, openClDevice = 0, threads = 4;
+    app.add_option("--gpu", gpu, "CUDA 设备 ID");
+    app.add_option("--opencl-device", openClDevice, "OpenCL GPU 设备 ID");
     app.add_option("--threads", threads, "CPU 线程数");
 
     float lrThresh = 1.0f;
-    int   medianFilter = 3;
-    app.add_option("--lr-threshold",  lrThresh,     "L-R 一致性阈值 (px)");
+    int medianFilter = 3;
+    app.add_option("--lr-threshold", lrThresh, "L-R 一致性阈值 (px)");
     app.add_option("--median-filter", medianFilter, "中值滤波核 (0=禁用)");
 
     bool verbose = false;
@@ -64,70 +73,114 @@ int main(int argc, char *argv[])
 
     CLI11_PARSE(app, argc, argv);
 
+    if (legacyCuda && legacyNoCuda)
+    {
+        cli::fatal("--cuda 与 --no-cuda 不能同时使用");
+    }
+    if (deviceOption->count() > 0 && (legacyCuda || legacyNoCuda))
+    {
+        cli::fatal("--device 不能与兼容选项 --cuda/--no-cuda 同时使用");
+    }
+
     if (imgL.empty() || imgR.empty() || outPath.empty())
         cli::fatal("必须指定 -L, -R, -o");
 
     // 解析枚举
-    auto parseAlgo = [](const std::string &s) -> xjw::dense_match::StereoAlgorithm
+    auto parseAlgo = [](const std::string& s) -> xjw::dense_match::StereoAlgorithm
     {
-        if (s == "bm")   return xjw::dense_match::StereoAlgorithm::BlockMatch;
-        if (s == "sgm")  return xjw::dense_match::StereoAlgorithm::SemiGlobalMatch;
-        if (s == "mgm")  return xjw::dense_match::StereoAlgorithm::MoreGlobalMatch;
-        if (s == "opencv_sgbm") return xjw::dense_match::StereoAlgorithm::OpenCV_SGBM;
+        if (s == "bm")
+            return xjw::dense_match::StereoAlgorithm::BlockMatch;
+        if (s == "sgm")
+            return xjw::dense_match::StereoAlgorithm::SemiGlobalMatch;
+        if (s == "mgm")
+            return xjw::dense_match::StereoAlgorithm::MoreGlobalMatch;
+        if (s == "opencv_sgbm")
+            return xjw::dense_match::StereoAlgorithm::OpenCV_SGBM;
         cli::fatal("未知算法: " + s);
         return xjw::dense_match::StereoAlgorithm::MoreGlobalMatch;
     };
 
-    auto parseCost = [](const std::string &s) -> xjw::dense_match::CostFunction
+    auto parseCost = [](const std::string& s) -> xjw::dense_match::CostFunction
     {
-        if (s == "ad")      return xjw::dense_match::CostFunction::AbsoluteDifference;
-        if (s == "sd")      return xjw::dense_match::CostFunction::SquaredDifference;
-        if (s == "ncc")     return xjw::dense_match::CostFunction::NormalizedCrossCorr;
-        if (s == "census")  return xjw::dense_match::CostFunction::CensusTransform;
-        if (s == "ternary") return xjw::dense_match::CostFunction::TernaryCensusTransform;
+        if (s == "ad")
+            return xjw::dense_match::CostFunction::AbsoluteDifference;
+        if (s == "sd")
+            return xjw::dense_match::CostFunction::SquaredDifference;
+        if (s == "ncc")
+            return xjw::dense_match::CostFunction::NormalizedCrossCorr;
+        if (s == "census")
+            return xjw::dense_match::CostFunction::CensusTransform;
+        if (s == "ternary")
+            return xjw::dense_match::CostFunction::TernaryCensusTransform;
         cli::fatal("未知代价函数: " + s);
         return xjw::dense_match::CostFunction::CensusTransform;
     };
 
-    auto parseSubpixel = [](const std::string &s) -> xjw::dense_match::SubpixelMode
+    auto parseSubpixel = [](const std::string& s) -> xjw::dense_match::SubpixelMode
     {
-        if (s == "none")     return xjw::dense_match::SubpixelMode::None;
-        if (s == "parabola") return xjw::dense_match::SubpixelMode::Parabola;
+        if (s == "none")
+            return xjw::dense_match::SubpixelMode::None;
+        if (s == "parabola")
+            return xjw::dense_match::SubpixelMode::Parabola;
         cli::fatal("未知子像素模式: " + s);
         return xjw::dense_match::SubpixelMode::Parabola;
     };
 
+    xjw::dense_match::DenseMatchComputeBackend computeBackend =
+        xjw::dense_match::parseDenseMatchComputeBackend(deviceStr);
+    if (legacyCuda)
+    {
+        computeBackend = xjw::dense_match::DenseMatchComputeBackend::Cuda;
+    }
+    else if (legacyNoCuda)
+    {
+        computeBackend = xjw::dense_match::DenseMatchComputeBackend::Cpu;
+    }
+
     // 构建配置
     xjw::dense_match::DenseMatchConfig cfg;
-    cfg.algorithm        = parseAlgo(algoStr);
-    cfg.costFunc         = parseCost(costStr);
-    cfg.subpixel         = parseSubpixel(subpixelStr);
-    cfg.minDisparity     = minDisp;
-    cfg.maxDisparity     = maxDisp;
-    cfg.corrKernelW      = kernelW;
-    cfg.corrKernelH      = kernelH;
-    cfg.p1               = p1;
-    cfg.p2               = p2;
-    cfg.sgmDirections    = directions;
-    cfg.pyramidLevels    = pyramid;
-    cfg.useCuda          = useCuda;
-    cfg.cudaDevice       = gpu;
-    cfg.numThreads       = threads;
+    cfg.algorithm = parseAlgo(algoStr);
+    cfg.costFunc = parseCost(costStr);
+    cfg.subpixel = parseSubpixel(subpixelStr);
+    cfg.minDisparity = minDisp;
+    cfg.maxDisparity = maxDisp;
+    cfg.corrKernelW = kernelW;
+    cfg.corrKernelH = kernelH;
+    cfg.p1 = p1;
+    cfg.p2 = p2;
+    cfg.sgmDirections = directions;
+    cfg.pyramidLevels = pyramid;
+    cfg.computeBackend = computeBackend;
+    cfg.useCuda = computeBackend != xjw::dense_match::DenseMatchComputeBackend::Cpu;
+    cfg.cudaDevice = gpu;
+    cfg.openClDevice = openClDevice;
+    cfg.numThreads = threads;
     cfg.lrCheckThreshold = lrThresh;
     cfg.medianFilterSize = medianFilter;
     cfg.enableLRCheck = lrThresh > 0.0f;
-    cfg.leftImagePath    = imgL;
-    cfg.rightImagePath   = imgR;
+    cfg.leftImagePath = imgL;
+    cfg.rightImagePath = imgR;
     cfg.outputDisparityPath = outPath;
 
     fprintf(stdout, "密集匹配: %s <-> %s\n", imgL.c_str(), imgR.c_str());
 
     if (verbose)
     {
-        fprintf(stdout, "  算法=%s 代价=%s 子像素=%s 视差=[%d,%d] 核=%dx%d\n",
-                algoStr.c_str(), costStr.c_str(), subpixelStr.c_str(),
-                minDisp, maxDisp, kernelW, kernelH);
-        fprintf(stdout, "  CUDA=%d GPU=%d 线程=%d\n", useCuda, gpu, threads);
+        fprintf(stdout,
+                "  算法=%s 代价=%s 子像素=%s 视差=[%d,%d] 核=%dx%d\n",
+                algoStr.c_str(),
+                costStr.c_str(),
+                subpixelStr.c_str(),
+                minDisp,
+                maxDisp,
+                kernelW,
+                kernelH);
+        fprintf(stdout,
+                "  设备=%s CUDA设备=%d OpenCL设备=%d CPU线程=%d\n",
+                xjw::dense_match::denseMatchComputeBackendName(computeBackend),
+                gpu,
+                openClDevice,
+                threads);
     }
 
     xjw::dense_match::DenseMatchService service(cfg);
@@ -136,33 +189,28 @@ int main(int argc, char *argv[])
     {
         result = service.process();
     }
-    catch (const std::bad_alloc &error)
+    catch (const std::bad_alloc& error)
     {
-        cli::fatal(
-            "密集匹配主机内存分配失败: 视差=[" + std::to_string(minDisp) + ','
-                + std::to_string(maxDisp) + "): " + error.what(),
-            cli::EXIT_ALGO_ERR);
+        cli::fatal("密集匹配主机内存分配失败: 视差=[" + std::to_string(minDisp) + ',' + std::to_string(maxDisp) +
+                       "): " + error.what(),
+                   cli::EXIT_ALGO_ERR);
     }
-    catch (const cv::Exception &error)
+    catch (const cv::Exception& error)
     {
-        cli::fatal(
-            "密集匹配 CUDA/OpenCV 执行失败: 视差=[" + std::to_string(minDisp) + ','
-                + std::to_string(maxDisp) + "): " + error.what(),
-            cli::EXIT_ALGO_ERR);
+        cli::fatal("密集匹配 GPU/OpenCV 执行失败: 视差=[" + std::to_string(minDisp) + ',' + std::to_string(maxDisp) +
+                       "): " + error.what(),
+                   cli::EXIT_ALGO_ERR);
     }
-    catch (const std::exception &error)
+    catch (const std::exception& error)
     {
-        cli::fatal(
-            "密集匹配执行失败: 视差=[" + std::to_string(minDisp) + ','
-                + std::to_string(maxDisp) + "): " + error.what(),
-            cli::EXIT_ALGO_ERR);
+        cli::fatal("密集匹配执行失败: 视差=[" + std::to_string(minDisp) + ',' + std::to_string(maxDisp) +
+                       "): " + error.what(),
+                   cli::EXIT_ALGO_ERR);
     }
 
     if (result.disparity.empty())
     {
-        const std::string detail = service.lastError().empty()
-            ? "视差图为空"
-            : service.lastError();
+        const std::string detail = service.lastError().empty() ? "视差图为空" : service.lastError();
         cli::fatal("密集匹配失败: " + detail, cli::EXIT_ALGO_ERR);
     }
 

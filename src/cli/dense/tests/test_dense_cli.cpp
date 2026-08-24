@@ -17,6 +17,75 @@ constexpr int kAlgorithmErrorExitCode = 3;
 
 } // namespace
 
+TEST(DenseMatchCliContractGTest, SourceExposesUnifiedDeviceSelection)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/dense/cli_dense_match.cpp"));
+
+    expectContainsAll(source, {
+        "\"--device\"",
+        "auto, cpu, cuda, opencl",
+        "\"--opencl-device\"",
+        "DenseMatchComputeBackend::Cuda",
+        "DenseMatchComputeBackend::Cpu",
+        "--device 不能与兼容选项 --cuda/--no-cuda 同时使用",
+    });
+    expectMatches(source, R"(std::string\s+deviceStr\s*=\s*"auto"\s*;)");
+    expectMatches(source, R"(parseDenseMatchComputeBackend\s*\(\s*deviceStr\s*\))");
+    expectMatches(source, R"(cfg\s*\.\s*computeBackend\s*=\s*computeBackend\s*;)");
+    expectMatches(source, R"(cfg\s*\.\s*openClDevice\s*=\s*openClDevice\s*;)");
+    expectMatches(source, R"(denseMatchComputeBackendName\s*\(\s*computeBackend\s*\))");
+}
+TEST(DenseMatchCliGTest, HelpListsUnifiedAndLegacyDeviceOptions)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_MATCH_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    const CliResult result = runCli(exe, {QStringLiteral("--help")});
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    expectContainsAll(combinedOutput(result), {
+        "--device",
+        "--opencl-device",
+        "--cuda",
+        "--no-cuda",
+        "auto, cpu, cuda, opencl",
+    });
+}
+
+TEST(DenseMatchCliGTest, RejectsConflictingUnifiedAndLegacyDeviceOptions)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_MATCH_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    const CliResult mixedResult = runCli(exe, {
+        QStringLiteral("--left"), QStringLiteral("left.tif"),
+        QStringLiteral("--right"), QStringLiteral("right.tif"),
+        QStringLiteral("--output"), QStringLiteral("output.tif"),
+        QStringLiteral("--device"), QStringLiteral("opencl"),
+        QStringLiteral("--cuda"),
+    });
+    EXPECT_EQ(mixedResult.exitCode, kArgumentErrorExitCode)
+        << qPrintable(combinedOutput(mixedResult));
+    expectContainsAll(combinedOutput(mixedResult), {
+        "--device",
+        "--cuda/--no-cuda",
+    });
+
+    const CliResult legacyResult = runCli(exe, {
+        QStringLiteral("--left"), QStringLiteral("left.tif"),
+        QStringLiteral("--right"), QStringLiteral("right.tif"),
+        QStringLiteral("--output"), QStringLiteral("output.tif"),
+        QStringLiteral("--cuda"),
+        QStringLiteral("--no-cuda"),
+    });
+    EXPECT_EQ(legacyResult.exitCode, kArgumentErrorExitCode)
+        << qPrintable(combinedOutput(legacyResult));
+    expectContainsAll(combinedOutput(legacyResult), {
+        "--cuda",
+        "--no-cuda",
+    });
+}
+
 TEST(DenseMatchCliGTest, RejectsExtremeKernelSizesBeforeAllocation)
 {
     const QString exe = executablePath(PLASCAN_DENSE_MATCH_CLI_PATH);

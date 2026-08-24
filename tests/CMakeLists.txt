@@ -42,12 +42,7 @@ plascan_deploy_qt_tls_runtime(test_qt_tls_runtime)
 gtest_discover_tests(test_qt_tls_runtime)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
-find_package(OpenCV REQUIRED)
-if(OpenCV_VERSION VERSION_GREATER_EQUAL "5.0.0")
-    find_package(OpenCV REQUIRED COMPONENTS core geometry stereo imgproc)
-else()
-    find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
-endif()
+find_package(OpenCV 5.0 REQUIRED COMPONENTS core geometry stereo imgproc)
 
 # ── 测试数据根目录──────────────────────────────────────────────────────────────
 set(TEST_DATA_DIR "${CMAKE_SOURCE_DIR}/testData")
@@ -380,10 +375,6 @@ target_include_directories(test_bundle_adjust_projection PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
-if(PLASCAN_ENABLE_CERES_REFERENCE)
-    target_link_libraries(test_bundle_adjust_projection PRIVATE Ceres::ceres)
-    target_compile_definitions(test_bundle_adjust_projection PRIVATE PLASCAN_TEST_HAS_CERES=1)
-endif()
 gtest_discover_tests(test_bundle_adjust_projection)
 
 # ==============================================================================
@@ -404,7 +395,7 @@ target_include_directories(test_bundle_adjust_shared_focal PRIVATE
 gtest_discover_tests(test_bundle_adjust_shared_focal)
 
 # ==============================================================================
-# test_bundle_adjust_adaptive_camera_model — 逐参数相机模型可靠性与 Ceres 掩码
+# test_bundle_adjust_adaptive_camera_model — 逐参数相机模型可靠性与参数掩码
 # ==============================================================================
 add_executable(test_bundle_adjust_adaptive_camera_model
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_adaptive_camera_model.cpp
@@ -419,28 +410,6 @@ target_include_directories(test_bundle_adjust_adaptive_camera_model PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 gtest_discover_tests(test_bundle_adjust_adaptive_camera_model)
-
-# ==============================================================================
-# test_bundle_adjust_ceres_backend — 可选 Ceres reference 后端与 GPU 规划
-# ==============================================================================
-if(PLASCAN_ENABLE_CERES_REFERENCE)
-    add_executable(test_bundle_adjust_ceres_backend
-        ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp
-    )
-    target_link_libraries(test_bundle_adjust_ceres_backend PRIVATE
-        bundle_adjust
-        camera
-        GTest::gtest_main
-    )
-    target_include_directories(test_bundle_adjust_ceres_backend PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-    )
-    gtest_discover_tests(test_bundle_adjust_ceres_backend)
-
-else()
-    message(STATUS "tests: Ceres reference disabled, skipping test_bundle_adjust_ceres_backend")
-endif()
 
 add_executable(test_bundle_adjust_plamatrix_backend
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_plamatrix_backend.cpp
@@ -471,48 +440,6 @@ target_include_directories(test_bundle_adjust_backend_selection PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 gtest_discover_tests(test_bundle_adjust_backend_selection)
-
-add_executable(test_bundle_adjust_native_cuda_workset
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_native_cuda_workset.cpp
-)
-target_link_libraries(test_bundle_adjust_native_cuda_workset PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_native_cuda_workset PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_native_cuda_workset)
-
-add_executable(test_bundle_adjust_native_cuda_math
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_native_cuda_math.cpp
-)
-target_link_libraries(test_bundle_adjust_native_cuda_math PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_native_cuda_math PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_native_cuda_math)
-
-add_executable(test_bundle_adjust_native_cuda_backend
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_native_cuda_backend.cpp
-)
-target_link_libraries(test_bundle_adjust_native_cuda_backend PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_native_cuda_backend PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_native_cuda_backend)
 
 add_executable(test_bundle_adjust_quality_gate
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_quality_gate.cpp
@@ -585,7 +512,7 @@ target_link_libraries(test_reference_dataset_planetary_laser PRIVATE
 gtest_discover_tests(test_reference_dataset_planetary_laser)
 
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+    "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/platforms")
 
 # ==============================================================================
 # test_project_data — ProjectData 持久化契约与 core/results 分域
@@ -672,7 +599,9 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/ModelPackageDownloadDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/PythonRuntimeDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/runtime/PythonRuntimeManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/runtime/GeospatialRuntimePaths.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/MaskEditorSettingsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/CameraCalibrationData.cpp
@@ -702,6 +631,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/CanvasWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MaskEditor.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceDetection.cpp
@@ -716,7 +646,6 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchSpatialIndex.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchGpuRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DisparityHeatmapOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeContextMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeModel.cpp
@@ -817,10 +746,11 @@ target_include_directories(test_gui_project_utils PRIVATE
 )
 if(WIN32)
     target_link_libraries(test_gui_project_utils PRIVATE ole32 user32 uuid)
+    plascan_deploy_onnxruntime(test_gui_project_utils)
 endif()
 plascan_import_qt_offscreen_plugin(test_gui_project_utils)
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+    "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/platforms")
 gtest_discover_tests(test_gui_project_utils
     # This target links most GUI and photogrammetry modules. Its first launch
     # can exceed one minute on a cold Windows runner while binaries are scanned.
@@ -938,6 +868,8 @@ add_executable(test_workflow_parameter_dialog_style
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/CreatePointCloudDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/CreateDemDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/CreateDemDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/TextureMappingDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/TextureMappingDialog.ui
@@ -960,6 +892,7 @@ target_link_libraries(test_workflow_parameter_dialog_style PRIVATE
 )
 target_include_directories(test_workflow_parameter_dialog_style PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
 )
 target_compile_definitions(test_workflow_parameter_dialog_style PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
@@ -1018,6 +951,9 @@ if(GDAL_INCLUDE_DIRS)
 endif()
 add_test(NAME test_layer_renderer_batched_overlay
          COMMAND test_layer_renderer_batched_overlay)
+if(WIN32)
+    plascan_deploy_onnxruntime(test_layer_renderer_batched_overlay)
+endif()
 endif()
 
 function(plascan_add_python_unittest test_name module_name)
@@ -1036,6 +972,7 @@ endfunction()
 
 plascan_add_python_unittest(FullPipelineEntrypointTest test_full_pipeline_entrypoint)
 plascan_add_python_unittest(RepoHygieneTest test_repo_hygiene)
+plascan_add_python_unittest(TensorRtSdkSetupTest test_tensorrt_sdk_setup)
 plascan_add_python_unittest(PythonRuntimeSetupTest test_setup_python_runtime)
 plascan_add_python_unittest(DownloadPhotogrammetryTestDataTest test_download_photogrammetry_testdata)
 plascan_add_python_unittest(PreparePhotogrammetryBenchmarksTest test_prepare_photogrammetry_benchmarks)
@@ -1368,8 +1305,11 @@ if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS AND
     gtest_discover_tests(test_camera_scene_rhi_smoke
         DISCOVERY_MODE PRE_TEST
         PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=${_PLASCAN_RHI_SMOKE_PLATFORM}"
-            LABELS "gui;gpu;vulkan")
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=${_PLASCAN_RHI_SMOKE_PLATFORM};QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}"
+            LABELS "gui;gpu;vulkan"
+            RUN_SERIAL TRUE
+            TIMEOUT 120)
     unset(_PLASCAN_RHI_SMOKE_PLATFORM)
 else()
     message(STATUS

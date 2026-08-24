@@ -22,7 +22,7 @@ from env_common import (
 BASE_PACKAGES = [
     "numpy",
     "scipy",
-    "opencv-python",
+    "opencv-python>=5.0,<6",
     "kornia",
     "git+https://github.com/cvg/LightGlue.git",
 ]

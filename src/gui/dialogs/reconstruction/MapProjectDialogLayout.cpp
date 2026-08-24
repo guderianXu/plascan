@@ -51,7 +51,7 @@ void MapProjectDialog::setupUi()
 {
     setObjectName(QStringLiteral("mapProjectDialog"));
     setWindowTitle(tr("创建正射影像"));
-    resize(680, 780);
+    resize(1020, 700);
     xjw::gui::dialogs::configureWorkflowParameterDialog(this);
 
     auto *mainLayout = new QVBoxLayout(this);
@@ -66,6 +66,39 @@ void MapProjectDialog::setupUi()
     auto *contentLayout = new QVBoxLayout(contentWidget);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     contentLayout->setSpacing(9);
+
+    _productModeGroup = new QGroupBox(tr("产品模式"), contentWidget);
+    _productModeGroup->setObjectName(QStringLiteral("orthoProductModeGroup"));
+    auto *productModeLayout = new QVBoxLayout(_productModeGroup);
+    productModeLayout->setContentsMargins(12, 10, 12, 10);
+    productModeLayout->setSpacing(5);
+    _productModeCombo = new QComboBox(_productModeGroup);
+    _productModeCombo->setObjectName(QStringLiteral("orthoProductModeCombo"));
+    _productModeCombo->addItem(tr("项目相机正射影像"), QStringLiteral("standard"));
+    _productModeCombo->addItem(tr("GeoTIFF 地理正射影像"), QStringLiteral("rpc"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_productModeCombo);
+    _productModeHint = new QLabel(_productModeGroup);
+    _productModeHint->setObjectName(QStringLiteral("orthoProductModeHint"));
+    _productModeHint->setWordWrap(true);
+    productModeLayout->addWidget(_productModeCombo);
+    productModeLayout->addWidget(_productModeHint);
+    contentLayout->addWidget(_productModeGroup);
+
+    auto *columnsWidget = new QWidget(contentWidget);
+    columnsWidget->setObjectName(QStringLiteral("orthoParameterColumns"));
+    auto *columnsLayout = new QHBoxLayout(columnsWidget);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(9);
+    auto *leftColumn = new QWidget(columnsWidget);
+    auto *leftColumnLayout = new QVBoxLayout(leftColumn);
+    leftColumnLayout->setContentsMargins(0, 0, 0, 0);
+    leftColumnLayout->setSpacing(9);
+    auto *rightColumn = new QWidget(columnsWidget);
+    auto *rightColumnLayout = new QVBoxLayout(rightColumn);
+    rightColumnLayout->setContentsMargins(0, 0, 0, 0);
+    rightColumnLayout->setSpacing(9);
+    columnsLayout->addWidget(leftColumn, 1);
+    columnsLayout->addWidget(rightColumn, 1);
 
     _projectionGroup = new QGroupBox(tr("投影"), contentWidget);
     _projectionGroup->setObjectName(QStringLiteral("orthoProjectionGroup"));
@@ -139,7 +172,7 @@ void MapProjectDialog::setupUi()
     bodyGrid->addWidget(new QLabel(tr("中央经线:"), _bodyReferenceWidget), 2, 3);
     bodyGrid->addWidget(_centralMeridianSpin, 2, 4, 1, 2);
     projectionForm->addRow(tr("小天体参考:"), _bodyReferenceWidget);
-    contentLayout->addWidget(_projectionGroup);
+    leftColumnLayout->addWidget(_projectionGroup);
 
     _parametersGroup = new QGroupBox(tr("参数"), contentWidget);
     _parametersGroup->setObjectName(QStringLiteral("orthoParametersGroup"));
@@ -215,7 +248,8 @@ void MapProjectDialog::setupUi()
     imageLayout->addWidget(_imageList);
     _imagePanel->setVisible(false);
     parametersForm->addRow(QString(), _imagePanel);
-    contentLayout->addWidget(_parametersGroup);
+    leftColumnLayout->addWidget(_parametersGroup);
+    leftColumnLayout->addStretch(1);
 
     _regionGroup = new QGroupBox(tr("区域"), contentWidget);
     _regionGroup->setObjectName(QStringLiteral("orthoRegionGroup"));
@@ -309,7 +343,7 @@ void MapProjectDialog::setupUi()
     regionForm->addRow(tr("边界:"), boundsWidget);
     regionForm->addRow(QString(), estimateWidget);
     regionForm->addRow(QString(), _memoryEstimateLabel);
-    contentLayout->addWidget(_regionGroup);
+    rightColumnLayout->addWidget(_regionGroup);
 
     _outputGroup = new QGroupBox(tr("输出"), contentWidget);
     _outputGroup->setObjectName(QStringLiteral("orthoOutputGroup"));
@@ -327,7 +361,9 @@ void MapProjectDialog::setupUi()
     outputHint->setWordWrap(true);
     outputForm->addRow(tr("正射影像:"), pathRow(_outputEdit, _outputBrowseButton));
     outputForm->addRow(QString(), outputHint);
-    contentLayout->addWidget(_outputGroup);
+    rightColumnLayout->addWidget(_outputGroup);
+    rightColumnLayout->addStretch(1);
+    contentLayout->addWidget(columnsWidget);
 
     _progressGroup = new QGroupBox(tr("进度"), contentWidget);
     _progressGroup->setObjectName(QStringLiteral("orthoProgressGroup"));
@@ -356,12 +392,11 @@ void MapProjectDialog::setupUi()
     _buttonBox = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     _buttonBox->setObjectName(QStringLiteral("orthoButtonBox"));
-    xjw::gui::dialogs::configureWorkflowButtonBox(_buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(_buttonBox, tr("生成"));
     _runButton = _buttonBox->button(QDialogButtonBox::Ok);
     _cancelButton = _buttonBox->button(QDialogButtonBox::Cancel);
     _runButton->setObjectName(QStringLiteral("orthoRunButton"));
     _cancelButton->setObjectName(QStringLiteral("orthoCancelButton"));
-    _runButton->setText(tr("生成"));
     _cancelButton->setText(tr("取消"));
     mainLayout->addWidget(_buttonBox);
 }

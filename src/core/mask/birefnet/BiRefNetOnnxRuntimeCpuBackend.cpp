@@ -15,6 +15,9 @@
 #include <thread>
 #include <vector>
 
+static_assert(ORT_API_VERSION == PLASCAN_ONNXRUNTIME_API_VERSION,
+              "ONNX Runtime headers do not match PlaScan's pinned C API version");
+
 namespace xjw::mask
 {
 namespace

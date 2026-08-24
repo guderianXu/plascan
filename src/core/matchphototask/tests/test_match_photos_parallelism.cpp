@@ -5,10 +5,10 @@
 namespace
 {
 
-constexpr std::uint64_t gib(std::uint64_t value)
-{
-    return value * 1024ULL * 1024ULL * 1024ULL;
-}
+    constexpr std::uint64_t gib(std::uint64_t value)
+    {
+        return value * 1024ULL * 1024ULL * 1024ULL;
+    }
 
 } // namespace
 
@@ -19,8 +19,8 @@ TEST(MatchPhotosParallelismTest, CpuMatchingAlwaysUsesOneWorker)
     memory.freeBytes = gib(24);
     memory.totalBytes = gib(24);
 
-    const auto decision = xjw::matchphotos::resolveLightGlueParallelism(
-        4, 120, false, 4096, memory);
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 4, 120, false, 4096, 256, memory);
 
     EXPECT_EQ(decision.requestedWorkers, 4);
     EXPECT_EQ(decision.effectiveWorkers, 1);
@@ -35,8 +35,8 @@ TEST(MatchPhotosParallelismTest, AutoModeUsesMemoryAwareBoundedConcurrency)
     memory.freeBytes = gib(20);
     memory.totalBytes = gib(24);
 
-    const auto decision = xjw::matchphotos::resolveLightGlueParallelism(
-        0, 120, true, 4096, memory);
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 0, 120, true, 4096, 256, memory);
 
     EXPECT_TRUE(decision.autoSelected);
     EXPECT_EQ(decision.requestedWorkers, 0);
@@ -52,8 +52,8 @@ TEST(MatchPhotosParallelismTest, ExplicitConcurrencyIsCappedByMemory)
     memory.freeBytes = gib(4);
     memory.totalBytes = gib(8);
 
-    const auto decision = xjw::matchphotos::resolveLightGlueParallelism(
-        4, 120, true, 8192, memory);
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 4, 120, true, 8192, 256, memory);
 
     EXPECT_EQ(decision.effectiveWorkers, 1);
     EXPECT_EQ(decision.maxWorkersByMemory, 1);
@@ -67,29 +67,60 @@ TEST(MatchPhotosParallelismTest, PairCountCapsWorkerCount)
     memory.freeBytes = gib(20);
     memory.totalBytes = gib(24);
 
-    const auto decision = xjw::matchphotos::resolveLightGlueParallelism(
-        4, 2, true, 4096, memory);
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 4, 2, true, 4096, 256, memory);
 
     EXPECT_EQ(decision.effectiveWorkers, 2);
 }
 
 TEST(MatchPhotosParallelismTest, MissingMemoryTelemetryFallsBackToSerial)
 {
-    const auto decision = xjw::matchphotos::resolveLightGlueParallelism(
-        0, 120, true, 4096, {});
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 0, 120, true, 4096, 256, {});
 
     EXPECT_EQ(decision.effectiveWorkers, 1);
     EXPECT_TRUE(decision.memoryLimited);
 }
 
+TEST(MatchPhotosParallelismTest, CudaSiftUsesLinearMemoryModel)
+{
+    xjw::matchphotos::MatchPhotosGpuMemoryInfo memory;
+    memory.available = true;
+    memory.freeBytes = gib(14);
+    memory.totalBytes = gib(16);
+
+    const auto sift = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::CudaSift, 0, 120, true, 40000, 128, memory);
+    const auto lightGlue = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LightGlue, 0, 120, true, 40000, 128, memory);
+
+    EXPECT_EQ(sift.effectiveWorkers, 8);
+    EXPECT_EQ(lightGlue.effectiveWorkers, 1);
+    EXPECT_LT(sift.estimatedBytesPerWorker, lightGlue.estimatedBytesPerWorker);
+    EXPECT_TRUE(sift.reason.contains(QStringLiteral("CUDA SIFT")));
+}
+
+TEST(MatchPhotosParallelismTest, LoMaRUsesDedicatedBoundedMemoryModel)
+{
+    xjw::matchphotos::MatchPhotosGpuMemoryInfo memory;
+    memory.available = true;
+    memory.freeBytes = gib(10);
+    memory.totalBytes = gib(12);
+
+    const auto decision = xjw::matchphotos::resolveGpuMatchingParallelism(
+        xjw::matchphotos::GpuMatchingAlgorithm::LoMaR, 0, 120, true, 3840, 256, memory);
+
+    EXPECT_EQ(decision.effectiveWorkers, 3);
+    EXPECT_LE(decision.maxWorkersByMemory, 3);
+    EXPECT_TRUE(decision.reason.contains(QStringLiteral("LoMa-R")));
+}
+
 TEST(MatchPhotosParallelismTest, DetectsCudaOutOfMemoryDiagnostics)
 {
-    EXPECT_TRUE(xjw::matchphotos::isCudaOutOfMemoryError(
-        QStringLiteral("CUDA out of memory. Tried to allocate 2.00 GiB")));
-    EXPECT_TRUE(xjw::matchphotos::isCudaOutOfMemoryError(
-        QStringLiteral("CUDNN_STATUS_ALLOC_FAILED")));
-    EXPECT_FALSE(xjw::matchphotos::isCudaOutOfMemoryError(
-        QStringLiteral("LightGlue 模型输出维度错误")));
+    EXPECT_TRUE(
+        xjw::matchphotos::isCudaOutOfMemoryError(QStringLiteral("CUDA out of memory. Tried to allocate 2.00 GiB")));
+    EXPECT_TRUE(xjw::matchphotos::isCudaOutOfMemoryError(QStringLiteral("CUDNN_STATUS_ALLOC_FAILED")));
+    EXPECT_FALSE(xjw::matchphotos::isCudaOutOfMemoryError(QStringLiteral("LightGlue 模型输出维度错误")));
 }
 
 TEST(MatchPhotosParallelismTest, SelectsLoMaRBucketFromStableTotalGpuMemory)
@@ -123,31 +154,17 @@ TEST(MatchPhotosParallelismTest, MissingTelemetryUsesConservativeLoMaRBucket)
 
 TEST(MatchPhotosParallelismTest, GeometryVerificationUsesHalfLogicalCpuPairParallelism)
 {
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 32),
-        16);
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 15),
-        7);
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(8, 32),
-        4);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(120, 32), 16);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(120, 15), 7);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(8, 32), 4);
 }
 
 TEST(MatchPhotosParallelismTest, GeometryVerificationKeepsSmallOrUnknownHostsSerial)
 {
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(2, 32),
-        1);
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 1),
-        1);
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 0),
-        1);
-    EXPECT_EQ(
-        xjw::matchphotos::resolveGeometryVerificationWorkers(0, 32),
-        1);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(2, 32), 1);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(120, 1), 1);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(120, 0), 1);
+    EXPECT_EQ(xjw::matchphotos::resolveGeometryVerificationWorkers(0, 32), 1);
 }
 
 TEST(MatchPhotosParallelismTest, GuidedMatchingUsesBoundedPairParallelism)

@@ -2,6 +2,7 @@ build/
 build_test/
 build_new/
 *.o
+*.obj
 *.so
 *.a
 *.pyc
@@ -28,6 +29,7 @@ docker/debs/
 .worktrees/
 logs/
 .superpowers/
+3rdparty/opencv_contrib/
 
 # Large AI mask model artifacts are installed locally by scripts.
 resources/models/sam2.1_hiera_tiny.pt

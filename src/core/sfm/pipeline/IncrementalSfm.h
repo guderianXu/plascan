@@ -27,7 +27,7 @@
 #include "triangulation/Triangulator.h"
 #include "registration/PriorTrack.h"
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 
 #include <array>

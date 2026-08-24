@@ -148,9 +148,22 @@ bool solvePlanetaryLineScanBundleAdjustPlaMatrix(
                 solverOptions.useInitialGuess = !retryPrimaryStep.empty();
                 std::vector<double> primaryStep = retryPrimaryStep;
                 std::vector<double> eliminatedStep;
-                const auto report = plamatrix::solveDampedSchurComplement(
+                auto report = plamatrix::solveDampedSchurComplement(
                     equations, lm.damping(), solverOptions, workspace,
                     &primaryStep, &eliminatedStep);
+                if (!report.converged &&
+                    backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
+                {
+                    backend = plamatrix::SchurComplementLinearBackend::Cpu;
+                    result->linearSolverName = linearBackendName(backend);
+                    solverOptions.linearBackend = backend;
+                    solverOptions.useInitialGuess = false;
+                    primaryStep.clear();
+                    eliminatedStep.clear();
+                    report = plamatrix::solveDampedSchurComplement(
+                        equations, lm.damping(), solverOptions, workspace,
+                        &primaryStep, &eliminatedStep);
+                }
                 if (isCancelled())
                 {
                     *workingSet = initialWorkingSet;

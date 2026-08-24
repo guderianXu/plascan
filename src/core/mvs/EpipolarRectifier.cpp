@@ -1,7 +1,7 @@
 #include "EpipolarRectifier.h"
 
-#include "OpenCvCompat.h"
 #include <opencv2/imgproc.hpp>
+#include <opencv2/stereo.hpp>
 
 #include <algorithm>
 #include <array>
@@ -190,7 +190,7 @@ bool EpipolarRectifier::rectify(
                       P1,
                       P2,
                       Q,
-                      PLASCAN_OPENCV_ZERO_DISPARITY,
+                      cv::STEREO_ZERO_DISPARITY,
                       -1,
                       imageSize,
                       &roi1,

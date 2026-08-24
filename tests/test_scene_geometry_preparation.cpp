@@ -371,6 +371,58 @@ TEST(SceneGeometryPreparationTest, UsesContinuousSelectionRectangleEdges)
     ASSERT_EQ(selected, (std::vector<PointVertexIndex>{0U, 1U, 2U, 3U}));
 }
 
+TEST(SceneGeometryPreparationTest, SelectsPointsInsideEllipseInsteadOfItsBoundingCorners)
+{
+    const SceneRenderCloud cloud = makePointCloud({
+        QVector3D(0.0f, 0.0f, 0.0f),
+        QVector3D(0.5f, 0.5f, 0.0f),
+        QVector3D(-0.5f, 0.0f, 0.0f)});
+    const PointRenderPreparation prepared = preparePointRenderData(cloud);
+    QMatrix4x4 identity;
+    identity.setToIdentity();
+    ScreenSelectionRegion region;
+    region.shape = ScreenSelectionShape::Ellipse;
+    region.bounds = QRectF(20.0, 20.0, 60.0, 60.0);
+
+    const std::vector<PointVertexIndex> selected = selectPointVertexIndices(
+        prepared.vertexData,
+        9 * int(sizeof(float)),
+        region,
+        identity,
+        QSize(100, 100),
+        QPointF());
+
+    EXPECT_EQ(selected, (std::vector<PointVertexIndex>{0U, 2U}));
+}
+
+TEST(SceneGeometryPreparationTest, SelectsPointsInsideFreehandPolygon)
+{
+    const SceneRenderCloud cloud = makePointCloud({
+        QVector3D(0.0f, 0.0f, 0.0f),
+        QVector3D(0.7f, 0.0f, 0.0f),
+        QVector3D(0.0f, 0.7f, 0.0f)});
+    const PointRenderPreparation prepared = preparePointRenderData(cloud);
+    QMatrix4x4 identity;
+    identity.setToIdentity();
+    ScreenSelectionRegion region;
+    region.shape = ScreenSelectionShape::Polygon;
+    region.polygon = QPolygonF{
+        QPointF(20.0, 80.0), QPointF(50.0, 20.0), QPointF(80.0, 80.0)};
+    region.bounds = region.polygon.boundingRect();
+
+    const PointSelectionPreparation selection = preparePointSelection(
+        prepared.vertexData,
+        9 * int(sizeof(float)),
+        prepared.scalarData,
+        region,
+        identity,
+        QSize(100, 100),
+        QPointF());
+
+    ASSERT_TRUE(selection.isValid());
+    EXPECT_EQ(selection.indices, (std::vector<PointVertexIndex>{0U}));
+}
+
 TEST(SceneGeometryPreparationTest, CancelledSelectionNeverReturnsPartialData)
 {
     const SceneRenderCloud cloud = makePointCloud({

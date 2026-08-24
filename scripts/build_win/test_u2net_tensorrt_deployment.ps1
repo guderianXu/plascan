@@ -52,27 +52,38 @@ function Assert-OpenCvCpuOnly
 {
     param([Parameter(Mandatory = $true)][string] $BuildPath)
 
-    $abiInfo = Join-Path $BuildPath "vcpkg_installed\x64-windows\share\opencv4\vcpkg_abi_info.txt"
-    Assert-ExistingPath $abiInfo "OpenCV vcpkg ABI info"
-    $featureLine = @(Get-Content -LiteralPath $abiInfo | Where-Object { $_ -match '^features\s+' }) |
+    $mainCache = Join-Path $BuildPath "CMakeCache.txt"
+    Assert-ExistingPath $mainCache "PlaScan CMake cache"
+    $prefixEntry = @(Get-Content -LiteralPath $mainCache |
+        Where-Object { $_ -match '^PLASCAN_SOURCE_DEPENDENCY_PREFIX:PATH=' }) |
         Select-Object -First 1
-    if ([string]::IsNullOrWhiteSpace($featureLine))
+    if ([string]::IsNullOrWhiteSpace($prefixEntry))
     {
-        throw "OpenCV ABI feature list is missing from: $abiInfo"
+        throw "Source-built OpenCV prefix is missing from the PlaScan cache: $mainCache"
     }
 
-    $features = @((($featureLine -replace '^features\s+', '') -split ';') |
-        ForEach-Object { $_.Trim().ToLowerInvariant() } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $forbidden = @(@("cuda", "cudnn", "dnn-cuda") |
-        Where-Object { $features -contains $_ })
-    if ($forbidden.Count -gt 0)
+    $sourcePrefix = $prefixEntry -replace '^PLASCAN_SOURCE_DEPENDENCY_PREFIX:PATH=', ''
+    $versionHeader = Join-Path $sourcePrefix "include\opencv2\core\version.hpp"
+    Assert-ExistingPath $versionHeader "OpenCV version header"
+    if ((Get-Content -Raw -LiteralPath $versionHeader) -notmatch `
+        '(?m)^#define\s+CV_VERSION_MAJOR\s+5\s*$')
     {
-        throw "OpenCV must be CPU-only, but its vcpkg ABI enables: $($forbidden -join ', ')"
+        throw "PlaScan deployment requires OpenCV 5: $versionHeader"
     }
-    if ($features -notcontains "dnn")
+
+    $sourceBuildRoot = Split-Path -Parent (Resolve-FullPath $sourcePrefix)
+    $opencvCache = Join-Path $sourceBuildRoot "opencv-build\CMakeCache.txt"
+    Assert-ExistingPath $opencvCache "source-built OpenCV CMake cache"
+    $opencvSettings = Get-Content -LiteralPath $opencvCache
+    foreach ($expected in @(
+        "WITH_CUDA:BOOL=OFF",
+        "OPENCV_DNN_CUDA:BOOL=OFF",
+        "BUILD_opencv_dnn:BOOL=ON"))
     {
-        throw "OpenCV CPU DNN support is missing from: $abiInfo"
+        if ($opencvSettings -notcontains $expected)
+        {
+            throw "Source-built OpenCV does not satisfy the CPU-DNN contract: missing $expected in $opencvCache"
+        }
     }
 }
 

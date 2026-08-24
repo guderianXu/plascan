@@ -5,7 +5,10 @@
  * @brief PlaMatrix 相机、三维点、共享 Brown 内参与物方约束联合 BA 后端入口。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustOptions.h"
+#include "BundleAdjustProblem.h"
+#include "BundleAdjustResult.h"
+#include "BundleAdjustTypes.h"
 
 #include <string>
 

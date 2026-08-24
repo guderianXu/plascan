@@ -64,12 +64,6 @@ bool evaluateLineScanImageObservation(
 double lineScanImageRms(const PlanetaryLineScanBaWorkingSet &workingSet);
 double lineScanLaserRangeRms(const PlanetaryLineScanBaWorkingSet &workingSet);
 
-bool solvePlanetaryLineScanBundleAdjustCeres(
-    PlanetaryLineScanBaWorkingSet *workingSet,
-    const PlanetaryLineScanBaOptions &options,
-    PlanetaryLineScanBaResult *result,
-    std::string *errorMessage);
-
 bool solvePlanetaryLineScanBundleAdjustPlaMatrix(
     PlanetaryLineScanBaWorkingSet *workingSet,
     const PlanetaryLineScanBaOptions &options,

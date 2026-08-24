@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DemDomTypes.h"
+#include "TerrainComputeBackend.h"
 
 #include <QString>
 
@@ -9,25 +10,27 @@
 namespace xjw
 {
 
-enum class DemMosaicBlendMode
-{
-    First,
-    Last,
-    Mean,
-    Median,
-    Min,
-    Max,
-    ConfidenceWeighted,
-    InverseErrorWeighted
-};
+    enum class DemMosaicBlendMode
+    {
+        First,
+        Last,
+        Mean,
+        Median,
+        Min,
+        Max,
+        ConfidenceWeighted,
+        InverseErrorWeighted
+    };
 
-class DemMosaic
-{
-public:
-    static bool mosaicSameGrid(const std::vector<DemGridData> &tiles,
-                               DemMosaicBlendMode blendMode,
-                               DemGridData *output,
-                               QString *errorMsg = nullptr);
-};
+    class DemMosaic
+    {
+    public:
+        static bool mosaicSameGrid(const std::vector<DemGridData>& tiles,
+                                   DemMosaicBlendMode blendMode,
+                                   DemGridData* output,
+                                   QString* errorMsg = nullptr,
+                                   const TerrainComputeOptions& computeOptions = {},
+                                   TerrainComputeExecution* computeExecution = nullptr);
+    };
 
 } // namespace xjw

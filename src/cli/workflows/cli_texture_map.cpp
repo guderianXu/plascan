@@ -44,6 +44,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication qt_application(argc, argv);
     CLI::App app{"PlaScan GUI 等价多视图纹理生成工具"};
+    cli::configureApp(app);
 
     std::string mesh_path;
     std::string depth_map_dir;

@@ -25,6 +25,32 @@ struct EstimatedCamera
     std::optional<camera_reference::Vector3d> orientationYprDegrees;
 };
 
+struct RpcProjectCamera
+{
+    QString uuid;
+    QString path;
+    QJsonObject camera;
+};
+
+QVector<RpcProjectCamera> rpcProjectCameras(const QJsonObject &metadata)
+{
+    QVector<RpcProjectCamera> result;
+    const QJsonObject files = xjw::common::project::projectFilesRootObject(metadata);
+    for (const QJsonValue &value : files.value(QStringLiteral("images")).toArray())
+    {
+        const QJsonObject image = value.toObject();
+        const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
+        if (camera.value(QStringLiteral("model")).toString().compare(
+                QStringLiteral("rpc"), Qt::CaseInsensitive) != 0)
+        {
+            continue;
+        }
+        result.append({image.value(QStringLiteral("image_uuid")).toString(),
+                       image.value(QStringLiteral("path")).toString(), camera});
+    }
+    return result;
+}
+
 struct ErrorStats
 {
     void add(const camera_reference::Vector3d &value)
@@ -273,8 +299,10 @@ void CameraReferenceTreeModel::setReferenceData(
     ReferenceDisplayMode mode)
 {
     clear();
+    const QVector<RpcProjectCamera> rpcCameras = rpcProjectCameras(projectMetadata);
     const bool geographicSource = mode == ReferenceDisplayMode::Source
-        && referenceSet.source().sourceCrs.contains(QStringLiteral("4979"));
+        && (referenceSet.source().sourceCrs.contains(QStringLiteral("4979"))
+            || !rpcCameras.isEmpty());
     setHorizontalHeaderLabels({QStringLiteral("相机"),
                                geographicSource ? QStringLiteral("经度 (°)") : QStringLiteral("X (m)"),
                                geographicSource ? QStringLiteral("纬度 (°)") : QStringLiteral("Y (m)"),
@@ -367,6 +395,30 @@ void CameraReferenceTreeModel::setReferenceData(
         if (const auto value = orientationStats.rms())
         {
             setVector(totalRow, *value, YawColumn);
+        }
+    }
+
+    if (!rpcCameras.isEmpty())
+    {
+        ItemRow groupRow = createRow(QStringLiteral("影像地理定位模型 (%1)").arg(rpcCameras.size()));
+        setNodeData(groupRow, NodeType::RpcModelGroup);
+        QStandardItem *groupItem = groupRow.front();
+        appendRow(groupRow);
+        for (const RpcProjectCamera &rpc : rpcCameras)
+        {
+            ItemRow row = createRow(QFileInfo(rpc.path).fileName());
+            setNodeData(row, NodeType::RpcModel, rpc.uuid, rpc.path);
+            if (mode == ReferenceDisplayMode::Source)
+            {
+                row.at(XColumn)->setData(rpc.camera.value(QStringLiteral("long_off")).toDouble(), Qt::DisplayRole);
+                row.at(YColumn)->setData(rpc.camera.value(QStringLiteral("lat_off")).toDouble(), Qt::DisplayRole);
+                row.at(ZColumn)->setData(rpc.camera.value(QStringLiteral("height_off")).toDouble(), Qt::DisplayRole);
+            }
+            row.at(StatusColumn)->setText(mode == ReferenceDisplayMode::Source
+                ? QStringLiteral("RPC00B 已就绪 · WGS84 椭球高")
+                : QStringLiteral("RPC 为区域定位模型，无单一相机中心/姿态"));
+            row.at(EnabledColumn)->setText(QStringLiteral("自动"));
+            groupItem->appendRow(row);
         }
     }
 

@@ -22,3 +22,8 @@
 对话框只负责展示状态、校验输入和收集参数。长任务由 controller、manager、service
 或 task 执行；文件 IO、算法、项目持久化和渲染数学不要放入 Dialog 类。非对话框的
 视图辅助代码应放在 `src/gui/views`，跨模块能力应下沉到 `src/common` 或 `src/core`。
+
+工作流参数对话框统一调用 `shared/WorkflowParameterDialogStyle`：主按钮使用“创建”“生成”“开始”等
+实际动作，确认/设置类对话框才使用默认“确定”；取消按钮统一为“取消”。GUI 展示中文名称，保存到
+项目配置的枚举值应与 CLI 使用相同的稳定英文 ID。完整约定见
+[`docs/GUI_CLI_GUIDE.md`](../../../docs/GUI_CLI_GUIDE.md)。

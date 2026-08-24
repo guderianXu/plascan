@@ -150,8 +150,7 @@ bool isSupportedLineScanBackend(BABackend backend)
     return backend == BABackend::Auto ||
            backend == BABackend::PlaMatrixCpu ||
            backend == BABackend::PlaMatrixCuda ||
-           backend == BABackend::PlaMatrixOpenCl ||
-           backend == BABackend::CeresCpu;
+           backend == BABackend::PlaMatrixOpenCl;
 }
 
 BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions &options,
@@ -486,11 +485,8 @@ bool runPlanetaryLineScanBundleAdjust(
         static_cast<int>(workingSet.cameraParameters.size()),
         static_cast<int>(workingSet.imageObservations.size()));
     result->usedBackend = solverOptions.backend;
-    bool solved = solverOptions.backend == BABackend::CeresCpu
-        ? detail::solvePlanetaryLineScanBundleAdjustCeres(
-              &workingSet, solverOptions, result, errorMessage)
-        : detail::solvePlanetaryLineScanBundleAdjustPlaMatrix(
-              &workingSet, solverOptions, result, errorMessage);
+    bool solved = detail::solvePlanetaryLineScanBundleAdjustPlaMatrix(
+        &workingSet, solverOptions, result, errorMessage);
     if (!solved &&
         (solverOptions.backend == BABackend::PlaMatrixCuda ||
          solverOptions.backend == BABackend::PlaMatrixOpenCl) &&

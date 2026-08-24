@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 
@@ -23,6 +23,7 @@ public:
     bool useGenericPreselection() const;
     bool useReferencePreselection() const;
     bool useGuidedMatching() const;
+    QString guidedMatchingMode() const;
     bool excludePinnedTiePoints() const;
     QString maskApplyMode() const;
     void setReferencePreselectionAvailable(bool available,
@@ -43,7 +44,7 @@ private:
     QLineEdit *_keypointLimitEdit{};
     QLineEdit *_tiePointLimitEdit{};
     QComboBox *_maskModeCombo{};
-    QCheckBox *_guidedMatchingCheck{};
+    QComboBox *_guidedMatchingCombo{};
     QCheckBox *_excludePinnedTiePointsCheck{};
     QGroupBox *_generalGroup{};
     QGroupBox *_advancedGroup{};

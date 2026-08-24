@@ -26,9 +26,11 @@ QString algorithmPlanSummary(const MatchPhotosAlgorithmPlan &plan)
     {
         summary += QStringLiteral("，%1").arg(plan.backendReason);
     }
-    if (plan.enableGuidedMatching)
+    if (guidedMatchingEnabled(plan.guidedMatchingMode))
     {
-        summary += QStringLiteral("，启用引导匹配");
+        summary += plan.guidedMatchingMode == GuidedMatchingMode::Automatic
+            ? QStringLiteral("，自动引导匹配")
+            : QStringLiteral("，强制引导匹配");
     }
     return summary;
 }

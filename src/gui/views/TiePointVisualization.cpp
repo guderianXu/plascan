@@ -348,7 +348,8 @@ PruneCandidateQueryResult queryPruneCandidates(
     const PrunePreviewQuery &query,
     qsizetype pointCount,
     const std::atomic_bool *cancellationFlag,
-    std::size_t maximumReturnedIndices)
+    std::size_t maximumReturnedIndices,
+    const std::vector<std::uint32_t> *excludedIndices)
 {
     PruneCandidateQueryResult result;
     if (pointCount <= 0)
@@ -372,9 +373,24 @@ PruneCandidateQueryResult queryPruneCandidates(
         result.errorMessage = QStringLiteral("连接点数量超过候选索引表示范围");
         return result;
     }
-
-    const auto is_rejected = [&metadata, &query](qsizetype index)
+    if (excludedIndices
+        && (!std::is_sorted(excludedIndices->cbegin(), excludedIndices->cend())
+            || (!excludedIndices->empty()
+                && excludedIndices->back() >= static_cast<std::uint32_t>(pointCount))))
     {
+        result.errorMessage = QStringLiteral("连接点暂删索引无效");
+        return result;
+    }
+
+    const auto is_rejected = [&metadata, &query, excludedIndices](qsizetype index)
+    {
+        if (excludedIndices
+            && std::binary_search(excludedIndices->cbegin(),
+                                  excludedIndices->cend(),
+                                  static_cast<std::uint32_t>(index)))
+        {
+            return false;
+        }
         switch (query.criterion)
         {
         case QualityCriterion::ReprojectionError:

@@ -90,6 +90,9 @@ public:
     /** @brief 更新当前影像是否已完成解码并可执行影像操作。 */
     void setImageDisplayReady(bool ready);
 
+    /** @brief 更新“重置蒙版选区”动作是否可用。 */
+    void setMaskSelectionActive(bool active);
+
     /** @brief 更新当前影像是否存在可显示的深度数据。 */
     void setDepthOverlayAvailable(bool available);
 
@@ -139,6 +142,12 @@ public:
     QAction *showFeaturePointsAction() const;
     QAction *showFeatureResidualsAction() const;
     QAction *showMaskOverlayAction() const;
+    QAction *rectangleMaskAction() const;
+    QAction *scissorsMaskAction() const;
+    QAction *smartPaintMaskAction() const;
+    QAction *magicWandMaskAction() const;
+    QAction *maskEditorSettingsAction() const;
+    QAction *resetMaskSelectionAction() const;
     QAction *showDepthOverlayAction() const;
     QAction *depthOverlayAllLevelsAction() const;
     QAction *depthOverlayLevel1Action() const;
@@ -152,13 +161,13 @@ public:
     /** @brief 返回"显示相机"切换动作（可检查状态）。 */
     QAction *toggleCamerasAction() const;
 
-    /** @brief 返回"显示缩略图"切换动作，用于控制相机影像平面显示模式。 */
+    /** @brief 返回“显示缩略图”切换动作，控制相机平面上的照片缩略图。 */
     QAction *toggleCameraThumbnailsAction() const;
 
     /** @brief 返回"显示本地轴"切换动作，用于工具栏相机菜单，状态与轨迹球显示同步。 */
     QAction *toggleLocalAxesAction() const;
 
-    /** @brief 返回"显示图像"切换动作，用于控制当前相机图像平面。 */
+    /** @brief 返回“显示图像”切换动作，按当前三维视角匹配并对齐 SfM 照片。 */
     QAction *toggleCameraImagesAction() const;
 
     QAction *showCameraImagesInForegroundAction() const;
@@ -238,6 +247,10 @@ public:
     QAction *cleanTiePointsAction() const;
     QAction *viewTiePointMatchesAction() const;
     QAction *manualPointCloudPruneAction() const;
+    QAction *navigationAction() const;
+    QAction *rectangleSelectionAction() const;
+    QAction *circleSelectionAction() const;
+    QAction *freehandSelectionAction() const;
     QAction *cameraCalibrationAction() const;
     QAction *cameraConvertAction() const;
     QAction *generateMaskAction() const;
@@ -328,6 +341,13 @@ private:
     QAction *_showFeaturePointsAct{};
     QAction *_showFeatureResidualsAct{};
     QAction *_showMaskOverlayAct{};
+    QAction *_rectangleMaskAct{};
+    QAction *_scissorsMaskAct{};
+    QAction *_smartPaintMaskAct{};
+    QAction *_magicWandMaskAct{};
+    QAction *_maskEditorSettingsAct{};
+    QAction *_resetMaskSelectionAct{};
+    QActionGroup *_maskEditingToolGroup{};
     QAction *_showDepthOverlayAct{};
     QAction *_depthOverlayAllLevelsAct{};
     QAction *_depthOverlayLevel1Act{};
@@ -336,23 +356,30 @@ private:
     QAction *_showDepthIntensityAct{};
     QActionGroup *_depthOverlayLevelGroup{};
     QAction *_cameraToolbarWidgetAct{}; ///< 三维相机工具按钮的工具栏包装动作
-    QAction *_cameraImageToolbarWidgetAct{}; ///< 三维图像工具按钮的工具栏包装动作
+    QAction *_cameraImageToolbarWidgetAct{}; ///< 三维视角匹配照片按钮的工具栏包装动作
     QAction *_rotateImageLeftToolbarWidgetAct{}; ///< 左转按钮的工具栏包装动作
     QAction *_rotateImageRightToolbarWidgetAct{}; ///< 右转按钮的工具栏包装动作
     QAction *_showFeaturePointsToolbarWidgetAct{};
     QAction *_showMaskOverlayToolbarWidgetAct{};
+    QAction *_maskEditingToolbarWidgetAct{};
     QAction *_showDepthOverlayToolbarWidgetAct{};
     QAction *_resetImageViewToolbarWidgetAct{};
     QAction *_toolbarEditingSeparatorAct{}; ///< 视图操作组与编辑操作组之间的分隔符
-    QAction *_manualPointCloudPruneToolbarWidgetAct{}; ///< 点云剔除按钮的工具栏包装动作
+    QAction *_navigationToolbarWidgetAct{}; ///< 三维导航按钮的工具栏包装动作
+    QAction *_pointSelectionToolbarWidgetAct{}; ///< 点云选择拆分按钮的工具栏包装动作
+    QActionGroup *_pointInteractionGroup{};
+    QAction *_navigationAct{};
+    QAction *_rectangleSelectionAct{};
+    QAction *_circleSelectionAct{};
+    QAction *_freehandSelectionAct{};
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
-    QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图
+    QAction *_toggleCameraThumbnailsAct{}; ///< 显示/隐藏相机平面上的缩略图
     QAction *_toggleLocalAxesAct{}; ///< 工具栏相机菜单中的本地轴显示开关
-    QAction *_toggleCameraImagesAct{}; ///< 启用 SfM 相机对齐检查
-    QAction *_showCameraImagesInForegroundAct{}; ///< 半透明投影当前原始影像到网格表面
-    QAction *_showCameraImagesInBackgroundAct{}; ///< 不透明投影当前原始影像到网格表面
-    QAction *_lockCameraImageAct{}; ///< 锁定当前检查相机
+    QAction *_toggleCameraImagesAct{}; ///< 按当前三维视角显示对齐的 SfM 照片
+    QAction *_showCameraImagesInForegroundAct{}; ///< 在场景几何前方显示当前照片
+    QAction *_showCameraImagesInBackgroundAct{}; ///< 在场景几何后方显示当前照片
+    QAction *_lockCameraImageAct{}; ///< 锁定当前照片并切换为二维导航
     QAction *_tiePointColorModeAct{}; ///< 连接点原始 RGB 颜色
     QAction *_tiePointElevationModeAct{}; ///< 连接点按高程着色
     QAction *_tiePointImageCountModeAct{}; ///< 连接点按影像观测数着色
@@ -375,6 +402,7 @@ private:
     QAction *_toggleFullScreenAct{}; ///< 全屏显示切换
     bool _imageToolsVisible{};
     bool _imageDisplayReady{};
+    bool _maskSelectionActive{};
     bool _depthOverlayAvailable{};
     bool _depthOverlayFinalAvailable{};
     bool _depthOverlayLevel1Available{};

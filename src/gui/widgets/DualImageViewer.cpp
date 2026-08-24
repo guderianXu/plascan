@@ -4,7 +4,6 @@
 
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
-#include "DisparityHeatmapOverlay.h"
 #include "ImageMatchFile.h"
 #include "project/ProjectMetadata.h"
 #include <QFileInfo>
@@ -50,7 +49,6 @@ DualImageViewer::DualImageViewer(QWidget *parent)
     , _leftView(nullptr)
     , _rightView(nullptr)
     , _overlay(nullptr)
-    , _disparityOverlay(nullptr)
     , _syncEnabled(false)
     , _syncing(false)
 {
@@ -60,14 +58,11 @@ DualImageViewer::DualImageViewer(QWidget *parent)
     // 创建延迟更新定时器
     _overlayUpdateTimer = new QTimer(this);
     _overlayUpdateTimer->setSingleShot(true);
-    _overlayUpdateTimer->setInterval(16); // ~60 FPS
+    // 同一事件循环内合并连续滚动/缩放信号，避免额外一帧的固定延迟。
+    _overlayUpdateTimer->setInterval(0);
     connect(_overlayUpdateTimer, &QTimer::timeout,
             this, &DualImageViewer::updateOverlayNow);
 
-    // 创建视差热力图覆盖层
-    _disparityOverlay = new DisparityHeatmapOverlay(this);
-    _disparityOverlay->hide();
-    setDisparityTarget(DisparityTarget::LeftImage);
 }
 
 ImageViewWidget* DualImageViewer::leftView() const
@@ -83,40 +78,6 @@ ImageViewWidget* DualImageViewer::rightView() const
 MatchLineOverlay* DualImageViewer::overlay() const
 {
     return _overlay.data();
-}
-
-DisparityHeatmapOverlay* DualImageViewer::disparityOverlay() const
-{
-    return _disparityOverlay;
-}
-
-void DualImageViewer::setOverlayMode(int mode)
-{
-    _overlayMode = mode;
-    if (_overlay)
-    {
-        _overlay->setVisible(mode == 0);
-    }
-    if (_disparityOverlay)
-    {
-        _disparityOverlay->setVisible(mode == 1);
-        _disparityOverlay->syncToTargetViewport();
-    }
-    scheduleOverlayUpdate();
-}
-
-void DualImageViewer::setDisparityTarget(DisparityTarget target)
-{
-    _disparityTarget = target;
-    if (!_disparityOverlay)
-    {
-        return;
-    }
-    ImageViewWidget *target_view = target == DisparityTarget::LeftImage
-        ? _leftView.data()
-        : _rightView.data();
-    _disparityOverlay->setTargetView(target_view);
-    _disparityOverlay->setVisible(_overlayMode == 1);
 }
 
 void DualImageViewer::highlightMatchIndex(int index)
@@ -204,15 +165,15 @@ void DualImageViewer::connectSignals()
 {
     // 连接视图变化信号
     connect(_leftView, &ImageViewWidget::viewTransformChanged,
-            this, &DualImageViewer::onLeftViewChanged, Qt::QueuedConnection);
+            this, &DualImageViewer::onLeftViewChanged);
     connect(_rightView, &ImageViewWidget::viewTransformChanged,
-            this, &DualImageViewer::onRightViewChanged, Qt::QueuedConnection);
+            this, &DualImageViewer::onRightViewChanged);
     
     // 覆盖层更新
     connect(_leftView, &ImageViewWidget::viewTransformChanged,
-            this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
+            this, &DualImageViewer::scheduleOverlayUpdate);
     connect(_rightView, &ImageViewWidget::viewTransformChanged,
-            this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
+            this, &DualImageViewer::scheduleOverlayUpdate);
     connect(_overlay, &MatchLineOverlay::visibleMatchesChanged,
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
 
@@ -406,11 +367,6 @@ void DualImageViewer::clearViewer()
         _overlay->setMatches({}, {});
         _overlay->clearHighlightedIndices();
     }
-    if (_disparityOverlay)
-    {
-        _disparityOverlay->clear();
-        _disparityOverlay->hide();
-    }
     updateOverlayGeometry();
 }
 
@@ -451,7 +407,7 @@ void DualImageViewer::onRightViewChanged(const QTransform &transform)
 
 void DualImageViewer::scheduleOverlayUpdate()
 {
-    // 延迟更新以提高性能（合并多次连续的更新请求）
+    // 以 0 ms 单次定时器合并同一事件循环内的连续变换，同时保持拖动跟手。
     if (!_overlayUpdateTimer) return;
     if (!_overlayUpdateTimer->isActive()) {
         _overlayUpdateTimer->start();
@@ -467,10 +423,6 @@ void DualImageViewer::updateOverlayNow()
     updateOverlayGeometry();
     // 防护：若组件已经被删除或指针失效则不进行更新
     if (!_overlay || !_leftView || !_rightView) return;
-    if (_overlayMode != 0)
-    {
-        return;
-    }
     _overlay->updateOverlay();
     
     const QVector<int> visible_matches = _overlay->visibleMatches();
@@ -483,11 +435,7 @@ void DualImageViewer::updateOverlayGeometry()
     if (_overlay) {
         _overlay->setGeometry(rect());
         _overlay->raise();
-        _overlay->setVisible(_overlayMode == 0);
-    }
-    if (_disparityOverlay) {
-        _disparityOverlay->syncToTargetViewport();
-        _disparityOverlay->setVisible(_overlayMode == 1);
+        _overlay->show();
     }
 }
 

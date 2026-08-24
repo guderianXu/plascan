@@ -14,14 +14,334 @@
 #include <QThread>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
+#include <limits>
 
 namespace xjw::mvs
 {
 
 namespace
 {
-QString frameSortName(const MvsDepthFrameRecord &record)
+constexpr std::array<char, 16> kFastDepthMatMagic{
+    'P', 'L', 'A', 'S', 'D', 'E', 'P', 'T', 'H', 'M', 'A', 'T', '0', '1', '\0', '\0'};
+
+struct FastDepthMatHeader
+{
+    char magic[16] = {};
+    qint32 rows = 0;
+    qint32 cols = 0;
+    qint32 type = 0;
+    quint32 reserved = 0;
+    quint64 dataBytes = 0;
+};
+
+static_assert(sizeof(FastDepthMatHeader) == 40, "Fast depth matrix header layout must remain backward compatible");
+
+struct FastDepthMatShape
+{
+    int rows = 0;
+    int cols = 0;
+    int type = 0;
+};
+
+struct PngShape
+{
+    int rows = 0;
+    int cols = 0;
+};
+
+enum class ConsistencyPublicationState
+{
+    Unavailable,
+    Completed,
+    Invalid
+};
+
+ConsistencyPublicationState consistencyPublicationState(const QJsonObject& diagnostics)
+{
+    constexpr std::array<const char*, 3> kRequiredCountKeys{
+        "pre_consistency_valid_count", "post_consistency_valid_count", "published_post_consistency_valid_count"};
+    int present_count = 0;
+    for (const char* key : kRequiredCountKeys)
+    {
+        const QString json_key = QString::fromLatin1(key);
+        if (!diagnostics.contains(json_key))
+        {
+            continue;
+        }
+        ++present_count;
+        const QJsonValue value = diagnostics.value(json_key);
+        const double numeric_value = value.toDouble(-1.0);
+        if (!value.isDouble() || !std::isfinite(numeric_value) || numeric_value < 0.0 ||
+            std::floor(numeric_value) != numeric_value ||
+            numeric_value > static_cast<double>(std::numeric_limits<int>::max()))
+        {
+            return ConsistencyPublicationState::Invalid;
+        }
+    }
+    if (present_count == 0)
+    {
+        return diagnostics.value(QStringLiteral("consistency_publication_fallback_applied")).toBool(false)
+                   ? ConsistencyPublicationState::Invalid
+                   : ConsistencyPublicationState::Unavailable;
+    }
+    return present_count == static_cast<int>(kRequiredCountKeys.size()) ? ConsistencyPublicationState::Completed
+                                                                        : ConsistencyPublicationState::Invalid;
+}
+
+template <typename T> void addHashValue(QCryptographicHash* hash, const T& value)
+{
+    const QByteArrayView bytes(reinterpret_cast<const char*>(&value), static_cast<qsizetype>(sizeof(value)));
+    hash->addData(bytes);
+}
+
+void addFramedHashData(QCryptographicHash* hash, const QByteArray& data)
+{
+    const qint64 size = data.size();
+    addHashValue(hash, size);
+    hash->addData(data);
+}
+
+QString normalizedInputPath(const std::string& path)
+{
+    const QString raw_path = xjw::common::io::fromUtf8Path(path).trimmed();
+    if (raw_path.isEmpty())
+    {
+        return QString();
+    }
+
+    const QFileInfo file_info(raw_path);
+    QString normalized_path = file_info.exists() ? file_info.canonicalFilePath() : file_info.absoluteFilePath();
+    if (normalized_path.isEmpty())
+    {
+        normalized_path = raw_path;
+    }
+    normalized_path = QDir::cleanPath(normalized_path).replace(QLatin1Char('\\'), QLatin1Char('/'));
+#ifdef Q_OS_WIN
+    normalized_path = normalized_path.toCaseFolded();
+#endif
+    return normalized_path;
+}
+
+QByteArray fileContentFingerprint(QFile* file, qint64 file_size, bool* readable)
+{
+    constexpr qint64 kFullHashMaximumBytes = 8LL * 1024LL * 1024LL;
+    constexpr qint64 kSampleBytes = 64LL * 1024LL;
+
+    QCryptographicHash content_hash(QCryptographicHash::Sha256);
+    *readable = false;
+    if (!file || !file->isOpen() || file_size < 0)
+    {
+        return QByteArray();
+    }
+
+    if (file_size <= kFullHashMaximumBytes)
+    {
+        content_hash.addData(QByteArrayLiteral("full\0"));
+        const QByteArray contents = file->readAll();
+        if (contents.size() != file_size)
+        {
+            return QByteArray();
+        }
+        content_hash.addData(contents);
+        *readable = true;
+        return content_hash.result();
+    }
+
+    content_hash.addData(QByteArrayLiteral("sampled\0"));
+    const std::array<qint64, 3> offsets{
+        0, std::max<qint64>(0, file_size / 2 - kSampleBytes / 2), std::max<qint64>(0, file_size - kSampleBytes)};
+    for (const qint64 offset : offsets)
+    {
+        if (!file->seek(offset))
+        {
+            return QByteArray();
+        }
+        const qint64 bytes_to_read = std::min(kSampleBytes, file_size - offset);
+        const QByteArray sample = file->read(bytes_to_read);
+        if (sample.size() != bytes_to_read)
+        {
+            return QByteArray();
+        }
+        addHashValue(&content_hash, offset);
+        addFramedHashData(&content_hash, sample);
+    }
+    *readable = true;
+    return content_hash.result();
+}
+
+void addFileFingerprint(QCryptographicHash* hash, const char* role, const std::string& path)
+{
+    addFramedHashData(hash, QByteArray(role));
+    const QString normalized_path = normalizedInputPath(path);
+    addFramedHashData(hash, normalized_path.toUtf8());
+
+    const QString io_path = xjw::common::io::fromUtf8Path(path).trimmed();
+    const QFileInfo file_info(io_path);
+    const bool exists = !io_path.isEmpty() && file_info.exists() && file_info.isFile();
+    addHashValue(hash, exists);
+    const qint64 file_size = exists ? file_info.size() : -1;
+    const qint64 modified_msecs = exists ? file_info.lastModified().toMSecsSinceEpoch() : -1;
+    addHashValue(hash, file_size);
+    addHashValue(hash, modified_msecs);
+
+    bool readable = false;
+    QByteArray content_fingerprint;
+    if (exists)
+    {
+        QFile file(io_path);
+        if (file.open(QIODevice::ReadOnly))
+        {
+            content_fingerprint = fileContentFingerprint(&file, file_size, &readable);
+        }
+    }
+    addHashValue(hash, readable);
+    addFramedHashData(hash, content_fingerprint);
+}
+
+bool isNonEmptyFile(const QString& path)
+{
+    const QFileInfo file_info(path);
+    return !path.trimmed().isEmpty() && file_info.exists() && file_info.isFile() && file_info.size() > 0;
+}
+
+quint32 readPngUint32(const char* bytes)
+{
+    return (static_cast<quint32>(static_cast<unsigned char>(bytes[0])) << 24) |
+           (static_cast<quint32>(static_cast<unsigned char>(bytes[1])) << 16) |
+           (static_cast<quint32>(static_cast<unsigned char>(bytes[2])) << 8) |
+           static_cast<quint32>(static_cast<unsigned char>(bytes[3]));
+}
+
+bool readPngShape(const QString& path, PngShape* shape)
+{
+    constexpr std::array<unsigned char, 8> kPngSignature{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+    if (!shape || !isNonEmptyFile(path))
+    {
+        return false;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    const QByteArray header = file.read(33);
+    if (header.size() != 33 || std::memcmp(header.constData(), kPngSignature.data(), kPngSignature.size()) != 0 ||
+        readPngUint32(header.constData() + 8) != 13 || std::memcmp(header.constData() + 12, "IHDR", 4) != 0)
+    {
+        return false;
+    }
+
+    const quint32 width = readPngUint32(header.constData() + 16);
+    const quint32 height = readPngUint32(header.constData() + 20);
+    const int bit_depth = static_cast<unsigned char>(header[24]);
+    const int color_type = static_cast<unsigned char>(header[25]);
+    const bool valid_bit_depth =
+        (color_type == 0 &&
+         (bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8 || bit_depth == 16)) ||
+        (color_type == 2 && (bit_depth == 8 || bit_depth == 16)) ||
+        (color_type == 3 && (bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8)) ||
+        (color_type == 4 && (bit_depth == 8 || bit_depth == 16)) ||
+        (color_type == 6 && (bit_depth == 8 || bit_depth == 16));
+    if (width == 0 || height == 0 || width > static_cast<quint32>(std::numeric_limits<int>::max()) ||
+        height > static_cast<quint32>(std::numeric_limits<int>::max()) || !valid_bit_depth || header[26] != 0 ||
+        header[27] != 0 || (header[28] != 0 && header[28] != 1))
+    {
+        return false;
+    }
+
+    shape->rows = static_cast<int>(height);
+    shape->cols = static_cast<int>(width);
+    bool saw_image_data = false;
+    while (!file.atEnd())
+    {
+        const QByteArray chunk_header = file.read(8);
+        if (chunk_header.size() != 8)
+        {
+            return false;
+        }
+        const quint32 chunk_size = readPngUint32(chunk_header.constData());
+        const QByteArray chunk_type = chunk_header.mid(4, 4);
+        const qint64 remaining = file.size() - file.pos();
+        if (remaining < static_cast<qint64>(chunk_size) + 4 ||
+            !file.seek(file.pos() + static_cast<qint64>(chunk_size) + 4))
+        {
+            return false;
+        }
+        if (chunk_type == QByteArrayLiteral("IDAT"))
+        {
+            saw_image_data = true;
+        }
+        if (chunk_type == QByteArrayLiteral("IEND"))
+        {
+            return chunk_size == 0 && saw_image_data && file.atEnd();
+        }
+    }
+    return false;
+}
+
+bool readFastDepthMatShape(const QString& path, FastDepthMatShape* shape)
+{
+    if (!shape || !isNonEmptyFile(path))
+    {
+        return false;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    FastDepthMatHeader header;
+    if (file.read(reinterpret_cast<char*>(&header), sizeof(header)) != static_cast<qint64>(sizeof(header)) ||
+        std::memcmp(header.magic, kFastDepthMatMagic.data(), kFastDepthMatMagic.size()) != 0 || header.rows <= 0 ||
+        header.cols <= 0 || header.type < 0 || header.dataBytes == 0)
+    {
+        return false;
+    }
+
+    const int depth = CV_MAT_DEPTH(header.type);
+    const int channels = CV_MAT_CN(header.type);
+    if (depth < CV_8U || depth > CV_64F || channels <= 0 || channels > CV_CN_MAX ||
+        header.type != CV_MAKETYPE(depth, channels))
+    {
+        return false;
+    }
+
+    const quint64 element_size = static_cast<quint64>(CV_ELEM_SIZE(header.type));
+    const quint64 rows = static_cast<quint64>(header.rows);
+    const quint64 cols = static_cast<quint64>(header.cols);
+    if (element_size == 0 || rows > std::numeric_limits<quint64>::max() / cols ||
+        rows * cols > std::numeric_limits<quint64>::max() / element_size)
+    {
+        return false;
+    }
+
+    const quint64 expected_data_bytes = rows * cols * element_size;
+    if (expected_data_bytes > std::numeric_limits<quint64>::max() - static_cast<quint64>(sizeof(header)))
+    {
+        return false;
+    }
+    const quint64 expected_file_bytes = static_cast<quint64>(sizeof(header)) + expected_data_bytes;
+    if (header.dataBytes != expected_data_bytes ||
+        expected_file_bytes > static_cast<quint64>(std::numeric_limits<qint64>::max()) ||
+        QFileInfo(path).size() != static_cast<qint64>(expected_file_bytes))
+    {
+        return false;
+    }
+
+    shape->rows = header.rows;
+    shape->cols = header.cols;
+    shape->type = header.type;
+    return true;
+}
+
+    QString frameSortName(const MvsDepthFrameRecord &record)
 {
     if (!record.refImage.isEmpty())
     {
@@ -146,26 +466,21 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     {
         geometry_source_indices.append(source_index);
     }
-    object.insert(
-        QStringLiteral("geometry_source_indices"),
-        geometry_source_indices);
+    object.insert(QStringLiteral("geometry_source_indices"), geometry_source_indices);
     object.insert(QStringLiteral("source_plan"), sourcePlan);
     object.insert(QStringLiteral("quality_profile"), qualityProfile);
-    object.insert(QStringLiteral("configured_source_view_count"),
-                  configuredSourceViewCount);
+    object.insert(QStringLiteral("configured_source_view_count"), configuredSourceViewCount);
     object.insert(QStringLiteral("source_view_count"), sourceViewCount);
-    object.insert(
-        QStringLiteral("requested_source_view_count"), requestedSourceViewCount);
+    object.insert(QStringLiteral("requested_source_view_count"), requestedSourceViewCount);
     object.insert(QStringLiteral("source_view_shortfall"), sourceViewShortfall);
-    object.insert(
-        QStringLiteral("source_view_shortfall_reason"),
-        sourceViewShortfallReason);
+    object.insert(QStringLiteral("source_view_shortfall_reason"), sourceViewShortfallReason);
+    object.insert(QStringLiteral("consistency_publication_expected"), consistencyPublicationExpected);
+    object.insert(QStringLiteral("geometric_guidance_pass_expected"), geometricGuidancePassExpected);
+    object.insert(QStringLiteral("geometric_guidance_pass_applied"), geometricGuidancePassApplied);
     object.insert(QStringLiteral("source_quality_mean"), meanSourceQualityScore);
     object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
-    object.insert(
-        QStringLiteral("effective_patch_match_confidence_threshold"),
-        effectivePatchMatchConfidenceThreshold);
+    object.insert(QStringLiteral("effective_patch_match_confidence_threshold"), effectivePatchMatchConfidenceThreshold);
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
     if (validCoverage >= 0.0 && validCoverage <= 1.0 && std::isfinite(validCoverage))
     {
@@ -285,24 +600,25 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         record.geometrySourceIndices.push_back(value.toInt(-1));
     }
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
-    record.qualityProfile = object.value(
-        QStringLiteral("quality_profile")).toString();
-    record.configuredSourceViewCount = object.value(
-        QStringLiteral("configured_source_view_count")).toInt(
-            object.value(QStringLiteral("requested_source_view_count")).toInt(0));
+    record.qualityProfile = object.value(QStringLiteral("quality_profile")).toString();
+    record.configuredSourceViewCount = object.value(QStringLiteral("configured_source_view_count"))
+                                           .toInt(object.value(QStringLiteral("requested_source_view_count")).toInt(0));
     record.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(0);
-    record.requestedSourceViewCount = object.value(
-        QStringLiteral("requested_source_view_count")).toInt(record.sourceViewCount);
-    record.sourceViewShortfall = object.value(
-        QStringLiteral("source_view_shortfall")).toInt(
-            std::max(0, record.requestedSourceViewCount - record.sourceViewCount));
-    record.sourceViewShortfallReason = object.value(
-        QStringLiteral("source_view_shortfall_reason")).toString();
+    record.requestedSourceViewCount =
+        object.value(QStringLiteral("requested_source_view_count")).toInt(record.sourceViewCount);
+    record.sourceViewShortfall = object.value(QStringLiteral("source_view_shortfall"))
+                                     .toInt(std::max(0, record.requestedSourceViewCount - record.sourceViewCount));
+    record.sourceViewShortfallReason = object.value(QStringLiteral("source_view_shortfall_reason")).toString();
+    record.consistencyPublicationExpected =
+        object.value(QStringLiteral("consistency_publication_expected")).toBool(false);
+    record.geometricGuidancePassExpected =
+        object.value(QStringLiteral("geometric_guidance_pass_expected")).toBool(false);
+    record.geometricGuidancePassApplied = object.value(QStringLiteral("geometric_guidance_pass_applied")).toBool(false);
     record.meanSourceQualityScore = object.value(QStringLiteral("source_quality_mean")).toDouble(0.0);
     record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
-    record.effectivePatchMatchConfidenceThreshold = object.value(
-        QStringLiteral("effective_patch_match_confidence_threshold")).toDouble(0.0);
+    record.effectivePatchMatchConfidenceThreshold =
+        object.value(QStringLiteral("effective_patch_match_confidence_threshold")).toDouble(0.0);
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
     record.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(-1.0);
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
@@ -567,13 +883,12 @@ void MvsWorkspaceManifest::markRunning(int refIndex, const QString &refImage, co
     upsertFrame(record);
 }
 
-void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
+void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord& record)
 {
     MvsDepthFrameRecord completed = record;
-    const bool has_explicit_acceptance =
-        !record.acceptance.trimmed().isEmpty();
-    const bool has_explicit_qualification_update =
-        has_explicit_acceptance || record.fusionEligibilityKnown;
+    const bool has_explicit_depth_completeness = !record.depthCompleteness.isEmpty();
+    const bool has_explicit_acceptance = !record.acceptance.trimmed().isEmpty();
+    const bool has_explicit_qualification_update = has_explicit_acceptance || record.fusionEligibilityKnown;
     // A completed artifact belongs to the running implementation even when a
     // replay caller seeded the record from an older manifest. Keeping the
     // caller's stale value makes the root and per-frame revisions disagree.
@@ -586,13 +901,20 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.sourceViewCount <= 0 && index >= 0)
     {
         completed.sourceViewCount = _frames[index].sourceViewCount;
-        completed.requestedSourceViewCount =
-            _frames[index].requestedSourceViewCount;
+        completed.requestedSourceViewCount = _frames[index].requestedSourceViewCount;
         completed.sourceViewShortfall = _frames[index].sourceViewShortfall;
-        completed.sourceViewShortfallReason =
-            _frames[index].sourceViewShortfallReason;
+        completed.sourceViewShortfallReason = _frames[index].sourceViewShortfallReason;
         completed.meanSourceQualityScore = _frames[index].meanSourceQualityScore;
         completed.minSourceQualityScore = _frames[index].minSourceQualityScore;
+    }
+    if (!completed.geometricGuidancePassExpected && !completed.geometricGuidancePassApplied && index >= 0)
+    {
+        completed.geometricGuidancePassExpected = _frames[index].geometricGuidancePassExpected;
+        completed.geometricGuidancePassApplied = _frames[index].geometricGuidancePassApplied;
+    }
+    if (!completed.consistencyPublicationExpected && !has_explicit_depth_completeness && index >= 0)
+    {
+        completed.consistencyPublicationExpected = _frames[index].consistencyPublicationExpected;
     }
     if (completed.validPixelCount <= 0 && index >= 0)
     {
@@ -603,15 +925,17 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.depthQuality = _frames[index].depthQuality;
     }
+    if (!has_explicit_depth_completeness && index >= 0)
+    {
+        completed.depthCompleteness = _frames[index].depthCompleteness;
+    }
     if (completed.geometryEvidenceDiagnostics.isEmpty() && index >= 0)
     {
-        completed.geometryEvidenceDiagnostics =
-            _frames[index].geometryEvidenceDiagnostics;
+        completed.geometryEvidenceDiagnostics = _frames[index].geometryEvidenceDiagnostics;
     }
     if (completed.crossViewRepairDiagnostics.isEmpty() && index >= 0)
     {
-        completed.crossViewRepairDiagnostics =
-            _frames[index].crossViewRepairDiagnostics;
+        completed.crossViewRepairDiagnostics = _frames[index].crossViewRepairDiagnostics;
     }
     if (completed.depthProvenanceSummary.isEmpty() && index >= 0)
     {
@@ -726,85 +1050,113 @@ void MvsWorkspaceManifest::updatePoseRefinement(
     _frames[index].derivedCameraModel = derivedCameraModel;
 }
 
-bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString &configHash) const
+bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString& configHash) const
 {
     const int index = findFrameIndex(refIndex);
     if (index < 0)
     {
         return false;
     }
-    const MvsDepthFrameRecord &record = _frames[index];
-    if (record.status != QStringLiteral("completed") ||
-        record.configHash != configHash ||
+    const MvsDepthFrameRecord& record = _frames[index];
+    if (record.status != QStringLiteral("completed") || record.configHash != configHash ||
         record.algorithmRevision != kMvsDepthAlgorithmRevision)
     {
         return false;
     }
-    if (!QFileInfo::exists(record.depthPng) ||
-        (!record.rawDepthPath.isEmpty() && !QFileInfo::exists(record.rawDepthPath)))
+    if (record.geometricGuidancePassExpected != record.geometricGuidancePassApplied)
+    {
+        return false;
+    }
+    FastDepthMatShape raw_depth_shape;
+    FastDepthMatShape raw_confidence_shape;
+    PngShape depth_preview_shape;
+    PngShape valid_mask_shape;
+    PngShape support_mask_shape;
+    if (!readFastDepthMatShape(record.rawDepthPath, &raw_depth_shape) ||
+        !readFastDepthMatShape(record.rawConfidencePath, &raw_confidence_shape) ||
+        !readPngShape(record.depthPng, &depth_preview_shape) ||
+        !readPngShape(record.validMaskPath, &valid_mask_shape) ||
+        !readPngShape(record.supportMaskPath, &support_mask_shape) || raw_depth_shape.type != CV_32FC1 ||
+        raw_confidence_shape.type != CV_32FC1 || record.gridWidth <= 0 || record.gridHeight <= 0 ||
+        raw_depth_shape.cols != record.gridWidth || raw_depth_shape.rows != record.gridHeight ||
+        raw_depth_shape.rows != raw_confidence_shape.rows || raw_depth_shape.cols != raw_confidence_shape.cols ||
+        raw_depth_shape.rows != valid_mask_shape.rows || raw_depth_shape.cols != valid_mask_shape.cols ||
+        raw_depth_shape.rows != support_mask_shape.rows || raw_depth_shape.cols != support_mask_shape.cols)
     {
         return false;
     }
 
-    if (record.algorithmRevision >= kMvsPreparedRasterProvenanceRevision &&
-        (record.preparedImage.isEmpty() ||
-         !QFileInfo::exists(record.preparedImage) ||
-         record.preparedValidMaskPath.isEmpty() ||
-         !QFileInfo::exists(record.preparedValidMaskPath) ||
-         record.preparedCameraModel.isEmpty()))
+    const auto matches_fast_mat = [&raw_depth_shape](const QString& path, int expected_type)
     {
-        return false;
-    }
-
-    const auto artifact_exists = [](const QString &path)
+        FastDepthMatShape shape;
+        return readFastDepthMatShape(path, &shape) && shape.type == expected_type &&
+               shape.rows == raw_depth_shape.rows && shape.cols == raw_depth_shape.cols;
+    };
+    const auto matches_png = [&raw_depth_shape](const QString& path)
     {
-        return !path.isEmpty() && QFileInfo::exists(path);
+        PngShape shape;
+        return readPngShape(path, &shape) && shape.rows == raw_depth_shape.rows && shape.cols == raw_depth_shape.cols;
     };
 
-    if (record.algorithmRevision >= kMvsDepthProvenanceRevision &&
-        !artifact_exists(record.depthProvenancePath))
+    if (record.algorithmRevision >= kMvsPreparedRasterProvenanceRevision)
+    {
+        PngShape prepared_image_shape;
+        PngShape prepared_valid_mask_shape;
+        if (!readPngShape(record.preparedImage, &prepared_image_shape) ||
+            !readPngShape(record.preparedValidMaskPath, &prepared_valid_mask_shape) ||
+            prepared_image_shape.rows != prepared_valid_mask_shape.rows ||
+            prepared_image_shape.cols != prepared_valid_mask_shape.cols || record.preparedCameraModel.isEmpty())
+        {
+            return false;
+        }
+    }
+
+    if (record.algorithmRevision >= kMvsDepthProvenanceRevision && !matches_png(record.depthProvenancePath))
     {
         return false;
     }
 
     if (record.algorithmRevision >= kMvsJointViewAndGeometricGuidanceRevision &&
-        !artifact_exists(record.rawPhotometricSourceMaskPath))
+        !matches_fast_mat(record.rawPhotometricSourceMaskPath, CV_32SC1))
     {
         return false;
     }
 
-    if (record.algorithmRevision >= kMvsGeometryFusionSupportRevision &&
-        (!artifact_exists(record.rawGeometrySupportPath) ||
-         !artifact_exists(record.rawInverseDepthSpreadPath)))
+    const ConsistencyPublicationState consistency_state = consistencyPublicationState(record.depthCompleteness);
+    if (consistency_state == ConsistencyPublicationState::Invalid)
+    {
+        return false;
+    }
+    const bool has_completed_consistency = consistency_state == ConsistencyPublicationState::Completed;
+    if (record.consistencyPublicationExpected != has_completed_consistency)
+    {
+        return false;
+    }
+
+    if (record.algorithmRevision >= kMvsGeometryFusionSupportRevision && has_completed_consistency &&
+        (!matches_fast_mat(record.rawGeometrySupportPath, CV_16UC1) ||
+         !matches_fast_mat(record.rawInverseDepthSpreadPath, CV_32FC1)))
     {
         return false;
     }
 
     if (record.algorithmRevision >= kMvsGeometrySourceOrdinalRevision)
     {
-        const bool has_source_mask_path =
-            !record.rawGeometrySourceMaskPath.trimmed().isEmpty();
-        const bool has_source_ordinals =
-            !record.geometrySourceIndices.isEmpty();
+        const bool has_source_mask_path = !record.rawGeometrySourceMaskPath.trimmed().isEmpty();
+        const bool has_source_ordinals = !record.geometrySourceIndices.isEmpty();
         if (has_source_mask_path != has_source_ordinals ||
-            (has_source_mask_path &&
-             !artifact_exists(record.rawGeometrySourceMaskPath)) ||
+            (has_source_mask_path && !matches_fast_mat(record.rawGeometrySourceMaskPath, CV_16UC1)) ||
             record.geometrySourceIndices.size() > 16)
         {
             return false;
         }
-        for (qsizetype ordinal = 0;
-             ordinal < record.geometrySourceIndices.size();
-             ++ordinal)
+        for (qsizetype ordinal = 0; ordinal < record.geometrySourceIndices.size(); ++ordinal)
         {
-            const int source_index =
-                record.geometrySourceIndices[ordinal];
+            const int source_index = record.geometrySourceIndices[ordinal];
             if (source_index < 0 || source_index == record.refIndex ||
-                std::find(
-                    record.geometrySourceIndices.cbegin(),
-                    record.geometrySourceIndices.cbegin() + ordinal,
-                    source_index) !=
-                    record.geometrySourceIndices.cbegin() + ordinal)
+                std::find(record.geometrySourceIndices.cbegin(),
+                          record.geometrySourceIndices.cbegin() + ordinal,
+                          source_index) != record.geometrySourceIndices.cbegin() + ordinal)
             {
                 return false;
             }
@@ -817,15 +1169,18 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
     }
     const bool requires_adaptive_geometry_evidence =
         record.algorithmRevision >= kMvsAdaptiveGeometryEvidenceRevision &&
+        has_completed_consistency &&
         isOrbitalDepthSceneProfile(record.sceneProfile);
     if (!requires_adaptive_geometry_evidence)
     {
         return true;
     }
 
-    return artifact_exists(record.rawAdaptiveGeometrySupportWeightPath) &&
-           artifact_exists(record.rawAdaptiveGeometryEffectiveViewCountPath) &&
-           artifact_exists(record.rawAdaptiveGeometryConflictRatioPath);
+    return matches_fast_mat(record.rawInverseDepthMeanPath, CV_32FC1) &&
+           matches_png(record.crossViewRepairedMaskPath) &&
+           matches_fast_mat(record.rawAdaptiveGeometrySupportWeightPath, CV_32FC1) &&
+           matches_fast_mat(record.rawAdaptiveGeometryEffectiveViewCountPath, CV_32FC1) &&
+           matches_fast_mat(record.rawAdaptiveGeometryConflictRatioPath, CV_32FC1);
 }
 
 QJsonObject MvsWorkspaceManifest::toJson() const
@@ -836,7 +1191,7 @@ QJsonObject MvsWorkspaceManifest::toJson() const
     root.insert(QStringLiteral("config_hash"), _configHash);
 
     QJsonArray frames;
-    for (const MvsDepthFrameRecord &record : _frames)
+    for (const MvsDepthFrameRecord& record : _frames)
     {
         frames.push_back(record.toJson());
     }
@@ -863,6 +1218,8 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("patch_half"), config.patchMatch.patchHalf);
     patch.insert(QStringLiteral("num_source_views"), config.patchMatch.numSourceViews);
     patch.insert(QStringLiteral("confidence_thresh"), config.patchMatch.confidenceThresh);
+    patch.insert(QStringLiteral("minimum_masked_patch_support_ratio"),
+                 config.patchMatch.minimumMaskedPatchSupportRatio);
     patch.insert(QStringLiteral("photometric_uniqueness"),
                  config.patchMatch.enablePhotometricUniqueness);
     patch.insert(QStringLiteral("photometric_uniqueness_relative_depth_step"),
@@ -903,6 +1260,9 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("cuda_device_index"), config.patchMatch.cudaDeviceIndex);
     patch.insert(QStringLiteral("opencl_fallback_to_cpu"), config.patchMatch.openClFallbackToCpu);
     patch.insert(QStringLiteral("opencl_device_index"), config.patchMatch.openClDeviceIndex);
+    // cpuThreadCount and the CUDA launch dimensions only control scheduling.
+    // cancelFlag is transient process state. None belongs to the persisted
+    // result contract, so changing them must not invalidate a valid cache.
 
     QJsonObject fusion;
     fusion.insert(QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews);
@@ -954,7 +1314,7 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     fusion.insert(QStringLiteral("speckle_max_removal_ratio"), config.fusion.maxSpeckleRemovalRatio);
 
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v4"));
+    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v5"));
     root.insert(QStringLiteral("algorithm_revision"), kMvsDepthAlgorithmRevision);
     root.insert(QStringLiteral("view_count"), viewCount);
     root.insert(QStringLiteral("input_signature"),
@@ -1044,6 +1404,11 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
         pose_refinement.optimizer.minimumCorrespondences);
     pose_refinement_json.insert(QStringLiteral("huber_delta"),
                                 pose_refinement.optimizer.huberDelta);
+    pose_refinement_json.insert(QStringLiteral("damping"), pose_refinement.optimizer.damping);
+    pose_refinement_json.insert(QStringLiteral("convergence_translation"),
+                                pose_refinement.optimizer.convergenceTranslation);
+    pose_refinement_json.insert(QStringLiteral("convergence_rotation_radians"),
+                                pose_refinement.optimizer.convergenceRotationRadians);
     pose_refinement_json.insert(QStringLiteral("maximum_translation"),
                                 pose_refinement.optimizer.maximumTranslation);
     pose_refinement_json.insert(
@@ -1139,6 +1504,112 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
 
     const QByteArray canonical = QJsonDocument(root).toJson(QJsonDocument::Compact);
     return QString::fromLatin1(QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex());
+}
+
+QString
+makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView>& views, const SparseCloud& sparse)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    addFramedHashData(&hash, QByteArrayLiteral("plascan.mvs.depth.input.v2"));
+    addFramedHashData(&hash, makeMvsDepthConfigHash(config, static_cast<int>(views.size())).toUtf8());
+
+    for (const CameraView& view : views)
+    {
+        addFileFingerprint(&hash, "original_image", view.imagePath);
+        addFileFingerprint(&hash, "prepared_image", view.preparedImagePath);
+        addFileFingerprint(&hash, "prepared_valid_mask", view.preparedValidMaskPath);
+        addFileFingerprint(&hash, "project_valid_region_mask", view.validRegionMaskPath);
+        addFramedHashData(&hash, QByteArray::fromStdString(view.preparedValidMaskSource));
+        addHashValue(&hash, view.imageWidth);
+        addHashValue(&hash, view.imageHeight);
+
+        const xjw::FramePinholeCamera::Intrinsics intrinsics = view.camera.intrinsics();
+        addHashValue(&hash, intrinsics.focalX);
+        addHashValue(&hash, intrinsics.focalY);
+        addHashValue(&hash, intrinsics.principalX);
+        addHashValue(&hash, intrinsics.principalY);
+        addHashValue(&hash, intrinsics.pixelPitch);
+        addHashValue(&hash, intrinsics.uAxisSign);
+        addHashValue(&hash, intrinsics.vAxisSign);
+
+        const xjw::FramePinholeCamera::Distortion distortion = view.camera.distortion();
+        addHashValue(&hash, distortion.radialK1);
+        addHashValue(&hash, distortion.radialK2);
+        addHashValue(&hash, distortion.radialK3);
+        addHashValue(&hash, distortion.tangentialP1);
+        addHashValue(&hash, distortion.tangentialP2);
+
+        const auto rotation = view.camera.cameraToWorldRotation();
+        const auto center = view.camera.cameraCenter();
+        for (const double value : rotation)
+        {
+            addHashValue(&hash, value);
+        }
+        for (const double value : center)
+        {
+            addHashValue(&hash, value);
+        }
+        const bool depth_axis_flipped = view.camera.depthAxisFlipped();
+        addHashValue(&hash, depth_axis_flipped);
+    }
+
+    if (config.enableLearnedMvsCandidates)
+    {
+        addFramedHashData(&hash, QByteArrayLiteral("learned_mvs_candidate_inputs"));
+        const bool has_candidate_directory = !config.learnedMvsCandidateDirectory.empty();
+        const QDir candidate_directory(xjw::common::io::fromUtf8Path(config.learnedMvsCandidateDirectory));
+        for (std::size_t frame_index = 0; frame_index < views.size(); ++frame_index)
+        {
+            addHashValue(&hash, frame_index);
+            const QString depth_path =
+                has_candidate_directory
+                    ? candidate_directory.filePath(
+                          QStringLiteral("learned_depth_%1.bin").arg(static_cast<qulonglong>(frame_index)))
+                    : QString();
+            const QString confidence_path =
+                has_candidate_directory
+                    ? candidate_directory.filePath(
+                          QStringLiteral("learned_depth_%1_conf.bin").arg(static_cast<qulonglong>(frame_index)))
+                    : QString();
+            addFileFingerprint(&hash, "learned_candidate_depth", xjw::common::io::toUtf8Path(depth_path));
+            addFileFingerprint(&hash, "learned_candidate_confidence", xjw::common::io::toUtf8Path(confidence_path));
+        }
+    }
+
+    addHashValue(&hash, config.requireVerifiedSourcePairs);
+    addHashValue(&hash, config.minSourcePairGeometricInliers);
+    const std::size_t pair_quality_count = config.sourcePairQualities.size();
+    addHashValue(&hash, pair_quality_count);
+    for (const MvsSourcePairQuality& quality : config.sourcePairQualities)
+    {
+        addFramedHashData(&hash, QByteArray::fromStdString(quality.imageA));
+        addFramedHashData(&hash, QByteArray::fromStdString(quality.imageB));
+        addHashValue(&hash, quality.totalMatches);
+        addHashValue(&hash, quality.geometricInliers);
+        addHashValue(&hash, quality.verified);
+        addHashValue(&hash, quality.hasVerificationStatistics);
+        addHashValue(&hash, quality.geometricCoverage);
+        addFramedHashData(&hash, QByteArray::fromStdString(quality.verificationReason));
+    }
+
+    const std::size_t sparse_point_count = sparse.points.size();
+    addHashValue(&hash, sparse_point_count);
+    for (const float value : sparse.minPt)
+    {
+        addHashValue(&hash, value);
+    }
+    for (const float value : sparse.maxPt)
+    {
+        addHashValue(&hash, value);
+    }
+    for (const auto& point : sparse.points)
+    {
+        for (const float coordinate : point)
+        {
+            addHashValue(&hash, coordinate);
+        }
+    }
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 } // namespace xjw::mvs

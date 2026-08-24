@@ -25,6 +25,7 @@
 int main(int argc, char *argv[])
 {
     CLI::App app{"PlaScan 视差三角化工具 — 视差图 → 密集点云 .ply"};
+    cli::configureApp(app);
 
     std::string dispPath, rectPath, camL, camR, outPath, intensityImagePath, validMaskPath;
     app.add_option("-d,--disparity", dispPath, "视差图路径 (.tif)")->required();

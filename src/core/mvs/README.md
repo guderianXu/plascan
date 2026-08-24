@@ -21,8 +21,9 @@ live under `src/core/mvs/tests/`.
 - `MvsWorkspaceManifest` is the disk record for depth estimation. Each frame stores the reference image,
   selected source images, `source plan`, status, device, elapsed time, `depth_png`, raw depth, raw
   `confidence`, `valid mask`, and a config hash.
-- `DepthMapGenerator` writes frame artifacts before reporting completion. Completed frames with a matching
-  config hash can be reused; failed frames can be retried.
+- `DepthMapGenerator` writes initial frame artifacts as non-publishable `running` checkpoints. It marks a frame
+  `completed` and emits project metadata only after the final required artifact set has been written and verified;
+  completed frames with a matching config hash can be reused, while failed or interrupted checkpoints are retried.
 - Orbital depth artifacts at algorithm revision 15 persist adaptive support weight, effective view count,
   conflict ratio, geometry source masks, and inverse-depth moments. Before final hole handling, projected source
   depths are clustered into a dominant occlusion layer. A stable layer may refine a matching native depth,
@@ -315,6 +316,12 @@ live under `src/core/mvs/tests/`.
   and total time. OpenCL additionally separates command queue turnaround from profiled kernel execution. These
   fields distinguish expected frame-pipeline overlap from a driver/queue or device-side utilization gap.
 - MVS has no Vulkan Compute backend or placeholder interface. Vulkan remains a GUI rendering dependency only.
+- `DenseCloudBuilder` can run depth-map unprojection on CUDA or OpenCL and reports the requested backend, the
+  backend/device that actually executed, and any Auto fallback. An explicit accelerator request is strict.
+  Streaming fusion can explicitly use that accelerator for the reference-frame unprojection precompute, while
+  reprojection consistency, normal checks, and observation aggregation remain CPU work. Fusion `Auto` therefore
+  keeps unprojection on CPU to avoid an extra full-resolution point map and device round trip; select CUDA/OpenCL
+  explicitly when profiling shows the precompute is beneficial.
 
 The implementation plan and current boundary are documented in
 `docs/plans/MVS_HETEROGENEOUS_COMPUTE_PLAN.md`.
@@ -365,6 +372,23 @@ The implementation plan and current boundary are documented in
   persisted separately as `raw_photometric_source_mask_path`; revision-45 cache reuse requires that artifact.
   OpenCL source-depth guidance fails explicitly at the estimator boundary; resident batch processing records a CPU
   reference second pass, while streaming or memory-pressure runs log a controlled skip.
+- Revision 46 fingerprints the effective original/prepared rasters and both prepared/project masks (path, metadata,
+  and bounded content digest), includes masked-patch support in the workspace hash, and
+  validates required depth/confidence/evidence headers plus core masks before cache reuse. The adaptive CUDA retry
+  adapter now forwards the per-pixel photometric-source output and frozen source-depth input instead of silently
+  discarding them, so the persisted source contract and geometric guidance pass reflect the backend computation.
+  Cross-view consistency reports the actually observed retention separately from a restored diagnostic carrier;
+  such a fallback cannot be promoted to a primary fusion frame, so restored coverage cannot conceal a consistency
+  collapse.
+- Revision 47 makes artifact publication durable and stage-aware. Initial writes remain resumability checkpoints
+  and cannot enter project metadata or cache reuse before final publication. Each frame records whether cross-view
+  consistency and the frozen-source-depth guidance pass were expected and whether guidance actually completed;
+  expected-but-missing evidence is not reusable. Single-view and initially rejected diagnostic frames retain an
+  explicit unavailable consistency state instead of converting the `-1` sentinel into synthetic zero evidence.
+  A durable workspace always retains the raw depth, confidence, masks, provenance, preview and prepared raster needed
+  for structural reuse. If memory pressure switches a guided resident run to streaming, the guided checkpoint is
+  refreshed before releasing pixel storage, and final streaming publication reloads the required photometric-source
+  mask instead of silently mixing first-pass data with second-pass metadata.
 - CPU, CUDA, and OpenCL PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
   samples that are foreground in the reference mask and whose four source bilinear neighbors are foreground;
   a masked patch needs at least 35% valid samples (and at least four) before it can contribute photometric

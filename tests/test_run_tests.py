@@ -12,9 +12,9 @@ SPEC.loader.exec_module(RUN_TESTS)
 
 
 class RunTestsTest(unittest.TestCase):
-    def test_default_parallel_jobs_uses_half_the_logical_cpus(self):
-        self.assertEqual(RUN_TESTS.default_parallel_jobs(32), 16)
-        self.assertEqual(RUN_TESTS.default_parallel_jobs(7), 3)
+    def test_default_parallel_jobs_uses_all_logical_cpus(self):
+        self.assertEqual(RUN_TESTS.default_parallel_jobs(32), 32)
+        self.assertEqual(RUN_TESTS.default_parallel_jobs(7), 7)
         self.assertEqual(RUN_TESTS.default_parallel_jobs(1), 1)
         self.assertEqual(RUN_TESTS.default_parallel_jobs(0), 1)
 
@@ -27,7 +27,7 @@ class RunTestsTest(unittest.TestCase):
 
         self.assertEqual(
             command,
-            ["ctest", "--parallel", "6", "--test-dir", "build", "--output-on-failure"],
+            ["ctest", "--parallel", "12", "--test-dir", "build", "--output-on-failure"],
         )
 
     def test_explicit_ctest_parallelism_is_preserved(self):

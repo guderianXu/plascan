@@ -127,6 +127,24 @@ const QVector<ParameterDescriptor> &parameters()
     return descriptors;
 }
 
+const QVector<ParameterDescriptor> &rpcParameters()
+{
+    static const QVector<ParameterDescriptor> descriptors{
+        {QStringLiteral("line_off"), QStringLiteral("行偏移 LINE_OFF (px)"), false},
+        {QStringLiteral("samp_off"), QStringLiteral("列偏移 SAMP_OFF (px)"), false},
+        {QStringLiteral("lat_off"), QStringLiteral("纬度偏移 LAT_OFF (°)"), false},
+        {QStringLiteral("long_off"), QStringLiteral("经度偏移 LONG_OFF (°)"), false},
+        {QStringLiteral("height_off"), QStringLiteral("高程偏移 HEIGHT_OFF (m)"), false},
+        {QStringLiteral("line_scale"), QStringLiteral("行尺度 LINE_SCALE (px)"), false},
+        {QStringLiteral("samp_scale"), QStringLiteral("列尺度 SAMP_SCALE (px)"), false},
+        {QStringLiteral("lat_scale"), QStringLiteral("纬度尺度 LAT_SCALE (°)"), false},
+        {QStringLiteral("long_scale"), QStringLiteral("经度尺度 LONG_SCALE (°)"), false},
+        {QStringLiteral("height_scale"), QStringLiteral("高程尺度 HEIGHT_SCALE (m)"), false},
+        {QStringLiteral("err_bias_m"), QStringLiteral("系统误差 ERR_BIAS (m)"), false},
+        {QStringLiteral("err_rand_m"), QStringLiteral("随机误差 ERR_RAND (m)"), false}};
+    return descriptors;
+}
+
 std::optional<double> calibrationParameter(
     const xjw::gui::camera_calibration::CameraCalibrationRecord &record,
     const QJsonObject &camera,
@@ -293,6 +311,10 @@ QString initialSourceLabel(const QString &source)
     {
         return QStringLiteral("项目相机/标定先验");
     }
+    if (source == QStringLiteral("embedded_rpc00b"))
+    {
+        return QStringLiteral("GeoTIFF 内嵌 RPC00B");
+    }
     if (source == QStringLiteral("image_metadata_focal_prior"))
     {
         return QStringLiteral("EXIF/影像元数据焦距先验");
@@ -330,6 +352,10 @@ QString adjustmentStatusLabel(const QString &status)
     if (status == QStringLiteral("not_run"))
     {
         return QStringLiteral("尚未运行空三，没有调整值");
+    }
+    if (status == QStringLiteral("rpc_fixed_model"))
+    {
+        return QStringLiteral("RPC00B 定位模型已就绪（固定模型）");
     }
     if (status == QStringLiteral("legacy_adjusted_only"))
     {
@@ -446,7 +472,8 @@ void CameraCalibrationDialog::buildInterface()
     auto *intro = new QLabel(
         tr("“初始”是本次空三开始时使用的内方位先验；“调整”是连接点与束平差得到的内方位结果。"
            "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C；下方按钮用于导入或清除"
-           "项目相机参数，也可直接输入真实内参。左侧按相机模型、影像分辨率和初始参数来源整理显示，"
+           "项目相机参数，也可直接输入真实内参。RPC00B 影像会改为显示经纬高、行列偏移/尺度及模型来源；"
+           "RPC 是区域定位模型，没有传统焦距/主点或单一外方位 R/C。左侧按相机模型、影像分辨率和初始参数来源整理显示，"
            "不是按调整后焦距自动拆分。导航/GNSS 参考请在左侧“参考”面板管理。"),
         this);
     intro->setWordWrap(true);
@@ -627,12 +654,20 @@ void CameraCalibrationDialog::showSelectedCameraGroup(int row)
         }
         requiresReview = requiresReview || record.requiresReview;
     }
-    QString summary = tr("%1　·　初始来源：%2　·　内参状态：%3　·　记录：%4/%5 张")
+    const bool rpc_group = !_records.isEmpty()
+        && _records.at(group.recordIndices.front()).model.compare(
+               QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
+    QString summary = tr("%1　·　%2：%3　·　%4：%5　·　%6")
                           .arg(group.label.section(QLatin1Char('\n'), 0, 0))
+                          .arg(rpc_group ? tr("模型来源") : tr("初始来源"))
                           .arg(initialSourceLabel(initialSource))
+                          .arg(rpc_group ? tr("定位状态") : tr("内参状态"))
                           .arg(adjustmentStatusLabel(adjustmentStatus))
-                          .arg(adjustedCount)
-                          .arg(group.recordIndices.size());
+                          .arg(rpc_group
+                                   ? tr("有效模型：%1/%1 张").arg(group.recordIndices.size())
+                                   : tr("调整记录：%1/%2 张")
+                                         .arg(adjustedCount)
+                                         .arg(group.recordIndices.size()));
     if (!_reportTimestamp.isEmpty())
     {
         summary += tr("　·　记录时间：%1").arg(_reportTimestamp);
@@ -650,16 +685,28 @@ void CameraCalibrationDialog::showSelectedCameraGroup(int row)
 
 void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
 {
+    const bool rpc_group = !group.recordIndices.isEmpty()
+        && _records.at(group.recordIndices.front()).model.compare(
+               QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
+    const QVector<ParameterDescriptor> &descriptors = rpc_group ? rpcParameters() : parameters();
     const QString unit = cameraUnit();
     _initialParameters->setHorizontalHeaderLabels(
-        {tr("参数"), tr("初始值 (%1)").arg(unit)});
+        {tr("参数"), rpc_group ? tr("模型值") : tr("初始值 (%1)").arg(unit)});
     _adjustedParameters->setHorizontalHeaderLabels(
         {tr("参数"), tr("初始值 (%1)").arg(unit), tr("调整值 (%1)").arg(unit),
          tr("变化"), tr("本次状态")});
 
-    for (int row = 0; row < parameters().size(); ++row)
+    _initialParameters->setRowCount(descriptors.size());
+    _adjustedParameters->setRowCount(descriptors.size());
+    _calibrationTabs->setTabText(0, rpc_group ? tr("定位模型") : tr("初始"));
+    _calibrationTabs->setTabEnabled(1, !rpc_group);
+    if (rpc_group)
     {
-        const ParameterDescriptor &parameter = parameters().at(row);
+        _calibrationTabs->setCurrentIndex(0);
+    }
+    for (int row = 0; row < descriptors.size(); ++row)
+    {
+        const ParameterDescriptor &parameter = descriptors.at(row);
         const auto initial = meanParameter(_records, group.recordIndices, parameter.key, false);
         const auto adjusted = meanParameter(_records, group.recordIndices, parameter.key, true);
         const bool optimized = parameterWasOptimized(
@@ -740,7 +787,8 @@ void CameraCalibrationDialog::populatePhotoTable(const CameraGroup &group)
         }
         else if (record.hasInitial)
         {
-            status = tr("仅初始值");
+            status = record.model.compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0
+                ? tr("RPC00B 定位模型已就绪") : tr("仅初始值");
         }
         else if (record.hasAdjusted)
         {

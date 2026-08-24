@@ -41,6 +41,9 @@ add_library(control_points STATIC
 target_include_directories(control_points PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+target_include_directories(control_points PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+)
 
 target_link_libraries(control_points PUBLIC
     control_network

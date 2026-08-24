@@ -41,7 +41,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize PlaScan libraries
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Install system dependencies
         timeout-minutes: 15
@@ -89,6 +92,29 @@ jobs:
             xvfb \
             xauth \
             '^libxcb.*-dev'
+
+      - name: Build pinned OpenCV 5
+        run: |
+          test "$(git -C 3rdparty/opencv rev-parse HEAD)" = "40738fb16ceddb5fb3fea747585f7ce6abb0605b"
+          opencv_prefix="${RUNNER_TEMP}/opencv-5.0.0"
+          cmake -S 3rdparty/opencv -B "${RUNNER_TEMP}/opencv-5.0.0-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${opencv_prefix}" \
+            -DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DBUILD_opencv_world=OFF \
+            -DWITH_CUDA=OFF \
+            -DWITH_QT=OFF
+          cmake --build "${RUNNER_TEMP}/opencv-5.0.0-build" --parallel 2
+          cmake --install "${RUNNER_TEMP}/opencv-5.0.0-build"
+          echo "CMAKE_PREFIX_PATH=${opencv_prefix}" >> "${GITHUB_ENV}"
+          echo "LD_LIBRARY_PATH=${opencv_prefix}/lib:${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
 
       - name: Configure pinned vcpkg
         run: |
@@ -248,7 +274,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize PlaScan libraries
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Install package build dependencies
         timeout-minutes: 15
@@ -294,6 +323,29 @@ jobs:
             unzip \
             zip \
             '^libxcb.*-dev'
+
+      - name: Build pinned OpenCV 5
+        run: |
+          test "$(git -C 3rdparty/opencv rev-parse HEAD)" = "40738fb16ceddb5fb3fea747585f7ce6abb0605b"
+          opencv_prefix="${RUNNER_TEMP}/opencv-5.0.0"
+          cmake -S 3rdparty/opencv -B "${RUNNER_TEMP}/opencv-5.0.0-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${opencv_prefix}" \
+            -DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DBUILD_opencv_world=OFF \
+            -DWITH_CUDA=OFF \
+            -DWITH_QT=OFF
+          cmake --build "${RUNNER_TEMP}/opencv-5.0.0-build" --parallel 2
+          cmake --install "${RUNNER_TEMP}/opencv-5.0.0-build"
+          echo "CMAKE_PREFIX_PATH=${opencv_prefix}" >> "${GITHUB_ENV}"
+          echo "LD_LIBRARY_PATH=${opencv_prefix}/lib:${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
 
       - name: Configure pinned vcpkg
         run: |
@@ -346,7 +398,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize PlaScan libraries
+        shell: pwsh
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Download smoke-test models
         shell: pwsh
@@ -397,7 +453,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize PlaScan libraries
+        shell: pwsh
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Download complete release model set
         shell: pwsh

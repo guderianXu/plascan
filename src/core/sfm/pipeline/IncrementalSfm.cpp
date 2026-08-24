@@ -20,7 +20,6 @@
 #include "log/Logger.h"
 
 #include "DeterministicOpenCvRansac.h"
-#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <algorithm>

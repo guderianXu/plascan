@@ -90,7 +90,27 @@ double CleanTiePointsDialog::level() const
 
 bool CleanTiePointsDialog::deleteRequested() const
 {
-    return _deleteRequested;
+    return _stagedDeletionCount > 0;
+}
+
+bool CleanTiePointsDialog::hasStagedDeletion(Criterion criterion) const
+{
+    return _stagedLevels.contains(static_cast<int>(criterion));
+}
+
+double CleanTiePointsDialog::stagedLevel(Criterion criterion) const
+{
+    return _stagedLevels.value(static_cast<int>(criterion), 0.0);
+}
+
+int CleanTiePointsDialog::stagedDeletionCount() const
+{
+    return _stagedDeletionCount;
+}
+
+int CleanTiePointsDialog::remainingPointCount() const
+{
+    return _remainingPointCount;
 }
 
 CleanTiePointsDialog::CriterionConfiguration CleanTiePointsDialog::criterionConfiguration(
@@ -161,6 +181,33 @@ void CleanTiePointsDialog::setCandidateCount(int candidateCount, int totalCount)
 
     _totalPointCount = totalCount;
     _candidateCount = std::clamp(candidateCount, 0, totalCount);
+    updateCandidateState();
+}
+
+void CleanTiePointsDialog::confirmStagedDeletion(Criterion criterion,
+                                                 double level,
+                                                 int stagedDeletionCount,
+                                                 int remainingPointCount)
+{
+    if (criterion == Criterion::None || stagedDeletionCount <= 0
+        || remainingPointCount <= 0 || !std::isfinite(level))
+    {
+        return;
+    }
+
+    const int key = static_cast<int>(criterion);
+    if (_stagedLevels.contains(key))
+    {
+        const double previous_level = _stagedLevels.value(key);
+        level = criterion == Criterion::ReprojectionError
+            ? std::min(previous_level, level)
+            : std::max(previous_level, level);
+    }
+    _stagedLevels.insert(key, level);
+    _stagedDeletionCount = stagedDeletionCount;
+    _remainingPointCount = remainingPointCount;
+    _candidateCount = 0;
+    _totalPointCount = remainingPointCount;
     updateCandidateState();
 }
 
@@ -308,13 +355,11 @@ void CleanTiePointsDialog::buildUi()
             &CleanTiePointsDialog::synchronizeSliderFromLevel);
     connect(_okButton, &QPushButton::clicked, this, [this]()
     {
-        _deleteRequested = false;
         accept();
     });
     connect(_deleteButton, &QPushButton::clicked, this, [this]()
     {
-        _deleteRequested = true;
-        accept();
+        emit stageDeleteRequested(criterion(), level());
     });
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(this, &QDialog::rejected, this, &CleanTiePointsDialog::previewCleared);
@@ -525,7 +570,7 @@ void CleanTiePointsDialog::updateCandidateState()
     if (!available)
     {
         _candidateCountLabel->setText(tr("请选择可用的清理标准。"));
-        _okButton->setEnabled(false);
+        _okButton->setEnabled(_stagedDeletionCount > 0);
         _deleteButton->setEnabled(false);
         _deleteButton->setToolTip(tr("请先选择可用的清理标准。"));
         return;
@@ -533,16 +578,24 @@ void CleanTiePointsDialog::updateCandidateState()
 
     if (_candidateCount < 0 || _totalPointCount < 0)
     {
-        _candidateCountLabel->setText(tr("候选点：正在等待预览结果..."));
-        _okButton->setEnabled(false);
+        _candidateCountLabel->setText(_stagedDeletionCount > 0
+            ? tr("已暂删：%1；剩余：%2；正在计算新的候选点...")
+                  .arg(_stagedDeletionCount)
+                  .arg(_remainingPointCount)
+            : tr("候选点：正在等待预览结果..."));
+        _okButton->setEnabled(_stagedDeletionCount > 0);
         _deleteButton->setEnabled(false);
         _deleteButton->setToolTip(tr("候选点计算完成后才能删除。"));
         return;
     }
 
-    _candidateCountLabel->setText(
-        tr("候选点：%1 / %2").arg(_candidateCount).arg(_totalPointCount));
-    _okButton->setEnabled(_totalPointCount > 0);
+    _candidateCountLabel->setText(_stagedDeletionCount > 0
+        ? tr("已暂删：%1；剩余：%2；当前候选：%3")
+              .arg(_stagedDeletionCount)
+              .arg(_remainingPointCount)
+              .arg(_candidateCount)
+        : tr("候选点：%1 / %2").arg(_candidateCount).arg(_totalPointCount));
+    _okButton->setEnabled(_stagedDeletionCount > 0);
     if (_candidateCount <= 0)
     {
         _deleteButton->setEnabled(false);
@@ -557,7 +610,7 @@ void CleanTiePointsDialog::updateCandidateState()
     }
 
     _deleteButton->setEnabled(true);
-    _deleteButton->setToolTip(tr("删除当前预览中高亮的候选点。"));
+    _deleteButton->setToolTip(tr("暂时隐藏当前高亮候选点；确定后才会应用。"));
 }
 
 int CleanTiePointsDialog::sliderPositionForValue(double value) const

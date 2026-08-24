@@ -57,6 +57,7 @@ private:
 int main(int argc, char *argv[])
 {
     CLI::App app{"PlaScan 原生小天体全球径向 DEM/DOM 生成工具"};
+    cli::configureApp(app);
     argv = app.ensure_utf8(argv);
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
     {

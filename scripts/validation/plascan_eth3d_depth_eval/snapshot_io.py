@@ -31,7 +31,11 @@ class _FileIdentity:
             mode=stat.S_IFMT(value.st_mode),
             size_bytes=value.st_size,
             modification_time_ns=value.st_mtime_ns,
-            change_time_ns=value.st_ctime_ns,
+            # Windows may report a slightly different creation/change timestamp
+            # for fstat(handle) and stat(path) on the same unchanged file. The
+            # stable volume/file identifiers plus size, mtime and content hash
+            # still detect replacement and mutation without that false positive.
+            change_time_ns=0 if os.name == "nt" else value.st_ctime_ns,
         )
 
 

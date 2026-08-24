@@ -244,6 +244,8 @@ QJsonObject processingReportToJson(const plapoint::ProcessingReport &report,
         {QStringLiteral("used_fallback"), report.usedFallback},
         {QStringLiteral("fallback_reason"),
          QString::fromStdString(report.fallbackReason)},
+        {QStringLiteral("selection_reason"),
+         QString::fromStdString(report.selectionReason)},
         {QStringLiteral("input_points"), static_cast<double>(beforeCount)},
         {QStringLiteral("output_points"), static_cast<double>(afterCount)}
     };
@@ -328,6 +330,11 @@ void reportPlaPointDevice(const std::function<void(const QString &, int)> &progr
         message += QStringLiteral(" fallback=%1")
             .arg(QString::fromStdString(report.fallbackReason));
     }
+    if (!report.selectionReason.empty())
+    {
+        message += QStringLiteral(" selection=%1")
+            .arg(QString::fromStdString(report.selectionReason));
+    }
     if (progress)
     {
         progress(message, percent);
@@ -351,6 +358,7 @@ PlaCloud sorFilter(const PlaCloud &cloud,
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: point count is smaller than k + 1";
+            report->selectionReason.clear();
         }
         return cloneCloudValue(cloud);
     }
@@ -372,6 +380,7 @@ PlaCloud radiusFilter(const PlaCloud &cloud,
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: empty cloud";
+            report->selectionReason.clear();
         }
         return PlaCloud(0);
     }
@@ -392,6 +401,7 @@ PlaCloud voxelDownsample(const PlaCloud &cloud,
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: empty cloud or invalid leaf size";
+            report->selectionReason.clear();
         }
         return cloneCloudValue(cloud);
     }
@@ -777,59 +787,56 @@ bool fuseDepthMapsStreamingFromDisk(
     config.minConsistentViews = denseSettings.minConsistentViews;
     config.depthConsistency = denseSettings.depthConsistency;
     config.workerCount = denseSettings.threads;
-    config.neighborCount = std::min(
-        frame_count - 1,
-        std::clamp(std::max(4, denseSettings.minViews * 3), 2, 16));
+    config.computeBackend = denseSettings.patchMatchBackend;
+    config.cudaDeviceIndex = std::max(0, depthConfig.patchMatch.cudaDeviceIndex);
+    config.openClDeviceIndex = std::max(0, depthConfig.patchMatch.openClDeviceIndex);
+    config.neighborCount = std::min(frame_count - 1, std::clamp(std::max(4, denseSettings.minViews * 3), 2, 16));
 
     const xjw::mvs::FusionFrameLoader frameLoader =
-        [&](int frameIndex, xjw::mvs::FusionFrameInput *frame, std::string *loaderError) {
-            if (!frame || frameIndex < 0 || frameIndex >= frame_count)
+        [&](int frameIndex, xjw::mvs::FusionFrameInput* frame, std::string* loaderError)
+    {
+        if (!frame || frameIndex < 0 || frameIndex >= frame_count)
+        {
+            if (loaderError)
             {
-                if (loaderError)
-                {
-                    *loaderError = "Stored fusion frame index is invalid";
-                }
-                return false;
+                *loaderError = "Stored fusion frame index is invalid";
             }
+            return false;
+        }
 
-            const auto &stored = storedFrames.frames[static_cast<std::size_t>(
-                frameIndex)];
-            if (stored.refIndex < 0 ||
-                stored.refIndex >= static_cast<int>(views.size()))
+        const auto& stored = storedFrames.frames[static_cast<std::size_t>(frameIndex)];
+        if (stored.refIndex < 0 || stored.refIndex >= static_cast<int>(views.size()))
+        {
+            if (loaderError)
             {
-                if (loaderError)
-                {
-                    *loaderError = QStringLiteral(
-                        "缓存深度帧缺少有效的原始视角索引：ref_index=%1")
-                                           .arg(stored.refIndex)
-                                           .toUtf8()
-                                           .toStdString();
-                }
-                return false;
+                *loaderError = QStringLiteral("缓存深度帧缺少有效的原始视角索引：ref_index=%1")
+                                   .arg(stored.refIndex)
+                                   .toUtf8()
+                                   .toStdString();
             }
+            return false;
+        }
 
-            auto loaded = xjw::core::project::buildStoredFusionFrame(
-                stored,
-                views[static_cast<std::size_t>(stored.refIndex)].camera,
-                depthConfig.fusion,
-                frame_count,
-                denseSettings.fusionMaxImageDim);
-            if (!loaded.status.ok)
+        auto loaded =
+            xjw::core::project::buildStoredFusionFrame(stored,
+                                                       views[static_cast<std::size_t>(stored.refIndex)].camera,
+                                                       depthConfig.fusion,
+                                                       frame_count,
+                                                       denseSettings.fusionMaxImageDim);
+        if (!loaded.status.ok)
+        {
+            if (loaderError)
             {
-                if (loaderError)
-                {
-                    *loaderError = loaded.status.errorMessage.toUtf8().toStdString();
-                }
-                return false;
+                *loaderError = loaded.status.errorMessage.toUtf8().toStdString();
             }
+            return false;
+        }
 
-            *frame = std::move(loaded.frame);
-            frame->viewIndex = frameIndex;
-            frame->sourceImageIndices =
-                xjw::core::project::storedFusionSourceIndices(
-                    storedFrames.frames, frameIndex);
-            return true;
-        };
+        *frame = std::move(loaded.frame);
+        frame->viewIndex = frameIndex;
+        frame->sourceImageIndices = xjw::core::project::storedFusionSourceIndices(storedFrames.frames, frameIndex);
+        return true;
+    };
     const xjw::mvs::FusedCloudReducer cloudReducer =
         [processing_device = denseSettings.processingDevice](
             std::vector<xjw::mvs::FusedPoint> *points) {
@@ -878,12 +885,22 @@ bool fuseDepthMapsStreamingFromDisk(
         return false;
     }
 
+    std::fprintf(stdout,
+                 "  [MVS  90%%] 融合反投影后端 requested=%s actual=%s device=%d (%s)%s；一致性/聚合=cpu\n",
+                 xjw::mvs::denseCloudComputeBackendId(result.unprojectionExecution.requestedBackend),
+                 result.mixedUnprojectionBackends
+                     ? "mixed"
+                     : xjw::mvs::denseCloudComputeBackendId(result.unprojectionExecution.actualBackend),
+                 result.unprojectionExecution.deviceIndex,
+                 result.unprojectionExecution.deviceName.empty() ? "CPU"
+                                                                 : result.unprojectionExecution.deviceName.c_str(),
+                 result.unprojectionExecution.fallbackUsed ? " fallback" : "");
     *fusedCloud = std::move(result.points);
     *depthPostprocessStats = std::move(result.depthPostprocessStats);
     return true;
 }
 
-QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameInput> &frames)
+QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameInput>& frames)
 {
     qint64 validBefore = 0;
     qint64 validAfterConfidence = 0;
@@ -1120,10 +1137,11 @@ int runReconstructionPipelineCliImpl(int argc, char *argv[])
     (void)xjw::cli::registerConsoleLogger();
 
 #ifdef PLASCAN_THREE_D_ONLY
-    CLI::App app{"PlaScan GUI-equivalent 3D reconstruction pipeline"};
+    CLI::App app{"PlaScan 无界面三维重建工作流"};
 #else
-    CLI::App app{"PlaScan GUI-equivalent reconstruction pipeline"};
+    CLI::App app{"PlaScan 无界面完整重建工作流"};
 #endif
+    cli::configureApp(app);
 xjw::cli::ReconstructionCliOptions options;
     options.addTo(app);
     CLI11_PARSE(app, argc, argv);

@@ -60,6 +60,8 @@ MapProjectDialog::MapProjectDialog(QWidget *parent)
 void MapProjectDialog::connectUi()
 {
     connect(_demBrowseButton, &QPushButton::clicked, this, &MapProjectDialog::onChooseDem);
+    connect(_productModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MapProjectDialog::onProductModeChanged);
     connect(_outputBrowseButton, &QPushButton::clicked, this, &MapProjectDialog::onChooseOutput);
     connect(_runButton, &QPushButton::clicked, this, &MapProjectDialog::onRun);
     connect(_cancelButton, &QPushButton::clicked, this, &MapProjectDialog::onCancelRequested);
@@ -133,7 +135,9 @@ void MapProjectDialog::setProjectRoot(const QString &projectRoot)
     if (_outputEdit->text().trimmed().isEmpty() && !_projectRoot.isEmpty())
     {
         _outputEdit->setText(
-            QDir(_projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif")));
+            QDir(_projectRoot).filePath(isRpcMode()
+                ? QStringLiteral("assets/ortho/rpc_dom.tif")
+                : QStringLiteral("assets/ortho/relative_dom.tif")));
     }
 }
 
@@ -145,6 +149,15 @@ void MapProjectDialog::setDefaultDemPath(const QString &demPath)
         && _demEdit->text().trimmed().isEmpty() && !cleanPath.isEmpty())
     {
         _demEdit->setText(cleanPath);
+    }
+}
+
+void MapProjectDialog::setDefaultRpcDemPath(const QString &demPath)
+{
+    _defaultRpcDemPath = demPath.trimmed();
+    if (isRpcMode() && !_defaultRpcDemPath.isEmpty())
+    {
+        _demEdit->setText(_defaultRpcDemPath);
     }
 }
 
@@ -186,6 +199,13 @@ void MapProjectDialog::setImageReadiness(const QStringList &cameraReadyImages, i
     updateImageSummary();
 }
 
+void MapProjectDialog::setRpcImageReadiness(const QStringList &rpcReadyImages)
+{
+    _rpcReadyImages = rpcReadyImages;
+    applyImageReadiness();
+    updateImageSummary();
+}
+
 void MapProjectDialog::applyImageReadiness()
 {
     if (!_imageReadinessSet || !_imageList)
@@ -198,6 +218,11 @@ void MapProjectDialog::applyImageReadiness()
     {
         readyImages.insert(normalizedImagePath(path));
     }
+    QSet<QString> rpcReadyImages;
+    for (const QString &path : _rpcReadyImages)
+    {
+        rpcReadyImages.insert(normalizedImagePath(path));
+    }
 
     const QSignalBlocker blocker(_imageList);
     for (int index = 0; index < _imageList->count(); ++index)
@@ -207,7 +232,9 @@ void MapProjectDialog::applyImageReadiness()
         {
             continue;
         }
-        const bool ready = readyImages.contains(normalizedImagePath(item->text()));
+        const bool ready = isRpcMode()
+            ? rpcReadyImages.contains(normalizedImagePath(item->text()))
+            : readyImages.contains(normalizedImagePath(item->text()));
         item->setData(Qt::UserRole, ready);
         if (ready)
         {
@@ -217,8 +244,11 @@ void MapProjectDialog::applyImageReadiness()
         {
             item->setCheckState(Qt::Unchecked);
             item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsUserCheckable);
-            item->setToolTip(tr("%1\n缺少有效相机参数，不能用于正射投影。")
-                                 .arg(QDir::toNativeSeparators(item->text())));
+            item->setToolTip(isRpcMode()
+                ? tr("%1\n影像中未检测到有效的地理定位模型（RPC00B）。")
+                      .arg(QDir::toNativeSeparators(item->text()))
+                : tr("%1\n缺少有效相机参数，不能用于正射投影。")
+                      .arg(QDir::toNativeSeparators(item->text())));
         }
     }
 }
@@ -249,7 +279,9 @@ void MapProjectDialog::onChooseOutput()
         this,
         tr("选择正射影像输出路径"),
         _outputEdit->text(),
-        tr("GeoTIFF (*.tif *.tiff);;PNG (*.png)"));
+        isRpcMode()
+            ? tr("GeoTIFF (*.tif *.tiff)")
+            : tr("GeoTIFF (*.tif *.tiff);;PNG (*.png)"));
     if (path.isEmpty())
     {
         return;
@@ -272,13 +304,14 @@ void MapProjectDialog::onRun()
     {
         _estimateTimer->stop();
     }
+    const bool rpcMode = isRpcMode();
     const bool pointCloud =
         _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
-    if (pointCloud)
+    if (!rpcMode && pointCloud)
     {
         _runAfterPointCloudEstimate = true;
     }
-    if (!runEstimate(true))
+    if (!rpcMode && !runEstimate(true))
     {
         return;
     }
@@ -396,6 +429,7 @@ void MapProjectDialog::setRunning(bool running)
 {
     _running = running;
     for (QWidget *widget : {
+             static_cast<QWidget *>(_productModeGroup),
              static_cast<QWidget *>(_projectionGroup),
              static_cast<QWidget *>(_parametersGroup),
              static_cast<QWidget *>(_regionGroup),

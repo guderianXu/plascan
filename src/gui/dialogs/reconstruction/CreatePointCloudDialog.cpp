@@ -123,7 +123,7 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     auto *button_box = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     button_box->setObjectName(QStringLiteral("workflowButtonBox"));
-    xjw::gui::dialogs::configureWorkflowButtonBox(button_box);
+    xjw::gui::dialogs::configureWorkflowButtonBox(button_box, tr("创建"));
     _okButton = button_box->button(QDialogButtonBox::Ok);
     main_layout->addWidget(button_box);
 

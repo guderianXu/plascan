@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file cli_feature_match.cpp
  * @brief 两幅原始影像的统一特征匹配入口。
  *
@@ -22,10 +22,11 @@
 #include <cstdio>
 #include <string>
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     QCoreApplication qtApplication(argc, argv);
     CLI::App app{"PlaScan 双影像匹配"};
+    cli::configureApp(app);
 
     std::string leftImageArg;
     std::string rightImageArg;
@@ -42,43 +43,37 @@ int main(int argc, char *argv[])
     double geometryThreshold = 1.5;
     int geometryMinInliers = 20;
     bool guidedImageMatching = false;
+    std::string guidedMatchingModeArg = "off";
 
     app.add_option("-L,--left", leftImageArg, "左影像路径")->required();
     app.add_option("-R,--right", rightImageArg, "右影像路径")->required();
-    app.add_option("-o,--output-dir", outputDirectoryArg,
-                   "逐影像 .pimatch 输出目录")->required();
-    app.add_option("-m,--model", enginePathArg,
+    app.add_option("-o,--output-dir", outputDirectoryArg, "逐影像 .pimatch 输出目录")->required();
+    app.add_option("-m,--model",
+                   enginePathArg,
                    "算法模型资源：LightGlue .onnx/本机 .engine 或 LoMa-R JSON 清单；"
                    "Auto SIFT 无需模型");
-    app.add_option("-a,--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
+    app.add_option("-a,--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
         ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
     app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大关键点数");
-    app.add_option("--max-image-dim", maxImageDim,
-                   "提取输入最长边，0 表示保持原始分辨率");
+    app.add_option("--max-image-dim", maxImageDim, "提取输入最长边，0 表示保持原始分辨率");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal")
         ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
     app.add_option("-t,--match-threshold", matchThreshold, "匹配置信度阈值");
     app.add_option("--sift-ratio", siftMaximumRatio, "SIFT 最近邻/次近邻距离比上限");
-    app.add_flag("--no-adaptive-sift-ratio", noAdaptiveSiftRatio,
-                 "禁用按当前像对分布自适应收紧 SIFT ratio");
-    app.add_option("--geometry-threshold", geometryThreshold,
-                   "几何验证像素残差阈值");
-    app.add_option("--geometry-min-inliers", geometryMinInliers,
-                   "几何验证最少内点数");
-    app.add_flag("--guided-image-matching",
-                 guidedImageMatching,
-                 "在初始基础矩阵约束下补充弱 SIFT 对应");
+    app.add_flag("--no-adaptive-sift-ratio", noAdaptiveSiftRatio, "禁用按当前像对分布自适应收紧 SIFT ratio");
+    app.add_option("--geometry-threshold", geometryThreshold, "几何验证像素残差阈值");
+    app.add_option("--geometry-min-inliers", geometryMinInliers, "几何验证最少内点数");
+    app.add_flag("--guided-image-matching", guidedImageMatching, "兼容开关：等价于 --guided-image-matching-mode auto");
+    app.add_option("--guided-image-matching-mode", guidedMatchingModeArg, "指导匹配模式: off, auto, force")
+        ->check(CLI::IsMember({"off", "auto", "force"}));
 
     CLI11_PARSE(app, argc, argv);
 
-    const QString leftImage = QDir::cleanPath(
-        QFileInfo(QString::fromStdString(leftImageArg)).absoluteFilePath());
-    const QString rightImage = QDir::cleanPath(
-        QFileInfo(QString::fromStdString(rightImageArg)).absoluteFilePath());
-    const QString outputDirectory = QDir::cleanPath(
-        QFileInfo(QString::fromStdString(outputDirectoryArg)).absoluteFilePath());
+    const QString leftImage = QDir::cleanPath(QFileInfo(QString::fromStdString(leftImageArg)).absoluteFilePath());
+    const QString rightImage = QDir::cleanPath(QFileInfo(QString::fromStdString(rightImageArg)).absoluteFilePath());
+    const QString outputDirectory =
+        QDir::cleanPath(QFileInfo(QString::fromStdString(outputDirectoryArg)).absoluteFilePath());
     if (!QFileInfo(leftImage).isFile() || !QFileInfo(rightImage).isFile())
     {
         std::fprintf(stderr, "错误: 左右影像必须是可读取文件。\n");
@@ -91,8 +86,7 @@ int main(int argc, char *argv[])
     }
     if (!QDir().mkpath(outputDirectory))
     {
-        std::fprintf(stderr, "错误: 无法创建输出目录: %s\n",
-                     qUtf8Printable(outputDirectory));
+        std::fprintf(stderr, "错误: 无法创建输出目录: %s\n", qUtf8Printable(outputDirectory));
         return cli::EXIT_IO_ERR;
     }
 
@@ -138,7 +132,12 @@ int main(int argc, char *argv[])
     options.geometryReprojThreshold = std::max(0.1, geometryThreshold);
     options.geometryMinInliers = std::max(4, geometryMinInliers);
     options.enableGeometryVerification = true;
-    options.enableGuidedMatching = guidedImageMatching;
+    options.guidedMatchingMode =
+        xjw::matchphotos::guidedMatchingModeFromName(QString::fromStdString(guidedMatchingModeArg));
+    if (guidedImageMatching && options.guidedMatchingMode == xjw::matchphotos::GuidedMatchingMode::Disabled)
+    {
+        options.guidedMatchingMode = xjw::matchphotos::GuidedMatchingMode::Automatic;
+    }
     options.enableTrackBuild = true;
     options.useGenericPreselection = false;
     options.useReferencePreselection = false;
@@ -149,24 +148,17 @@ int main(int argc, char *argv[])
     context.workingDirectory = outputDirectory;
     context.matchDirectory = outputDirectory;
     context.pairInput.images = QStringList{leftImage, rightImage};
-    context.pairInput.manualPairKeys.append(
-        xjw::matchphotos::makePairKey(leftImage, rightImage));
+    context.pairInput.manualPairKeys.append(xjw::matchphotos::makePairKey(leftImage, rightImage));
 
     std::atomic_bool cancelFlag(false);
     context.cancelFlag = &cancelFlag;
-    context.progressCallback = [](const QString &stageId,
-                                  const QString &message,
-                                  int current,
-                                  int maximum)
+    context.progressCallback = [](const QString& stageId, const QString& message, int current, int maximum)
     {
-        std::fprintf(stdout, "[%s %d/%d] %s\n",
-                     qUtf8Printable(stageId), current, maximum,
-                     qUtf8Printable(message));
+        std::fprintf(stdout, "[%s %d/%d] %s\n", qUtf8Printable(stageId), current, maximum, qUtf8Printable(message));
         std::fflush(stdout);
     };
 
-    const xjw::matchphotos::MatchPhotosResult result =
-        xjw::matchphotos::MatchPhotosTask(options).run(context);
+    const xjw::matchphotos::MatchPhotosResult result = xjw::matchphotos::MatchPhotosTask(options).run(context);
     if (!result.success)
     {
         std::fprintf(stderr, "匹配失败: %s\n", qUtf8Printable(result.errorMessage));
@@ -176,10 +168,9 @@ int main(int argc, char *argv[])
     std::fprintf(stdout, "status=ok\n");
     std::fprintf(stdout, "pair_matches=%d\n", static_cast<int>(result.matches.size()));
     std::fprintf(stdout, "tracks=%d\n", result.trackCount);
-    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &record : result.imageMatchFiles)
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord& record : result.imageMatchFiles)
     {
-        std::fprintf(stdout, "image_match_file=%s\n",
-                     qUtf8Printable(record.matchFilePath));
+        std::fprintf(stdout, "image_match_file=%s\n", qUtf8Printable(record.matchFilePath));
     }
     return cli::EXIT_OK;
 }

@@ -7,6 +7,7 @@
 #include "io/PathIO.h"
 
 #include <gtest/gtest.h>
+#include <opencv2/imgproc.hpp>
 
 #include <QDir>
 #include <QFileInfo>

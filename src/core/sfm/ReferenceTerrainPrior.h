@@ -8,7 +8,7 @@
  * 不负责坐标参考系转换。调用方必须保证稀疏点和 DEM 已位于同一平面/高程坐标系。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 
 #include <vector>
 

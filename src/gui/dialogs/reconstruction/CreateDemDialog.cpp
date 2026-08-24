@@ -5,12 +5,17 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSizePolicy>
+#include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 
 CreateDemDialog::CreateDemDialog(QWidget *parent)
     : QDialog(parent)
@@ -41,10 +46,19 @@ void CreateDemDialog::setupUi()
 
     _modeCombo = ui.m_modeCombo;
     _optionsStack = ui.m_optionsStack;
+    _optionsStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     _hintLabel = ui.m_hintLabel;
 
     _denseEdit = ui.m_denseEdit;
     _browseDenseBtn = ui.browseDenseBtn;
+
+    _stereoImageList = ui.m_stereoImageList;
+    _stereoSelectionLabel = ui.m_stereoSelectionLabel;
+    _selectAllImagesBtn = ui.m_selectAllImagesBtn;
+    _clearImagesBtn = ui.m_clearImagesBtn;
+    _rpcResolutionSpin = ui.m_rpcResolutionSpin;
+    _rpcMaximumFeaturesSpin = ui.m_rpcMaximumFeaturesSpin;
+    _rpcMaximumErrorSpin = ui.m_rpcMaximumErrorSpin;
 
     _surfaceEdit = ui.m_surfaceEdit;
     _browseSurfaceBtn = ui.browseSurfaceBtn;
@@ -71,6 +85,10 @@ void CreateDemDialog::setupUi()
             });
     connect(_browseDenseBtn, &QPushButton::clicked,
             this, &CreateDemDialog::onBrowseDenseCloud);
+    connect(_selectAllImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::selectAllStereoImages);
+    connect(_clearImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::clearStereoImages);
+    connect(_stereoImageList, &QListWidget::itemChanged, this,
+            [this](QListWidgetItem *) { refreshStereoSelection(); });
     connect(_browseSurfaceBtn, &QPushButton::clicked,
             this, &CreateDemDialog::onBrowseSurface);
     connect(_denseEdit, &QLineEdit::textChanged,
@@ -98,12 +116,32 @@ void CreateDemDialog::setupUi()
                 accept();
             });
 
+    resize(900, 430);
     refreshModeUi();
 }
 
 bool CreateDemDialog::isSmallBodyGlobalMode() const
 {
+    return _modeCombo && _modeCombo->currentIndex() == 2;
+}
+
+bool CreateDemDialog::isImageStereoMode() const
+{
     return _modeCombo && _modeCombo->currentIndex() == 1;
+}
+
+void CreateDemDialog::setAvailableImages(const QStringList &images)
+{
+    _stereoImageList->clear();
+    for (const QString &path : images)
+    {
+        auto *item = new QListWidgetItem(QFileInfo(path).fileName(), _stereoImageList);
+        item->setData(Qt::UserRole, path);
+        item->setToolTip(path);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
+    }
+    refreshStereoSelection();
 }
 
 void CreateDemDialog::onBrowseDenseCloud()
@@ -115,6 +153,44 @@ void CreateDemDialog::onBrowseDenseCloud()
     {
         _denseEdit->setText(file_path);
     }
+}
+
+QStringList CreateDemDialog::selectedStereoImages() const
+{
+    QStringList images;
+    for (int index = 0; index < _stereoImageList->count(); ++index)
+    {
+        const auto *item = _stereoImageList->item(index);
+        if (item->checkState() == Qt::Checked)
+        {
+            images.append(item->data(Qt::UserRole).toString());
+        }
+    }
+    return images;
+}
+
+void CreateDemDialog::selectAllStereoImages()
+{
+    for (int index = 0; index < _stereoImageList->count(); ++index)
+    {
+        _stereoImageList->item(index)->setCheckState(Qt::Checked);
+    }
+}
+
+void CreateDemDialog::clearStereoImages()
+{
+    for (int index = 0; index < _stereoImageList->count(); ++index)
+    {
+        _stereoImageList->item(index)->setCheckState(Qt::Unchecked);
+    }
+}
+
+void CreateDemDialog::refreshStereoSelection()
+{
+    _stereoSelectionLabel->setText(tr("已选择 %1 / %2 张")
+                                       .arg(selectedStereoImages().size())
+                                       .arg(_stereoImageList->count()));
+    refreshRunButton();
 }
 
 void CreateDemDialog::onBrowseSurface()
@@ -131,7 +207,16 @@ void CreateDemDialog::onBrowseSurface()
 void CreateDemDialog::onRunClicked()
 {
     xjw::gui::project::DemGenerationRequest request;
-    if (isSmallBodyGlobalMode())
+    if (isImageStereoMode())
+    {
+        request.mode = xjw::gui::project::DemGenerationMode::ImageStereo;
+        request.imageStereoOptions.sourceImages = selectedStereoImages();
+        request.imageStereoOptions.gridResolutionMeters = _rpcResolutionSpin->value();
+        request.imageStereoOptions.maximumFeatures = _rpcMaximumFeaturesSpin->value();
+        request.imageStereoOptions.maximumReprojectionErrorPixels =
+            _rpcMaximumErrorSpin->value();
+    }
+    else if (isSmallBodyGlobalMode())
     {
         request.mode = xjw::gui::project::DemGenerationMode::SmallBodyGlobal;
         request.sourceSurfacePath = _surfaceEdit->text().trimmed();
@@ -160,7 +245,7 @@ void CreateDemDialog::onRunClicked()
         QMessageBox::warning(this, tr("生成 DEM"), error_message);
         return;
     }
-    _runningCancelable = isSmallBodyGlobalMode();
+    _runningCancelable = isSmallBodyGlobalMode() || isImageStereoMode();
     setRunning(true);
     emit requestRun(request);
 }
@@ -168,11 +253,16 @@ void CreateDemDialog::onRunClicked()
 void CreateDemDialog::refreshModeUi()
 {
     const bool global_mode = isSmallBodyGlobalMode();
-    _optionsStack->setCurrentIndex(global_mode ? 1 : 0);
+    const bool rpc_mode = isImageStereoMode();
+    _optionsStack->setCurrentIndex(global_mode ? 2 : (rpc_mode ? 1 : 0));
     _hintLabel->setText(global_mode
         ? tr("从体固连闭合三角网格生成全球径向 DEM、参考半径高程 DEM、DOM 和质量报告。")
-        : tr("选择已有点云文件生成局部平面相对 DEM。"));
-    _runBtn->setText(global_mode ? tr("生成全球 DEM + DOM") : tr("一键生成 DEM"));
+        : (rpc_mode
+               ? tr("从当前项目勾选多张重叠影像，自动使用 RPC 或框幅式相机进行匹配与前方交会。")
+               : tr("选择已有点云文件生成局部平面相对 DEM。")));
+    _runBtn->setText(global_mode
+        ? tr("生成全球 DEM + DOM")
+        : (rpc_mode ? tr("生成影像立体 DEM") : tr("一键生成 DEM")));
 
     const bool manual_center = global_mode
         && !_automaticCenterCheck->isChecked()
@@ -181,6 +271,13 @@ void CreateDemDialog::refreshModeUi()
     _centerYSpin->setEnabled(manual_center);
     _centerZSpin->setEnabled(manual_center);
     refreshRunButton();
+    if (!_running)
+    {
+        QTimer::singleShot(0, this, [this, global_mode]()
+        {
+            resize(width(), global_mode ? 650 : 430);
+        });
+    }
 }
 
 void CreateDemDialog::refreshRunButton()
@@ -197,6 +294,11 @@ void CreateDemDialog::refreshRunButton()
             !_surfaceEdit->text().trimmed().isEmpty()
             && !_targetNameEdit->text().trimmed().isEmpty()
             && !_bodyFixedFrameEdit->text().trimmed().isEmpty());
+        return;
+    }
+    if (isImageStereoMode())
+    {
+        _runBtn->setEnabled(selectedStereoImages().size() >= 2);
         return;
     }
     _runBtn->setEnabled(!_denseEdit->text().trimmed().isEmpty());

@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "BundleAdjustPlaMatrixProblem.h"
 #include "BundleAdjustPlaMatrixProjection.h"
 #include "FramePinholeCamera.h"
@@ -195,11 +195,11 @@ TEST(BundleAdjustPlaMatrixExtendedProjectionTest,
 }
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest,
-     FullSharedBrownModelMatchesCeresAcrossCpuCudaAndOpenCl)
+     FullSharedBrownModelMatchesAcrossCpuCudaAndOpenCl)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is unavailable";
+        GTEST_SKIP() << "PlaMatrix backend is unavailable";
     }
     const std::vector<xjw::FramePinholeCamera> truth_cameras{
         makeCalibrationCamera(-3.0, 0.0, true),
@@ -216,13 +216,15 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest,
     auto options = makeFullBrownOptions();
     options.stageSharedFocalRefinement = false;
 
-    auto ceres_options = options;
-    ceres_options.backend = xjw::BABackend::CeresCpu;
-    const auto ceres = xjw::BundleAdjust::optimizePoints(
-        initial_cameras, tracks, ceres_options);
-    ASSERT_TRUE(ceres.solutionUsable) << ceres.backendMessage;
+    auto plamatrix_options = options;
+    plamatrix_options.backend = xjw::BABackend::PlaMatrixCpu;
+    const auto plamatrix = xjw::BundleAdjust::optimizePoints(
+        initial_cameras, tracks, plamatrix_options);
+    ASSERT_TRUE(plamatrix.solutionUsable) << plamatrix.backendMessage;
 
-    std::vector<xjw::BABackend> backends{xjw::BABackend::PlaMatrixCpu};
+    EXPECT_EQ(plamatrix.refinedCalibrationGroupCount, 1);
+
+    std::vector<xjw::BABackend> backends;
     for (const auto backend : {
              xjw::BABackend::PlaMatrixCuda,
              xjw::BABackend::PlaMatrixOpenCl})
@@ -244,7 +246,7 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest,
         EXPECT_FALSE(result.backendFallback);
         EXPECT_EQ(result.refinedCalibrationGroupCount, 1);
         const auto& actual = result.refinedCameras.front();
-        const auto& expected = ceres.refinedCameras.front();
+        const auto& expected = plamatrix.refinedCameras.front();
         EXPECT_NEAR(actual.focalX(), expected.focalX(), 2.0);
         EXPECT_NEAR(actual.focalY(), expected.focalY(), 2.0);
         EXPECT_NEAR(actual.principalX(), expected.principalX(), 0.5);
@@ -264,7 +266,7 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest,
         EXPECT_NEAR(actual.distortion().tangentialP2,
                     expected.distortion().tangentialP2,
                     5e-4);
-        EXPECT_NEAR(result.meanRmsAfter, ceres.meanRmsAfter, 2e-3);
+        EXPECT_NEAR(result.meanRmsAfter, plamatrix.meanRmsAfter, 2e-3);
     }
 }
 
@@ -297,7 +299,7 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest,
 }
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest,
-     IntrinsicStagingMatchesCeresIterationBudget)
+     IntrinsicStagingMatchesPlaMatrixIterationBudget)
 {
     xjw::BAIntrinsicParameterMask enabled{};
     enabled.fill(true);

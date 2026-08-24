@@ -4,44 +4,58 @@
 
 #include <plamatrix/optimization/block_schur.h>
 
+#include <exception>
+#include <memory>
+
 namespace xjw::detail::plamatrix_ba
 {
 
-struct OptimizationState
-{
-    std::vector<FramePinholeCamera> cameras;
-    std::vector<std::array<double, 3>> points;
-    std::vector<std::array<double, 3>> laserPoints;
-    std::vector<IntrinsicGroupState> intrinsicGroups;
-};
+    struct OptimizationState
+    {
+        std::vector<FramePinholeCamera> cameras;
+        std::vector<std::array<double, 3>> points;
+        std::vector<std::array<double, 3>> laserPoints;
+        std::vector<IntrinsicGroupState> intrinsicGroups;
+    };
 
-OptimizationState initializeState(const std::vector<FramePinholeCamera>& cameras,
-                                  const std::vector<BATrack>& tracks,
-                                  const BAOptions& options,
-                                  const ActiveProblem& active);
+    struct NormalEquationAssemblyWorkspace
+    {
+        explicit NormalEquationAssemblyWorkspace(const ActiveProblem& active);
 
-plamatrix::BlockNormalEquations<double> buildNormalEquations(
-    const std::vector<FramePinholeCamera>& input_cameras,
-    const std::vector<BATrack>& tracks,
-    const BAOptions& options,
-    const ActiveProblem& active,
-    const OptimizationState& state,
-    int iteration,
-    double* objective_cost = nullptr);
+        plamatrix::BlockNormalEquations<double> equations;
+        std::vector<std::unique_ptr<plamatrix::BlockNormalEquations<double>>> partialEquations;
+        std::vector<double> partialCosts;
+        std::vector<std::exception_ptr> errors;
+        std::vector<std::size_t> trackBoundaries;
+        int partitionThreadCount = 0;
+    };
 
-double evaluateObjective(const std::vector<FramePinholeCamera>& input_cameras,
-                         const std::vector<BATrack>& tracks,
-                         const BAOptions& options,
-                         const ActiveProblem& active,
-                         const OptimizationState& state,
-                         int iteration);
+    OptimizationState initializeState(const std::vector<FramePinholeCamera>& cameras,
+                                      const std::vector<BATrack>& tracks,
+                                      const BAOptions& options,
+                                      const ActiveProblem& active);
 
-double maximumStepNorm(const std::vector<double>& primary_step,
-                       const std::vector<double>& eliminated_step);
+    void buildNormalEquations(const std::vector<FramePinholeCamera>& input_cameras,
+                              const std::vector<BATrack>& tracks,
+                              const BAOptions& options,
+                              const ActiveProblem& active,
+                              const OptimizationState& state,
+                              int iteration,
+                              NormalEquationAssemblyWorkspace* workspace,
+                              double* objective_cost = nullptr);
 
-void applyStep(const ActiveProblem& active,
-               const std::vector<double>& primary_step,
-               const std::vector<double>& eliminated_step,
-               OptimizationState* state);
+    double evaluateObjective(const std::vector<FramePinholeCamera>& input_cameras,
+                             const std::vector<BATrack>& tracks,
+                             const BAOptions& options,
+                             const ActiveProblem& active,
+                             const OptimizationState& state,
+                             int iteration);
+
+    double maximumStepNorm(const std::vector<double>& primary_step, const std::vector<double>& eliminated_step);
+
+    void applyStep(const ActiveProblem& active,
+                   const std::vector<double>& primary_step,
+                   const std::vector<double>& eliminated_step,
+                   OptimizationState* state);
 
 } // namespace xjw::detail::plamatrix_ba

@@ -51,6 +51,19 @@ struct SparseDepthResidualSummary
     float medianAbsoluteLogError = -1.0f;
 };
 
+/// Audit summary for the boundary between observed cross-view consistency and
+/// the depth product that is eventually published. A safety fallback may
+/// restore the original depth for diagnostics or later recovery, but that
+/// restored coverage is not evidence that cross-view consistency succeeded.
+struct DepthConsistencyPublicationSummary
+{
+    float observedRetentionRatio = -1.0f;
+    float publishedRetentionRatio = -1.0f;
+    bool originalDepthFallbackApplied = false;
+    DepthFrameAcceptance acceptanceCeiling = DepthFrameAcceptance::Accepted;
+    std::string diagnosticReason;
+};
+
 struct DepthFrameQualityInput
 {
     MvsSceneProfile sceneProfile = MvsSceneProfile::OrbitalObject;
@@ -79,6 +92,14 @@ struct DepthFrameQualityInput
     float validWithinMaskRatio = -1.0f;
     float outputFilterRetentionRatio = -1.0f;
     float consistencyRetentionRatio = -1.0f;
+    /// True when the published product restored the pre-consistency depth
+    /// after the observed consistency result collapsed. Such a product may
+    /// never be promoted to Primary solely because its coverage was restored.
+    bool consistencyPublicationFallbackApplied = false;
+    /// Upper bound supplied by summarizeDepthConsistencyPublication(). The
+    /// default preserves existing callers and quality decisions.
+    DepthFrameAcceptance consistencyAcceptanceCeiling = DepthFrameAcceptance::Accepted;
+    std::string consistencyPublicationDiagnosticReason;
     float fusionPostprocessRetentionRatio = -1.0f;
     bool adaptiveGeometryEvidenceAvailable = false;
     float adaptiveEffectiveViewCountMean = -1.0f;
@@ -117,20 +138,35 @@ enum class DepthConsistencyEvidence
     Contradicted
 };
 
-float calibrateDepthConfidence(const DepthConfidenceComponents &components);
-float geometryErrorConfidence(const SparseDepthResidualSummary &residual);
+float calibrateDepthConfidence(const DepthConfidenceComponents& components);
+float geometryErrorConfidence(const SparseDepthResidualSummary& residual);
+
+/// Preserve the observed consistency retention independently of any restored
+/// publication coverage. An all-unavailable (-1) tuple is accepted only when
+/// the caller explicitly marks the consistency stage as not applicable;
+/// expected, partially populated, or invalid counts fail closed. A fallback
+/// after a real (<10%) consistency collapse is rejected, while any other
+/// fallback remains validation-only at best.
+DepthConsistencyPublicationSummary summarizeDepthConsistencyPublication(int preConsistencyValidCount,
+                                                                        int observedPostConsistencyValidCount,
+                                                                        int publishedValidCount,
+                                                                        bool originalDepthFallbackApplied,
+                                                                        bool consistencyStageExpected);
+
+/// Apply a publication summary without converting an unavailable (-1)
+/// observation into synthetic zero-valued multi-view evidence.
+void applyDepthConsistencyPublicationSummary(const DepthConsistencyPublicationSummary& summary,
+                                             DepthFrameQualityInput* input);
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews);
 
-DepthConfidenceThresholds depthConfidenceThresholds(
-    MvsSceneProfile sceneProfile,
-    DepthFilterMode filterMode,
-    int availableSourceViews,
-    float configuredPatchMatch,
-    float configuredFusion);
+DepthConfidenceThresholds depthConfidenceThresholds(MvsSceneProfile sceneProfile,
+                                                    DepthFilterMode filterMode,
+                                                    int availableSourceViews,
+                                                    float configuredPatchMatch,
+                                                    float configuredFusion);
 
-int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode,
-                                               int availableSourceViews);
+int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode, int availableSourceViews);
 int minimumDepthConsistencySourceConfirmations(MvsSceneProfile sceneProfile,
                                                DepthFilterMode mode,
                                                int availableSourceViews);

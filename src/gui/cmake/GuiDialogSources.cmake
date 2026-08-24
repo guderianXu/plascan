@@ -36,7 +36,9 @@ set(GUI_CAMERA_DIALOG_SOURCES
 
 set(GUI_IMAGE_DIALOG_SOURCES
   dialogs/image/GenerateMaskDialog.cpp
+  dialogs/image/MaskEditorSettingsDialog.cpp
   dialogs/image/GenerateMaskDialog.h
+  dialogs/image/MaskEditorSettingsDialog.h
 )
 
 set(GUI_RECONSTRUCTION_DIALOG_SOURCES

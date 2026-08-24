@@ -13,7 +13,7 @@ xcode-select --install
 brew install ninja pkg-config autoconf autoconf-archive automake libtool libomp python@3.12
 ```
 
-项目使用 vcpkg manifest 管理 Qt6、OpenCV、GDAL、Ceres、libtiff、libzip 和 GTest 等 C++ 依赖。
+项目使用 vcpkg manifest 管理 Qt6、OpenCV、GDAL、libtiff、libzip 和 GTest 等 C++ 依赖。
 首次使用时在源码树外初始化 vcpkg：
 
 ```bash
@@ -76,7 +76,7 @@ cpack --preset macos-vcpkg-release
 
 - Apple Silicon 没有 NVIDIA CUDA 和 TensorRT；依赖它们的 LightGlue、LoMa-R 等路径不可用。
   BiRefNet Dynamic 使用随程序部署的 ONNX Runtime CPU 后端，可以在 macOS 上直接处理蒙版。
-- 新版 BA 生产路径使用 PlaMatrix CPU 后端；Ceres 只作为可选对照后端，macOS preset 默认不启用。
+- BA 联合优化路径使用 PlaMatrix CPU 后端，固定相机 point-only 问题可使用 Legacy CPU/OpenMP。
 - macOS preset 当前使用 CPU 后端；项目尚未把 Metal/MPS 接入 C++ 核心计算路径。
 - macOS 的 Qt6 不启用需要外部 MoltenVK SDK 的 Vulkan feature，GUI 使用 Qt 的平台 QRhi fallback。
 - U2Net 可使用 OpenCV DNN CPU 后端，BiRefNet Dynamic 使用 ONNX Runtime CPU 后端。

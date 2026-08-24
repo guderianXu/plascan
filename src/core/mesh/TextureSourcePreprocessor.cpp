@@ -7,6 +7,7 @@
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
 
+#include <opencv2/geometry/2d.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <QFileInfo>

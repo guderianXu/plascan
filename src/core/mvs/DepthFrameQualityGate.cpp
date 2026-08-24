@@ -18,6 +18,7 @@ constexpr float kMinimumRetainedFusionCoreRatio = 0.40f;
 constexpr float kMinimumGeneralMultiViewConsistency = 0.45f;
 constexpr float kLowConfidenceMeanThreshold = 0.45f;
 constexpr float kMaximumSearchBoundaryRatio = 0.45f;
+constexpr float kConsistencyFallbackCollapseRatio = 0.10f;
 
 float unitValue(float value)
 {
@@ -118,14 +119,102 @@ float geometryErrorConfidence(const SparseDepthResidualSummary &residual)
         1.0f,
         static_cast<float>(residual.validSampleCount) / 64.0f);
     const float valid_ratio = residual.projectedSampleCount > 0
-        ? std::clamp(
-              static_cast<float>(residual.validSampleCount)
-                  / static_cast<float>(residual.projectedSampleCount),
-              0.0f,
-              1.0f)
-        : 0.0f;
+                                  ? std::clamp(static_cast<float>(residual.validSampleCount) /
+                                                   static_cast<float>(residual.projectedSampleCount),
+                                               0.0f,
+                                               1.0f)
+                                  : 0.0f;
     const float evidence_strength = sample_strength * valid_ratio;
     return std::pow(std::max(0.01f, error_score), evidence_strength);
+}
+
+DepthConsistencyPublicationSummary summarizeDepthConsistencyPublication(int preConsistencyValidCount,
+                                                                        int observedPostConsistencyValidCount,
+                                                                        int publishedValidCount,
+                                                                        bool originalDepthFallbackApplied,
+                                                                        bool consistencyStageExpected)
+{
+    DepthConsistencyPublicationSummary summary;
+    summary.originalDepthFallbackApplied = originalDepthFallbackApplied;
+
+    // A consistency stage is optional for a single-view batch and for frames
+    // rejected before cross-view evaluation. Preserve that explicit
+    // unavailable state; partially populated statistics still fail closed.
+    if (!consistencyStageExpected && !originalDepthFallbackApplied && preConsistencyValidCount == -1 &&
+        observedPostConsistencyValidCount == -1 && publishedValidCount == -1)
+    {
+        return summary;
+    }
+
+    if (preConsistencyValidCount <= 0)
+    {
+        summary.acceptanceCeiling = DepthFrameAcceptance::Rejected;
+        summary.diagnosticReason = "invalid_consistency_pre_valid_count";
+        return summary;
+    }
+    if (observedPostConsistencyValidCount < 0)
+    {
+        summary.acceptanceCeiling = DepthFrameAcceptance::Rejected;
+        summary.diagnosticReason = "invalid_consistency_observed_valid_count";
+        return summary;
+    }
+    if (publishedValidCount < 0)
+    {
+        summary.acceptanceCeiling = DepthFrameAcceptance::Rejected;
+        summary.diagnosticReason = "invalid_consistency_published_valid_count";
+        return summary;
+    }
+
+    const float denominator = static_cast<float>(preConsistencyValidCount);
+    // Cross-view repair is part of the consistency stage, so the published
+    // valid count may legitimately exceed the pre-stage count. Retention is a
+    // loss metric; cap repair growth at one instead of treating it as invalid.
+    summary.observedRetentionRatio =
+        std::clamp(static_cast<float>(observedPostConsistencyValidCount) / denominator, 0.0f, 1.0f);
+    summary.publishedRetentionRatio = std::clamp(static_cast<float>(publishedValidCount) / denominator, 0.0f, 1.0f);
+
+    if (originalDepthFallbackApplied)
+    {
+        if (publishedValidCount != preConsistencyValidCount)
+        {
+            summary.acceptanceCeiling = DepthFrameAcceptance::Rejected;
+            summary.diagnosticReason = "consistency_fallback_did_not_restore_pre_count";
+            return summary;
+        }
+        if (summary.observedRetentionRatio < kConsistencyFallbackCollapseRatio)
+        {
+            summary.acceptanceCeiling = DepthFrameAcceptance::Rejected;
+            summary.diagnosticReason = "original_depth_fallback_after_consistency_collapse";
+            return summary;
+        }
+
+        summary.acceptanceCeiling = DepthFrameAcceptance::ValidationOnly;
+        summary.diagnosticReason = "original_depth_fallback_not_primary";
+        return summary;
+    }
+
+    if (publishedValidCount != observedPostConsistencyValidCount)
+    {
+        summary.acceptanceCeiling = DepthFrameAcceptance::ValidationOnly;
+        summary.diagnosticReason = "consistency_publication_count_mismatch_without_fallback";
+    }
+    return summary;
+}
+
+void applyDepthConsistencyPublicationSummary(const DepthConsistencyPublicationSummary& summary,
+                                             DepthFrameQualityInput* input)
+{
+    if (!input)
+    {
+        return;
+    }
+    const bool consistency_available = summary.observedRetentionRatio >= 0.0f;
+    input->multiViewConsistencyAvailable = consistency_available;
+    input->multiViewConsistency = consistency_available ? summary.observedRetentionRatio : 0.0f;
+    input->consistencyRetentionRatio = summary.observedRetentionRatio;
+    input->consistencyPublicationFallbackApplied = summary.originalDepthFallbackApplied;
+    input->consistencyAcceptanceCeiling = summary.acceptanceCeiling;
+    input->consistencyPublicationDiagnosticReason = summary.diagnosticReason;
 }
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews)
@@ -298,22 +387,45 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
             input.meanPhotometricConfidence >= 0.0f
         ? input.meanPhotometricConfidence
         : input.meanConfidence;
-    components.support = input.sourceViewCount > 0
-        ? std::min(1.0f, static_cast<float>(input.sourceViewCount) / 4.0f)
-        : 0.0f;
+    components.support =
+        input.sourceViewCount > 0 ? std::min(1.0f, static_cast<float>(input.sourceViewCount) / 4.0f) : 0.0f;
     components.uniqueness = 1.0f - input.depthAtSearchBoundaryRatio;
     components.geometry = input.dualChannelConfidenceAvailable &&
-            std::isfinite(input.meanIndependentGeometryConfidence) &&
-            input.meanIndependentGeometryConfidence >= 0.0f
-        ? input.meanIndependentGeometryConfidence
-        : input.multiViewConsistencyAvailable
-            ? input.multiViewConsistency
-            : 1.0f;
+                                  std::isfinite(input.meanIndependentGeometryConfidence) &&
+                                  input.meanIndependentGeometryConfidence >= 0.0f
+                              ? input.meanIndependentGeometryConfidence
+                          : input.multiViewConsistencyAvailable ? input.multiViewConsistency
+                                                                : 1.0f;
     components.texture = input.largestComponentRatio;
-    components.absoluteGeometry = geometryErrorConfidence(
-        input.sparseDepthResidual);
+    components.absoluteGeometry = geometryErrorConfidence(input.sparseDepthResidual);
     decision.confidenceComponents = components;
     decision.calibratedConfidence = calibrateDepthConfidence(components);
+
+    DepthFrameAcceptance consistency_acceptance_ceiling = input.consistencyAcceptanceCeiling;
+    if (input.consistencyPublicationFallbackApplied && consistency_acceptance_ceiling == DepthFrameAcceptance::Accepted)
+    {
+        // Fail closed even when a caller records the fallback flag but forgets
+        // to forward the helper's explicit ceiling.
+        consistency_acceptance_ceiling = DepthFrameAcceptance::ValidationOnly;
+    }
+    if (consistency_acceptance_ceiling != DepthFrameAcceptance::Accepted)
+    {
+        lowerAcceptance(consistency_acceptance_ceiling, decision);
+        if (!input.consistencyPublicationDiagnosticReason.empty())
+        {
+            decision.reasons.push_back(input.consistencyPublicationDiagnosticReason);
+        }
+        else if (input.consistencyPublicationFallbackApplied)
+        {
+            decision.reasons.emplace_back(consistency_acceptance_ceiling == DepthFrameAcceptance::Rejected
+                                              ? "original_depth_fallback_after_consistency_collapse"
+                                              : "original_depth_fallback_not_primary");
+        }
+        else
+        {
+            decision.reasons.emplace_back("invalid_consistency_publication_statistics");
+        }
+    }
 
     if (input.depthAtSearchBoundaryRatio > kMaximumSearchBoundaryRatio)
     {

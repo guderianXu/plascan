@@ -714,8 +714,8 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         if (usableObservationCount < 2 ||
             !hasSecondDistinctCamera ||
             !initialPointHasPositiveDepth ||
-            (options && options->maxCeresInitialTrackRms > 0.0 &&
-             initialTrackRms > options->maxCeresInitialTrackRms))
+            (options && options->maxInitialTrackRms > 0.0 &&
+             initialTrackRms > options->maxInitialTrackRms))
         {
             continue;
         }

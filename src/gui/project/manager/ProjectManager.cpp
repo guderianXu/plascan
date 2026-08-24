@@ -39,7 +39,7 @@
 #include "FileDialogStateManager.h"
 #include "FramePinholeCamera.h"
 #include "Intersection.h"
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "LaserConstraintMap.h"
 #include "PlanetaryLaserJson.h"
 #include "io/PathIO.h"
@@ -565,6 +565,10 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
             this, &ProjectManager::maskGenerationFinished);
     connect(_maskWorkflowController, &ProjectMaskWorkflowController::masksGenerated,
             this, &ProjectManager::masksGenerated);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::interactiveMaskSaved,
+            this, &ProjectManager::interactiveMaskSaved);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::interactiveMaskSaveFailed,
+            this, &ProjectManager::interactiveMaskSaveFailed);
     connect(_maskWorkflowController, &ProjectMaskWorkflowController::projectMetadataUpdated,
             this, &ProjectManager::projectMetadataUpdated);
 
@@ -936,12 +940,42 @@ void ProjectManager::startImageImport(const QStringList &imagePaths,
                 return;
             }
 
+            QMap<QString, QJsonObject> rpcCameras;
+            for (const QString &imagePath : batch.projectImagePaths)
+            {
+                const QString suffix = QFileInfo(imagePath).suffix().toLower();
+                if (suffix != QStringLiteral("tif") && suffix != QStringLiteral("tiff"))
+                {
+                    continue;
+                }
+                QJsonObject cameraMetadata;
+                if (xjw::common::project::parseRpcCameraRaster(
+                        imagePath, &cameraMetadata, nullptr))
+                {
+                    rpcCameras.insert(QFileInfo(imagePath).absoluteFilePath(), cameraMetadata);
+                }
+            }
+            int importedRpcCameras = 0;
+            QString rpcImportError;
+            if (!rpcCameras.isEmpty() &&
+                !self->_projectData->setImageCameras(
+                    rpcCameras, &importedRpcCameras, &rpcImportError))
+            {
+                LOG_WARN(QStringLiteral("影像已导入，但 RPC 相机写入工程失败: %1")
+                             .arg(rpcImportError));
+            }
+
             const int added = batch.projectImagePaths.size();
-            const QString finishedMessage = batch.skipped > 0
+            QString finishedMessage = batch.skipped > 0
                 ? QStringLiteral("已加载 %1 张影像，跳过 %2 张重复影像")
                       .arg(added)
                       .arg(batch.skipped)
                 : QStringLiteral("已加载 %1 张影像").arg(added);
+            if (importedRpcCameras > 0)
+            {
+                finishedMessage += QStringLiteral("，自动读取 %1 个 RPC 相机")
+                                       .arg(importedRpcCameras);
+            }
             LOG_INFO(QStringLiteral("%1（来源：%2，共选择 %3 张）")
                          .arg(finishedMessage, sourceLabel)
                          .arg(total));
@@ -1300,6 +1334,14 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
 void ProjectManager::clearMasksForImages(const QStringList &requestedImages)
 {
     _maskWorkflowController->clearMasksForImages(requestedImages);
+}
+
+void ProjectManager::saveInteractiveMask(const QString &imagePath,
+                                         const QImage &mask,
+                                         const QString &method,
+                                         quint64 revision)
+{
+    _maskWorkflowController->saveInteractiveMask(imagePath, mask, method, revision);
 }
 
 void ProjectManager::runReferenceQualityCheck()
@@ -2333,25 +2375,10 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     {
         opts.baOpt.backend = xjw::BABackend::PlaMatrixOpenCl;
     }
-    else if (baBackendName == QLatin1String("ceres_cpu"))
-    {
-        opts.baOpt.backend = xjw::BABackend::CeresCpu;
-    }
-    else if (baBackendName == QLatin1String("ceres_cuda"))
-    {
-        opts.baOpt.backend = xjw::BABackend::CeresCuda;
-    }
-    else if (baBackendName == QLatin1String("native_cuda"))
-    {
-        opts.baOpt.backend = xjw::BABackend::NativeCuda;
-    }
     else
     {
         opts.baOpt.backend = xjw::BABackend::Auto;
     }
-    opts.baOpt.ceresCudaDevice = qMax(
-        0,
-        extraSettings.value(QStringLiteral("ba_cuda_device")).toInt(0));
     opts.baOpt.plaMatrixDevice = qMax(
         0,
         extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
@@ -2363,40 +2390,14 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         1,
         extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(
             opts.baOpt.minPlaMatrixGpuObservations));
-    opts.baOpt.minCeresCudaCameras = opts.baOpt.minPlaMatrixGpuCameras;
-    opts.baOpt.minCeresCudaObservations = opts.baOpt.minPlaMatrixGpuObservations;
-    opts.baOpt.nativeCudaDevice = qMax(
-        0,
-        extraSettings.value(QStringLiteral("ba_native_cuda_device")).toInt(opts.baOpt.nativeCudaDevice));
-    opts.baOpt.nativeCudaMaxPointStepNorm = qMax(
-        1e-12,
-        extraSettings.value(QStringLiteral("ba_native_cuda_max_point_step")).toDouble(
-            opts.baOpt.nativeCudaMaxPointStepNorm));
-    opts.baOpt.minCeresCpuObservations = qMax(
-        1,
-        extraSettings.value(QStringLiteral("ba_min_cpu_observations")).toInt(
-            opts.baOpt.minCeresCpuObservations));
-    opts.baOpt.maxCeresPointOnlyObservations = qMax(
-        1,
-        extraSettings.value(QStringLiteral("ba_max_ceres_point_only_observations")).toInt(
-            opts.baOpt.maxCeresPointOnlyObservations));
-    opts.baOpt.maxCeresInitialTrackRms = qMax(
+    opts.baOpt.maxInitialTrackRms = qMax(
         0.0,
-        extraSettings.value(QStringLiteral("ba_max_ceres_initial_track_rms")).toDouble(
-            opts.baOpt.maxCeresInitialTrackRms));
+        extraSettings.value(QStringLiteral("ba_max_initial_track_rms")).toDouble(
+            opts.baOpt.maxInitialTrackRms));
     opts.baOpt.maxDenseSchurCameras = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_max_dense_schur_cameras")).toInt(
             opts.baOpt.maxDenseSchurCameras));
-    opts.baOpt.maxSparseSchurCameras = qMax(
-        opts.baOpt.maxDenseSchurCameras,
-        extraSettings.value(QStringLiteral("ba_max_sparse_schur_cameras")).toInt(
-            opts.baOpt.maxSparseSchurCameras));
-    opts.baOpt.maxCeresCudaMemoryFraction = qBound(
-        0.01,
-        extraSettings.value(QStringLiteral("ba_max_ceres_cuda_memory_fraction")).toDouble(
-            opts.baOpt.maxCeresCudaMemoryFraction),
-        1.0);
     opts.baOpt.allowBackendFallback =
         extraSettings.value(QStringLiteral("ba_allow_backend_fallback")).toBool(true);
     opts.baOpt.maxAcceptedConstraintRmsGrowth = qMax(
@@ -2844,6 +2845,41 @@ QMap<QString, xjw::FramePinholeCamera> ProjectManager::getCamerasForImages(
     if (hasCamerasForAll && result.size() != images.size())
         *hasCamerasForAll = false;
 
+    return result;
+}
+
+QMap<QString, xjw::RpcCameraModel> ProjectManager::getRpcCamerasForImages(
+        const QStringList &images,
+        bool *hasCamerasForAll) const
+{
+    if (hasCamerasForAll) *hasCamerasForAll = true;
+    QMap<QString, xjw::RpcCameraModel> result;
+    if (!_projectData)
+    {
+        if (hasCamerasForAll) *hasCamerasForAll = false;
+        return result;
+    }
+    const QMap<QString, QJsonObject> imageMetaByPath =
+        xjw::common::project::projectImageMetaByPath(projectFilesMeta(_projectData), true);
+    for (const QString &imagePath : images)
+    {
+        const QString normalized = normalizePath(imagePath);
+        xjw::RpcCameraModel camera;
+        QJsonObject rasterCamera;
+        const bool loadedFromProject = xjw::common::project::imageCameraFromEntry(
+            imageMetaByPath.value(normalized), &camera);
+        const bool loadedFromRaster = !loadedFromProject
+            && xjw::common::project::parseRpcCameraRaster(imagePath, &rasterCamera, nullptr)
+            && xjw::common::project::cameraFromJson(rasterCamera, &camera);
+        if (loadedFromProject || loadedFromRaster)
+        {
+            result.insert(normalized, camera);
+        }
+        else if (hasCamerasForAll)
+        {
+            *hasCamerasForAll = false;
+        }
+    }
     return result;
 }
 

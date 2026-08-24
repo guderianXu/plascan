@@ -7,17 +7,24 @@ add_library(camera STATIC
 	PlanetaryLineScanCameraIsd.cpp
 	PlanetaryLineScanProjection.cpp
 	PlanetaryLineScanCameraModel.cpp
+	RpcCameraModel.cpp
+	RpcCameraCoordinates.cpp
+	RpcCameraImageCorrection.cpp
+	RpcCameraIO.cpp
+	RpcBiasAdjustment.cpp
+	RpcStereoIntersection.cpp
 	CameraBaseline.cpp
 	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
 	ColmapImageUndistorter.cpp
 	ProjectCameraIO.cpp
+	ProjectRpcCameraIO.cpp
 )
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(camera PUBLIC cxx_std_20)
 target_link_libraries(camera
 	PUBLIC plascan_common_io
-	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET} ${OpenCV_LIBS}
+	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET} ${OpenCV_LIBS} ${PLASCAN_GDAL_TARGET}
 )
 
 # 始终构建的手工投影诊断工具；它读取用户指定的 Tsai 和世界点，不属于 CTest。
@@ -33,9 +40,11 @@ if(BUILD_TESTS)
 		add_executable(test_camera_unit
 			test/FramePinholeCamera_tests.cpp
 			test/CameraModel_tests.cpp
+			test/RpcCameraModel_tests.cpp
 		)
 		target_link_libraries(test_camera_unit PRIVATE
 			camera
+			${PLASCAN_GDAL_TARGET}
 			GTest::gtest_main
 		)
 		target_include_directories(test_camera_unit PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)

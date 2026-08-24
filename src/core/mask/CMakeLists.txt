@@ -1,4 +1,5 @@
 add_library(mask
+    InteractiveMaskAlgorithms.cpp
     MaskGenerator.cpp
     birefnet/BiRefNetImageProcessing.cpp
     birefnet/BiRefNetMaskGenerator.cpp
@@ -14,6 +15,9 @@ target_include_directories(mask PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
+target_include_directories(mask PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+)
 
 target_link_libraries(mask PUBLIC
     plascan_inference
@@ -22,6 +26,9 @@ target_link_libraries(mask PUBLIC
 )
 
 target_compile_features(mask PUBLIC cxx_std_20)
+target_compile_definitions(mask PRIVATE
+    PLASCAN_ONNXRUNTIME_API_VERSION=${PLASCAN_ONNXRUNTIME_API_VERSION}
+)
 
 if(BUILD_TESTS)
     add_subdirectory(tests)

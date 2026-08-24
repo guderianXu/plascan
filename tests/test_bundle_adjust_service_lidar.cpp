@@ -194,9 +194,9 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     options.enableLaserConstraints = true;
     options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
     options.laserAssociationMaxDistanceMeters = 3.0;
-    options.baOpt.backend = xjw::BABackend::CeresCpu;
+    options.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
     options.baOpt.refineCameraPose = false;
-    options.baOpt.maxCeresInitialTrackRms = 0.0;
+    options.baOpt.maxInitialTrackRms = 0.0;
     options.baOpt.filterMaxReprojError = 2.5;
     options.baOpt.filterSigmaFactor = 0.0;
 

@@ -111,7 +111,8 @@ void configureWorkflowComboBox(QComboBox *comboBox, int minimumWidth)
     comboBox->setMinimumContentsLength(24);
 }
 
-void configureWorkflowButtonBox(QDialogButtonBox *buttonBox)
+void configureWorkflowButtonBox(QDialogButtonBox *buttonBox,
+                                const QString &primaryActionText)
 {
     if (!buttonBox)
     {
@@ -121,7 +122,10 @@ void configureWorkflowButtonBox(QDialogButtonBox *buttonBox)
     buttonBox->setCenterButtons(true);
     if (QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok))
     {
-        okButton->setText(QCoreApplication::translate("WorkflowParameterDialogStyle", "确定"));
+        okButton->setText(primaryActionText.isEmpty()
+                              ? QCoreApplication::translate(
+                                    "WorkflowParameterDialogStyle", "确定")
+                              : primaryActionText);
     }
     if (QPushButton *cancelButton = buttonBox->button(QDialogButtonBox::Cancel))
     {

@@ -125,15 +125,18 @@ bool loadVocabularyFeatures(const MatchPhotosContext &context,
     return true;
 }
 
-VocabularyOverlapConfig makeVocabularyConfig(const MatchPhotosOptions &options,
-                                             const MatchPhotosAlgorithmPlan &plan)
+VocabularyOverlapConfig makeVocabularyConfig(const MatchPhotosOptions& options, const MatchPhotosAlgorithmPlan& plan)
 {
     VocabularyOverlapConfig config;
-    config.topK = std::max(8, options.pairPolicy.sequenceWindow * 2);
-    config.minPairsPerImage = std::max(4, options.pairPolicy.sequenceWindow);
+    const bool expandedCoverage =
+        options.profile == MatchPhotosProfile::HighAccuracy || options.profile == MatchPhotosProfile::DifficultTexture;
+    const int topKMultiplier = expandedCoverage ? 3 : 2;
+    config.topK = std::max(8, options.pairPolicy.sequenceWindow * topKMultiplier);
+    config.minPairsPerImage = std::max(4, options.pairPolicy.sequenceWindow + (expandedCoverage ? 4 : 0));
     config.minSimilarity = 0.03;
     config.mutualTopK = true;
     config.keepOneWayTopK = true;
+    config.cycleClosureMaxPairsPerImage = expandedCoverage ? std::max(2, options.pairPolicy.sequenceWindow / 2) : 0;
     config.connectComponents = true;
     config.useSequenceFallback = true;
     config.sequenceWindow = std::max(1, options.pairPolicy.sequenceWindow);
@@ -141,8 +144,8 @@ VocabularyOverlapConfig makeVocabularyConfig(const MatchPhotosOptions &options,
     // 把航带末端与开头加入词汇候选，形成外观自洽但空间错误的首尾分支。
     config.closeSequenceLoop = options.pairPolicy.closeSequenceLoop;
     config.geometryCheck = false;
-    config.useCuda = options.device == ComputeDevice::Cuda ||
-        (options.device == ComputeDevice::Auto && plan.preferCuda);
+    config.useCuda =
+        options.device == ComputeDevice::Cuda || (options.device == ComputeDevice::Auto && plan.preferCuda);
     return config;
 }
 

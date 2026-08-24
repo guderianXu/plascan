@@ -26,7 +26,7 @@
 #include "common/SfmTypes.h"
 #include "graph/CorrespondenceGraph.h"
 #include "FramePinholeCamera.h"
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "triangulation/Triangulator.h"
 
 #include <algorithm>
@@ -51,8 +51,7 @@ TEST(PnpCorrespondenceSelectionTest, PrefersMultineighborConsensusAndKeepsOneToO
         {12, 103, 1, 4, 0.85, 0.4},
     };
 
-    const auto selected =
-        incremental_sfm_detail::selectUniquePnpCorrespondences(proposals);
+    const auto selected = incremental_sfm_detail::selectUniquePnpCorrespondences(proposals);
 
     ASSERT_EQ(selected.size(), 3u);
     EXPECT_EQ(selected[0].featureIdx, 10u);
@@ -65,36 +64,36 @@ TEST(PnpCorrespondenceSelectionTest, PrefersMultineighborConsensusAndKeepsOneToO
 
     std::vector<PnpCorrespondenceProposal> reversed = proposals;
     std::reverse(reversed.begin(), reversed.end());
-    const auto selected_reversed =
-        incremental_sfm_detail::selectUniquePnpCorrespondences(reversed);
+    const auto selected_reversed = incremental_sfm_detail::selectUniquePnpCorrespondences(reversed);
     ASSERT_EQ(selected_reversed.size(), selected.size());
     for (std::size_t index = 0; index < selected.size(); ++index)
     {
         EXPECT_EQ(selected_reversed[index].featureIdx, selected[index].featureIdx);
         EXPECT_EQ(selected_reversed[index].pointId, selected[index].pointId);
-        EXPECT_EQ(selected_reversed[index].supportingNeighbors,
-                  selected[index].supportingNeighbors);
+        EXPECT_EQ(selected_reversed[index].supportingNeighbors, selected[index].supportingNeighbors);
     }
 }
 
 TEST(PnpCorrespondenceSelectionTest, MeasuresDistributedAndClusteredSmallSupport)
 {
     const std::vector<std::array<double, 2>> points{
-        {{80.0, 60.0}}, {{240.0, 60.0}}, {{400.0, 180.0}}, {{560.0, 180.0}},
-        {{80.0, 300.0}}, {{240.0, 300.0}}, {{400.0, 420.0}}, {{560.0, 420.0}},
+        {{80.0, 60.0}},
+        {{240.0, 60.0}},
+        {{400.0, 180.0}},
+        {{560.0, 180.0}},
+        {{80.0, 300.0}},
+        {{240.0, 300.0}},
+        {{400.0, 420.0}},
+        {{560.0, 420.0}},
     };
     const std::vector<unsigned char> all_inliers(points.size(), 1);
-    const auto distributed =
-        incremental_sfm_detail::measurePnpInlierSpatialSupport(
-            points, all_inliers, 640, 480);
+    const auto distributed = incremental_sfm_detail::measurePnpInlierSpatialSupport(points, all_inliers, 640, 480);
     EXPECT_EQ(distributed.occupiedCells, 8);
     EXPECT_EQ(distributed.occupiedRows, 4);
     EXPECT_EQ(distributed.occupiedColumns, 4);
 
     std::vector<std::array<double, 2>> clustered(points.size(), {{20.0, 20.0}});
-    const auto local =
-        incremental_sfm_detail::measurePnpInlierSpatialSupport(
-            clustered, all_inliers, 640, 480);
+    const auto local = incremental_sfm_detail::measurePnpInlierSpatialSupport(clustered, all_inliers, 640, 480);
     EXPECT_EQ(local.occupiedCells, 1);
     EXPECT_EQ(local.occupiedRows, 1);
     EXPECT_EQ(local.occupiedColumns, 1);
@@ -116,8 +115,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
     EXPECT_FALSE(options.correctUnanchoredAerialDoming);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     StabilizesEveryTrustedFocalUnanchoredAerialCalibrationRound)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, StabilizesEveryTrustedFocalUnanchoredAerialCalibrationRound)
 {
     EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
         false, false, true, true, true, 444, 0.9504, 0.0974));
@@ -133,65 +131,50 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
         false, false, true, true, true, 444, 0.7500, 0.0974));
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     PreservesAppliedAdaptiveDiagnosticsAcrossNoOpAndSkippedRounds)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesAppliedAdaptiveDiagnosticsAcrossNoOpAndSkippedRounds)
 {
     SfmAdaptiveCameraModelDiagnosticSnapshot firstRound;
     firstRound.evaluated = true;
     firstRound.applied = true;
-    firstRound.parameterMask[static_cast<std::size_t>(
-        BAIntrinsicParameter::FocalLength)] = true;
-    firstRound.parameterMask[static_cast<std::size_t>(
-        BAIntrinsicParameter::RadialK1)] = true;
+    firstRound.parameterMask[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)] = true;
+    firstRound.parameterMask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)] = true;
     firstRound.modelName = "f+k1";
 
-    auto merged =
-        SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
-            {}, firstRound);
+    auto merged = SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics({}, firstRound);
     ASSERT_TRUE(merged.shouldReplaceEvidence);
     ASSERT_TRUE(merged.accumulated.applied);
 
     SfmAdaptiveCameraModelDiagnosticSnapshot noOpRound;
     noOpRound.evaluated = true;
-    noOpRound.parameterMask[static_cast<std::size_t>(
-        BAIntrinsicParameter::FocalLength)] = true;
+    noOpRound.parameterMask[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)] = true;
     noOpRound.modelName = "f";
-    merged = SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
-        merged.accumulated, noOpRound);
+    merged = SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(merged.accumulated, noOpRound);
 
     EXPECT_TRUE(merged.accumulated.evaluated);
     EXPECT_TRUE(merged.accumulated.applied);
     EXPECT_FALSE(merged.shouldReplaceEvidence);
     EXPECT_EQ(merged.accumulated.modelName, "f+k1");
-    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(
-        BAIntrinsicParameter::FocalLength)]);
-    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(
-        BAIntrinsicParameter::RadialK1)]);
+    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)]);
+    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)]);
 
-    const auto skipped =
-        SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
-            merged.accumulated, {});
+    const auto skipped = SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(merged.accumulated, {});
     EXPECT_FALSE(skipped.shouldReplaceEvidence);
     EXPECT_TRUE(skipped.accumulated.evaluated);
     EXPECT_TRUE(skipped.accumulated.applied);
     EXPECT_EQ(skipped.accumulated.modelName, "f+k1");
-    EXPECT_EQ(
-        skipped.accumulated.parameterMask,
-        merged.accumulated.parameterMask);
+    EXPECT_EQ(skipped.accumulated.parameterMask, merged.accumulated.parameterMask);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     CalibrationSeedRefreshPreservesStableReferenceMetrics)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, CalibrationSeedRefreshPreservesStableReferenceMetrics)
 {
     std::vector<FramePinholeCamera> before(2);
-    for (FramePinholeCamera &camera : before)
+    for (FramePinholeCamera& camera : before)
     {
         camera.setIntrinsics(1000.0, 1010.0, 512.0, 384.0);
     }
     BAResult result;
     result.refinedCameras = before;
-    result.refinedCameras[0].setIntrinsics(
-        980.0, 989.8, 512.0, 384.0);
+    result.refinedCameras[0].setIntrinsics(980.0, 989.8, 512.0, 384.0);
     FramePinholeCamera::Distortion distortion = result.refinedCameras[0].distortion();
     distortion.radialK1 = -0.02;
     result.refinedCameras[0].setDistortion(distortion);
@@ -201,8 +184,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     result.refinedSharedPrincipalOffsetY = -2.75;
     result.refinedSharedRadialK1 = -0.031;
 
-    SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(
-        before, &result);
+    SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(before, &result);
 
     EXPECT_EQ(result.refinedIntrinsicCount, 1);
     EXPECT_DOUBLE_EQ(result.refinedSharedFocalScale, 1.234);
@@ -212,68 +194,53 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     EXPECT_DOUBLE_EQ(result.refinedSharedRadialK1, -0.031);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     FocalOnlyRefinementCountsAsReusableCalibrationSeed)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, FocalOnlyRefinementCountsAsReusableCalibrationSeed)
 {
     std::vector<FramePinholeCamera> references(2);
-    for (FramePinholeCamera &camera : references)
+    for (FramePinholeCamera& camera : references)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
     std::vector<FramePinholeCamera> current = references;
     current[0].setIntrinsics(980.0, 980.0, 512.0, 384.0);
 
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
-        current, references, true, false));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
-        references, references, true, false));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
-        current, references, false, true));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, true, false));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(references, references, true, false));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, false, true));
 
     FramePinholeCamera::Distortion distortion = current[0].distortion();
     distortion.radialK1 = -0.02;
     current[0].setDistortion(distortion);
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
-        current, references, false, true));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, false, true));
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     ReusesConfiguredIterationBudgetAfterCalibrationSeedExists)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, ReusesConfiguredIterationBudgetAfterCalibrationSeedExists)
 {
-    EXPECT_EQ(
-        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, false),
-        60);
-    EXPECT_EQ(
-        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, true),
-        20);
-    EXPECT_EQ(
-        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(80, true),
-        80);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, false), 60);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, true), 20);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(80, true), 80);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
 {
     const std::vector<ImageId> firstIds{2, 5};
     std::vector<FramePinholeCamera> firstCameras(2);
-    for (FramePinholeCamera &camera : firstCameras)
+    for (FramePinholeCamera& camera : firstCameras)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
     std::unordered_map<ImageId, FramePinholeCamera> referencesByImageId;
     const std::vector<FramePinholeCamera> firstReferences =
-        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
-            firstIds, firstCameras, &referencesByImageId);
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(firstIds, firstCameras, &referencesByImageId);
     ASSERT_EQ(firstReferences.size(), 2u);
 
     std::vector<FramePinholeCamera> secondCameras = firstCameras;
-    for (FramePinholeCamera &camera : secondCameras)
+    for (FramePinholeCamera& camera : secondCameras)
     {
         camera.setIntrinsics(1100.0, 1100.0, 512.0, 384.0);
     }
     const std::vector<FramePinholeCamera> secondReferences =
-        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
-            firstIds, secondCameras, &referencesByImageId);
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(firstIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(secondReferences.size(), 2u);
     EXPECT_DOUBLE_EQ(secondReferences[0].focalX(), 1000.0);
     EXPECT_DOUBLE_EQ(secondReferences[1].focalX(), 1000.0);
@@ -282,19 +249,17 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     secondCameras.push_back(FramePinholeCamera{});
     secondCameras.back().setIntrinsics(900.0, 900.0, 512.0, 384.0);
     const std::vector<FramePinholeCamera> retryReferences =
-        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
-            retryIds, secondCameras, &referencesByImageId);
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(retryIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(retryReferences.size(), 3u);
     EXPECT_DOUBLE_EQ(retryReferences[0].focalX(), 1000.0);
     EXPECT_DOUBLE_EQ(retryReferences[1].focalX(), 1000.0);
     EXPECT_DOUBLE_EQ(retryReferences[2].focalX(), 900.0);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest,
-     IntrinsicConvergenceDoesNotAverageOpposingCalibrationGroups)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, IntrinsicConvergenceDoesNotAverageOpposingCalibrationGroups)
 {
     std::vector<FramePinholeCamera> references(2);
-    for (FramePinholeCamera &camera : references)
+    for (FramePinholeCamera& camera : references)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
@@ -303,71 +268,45 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     current[0].setIntrinsics(1010.0, 1010.0, 512.0, 384.0);
     current[1].setIntrinsics(990.0, 990.0, 512.0, 384.0);
 
-    EXPECT_NEAR(
-        SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
-            previous, current, references),
-        0.01,
-        1.0e-12);
+    EXPECT_NEAR(SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(previous, current, references), 0.01, 1.0e-12);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesLayerOnlyDuringFinalSelfCalibration)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
-        false, false, true, true));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
-        true, false, true, true));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
-        false, true, true, true));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
-        false, false, false, true));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
-        false, false, true, false));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(false, false, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(true, false, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(false, true, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(false, false, false, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(false, false, true, false));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsAfterNearCompleteLargeRegistration)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 16, 16, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        true, 7, 16, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 2, 2, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 15, 15, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 14, 14, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 14, 15, 16));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 437, 437, 444));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 435, 435, 444));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
-        false, 436, 437, 444));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 16, 16, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(true, 7, 16, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 2, 2, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 15, 15, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 14, 14, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 14, 15, 16));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 437, 437, 444));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 435, 435, 444));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(false, 436, 437, 444));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, IterativeConvergenceIncludesSharedCalibration)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, false, 1.0));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        1, 0.005, true, 0.0));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, true, 1.0e-3));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, true, 2.0e-4));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(2, 0.005, false, 1.0));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(1, 0.005, true, 0.0));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(2, 0.005, true, 1.0e-3));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(2, 0.005, true, 2.0e-4));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, DefersPeriodicGlobalBaNearFinalRefinement)
 {
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
-        330, 444, 54, 55));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
-        440, 444, 55, 55));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
-        330, 444, 55, 55));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
-        444, 444, 55, 55));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(330, 444, 54, 55));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(440, 444, 55, 55));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(330, 444, 55, 55));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(444, 444, 55, 55));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
@@ -380,38 +319,25 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, ReducesOnlyVeryLargeWellSupportedGlobalNetwork)
 {
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        false, 444, 100028, 79006, 21022));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        false, 1000, 400000, 320000, 80000));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        true, 444, 100028, 79006, 21022));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        false, 64, 100028, 79006, 21022));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        false, 444, 10000, 6000, 4000));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
-        false, 444, 10000, 9000, 1000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 444, 100028, 79006, 21022));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 1000, 400000, 320000, 80000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(true, 444, 100028, 79006, 21022));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 64, 100028, 79006, 21022));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 444, 10000, 6000, 4000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 444, 10000, 9000, 1000));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, AcceptsConsolidationThatAddsMultiviewRigidity)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
-        90000, 210000, 20000,
-        60000, 180000, 35000));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(90000, 210000, 20000, 60000, 180000, 35000));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, RejectsConsolidationThatDropsCoverage)
 {
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
-        90000, 210000, 20000,
-        30000, 80000, 25000));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
-        90000, 210000, 20000,
-        70000, 190000, 19000));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
-        200, 400, 0,
-        200, 400, 0));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(90000, 210000, 20000, 30000, 80000, 25000));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(90000, 210000, 20000, 70000, 190000, 19000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(200, 400, 0, 200, 400, 0));
 }
 
 TEST(HierarchicalBundleAdjusterPolicyTest, WritesBackOnlyBlockLocalPoints)
@@ -424,254 +350,253 @@ TEST(HierarchicalBundleAdjusterPolicyTest, WritesBackOnlyBlockLocalPoints)
 
 TEST(HierarchicalBundleAdjusterPolicyTest, RejectsGloballyInconsistentMerge)
 {
-    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
-        0.8, 10000, 0.9, 10000));
-    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
-        4.0, 10000, 4.9, 9600));
-    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
-        0.8, 10000, 66.0, 10000));
-    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
-        0.8, 10000, 0.7, 9400));
+    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(0.8, 10000, 0.9, 10000));
+    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(4.0, 10000, 4.9, 9600));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(0.8, 10000, 66.0, 10000));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(0.8, 10000, 0.7, 9400));
     EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
         std::numeric_limits<double>::infinity(), 10000, 0.7, 10000));
 }
 
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────
 
-namespace {
-
-/// 创建一个简单的 pinhole 相机（焦距 1000px, 主点 512x384, 位于 (cx,cy,cz)）
-FramePinholeCamera makeCamera(double cx, double cy, double cz,
-                  double fu = 1000.0, double fv = 1000.0)
+namespace
 {
-    FramePinholeCamera cam;
-    cam.setIntrinsics(fu, fv, 512.0, 384.0);
-    // identity rotation, camera at (cx,cy,cz)
-    std::array<double,9> R = {1,0,0, 0,1,0, 0,0,1};
-    std::array<double,3> C = {cx, cy, cz};
-    cam.setPose(R, C);
-    return cam;
-}
 
-/// 将世界点投影到相机上，返回 (u, v)；成功返回 true
-bool projectPoint(const FramePinholeCamera &cam, double wx, double wy, double wz,
-                  double &u, double &v)
-{
-    double world[3] = {wx, wy, wz};
-    double uv[2] = {0, 0};
-    bool ok = cam.projectWorldPoint(world, uv);
-    u = uv[0]; v = uv[1];
-    return ok;
-}
-
-/// 生成合成 3D 点（在两个相机前方、可被投影的点）
-struct SyntheticPoint {
-    double x, y, z;
-};
-
-double centerDistance(const FramePinholeCamera &a, const FramePinholeCamera &b)
-{
-    const auto ca = a.cameraCenter();
-    const auto cb = b.cameraCenter();
-    const double dx = ca[0] - cb[0];
-    const double dy = ca[1] - cb[1];
-    const double dz = ca[2] - cb[2];
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
-{
-    SfmReconstruction reconstruction;
-    const std::array<FramePinholeCamera, 3> cameras{{
-        makeCamera(-1.0, 0.0, 0.0),
-        makeCamera(1.0, 0.0, 0.0),
-        makeCamera(0.0, 1.0, 0.0),
-    }};
-    const std::array<double, 3> point{{0.2, -0.1, 8.0}};
-    ScenePoint3D scene_point;
-    scene_point.xyz = point;
-    for (ImageId image_id = 0; image_id < cameras.size(); ++image_id)
+    /// 创建一个简单的 pinhole 相机（焦距 1000px, 主点 512x384, 位于 (cx,cy,cz)）
+    FramePinholeCamera makeCamera(double cx, double cy, double cz, double fu = 1000.0, double fv = 1000.0)
     {
-        double u = 0.0;
-        double v = 0.0;
-        ASSERT_TRUE(projectPoint(
-            cameras[image_id], point[0], point[1], point[2], u, v));
-        ImageData image;
-        image.id = image_id;
-        image.keypoints.push_back(
-            {static_cast<float>(u), static_cast<float>(v)});
-        image.point3DIds.push_back(kInvalidPoint3DId);
-        reconstruction.addImage(image);
-        reconstruction.registerImage(image_id, cameras[image_id]);
-        scene_point.track.elements.push_back({image_id, 0});
+        FramePinholeCamera cam;
+        cam.setIntrinsics(fu, fv, 512.0, 384.0);
+        // identity rotation, camera at (cx,cy,cz)
+        std::array<double, 9> R = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        std::array<double, 3> C = {cx, cy, cz};
+        cam.setPose(R, C);
+        return cam;
     }
-    reconstruction.addPoint3DWithTrack(point, scene_point.track);
 
-    CovisibilityBlock block;
-    block.coreImageIds = {0, 1};
-    block.overlapImageIds = {2};
-    BAOptions options;
-    options.backend = BABackend::LegacyCpu;
-    options.refineCameraPose = true;
-    options.maxIterations = 2;
-    const hierarchical_ba_detail::BlockOutcome outcome =
-        hierarchical_ba_detail::solveBlock(
-            0, block, reconstruction, options, 1);
-
-    EXPECT_EQ(outcome.fixedTrackCount, 1);
-    ASSERT_TRUE(outcome.accepted) << outcome.result.backendMessage;
-    ASSERT_EQ(outcome.result.points.size(), 1U);
-    EXPECT_EQ(outcome.result.points[0].point, point);
-}
-
-/// 生成 N 个在两个相机前方的随机 3D 点
-std::vector<SyntheticPoint> generatePoints(int n, double cx, double cy, double cz,
-                                           double spread, unsigned seed = 42)
-{
-    std::mt19937 rng(seed);
-    std::normal_distribution<double> dist(0.0, spread);
-    std::vector<SyntheticPoint> pts;
-    pts.reserve(n);
-    for (int i = 0; i < n; ++i) {
-        // 确保 z > 0（在相机前方）
-        double z = cz + std::abs(dist(rng)) + 10.0;
-        pts.push_back({cx + dist(rng), cy + dist(rng), z});
-    }
-    return pts;
-}
-
-/// 从合成 3D 点生成两幅图像的特征点和匹配
-void buildSyntheticMatches(
-    const FramePinholeCamera &cam1, const FramePinholeCamera &cam2,
-    const std::vector<SyntheticPoint> &points3D,
-    std::vector<FeatureKeypoint> &kpts1,
-    std::vector<FeatureKeypoint> &kpts2,
-    std::vector<FeatureMatch> &matches)
-{
-    kpts1.clear();
-    kpts2.clear();
-    matches.clear();
-
-    for (size_t i = 0; i < points3D.size(); ++i) {
-        double u1, v1, u2, v2;
-        bool ok1 = projectPoint(cam1, points3D[i].x, points3D[i].y, points3D[i].z, u1, v1);
-        bool ok2 = projectPoint(cam2, points3D[i].x, points3D[i].y, points3D[i].z, u2, v2);
-        if (!ok1 || !ok2) continue;
-
-        // 检查投影在合理范围内
-        if (u1 < 0 || u1 > 1024 || v1 < 0 || v1 > 768) continue;
-        if (u2 < 0 || u2 > 1024 || v2 < 0 || v2 > 768) continue;
-
-        FeatureIdx idx1 = static_cast<FeatureIdx>(kpts1.size());
-        FeatureIdx idx2 = static_cast<FeatureIdx>(kpts2.size());
-
-        kpts1.push_back({static_cast<float>(u1), static_cast<float>(v1)});
-        kpts2.push_back({static_cast<float>(u2), static_cast<float>(v2)});
-
-        FeatureMatch m;
-        m.idx1 = idx1;
-        m.idx2 = idx2;
-        matches.push_back(m);
-    }
-}
-
-void buildKnownPoseTracks(const std::vector<FramePinholeCamera> &cameras,
-                          const std::vector<SyntheticPoint> &points3D,
-                          std::vector<std::vector<FeatureKeypoint>> &keypoints,
-                          std::vector<FeatureMatch> &matches01,
-                          std::vector<FeatureMatch> &matches12,
-                          std::vector<FeatureMatch> &matches02)
-{
-    keypoints.assign(cameras.size(), {});
-    matches01.clear();
-    matches12.clear();
-    matches02.clear();
-
-    for (const auto &point : points3D)
+    /// 将世界点投影到相机上，返回 (u, v)；成功返回 true
+    bool projectPoint(const FramePinholeCamera& cam, double wx, double wy, double wz, double& u, double& v)
     {
-        std::vector<std::pair<double, double>> projections;
-        projections.reserve(cameras.size());
+        double world[3] = {wx, wy, wz};
+        double uv[2] = {0, 0};
+        bool ok = cam.projectWorldPoint(world, uv);
+        u = uv[0];
+        v = uv[1];
+        return ok;
+    }
 
-        bool visibleInAll = true;
-        for (const FramePinholeCamera &camera : cameras)
+    /// 生成合成 3D 点（在两个相机前方、可被投影的点）
+    struct SyntheticPoint
+    {
+        double x, y, z;
+    };
+
+    double centerDistance(const FramePinholeCamera& a, const FramePinholeCamera& b)
+    {
+        const auto ca = a.cameraCenter();
+        const auto cb = b.cameraCenter();
+        const double dx = ca[0] - cb[0];
+        const double dy = ca[1] - cb[1];
+        const double dz = ca[2] - cb[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
+    {
+        SfmReconstruction reconstruction;
+        const std::array<FramePinholeCamera, 3> cameras{{
+            makeCamera(-1.0, 0.0, 0.0),
+            makeCamera(1.0, 0.0, 0.0),
+            makeCamera(0.0, 1.0, 0.0),
+        }};
+        const std::array<double, 3> point{{0.2, -0.1, 8.0}};
+        ScenePoint3D scene_point;
+        scene_point.xyz = point;
+        for (ImageId image_id = 0; image_id < cameras.size(); ++image_id)
         {
             double u = 0.0;
             double v = 0.0;
-            if (!projectPoint(camera, point.x, point.y, point.z, u, v) ||
-                u < 0.0 || u > 1024.0 || v < 0.0 || v > 768.0)
-            {
-                visibleInAll = false;
-                break;
-            }
-            projections.emplace_back(u, v);
+            ASSERT_TRUE(projectPoint(cameras[image_id], point[0], point[1], point[2], u, v));
+            ImageData image;
+            image.id = image_id;
+            image.keypoints.push_back({static_cast<float>(u), static_cast<float>(v)});
+            image.point3DIds.push_back(kInvalidPoint3DId);
+            reconstruction.addImage(image);
+            reconstruction.registerImage(image_id, cameras[image_id]);
+            scene_point.track.elements.push_back({image_id, 0});
         }
+        const Point3DId point_id = reconstruction.addPoint3DWithTrack(point, scene_point.track);
 
-        if (!visibleInAll)
-        {
-            continue;
-        }
+        CovisibilityBlock block;
+        block.coreImageIds = {0, 1};
+        block.overlapImageIds = {2};
+        BAOptions options;
+        options.backend = BABackend::LegacyCpu;
+        options.refineCameraPose = true;
+        options.maxIterations = 2;
+        const hierarchical_ba_detail::BlockOutcome outcome =
+            hierarchical_ba_detail::solveBlock(0, block, reconstruction, {point_id}, options, 1);
 
-        const FeatureIdx idx = static_cast<FeatureIdx>(keypoints[0].size());
-        for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
-        {
-            keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
-                                              static_cast<float>(projections[cameraIndex].second)});
-        }
-
-        matches01.push_back({idx, idx});
-        matches12.push_back({idx, idx});
-        matches02.push_back({idx, idx});
+        EXPECT_EQ(outcome.fixedTrackCount, 1);
+        ASSERT_TRUE(outcome.accepted) << outcome.result.backendMessage;
+        ASSERT_EQ(outcome.result.points.size(), 1U);
+        EXPECT_EQ(outcome.result.points[0].point, point);
     }
-}
 
-void buildIndexedKeypoints(const std::vector<FramePinholeCamera> &cameras,
-                           const std::vector<SyntheticPoint> &points3D,
-                           std::vector<std::vector<FeatureKeypoint>> &keypoints)
-{
-    keypoints.assign(cameras.size(), {});
-
-    for (const auto &point : points3D)
+    /// 生成 N 个在两个相机前方的随机 3D 点
+    std::vector<SyntheticPoint>
+    generatePoints(int n, double cx, double cy, double cz, double spread, unsigned seed = 42)
     {
-        std::vector<std::pair<double, double>> projections;
-        projections.reserve(cameras.size());
-
-        bool visibleInAll = true;
-        for (const FramePinholeCamera &camera : cameras)
+        std::mt19937 rng(seed);
+        std::normal_distribution<double> dist(0.0, spread);
+        std::vector<SyntheticPoint> pts;
+        pts.reserve(n);
+        for (int i = 0; i < n; ++i)
         {
-            double u = 0.0;
-            double v = 0.0;
-            if (!projectPoint(camera, point.x, point.y, point.z, u, v) ||
-                u < 0.0 || u > 1024.0 || v < 0.0 || v > 768.0)
-            {
-                visibleInAll = false;
-                break;
-            }
-            projections.emplace_back(u, v);
+            // 确保 z > 0（在相机前方）
+            double z = cz + std::abs(dist(rng)) + 10.0;
+            pts.push_back({cx + dist(rng), cy + dist(rng), z});
         }
-
-        if (!visibleInAll)
-        {
-            continue;
-        }
-
-        for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
-        {
-            keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
-                                              static_cast<float>(projections[cameraIndex].second)});
-        }
+        return pts;
     }
-}
 
-std::vector<FeatureMatch> makeIndexedMatches(int beginInclusive, int endExclusive)
-{
-    std::vector<FeatureMatch> matches;
-    matches.reserve(static_cast<size_t>(std::max(0, endExclusive - beginInclusive)));
-    for (int idx = beginInclusive; idx < endExclusive; ++idx)
+    /// 从合成 3D 点生成两幅图像的特征点和匹配
+    void buildSyntheticMatches(const FramePinholeCamera& cam1,
+                               const FramePinholeCamera& cam2,
+                               const std::vector<SyntheticPoint>& points3D,
+                               std::vector<FeatureKeypoint>& kpts1,
+                               std::vector<FeatureKeypoint>& kpts2,
+                               std::vector<FeatureMatch>& matches)
     {
-        matches.push_back({static_cast<FeatureIdx>(idx), static_cast<FeatureIdx>(idx)});
+        kpts1.clear();
+        kpts2.clear();
+        matches.clear();
+
+        for (size_t i = 0; i < points3D.size(); ++i)
+        {
+            double u1, v1, u2, v2;
+            bool ok1 = projectPoint(cam1, points3D[i].x, points3D[i].y, points3D[i].z, u1, v1);
+            bool ok2 = projectPoint(cam2, points3D[i].x, points3D[i].y, points3D[i].z, u2, v2);
+            if (!ok1 || !ok2)
+                continue;
+
+            // 检查投影在合理范围内
+            if (u1 < 0 || u1 > 1024 || v1 < 0 || v1 > 768)
+                continue;
+            if (u2 < 0 || u2 > 1024 || v2 < 0 || v2 > 768)
+                continue;
+
+            FeatureIdx idx1 = static_cast<FeatureIdx>(kpts1.size());
+            FeatureIdx idx2 = static_cast<FeatureIdx>(kpts2.size());
+
+            kpts1.push_back({static_cast<float>(u1), static_cast<float>(v1)});
+            kpts2.push_back({static_cast<float>(u2), static_cast<float>(v2)});
+
+            FeatureMatch m;
+            m.idx1 = idx1;
+            m.idx2 = idx2;
+            matches.push_back(m);
+        }
     }
-    return matches;
-}
+
+    void buildKnownPoseTracks(const std::vector<FramePinholeCamera>& cameras,
+                              const std::vector<SyntheticPoint>& points3D,
+                              std::vector<std::vector<FeatureKeypoint>>& keypoints,
+                              std::vector<FeatureMatch>& matches01,
+                              std::vector<FeatureMatch>& matches12,
+                              std::vector<FeatureMatch>& matches02)
+    {
+        keypoints.assign(cameras.size(), {});
+        matches01.clear();
+        matches12.clear();
+        matches02.clear();
+
+        for (const auto& point : points3D)
+        {
+            std::vector<std::pair<double, double>> projections;
+            projections.reserve(cameras.size());
+
+            bool visibleInAll = true;
+            for (const FramePinholeCamera& camera : cameras)
+            {
+                double u = 0.0;
+                double v = 0.0;
+                if (!projectPoint(camera, point.x, point.y, point.z, u, v) || u < 0.0 || u > 1024.0 || v < 0.0 ||
+                    v > 768.0)
+                {
+                    visibleInAll = false;
+                    break;
+                }
+                projections.emplace_back(u, v);
+            }
+
+            if (!visibleInAll)
+            {
+                continue;
+            }
+
+            const FeatureIdx idx = static_cast<FeatureIdx>(keypoints[0].size());
+            for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+            {
+                keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
+                                                  static_cast<float>(projections[cameraIndex].second)});
+            }
+
+            matches01.push_back({idx, idx});
+            matches12.push_back({idx, idx});
+            matches02.push_back({idx, idx});
+        }
+    }
+
+    void buildIndexedKeypoints(const std::vector<FramePinholeCamera>& cameras,
+                               const std::vector<SyntheticPoint>& points3D,
+                               std::vector<std::vector<FeatureKeypoint>>& keypoints)
+    {
+        keypoints.assign(cameras.size(), {});
+
+        for (const auto& point : points3D)
+        {
+            std::vector<std::pair<double, double>> projections;
+            projections.reserve(cameras.size());
+
+            bool visibleInAll = true;
+            for (const FramePinholeCamera& camera : cameras)
+            {
+                double u = 0.0;
+                double v = 0.0;
+                if (!projectPoint(camera, point.x, point.y, point.z, u, v) || u < 0.0 || u > 1024.0 || v < 0.0 ||
+                    v > 768.0)
+                {
+                    visibleInAll = false;
+                    break;
+                }
+                projections.emplace_back(u, v);
+            }
+
+            if (!visibleInAll)
+            {
+                continue;
+            }
+
+            for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+            {
+                keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
+                                                  static_cast<float>(projections[cameraIndex].second)});
+            }
+        }
+    }
+
+    std::vector<FeatureMatch> makeIndexedMatches(int beginInclusive, int endExclusive)
+    {
+        std::vector<FeatureMatch> matches;
+        matches.reserve(static_cast<size_t>(std::max(0, endExclusive - beginInclusive)));
+        for (int idx = beginInclusive; idx < endExclusive; ++idx)
+        {
+            matches.push_back({static_cast<FeatureIdx>(idx), static_cast<FeatureIdx>(idx)});
+        }
+        return matches;
+    }
 
 } // anonymous namespace
 
@@ -679,11 +604,13 @@ std::vector<FeatureMatch> makeIndexedMatches(int beginInclusive, int endExclusiv
 // 测试组 1：SFM 初始化
 // ═══════════════════════════════════════════════════════════════
 
-class SfmInitTest : public ::testing::Test {
+class SfmInitTest : public ::testing::Test
+{
 protected:
     IncrementalSfmOptions opts;
 
-    void SetUp() override {
+    void SetUp() override
+    {
         // 使用宽松参数以便小规模合成数据也能通过
         opts.initMinNumMatches = 20;
         opts.initMinNumInliers = 10;
@@ -775,8 +702,8 @@ TEST_F(SfmInitTest, MultiCandidateRetry)
     // 创建 3 幅图像：0和1的匹配主要是共线的（容易导致 chirality failure），
     // 0和2的匹配是良好的三角化几何
     FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(0.001, 0, 0);  // 几乎重合 → 差的几何
-    FramePinholeCamera cam2 = makeCamera(10, 0, 0);     // 良好基线
+    FramePinholeCamera cam1 = makeCamera(0.001, 0, 0); // 几乎重合 → 差的几何
+    FramePinholeCamera cam2 = makeCamera(10, 0, 0);    // 良好基线
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -808,12 +735,13 @@ TEST_F(SfmInitTest, MultiCandidateRetry)
 TEST_F(SfmInitTest, LoadCameraFromTsaiFile)
 {
     std::string tsaiDir = std::string(TEST_DATA_DIR) + "/tsai/";
-    std::string imgDir  = std::string(TEST_DATA_DIR) + "/img/";
+    std::string imgDir = std::string(TEST_DATA_DIR) + "/img/";
 
     // 验证测试数据存在
     FramePinholeCamera testCam;
     bool loaded = testCam.loadFromFile(tsaiDir + "1.tsai");
-    if (!loaded) {
+    if (!loaded)
+    {
         GTEST_SKIP() << "Test data not available at " << tsaiDir;
     }
 
@@ -924,9 +852,8 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     EXPECT_GT(result.baTracksOptimized, 0);
     EXPECT_GE(result.baRmsBefore, result.baRmsAfter);
 
-    const FramePinholeCamera &refinedCamera = result.reconstruction->camera(1);
-    EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]),
-              centerDistance(inputCameras[1], trueCameras[1]));
+    const FramePinholeCamera& refinedCamera = result.reconstruction->camera(1);
+    EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]), centerDistance(inputCameras[1], trueCameras[1]));
 }
 
 TEST_F(SfmInitTest, LockedKnownCameraPoseModeKeepsInputExtrinsicsExact)
@@ -996,7 +923,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTrack
     buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
     ASSERT_GT(matches01.size(), 30u);
 
-    for (FeatureKeypoint &keypoint : keypoints[2])
+    for (FeatureKeypoint& keypoint : keypoints[2])
     {
         keypoint.x += 20.0f;
     }
@@ -1042,7 +969,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAlmostAllTwoViewOutputWhenMultiVie
     ASSERT_FALSE(keypoints[2].empty());
 
     const FeatureKeypoint oneGoodThirdViewObservation = keypoints[2][0];
-    for (FeatureKeypoint &keypoint : keypoints[2])
+    for (FeatureKeypoint& keypoint : keypoints[2])
     {
         keypoint.x += 20.0f;
     }
@@ -1102,23 +1029,17 @@ TEST(SfmOptionsTest, NewOptionsDefaults)
     IncrementalSfmOptions opts;
 
     // 新增选项应有合理默认值
-    EXPECT_GE(opts.initMinChiralityInliers, 5)
-        << "chirality threshold should be >= 5";
+    EXPECT_GE(opts.initMinChiralityInliers, 5) << "chirality threshold should be >= 5";
     EXPECT_LE(opts.initMinChiralityInliers, opts.initMinNumInliers)
         << "chirality threshold should be softer than main inlier threshold";
 
-    EXPECT_GT(opts.maxInitPairCandidates, 1)
-        << "Should try multiple candidate pairs";
-    EXPECT_LE(opts.maxInitPairCandidates, 50)
-        << "Candidate limit should be reasonable";
+    EXPECT_GT(opts.maxInitPairCandidates, 1) << "Should try multiple candidate pairs";
+    EXPECT_LE(opts.maxInitPairCandidates, 50) << "Candidate limit should be reasonable";
 
-    EXPECT_GE(opts.iterativeBARounds, 1)
-        << "Should do at least 1 round of iterative BA";
-    EXPECT_LE(opts.iterativeBARounds, 10)
-        << "iterativeBARounds should be reasonable";
+    EXPECT_GE(opts.iterativeBARounds, 1) << "Should do at least 1 round of iterative BA";
+    EXPECT_LE(opts.iterativeBARounds, 10) << "iterativeBARounds should be reasonable";
 
-    EXPECT_TRUE(opts.filterNegativeDepth)
-        << "Negative depth filtering should be enabled by default";
+    EXPECT_TRUE(opts.filterNegativeDepth) << "Negative depth filtering should be enabled by default";
     EXPECT_FALSE(opts.repairParallelAerialPoseOutliers)
         << "Aerial pose repair should only be enabled by the aerial workflow";
 }
@@ -1143,15 +1064,12 @@ TEST(ImageRegistrationEngineTest, DetectsSmallParallelAerialPoseBranch)
         }
         const double cosine = std::cos(angle);
         const double sine = std::sin(angle);
-        camera.setPose({cosine, 0.0, sine,
-                        0.0, 1.0, 0.0,
-                        -sine, 0.0, cosine},
+        camera.setPose({cosine, 0.0, sine, 0.0, 1.0, 0.0, -sine, 0.0, cosine},
                        {static_cast<double>(imageId), 0.0, 10.0});
         reconstruction.registerImage(imageId, camera);
     }
 
-    const std::vector<ImageId> outliers =
-        ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
+    const std::vector<ImageId> outliers = ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
     EXPECT_EQ(outliers, (std::vector<ImageId>{2, 3}));
 }
 
@@ -1180,15 +1098,12 @@ TEST(ImageRegistrationEngineTest, ExpandsSmoothShouldersAroundStrongPoseOutliers
         const double sine = std::sin(angle);
         FramePinholeCamera camera;
         camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
-        camera.setPose({cosine, 0.0, sine,
-                        0.0, 1.0, 0.0,
-                        -sine, 0.0, cosine},
+        camera.setPose({cosine, 0.0, sine, 0.0, 1.0, 0.0, -sine, 0.0, cosine},
                        {static_cast<double>(imageId), 0.0, 10.0});
         reconstruction.registerImage(imageId, camera);
     }
 
-    const std::vector<ImageId> outliers =
-        ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
+    const std::vector<ImageId> outliers = ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
     EXPECT_EQ(outliers, (std::vector<ImageId>{1, 2, 3, 4}));
 }
 
@@ -1205,29 +1120,27 @@ TEST(ImageRegistrationEngineTest, SkipsNonParallelCameraNetwork)
 
         FramePinholeCamera camera;
         camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
-        const double angle = 2.0 * pi * static_cast<double>(imageId) /
-            static_cast<double>(imageCount);
+        const double angle = 2.0 * pi * static_cast<double>(imageId) / static_cast<double>(imageCount);
         const double cosine = std::cos(angle);
         const double sine = std::sin(angle);
-        camera.setPose({cosine, 0.0, sine,
-                        0.0, 1.0, 0.0,
-                        -sine, 0.0, cosine},
+        camera.setPose({cosine, 0.0, sine, 0.0, 1.0, 0.0, -sine, 0.0, cosine},
                        {static_cast<double>(imageId), 0.0, 10.0});
         reconstruction.registerImage(imageId, camera);
     }
 
-    EXPECT_TRUE(ImageRegistrationEngine::findParallelAerialPoseOutliers(
-        reconstruction).empty());
+    EXPECT_TRUE(ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction).empty());
 }
 
 // ═══════════════════════════════════════════════════════════════
 // 测试组 3：BA 离群点过滤
 // ═══════════════════════════════════════════════════════════════
 
-class BAFilterTest : public ::testing::Test {
+class BAFilterTest : public ::testing::Test
+{
 protected:
     /// 构造一个带有离群点的合成 BA 场景
-    struct SyntheticBA {
+    struct SyntheticBA
+    {
         std::vector<FramePinholeCamera> cameras;
         std::vector<BATrack> tracks;
         int numGoodPoints = 0;
@@ -1248,12 +1161,15 @@ protected:
 
         // 好点：近似在 Z=50 处
         auto goodPts = generatePoints(numGood, 5, 0, 50, 5.0, seed);
-        for (const auto &p : goodPts) {
+        for (const auto& p : goodPts)
+        {
             BATrack track;
             track.initialPoint = {p.x, p.y, p.z};
-            for (int ci = 0; ci < 2; ++ci) {
+            for (int ci = 0; ci < 2; ++ci)
+            {
                 double u, v;
-                if (projectPoint(scene.cameras[ci], p.x, p.y, p.z, u, v)) {
+                if (projectPoint(scene.cameras[ci], p.x, p.y, p.z, u, v))
+                {
                     BAObservation obs;
                     obs.cameraIndex = ci;
                     obs.u = u + noise(rng);
@@ -1261,14 +1177,16 @@ protected:
                     track.observations.push_back(obs);
                 }
             }
-            if (track.observations.size() >= 2) {
+            if (track.observations.size() >= 2)
+            {
                 scene.tracks.push_back(std::move(track));
                 ++scene.numGoodPoints;
             }
         }
 
         // 离群点：坐标偏移很大
-        for (int i = 0; i < numOutlier; ++i) {
+        for (int i = 0; i < numOutlier; ++i)
+        {
             BATrack track;
             // 远离真实场景的错误坐标
             double ox = 500 + rng() % 1000;
@@ -1278,11 +1196,11 @@ protected:
 
             // 但观测像素坐标是来自正确 3D 点的投影（模拟错误三角化）
             auto correctPt = generatePoints(1, 5, 0, 50, 5.0, seed + i + 999);
-            for (int ci = 0; ci < 2; ++ci) {
+            for (int ci = 0; ci < 2; ++ci)
+            {
                 double u, v;
-                if (projectPoint(scene.cameras[ci],
-                                 correctPt[0].x, correctPt[0].y, correctPt[0].z,
-                                 u, v)) {
+                if (projectPoint(scene.cameras[ci], correctPt[0].x, correctPt[0].y, correctPt[0].z, u, v))
+                {
                     BAObservation obs;
                     obs.cameraIndex = ci;
                     obs.u = u;
@@ -1290,7 +1208,8 @@ protected:
                     track.observations.push_back(obs);
                 }
             }
-            if (track.observations.size() >= 2) {
+            if (track.observations.size() >= 2)
+            {
                 scene.tracks.push_back(std::move(track));
                 ++scene.numOutliers;
             }
@@ -1315,18 +1234,17 @@ TEST_F(BAFilterTest, FilterRemovesOutliers)
 
     // 统计被标记为无效的点
     int invalidCount = 0;
-    for (const auto &p : result.points) {
-        if (!p.valid) ++invalidCount;
+    for (const auto& p : result.points)
+    {
+        if (!p.valid)
+            ++invalidCount;
     }
 
-    EXPECT_GE(invalidCount, scene.numOutliers / 2)
-        << "BA should filter at least half of the outlier points";
-    EXPECT_LE(invalidCount, scene.numOutliers + 5)
-        << "BA should not overly filter good points";
+    EXPECT_GE(invalidCount, scene.numOutliers / 2) << "BA should filter at least half of the outlier points";
+    EXPECT_LE(invalidCount, scene.numOutliers + 5) << "BA should not overly filter good points";
 
     // 优化后 RMS 应比优化前更小
-    EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore + 1e-6)
-        << "BA should improve or maintain reprojection error";
+    EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore + 1e-6) << "BA should improve or maintain reprojection error";
 }
 
 // 2. 过滤阈值越严格，过滤越多
@@ -1349,15 +1267,18 @@ TEST_F(BAFilterTest, StricterThresholdFiltersMore)
     auto resultStrict = BundleAdjust::optimizePoints(scene.cameras, scene.tracks, optsStrict);
 
     int looseFilt = 0, strictFilt = 0;
-    for (size_t i = 0; i < resultLoose.points.size(); ++i) {
-        if (!resultLoose.points[i].valid) ++looseFilt;
+    for (size_t i = 0; i < resultLoose.points.size(); ++i)
+    {
+        if (!resultLoose.points[i].valid)
+            ++looseFilt;
     }
-    for (size_t i = 0; i < resultStrict.points.size(); ++i) {
-        if (!resultStrict.points[i].valid) ++strictFilt;
+    for (size_t i = 0; i < resultStrict.points.size(); ++i)
+    {
+        if (!resultStrict.points[i].valid)
+            ++strictFilt;
     }
 
-    EXPECT_GE(strictFilt, looseFilt)
-        << "Stricter threshold should filter at least as many points";
+    EXPECT_GE(strictFilt, looseFilt) << "Stricter threshold should filter at least as many points";
 }
 
 // 3. 禁用过滤 → 不删点
@@ -1371,14 +1292,15 @@ TEST_F(BAFilterTest, DisabledFilterKeepsAllPoints)
     auto result = BundleAdjust::optimizePoints(scene.cameras, scene.tracks, opts);
 
     int invalidCount = 0;
-    for (const auto &p : result.points) {
-        if (!p.valid) ++invalidCount;
+    for (const auto& p : result.points)
+    {
+        if (!p.valid)
+            ++invalidCount;
     }
 
     // 不过滤时，应该没有（或极少）无效点（仅优化失败的）
     // 注意：即使禁用过滤，数值发散也可能导致极个别点无效
-    EXPECT_LE(invalidCount, 2)
-        << "With filter disabled, very few points should be marked invalid";
+    EXPECT_LE(invalidCount, 2) << "With filter disabled, very few points should be marked invalid";
 }
 
 // 4. 空场景不崩溃
@@ -1480,15 +1402,15 @@ TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
     ASSERT_TRUE(equalResult.points.front().valid);
     ASSERT_TRUE(weightedResult.points.front().valid);
 
-    auto distanceToTruth = [&](const std::array<double, 3> &point) {
+    auto distanceToTruth = [&](const std::array<double, 3>& point)
+    {
         const double dx = point[0] - truth[0];
         const double dy = point[1] - truth[1];
         const double dz = point[2] - truth[2];
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     };
 
-    EXPECT_LT(distanceToTruth(weightedResult.points.front().point),
-              distanceToTruth(equalResult.points.front().point));
+    EXPECT_LT(distanceToTruth(weightedResult.points.front().point), distanceToTruth(equalResult.points.front().point));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1546,18 +1468,20 @@ TEST(IncrementalSfmOptionsTest, ReprojectionThresholdIsSharedWithBundleAdjustmen
     EXPECT_DOUBLE_EQ(effective.baOptions.filterMaxReprojError, 1.25);
 }
 
-class SfmPipelineTest : public ::testing::Test {
+class SfmPipelineTest : public ::testing::Test
+{
 protected:
     IncrementalSfmOptions opts;
 
-    void SetUp() override {
+    void SetUp() override
+    {
         opts.initMinNumMatches = 20;
         opts.initMinNumInliers = 10;
         opts.initMinChiralityInliers = 5;
         opts.maxInitPairCandidates = 5;
         opts.iterativeBARounds = 2;
         opts.filterMinTrackLen = 1;
-        opts.filterMaxReprojError = 4.0;  // 宽松些（合成数据噪声较大）
+        opts.filterMaxReprojError = 4.0; // 宽松些（合成数据噪声较大）
         opts.filterMinTriAngle = 1.0;
         opts.baOptions.filterMaxReprojError = 5.0;
         opts.baOptions.maxIterations = 3;
@@ -1618,20 +1542,20 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesLowOrderCalibrationForParallelAerialBlock)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, false, true, true, 444, 0.98));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        true, false, true, true, 444, 0.98));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, true, true, true, 444, 0.98));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, false, false, true, 444, 0.98));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, false, true, false, 444, 0.98));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, false, true, true, 444, 0.75));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
-        false, false, true, true, 12, 0.98));
+    EXPECT_TRUE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, false, true, true, 444, 0.98));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(true, false, true, true, 444, 0.98));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, true, true, true, 444, 0.98));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, false, false, true, 444, 0.98));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, false, true, false, 444, 0.98));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, false, true, true, 444, 0.75));
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(false, false, true, true, 12, 0.98));
 }
 
 TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
@@ -1745,10 +1669,8 @@ TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossS
     IncrementalSfm sfm(opts);
     for (ImageId imageId = 0; imageId < cameras.size(); ++imageId)
     {
-        sfm.addImageWithCamera(imageId,
-                               "sequence_" + std::to_string(imageId) + ".png",
-                               cameras[imageId],
-                               keypoints[imageId]);
+        sfm.addImageWithCamera(
+            imageId, "sequence_" + std::to_string(imageId) + ".png", cameras[imageId], keypoints[imageId]);
     }
     sfm.addMatches(0, 1, matches01);
     sfm.addMatches(1, 2, matches12);
@@ -1781,14 +1703,16 @@ TEST_F(SfmPipelineTest, ProgressCallbackWorks)
     sfm.addMatches(0, 1, m01);
 
     int callCount = 0;
-    auto result = sfm.run([&](int registered, int total, const std::string &msg) -> bool {
-        ++callCount;
-        EXPECT_GE(total, 2);
-        EXPECT_GE(registered, 0);
-        EXPECT_LE(registered, total);
-        EXPECT_FALSE(msg.empty());
-        return true;
-    });
+    auto result = sfm.run(
+        [&](int registered, int total, const std::string& msg) -> bool
+        {
+            ++callCount;
+            EXPECT_GE(total, 2);
+            EXPECT_GE(registered, 0);
+            EXPECT_LE(registered, total);
+            EXPECT_FALSE(msg.empty());
+            return true;
+        });
 
     EXPECT_GE(callCount, 1) << "Progress callback should be called at least once";
 }
@@ -1810,9 +1734,11 @@ TEST_F(SfmPipelineTest, ProgressCallbackAbort)
     sfm.addImageWithCamera(1, "img1.png", cam1, kpts1);
     sfm.addMatches(0, 1, m01);
 
-    auto result = sfm.run([](int, int, const std::string &) -> bool {
-        return false; // 立即中止
-    });
+    auto result = sfm.run(
+        [](int, int, const std::string&) -> bool
+        {
+            return false; // 立即中止
+        });
 
     // 中止后结果不一定 success，但不崩溃
     EXPECT_GE(result.numRegisteredImages, 0);
@@ -1868,15 +1794,19 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
     // 这里改为直接验证深度计算逻辑
     auto allPts = recon.allPoint3DIds();
     int negCount = 0;
-    for (auto pid : allPts) {
-        const auto &pt = recon.point3D(pid);
-        for (const auto &elem : pt.track.elements) {
-            if (!recon.hasCamera(elem.imageId)) continue;
-            const FramePinholeCamera &cam = recon.camera(elem.imageId);
+    for (auto pid : allPts)
+    {
+        const auto& pt = recon.point3D(pid);
+        for (const auto& elem : pt.track.elements)
+        {
+            if (!recon.hasCamera(elem.imageId))
+                continue;
+            const FramePinholeCamera& cam = recon.camera(elem.imageId);
             const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
             double cameraPoint[3] = {0.0, 0.0, 0.0};
             cam.worldToCamera(world, cameraPoint);
-            if (cameraPoint[2] < 0) ++negCount;
+            if (cameraPoint[2] < 0)
+                ++negCount;
         }
     }
 
@@ -1900,7 +1830,8 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
     // 一个好点
     BATrack goodTrack;
     goodTrack.initialPoint = {10, 0, 50};
-    for (int ci = 0; ci < 3; ++ci) {
+    for (int ci = 0; ci < 3; ++ci)
+    {
         double u, v;
         projectPoint(cameras[ci], 10, 0, 50, u, v);
         goodTrack.observations.push_back({ci, u, v});
@@ -1909,7 +1840,8 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
     // 一个有一个坏观测的轨迹
     BATrack mixedTrack;
     mixedTrack.initialPoint = {5, 0, 50};
-    for (int ci = 0; ci < 2; ++ci) {
+    for (int ci = 0; ci < 2; ++ci)
+    {
         double u, v;
         projectPoint(cameras[ci], 5, 0, 50, u, v);
         mixedTrack.observations.push_back({ci, u, v});
@@ -1922,7 +1854,7 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
     BAOptions opts;
     opts.maxIterations = 3;
     opts.enablePointFilter = true;
-    opts.filterMaxReprojError = 2.0;  // 严格
+    opts.filterMaxReprojError = 2.0; // 严格
 
     auto result = BundleAdjust::optimizePoints(cameras, tracks, opts);
 
@@ -1947,17 +1879,21 @@ TEST(IterativeBATest, ConvergesWithMultipleRounds)
     std::mt19937 rng(42);
     std::normal_distribution<double> noise(0.0, 0.5);
 
-    for (const auto &p : points) {
+    for (const auto& p : points)
+    {
         BATrack track;
         // 给初始坐标加噪声（模拟初始三角化噪声）
         track.initialPoint = {p.x + noise(rng), p.y + noise(rng), p.z + noise(rng)};
-        for (int ci = 0; ci < 2; ++ci) {
+        for (int ci = 0; ci < 2; ++ci)
+        {
             double u, v;
-            if (projectPoint(cameras[ci], p.x, p.y, p.z, u, v)) {
+            if (projectPoint(cameras[ci], p.x, p.y, p.z, u, v))
+            {
                 track.observations.push_back({ci, u + noise(rng) * 0.2, v + noise(rng) * 0.2});
             }
         }
-        if (track.observations.size() >= 2) {
+        if (track.observations.size() >= 2)
+        {
             tracks.push_back(std::move(track));
         }
     }
@@ -1972,8 +1908,7 @@ TEST(IterativeBATest, ConvergesWithMultipleRounds)
 
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore + 0.001)
         << "Multiple rounds of BA should converge (RMS should not increase)";
-    EXPECT_GT(result.optimizedTracks, 0)
-        << "Some tracks should be successfully optimized";
+    EXPECT_GT(result.optimizedTracks, 0) << "Some tracks should be successfully optimized";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1987,11 +1922,13 @@ TEST(OutlierTypeTest, LargeReprojErrorOutliers)
     std::vector<BATrack> tracks;
 
     // 好点
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 30; ++i)
+    {
         double x = 5 + i * 0.2, y = 0, z = 50;
         BATrack track;
         track.initialPoint = {x, y, z};
-        for (int ci = 0; ci < 2; ++ci) {
+        for (int ci = 0; ci < 2; ++ci)
+        {
             double u, v;
             projectPoint(cameras[ci], x, y, z, u, v);
             track.observations.push_back({ci, u, v});
@@ -2000,7 +1937,8 @@ TEST(OutlierTypeTest, LargeReprojErrorOutliers)
     }
 
     // 坏点：正确的 3D 坐标，但像点坐标完全错误
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 5; ++i)
+    {
         double x = 5 + i * 0.2, y = 0, z = 50;
         BATrack track;
         track.initialPoint = {x, y, z};
@@ -2019,12 +1957,13 @@ TEST(OutlierTypeTest, LargeReprojErrorOutliers)
 
     int filteredCount = 0;
     // 只检查最后 5 个（离群）
-    for (size_t i = 30; i < result.points.size(); ++i) {
-        if (!result.points[i].valid) ++filteredCount;
+    for (size_t i = 30; i < result.points.size(); ++i)
+    {
+        if (!result.points[i].valid)
+            ++filteredCount;
     }
 
-    EXPECT_GE(filteredCount, 3)
-        << "Most large-reprojection-error outliers should be filtered";
+    EXPECT_GE(filteredCount, 3) << "Most large-reprojection-error outliers should be filtered";
 }
 
 TEST(OutlierTypeTest, WrongTriangulationOutliers)
@@ -2034,11 +1973,13 @@ TEST(OutlierTypeTest, WrongTriangulationOutliers)
     std::vector<BATrack> tracks;
 
     // 好点
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 30; ++i)
+    {
         double x = 5 + i * 0.2, y = 0, z = 50;
         BATrack track;
         track.initialPoint = {x, y, z};
-        for (int ci = 0; ci < 2; ++ci) {
+        for (int ci = 0; ci < 2; ++ci)
+        {
             double u, v;
             projectPoint(cameras[ci], x, y, z, u, v);
             track.observations.push_back({ci, u, v});
@@ -2047,12 +1988,14 @@ TEST(OutlierTypeTest, WrongTriangulationOutliers)
     }
 
     // 坏点：观测来自正确点，但初始 3D 坐标严重偏离
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 5; ++i)
+    {
         double trueX = 5 + i * 0.2, trueY = 0, trueZ = 50;
         BATrack track;
         // 初始坐标完全错误
         track.initialPoint = {trueX + 200, trueY + 200, trueZ + 200};
-        for (int ci = 0; ci < 2; ++ci) {
+        for (int ci = 0; ci < 2; ++ci)
+        {
             double u, v;
             projectPoint(cameras[ci], trueX, trueY, trueZ, u, v);
             track.observations.push_back({ci, u, v});
@@ -2070,29 +2013,31 @@ TEST(OutlierTypeTest, WrongTriangulationOutliers)
     // 错误三角化的点，如果优化能把它拉回来就保留，否则过滤
     // 关键是不崩溃
     EXPECT_EQ(result.totalTracks, 35);
-    EXPECT_GT(result.optimizedTracks, 20)
-        << "Good tracks should survive the filtering";
+    EXPECT_GT(result.optimizedTracks, 20) << "Good tracks should survive the filtering";
 }
 
 // ═══════════════════════════════════════════════════════════════
 // 测试组 9：重三角化（Retriangulation）
 // ═══════════════════════════════════════════════════════════════
 
-class RetriangulationTest : public ::testing::Test {
+class RetriangulationTest : public ::testing::Test
+{
 protected:
     SfmReconstruction recon;
     CorrespondenceGraph graph;
 
     FramePinholeCamera cam0, cam1, cam2;
 
-    void SetUp() override {
+    void SetUp() override
+    {
         cam0 = makeCamera(0, 0, 0);
         cam1 = makeCamera(10, 0, 0);
         cam2 = makeCamera(20, 0, 0);
     }
 
     /// 添加一幅已注册图像
-    void addRegisteredImage(ImageId id, const FramePinholeCamera &cam, int numKpts = 10) {
+    void addRegisteredImage(ImageId id, const FramePinholeCamera& cam, int numKpts = 10)
+    {
         ImageData img;
         img.id = id;
         img.imagePath = "img" + std::to_string(id) + ".png";
@@ -2104,18 +2049,21 @@ protected:
     }
 
     /// 向点云添加带轨迹的3D点，返回分配的 Point3DId
-    Point3DId addPointWithTrack(double x, double y, double z,
-                                 const std::vector<std::pair<ImageId, FeatureIdx>> &obs) {
+    Point3DId addPointWithTrack(double x, double y, double z, const std::vector<std::pair<ImageId, FeatureIdx>>& obs)
+    {
         ScenePoint3D pt;
         pt.xyz = {x, y, z};
-        for (auto &[imgId, fi] : obs) {
+        for (auto& [imgId, fi] : obs)
+        {
             pt.track.elements.push_back({imgId, fi});
         }
         Point3DId pid = recon.addPoint3D(pt);
         // 关联 ImageData 中的 point3DIds
-        for (auto &[imgId, fi] : obs) {
-            if (recon.hasImage(imgId)) {
-                auto &imgData = recon.image(imgId);
+        for (auto& [imgId, fi] : obs)
+        {
+            if (recon.hasImage(imgId))
+            {
+                auto& imgData = recon.image(imgId);
                 if (fi < imgData.point3DIds.size())
                     imgData.point3DIds[fi] = pid;
             }
@@ -2138,8 +2086,8 @@ TEST_F(RetriangulationTest, ImprovesPerturbed3DPoints)
     projectPoint(cam0, trueX, trueY, trueZ, u0, v0);
     projectPoint(cam1, trueX, trueY, trueZ, u1, v1);
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
 
@@ -2148,7 +2096,8 @@ TEST_F(RetriangulationTest, ImprovesPerturbed3DPoints)
 
     // 添加匹配以支持 graph
     FeatureMatch m;
-    m.idx1 = 0; m.idx2 = 0;
+    m.idx1 = 0;
+    m.idx2 = 0;
     graph.addMatches(0, 1, {m});
     graph.buildCorrespondences();
 
@@ -2158,10 +2107,9 @@ TEST_F(RetriangulationTest, ImprovesPerturbed3DPoints)
     EXPECT_GE(improved, 1) << "Retriangulation should improve perturbed point";
 
     // 验证坐标更接近真实值
-    const auto &pt = recon.point3D(pid);
-    double dist = std::sqrt(std::pow(pt.xyz[0] - trueX, 2)
-                          + std::pow(pt.xyz[1] - trueY, 2)
-                          + std::pow(pt.xyz[2] - trueZ, 2));
+    const auto& pt = recon.point3D(pid);
+    double dist =
+        std::sqrt(std::pow(pt.xyz[0] - trueX, 2) + std::pow(pt.xyz[1] - trueY, 2) + std::pow(pt.xyz[2] - trueZ, 2));
     EXPECT_LT(dist, 3.0) << "Retriangulated point should be closer to truth";
 }
 
@@ -2179,9 +2127,9 @@ TEST_F(RetriangulationTest, MultiViewBetterThanTwoView)
     projectPoint(cam1, trueX, trueY, trueZ, u1, v1);
     projectPoint(cam2, trueX, trueY, trueZ, u2, v2);
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
-    auto &img2 = recon.image(2);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
+    auto& img2 = recon.image(2);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
     img2.keypoints[0] = {static_cast<float>(u2), static_cast<float>(v2)};
@@ -2190,8 +2138,10 @@ TEST_F(RetriangulationTest, MultiViewBetterThanTwoView)
     auto pid = addPointWithTrack(trueX + 3, trueY + 2, trueZ - 1, {{0, 0}, {1, 0}, {2, 0}});
 
     FeatureMatch m01, m02;
-    m01.idx1 = 0; m01.idx2 = 0;
-    m02.idx1 = 0; m02.idx2 = 0;
+    m01.idx1 = 0;
+    m01.idx2 = 0;
+    m02.idx1 = 0;
+    m02.idx2 = 0;
     graph.addMatches(0, 1, {m01});
     graph.addMatches(0, 2, {m02});
     graph.buildCorrespondences();
@@ -2201,10 +2151,9 @@ TEST_F(RetriangulationTest, MultiViewBetterThanTwoView)
 
     EXPECT_GE(improved, 1);
 
-    const auto &pt = recon.point3D(pid);
-    double dist = std::sqrt(std::pow(pt.xyz[0] - trueX, 2)
-                          + std::pow(pt.xyz[1] - trueY, 2)
-                          + std::pow(pt.xyz[2] - trueZ, 2));
+    const auto& pt = recon.point3D(pid);
+    double dist =
+        std::sqrt(std::pow(pt.xyz[0] - trueX, 2) + std::pow(pt.xyz[1] - trueY, 2) + std::pow(pt.xyz[2] - trueZ, 2));
     EXPECT_LT(dist, 1.0) << "3-view retriangulation should be very accurate";
 }
 
@@ -2220,8 +2169,8 @@ TEST_F(RetriangulationTest, NegativeDepthNotRetriangulated)
     projectPoint(cam0, trueX, trueY, trueZ, u0, v0);
     projectPoint(cam1, trueX, trueY, trueZ, u1, v1);
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
 
@@ -2229,7 +2178,8 @@ TEST_F(RetriangulationTest, NegativeDepthNotRetriangulated)
     auto pid = addPointWithTrack(trueX, trueY, -50, {{0, 0}, {1, 0}});
 
     FeatureMatch m;
-    m.idx1 = 0; m.idx2 = 0;
+    m.idx1 = 0;
+    m.idx2 = 0;
     graph.addMatches(0, 1, {m});
     graph.buildCorrespondences();
 
@@ -2239,14 +2189,15 @@ TEST_F(RetriangulationTest, NegativeDepthNotRetriangulated)
     EXPECT_GE(improved, 1) << "Should retriangulate point that was behind camera";
 
     // 重三角化后的点应该在相机前方
-    const auto &pt = recon.point3D(pid);
+    const auto& pt = recon.point3D(pid);
     const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
     double cameraPoint[3] = {0.0, 0.0, 0.0};
     cam0.worldToCamera(world, cameraPoint);
     EXPECT_GT(cameraPoint[2], 0) << "After retriangulation, point should be in front of camera";
 
     // 验证坐标接近真实值
-    double dist = std::sqrt(std::pow(pt.xyz[0]-trueX,2) + std::pow(pt.xyz[1]-trueY,2) + std::pow(pt.xyz[2]-trueZ,2));
+    double dist =
+        std::sqrt(std::pow(pt.xyz[0] - trueX, 2) + std::pow(pt.xyz[1] - trueY, 2) + std::pow(pt.xyz[2] - trueZ, 2));
     EXPECT_LT(dist, 3.0) << "Retriangulated point should be close to truth";
 }
 
@@ -2261,8 +2212,8 @@ TEST_F(RetriangulationTest, RecomputeReprojErrors)
     projectPoint(cam0, trueX, trueY, trueZ, u0, v0);
     projectPoint(cam1, trueX, trueY, trueZ, u1, v1);
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
 
@@ -2279,7 +2230,7 @@ TEST_F(RetriangulationTest, RecomputeReprojErrors)
     Triangulator tri(recon, g);
     tri.recomputeReprojErrors();
 
-    const auto &pt = recon.point3D(pid);
+    const auto& pt = recon.point3D(pid);
     EXPECT_LT(pt.error, 1.0) << "Recomputed error for accurate point should be low";
     EXPECT_NE(pt.error, 999.0) << "Error should have been updated";
 }
@@ -2305,19 +2256,15 @@ TEST_F(RetriangulationTest, ParallelPostProcessingMatchesSerialResults)
         ASSERT_TRUE(projectPoint(cam0, trueX, trueY, trueZ, u0, v0));
         ASSERT_TRUE(projectPoint(cam1, trueX, trueY, trueZ, u1, v1));
         ASSERT_TRUE(projectPoint(cam2, trueX, trueY, trueZ, u2, v2));
-        recon.image(0).keypoints[static_cast<std::size_t>(index)] =
-            {static_cast<float>(u0), static_cast<float>(v0)};
-        recon.image(1).keypoints[static_cast<std::size_t>(index)] =
-            {static_cast<float>(u1), static_cast<float>(v1)};
-        recon.image(2).keypoints[static_cast<std::size_t>(index)] =
-            {static_cast<float>(u2), static_cast<float>(v2)};
-        addPointWithTrack(
-            trueX + 0.4,
-            trueY - 0.2,
-            trueZ + 0.6,
-            {{0, static_cast<FeatureIdx>(index)},
-             {1, static_cast<FeatureIdx>(index)},
-             {2, static_cast<FeatureIdx>(index)}});
+        recon.image(0).keypoints[static_cast<std::size_t>(index)] = {static_cast<float>(u0), static_cast<float>(v0)};
+        recon.image(1).keypoints[static_cast<std::size_t>(index)] = {static_cast<float>(u1), static_cast<float>(v1)};
+        recon.image(2).keypoints[static_cast<std::size_t>(index)] = {static_cast<float>(u2), static_cast<float>(v2)};
+        addPointWithTrack(trueX + 0.4,
+                          trueY - 0.2,
+                          trueZ + 0.6,
+                          {{0, static_cast<FeatureIdx>(index)},
+                           {1, static_cast<FeatureIdx>(index)},
+                           {2, static_cast<FeatureIdx>(index)}});
     }
 
     SfmReconstruction serialReconstruction = recon;
@@ -2334,21 +2281,17 @@ TEST_F(RetriangulationTest, ParallelPostProcessingMatchesSerialResults)
     for (Point3DId pointId : serialReconstruction.allPoint3DIds())
     {
         ASSERT_TRUE(parallelReconstruction.hasPoint3D(pointId));
-        const ScenePoint3D &serialPoint = serialReconstruction.point3D(pointId);
-        const ScenePoint3D &parallelPoint = parallelReconstruction.point3D(pointId);
+        const ScenePoint3D& serialPoint = serialReconstruction.point3D(pointId);
+        const ScenePoint3D& parallelPoint = parallelReconstruction.point3D(pointId);
         for (std::size_t coordinate = 0; coordinate < 3; ++coordinate)
         {
-            EXPECT_NEAR(serialPoint.xyz[coordinate],
-                        parallelPoint.xyz[coordinate],
-                        1.0e-10);
+            EXPECT_NEAR(serialPoint.xyz[coordinate], parallelPoint.xyz[coordinate], 1.0e-10);
         }
         EXPECT_NEAR(serialPoint.error, parallelPoint.error, 1.0e-10);
     }
 
-    EXPECT_EQ(serialTriangulator.filterPoints(100.0, 0.0),
-              parallelTriangulator.filterPoints(100.0, 0.0));
-    EXPECT_EQ(serialTriangulator.filterShortTracks(2),
-              parallelTriangulator.filterShortTracks(2));
+    EXPECT_EQ(serialTriangulator.filterPoints(100.0, 0.0), parallelTriangulator.filterPoints(100.0, 0.0));
+    EXPECT_EQ(serialTriangulator.filterShortTracks(2), parallelTriangulator.filterShortTracks(2));
 }
 
 // 5. completeTracks 跳过深度为负的观测
@@ -2358,7 +2301,7 @@ TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
     FramePinholeCamera cam3;
     cam3.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     // 旋转 180° 使相机朝 -Z （绕 Y 旋转 180°: R = [-1,0,0, 0,1,0, 0,0,-1]）
-    cam3.setPose({-1,0,0, 0,1,0, 0,0,-1}, {0, 0, -100});
+    cam3.setPose({-1, 0, 0, 0, 1, 0, 0, 0, -1}, {0, 0, -100});
 
     addRegisteredImage(0, cam0, 5);
     addRegisteredImage(3, cam3, 5);
@@ -2370,12 +2313,13 @@ TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
     // 设置像点
     double u0, v0;
     projectPoint(cam0, trueX, trueY, trueZ, u0, v0);
-    auto &img0 = recon.image(0);
+    auto& img0 = recon.image(0);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
 
     // 假设 cam3 的特征点 0 本来对应同一个 3D 点（通过 graph）
     FeatureMatch m;
-    m.idx1 = 0; m.idx2 = 0;
+    m.idx1 = 0;
+    m.idx2 = 0;
     graph.addMatches(0, 3, {m});
     graph.buildCorrespondences();
 
@@ -2385,8 +2329,9 @@ TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
     int completed = tri.completeTracks(opts);
 
     // cam3 看这个点是负深度，不应该被加入轨迹
-    const auto &pt = recon.point3D(pid);
-    for (const auto &elem : pt.track.elements) {
+    const auto& pt = recon.point3D(pid);
+    for (const auto& elem : pt.track.elements)
+    {
         EXPECT_NE(elem.imageId, 3u) << "Should not extend track to camera with negative depth";
     }
 }
@@ -2404,8 +2349,8 @@ TEST_F(RetriangulationTest, CompleteTracksDoesNotAddSecondFeatureFromSameImage)
     ASSERT_TRUE(projectPoint(cam0, trueX, trueY, trueZ, u0, v0));
     ASSERT_TRUE(projectPoint(cam1, trueX, trueY, trueZ, u1, v1));
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img0.keypoints[1] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
@@ -2424,9 +2369,9 @@ TEST_F(RetriangulationTest, CompleteTracksDoesNotAddSecondFeatureFromSameImage)
     const int completed = tri.completeTracks(opts);
 
     EXPECT_EQ(completed, 0);
-    const auto &pt = recon.point3D(pid);
+    const auto& pt = recon.point3D(pid);
     int image0ObservationCount = 0;
-    for (const auto &elem : pt.track.elements)
+    for (const auto& elem : pt.track.elements)
     {
         if (elem.imageId == 0u)
         {
@@ -2459,8 +2404,8 @@ TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera
     ASSERT_TRUE(projectPoint(baseCam, trueX, trueY, trueZ, u0, v0));
     ASSERT_TRUE(projectPoint(rotatedCam, trueX, trueY, trueZ, u1, v1));
 
-    auto &img0 = recon.image(0);
-    auto &img1 = recon.image(1);
+    auto& img0 = recon.image(0);
+    auto& img1 = recon.image(1);
     img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
     img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
 
@@ -2479,10 +2424,12 @@ TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera
 
     EXPECT_EQ(completed, 1) << "Positive-depth rotated camera observation should extend the track";
 
-    const auto &pt = recon.point3D(pid);
+    const auto& pt = recon.point3D(pid);
     bool hasRotatedObservation = false;
-    for (const auto &elem : pt.track.elements) {
-        if (elem.imageId == 1u) {
+    for (const auto& elem : pt.track.elements)
+    {
+        if (elem.imageId == 1u)
+        {
             hasRotatedObservation = true;
             break;
         }

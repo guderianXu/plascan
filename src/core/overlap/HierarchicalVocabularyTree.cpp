@@ -228,11 +228,12 @@ bool HierarchicalVocabularyTree::buildNode(
         _branchFactor,
         leafBudget,
         static_cast<int>(rows.size())});
-    cv::Mat node_descriptors;
-    node_descriptors.reserve(rows.size());
-    for (int row : rows)
+    cv::Mat node_descriptors(
+        static_cast<int>(rows.size()), training.cols, training.type());
+    for (std::size_t node_row = 0; node_row < rows.size(); ++node_row)
     {
-        node_descriptors.push_back(training.row(row));
+        training.row(rows[node_row]).copyTo(
+            node_descriptors.row(static_cast<int>(node_row)));
     }
 
     cv::Mat labels;

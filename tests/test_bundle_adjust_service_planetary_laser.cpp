@@ -129,7 +129,7 @@ xjw::gui::BaServiceOptions makePlanetaryServiceOptions(const QString &directory,
     options.planetaryLaserCameraSensorFrame = QStringLiteral("CAMERA");
     options.planetaryLaserRangeWeight = 1.0;
     options.planetaryLaserRangeHuberDeltaSigma = 10.0;
-    options.baOpt.backend = xjw::BABackend::CeresCpu;
+    options.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
     options.baOpt.refineCameraPose = false;
     options.baOpt.enablePointFilter = false;
     options.baOpt.maxIterations = 20;
@@ -140,9 +140,9 @@ xjw::gui::BaServiceOptions makePlanetaryServiceOptions(const QString &directory,
 
 TEST(BundleAdjustServicePlanetaryLaserTest, RunsRangeShotWithoutPollutingTrackMetrics)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is not available";
+        GTEST_SKIP() << "PlaMatrix backend is not available";
     }
 
     QTemporaryDir temporaryDirectory;
@@ -205,9 +205,9 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RejectsLineScanAsStaticFrameCamera)
 
 TEST(BundleAdjustServicePlanetaryLaserTest, MapsExplicitIsisSerialAliasToCamera)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is not available";
+        GTEST_SKIP() << "PlaMatrix backend is not available";
     }
 
     QTemporaryDir temporaryDirectory;

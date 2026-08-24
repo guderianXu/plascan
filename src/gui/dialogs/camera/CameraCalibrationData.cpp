@@ -130,9 +130,11 @@ QSize resolveImageSize(const QString &path,
                        const QJsonObject &camera)
 {
     int width = camera.value(QStringLiteral("image_width"))
-                    .toInt(image.value(QStringLiteral("width")).toInt());
+                    .toInt(camera.value(QStringLiteral("image_samples"))
+                               .toInt(image.value(QStringLiteral("width")).toInt()));
     int height = camera.value(QStringLiteral("image_height"))
-                     .toInt(image.value(QStringLiteral("height")).toInt());
+                     .toInt(camera.value(QStringLiteral("image_lines"))
+                                .toInt(image.value(QStringLiteral("height")).toInt()));
     if (width > 0 && height > 0)
     {
         return QSize(width, height);
@@ -275,9 +277,11 @@ void applyImageMetadata(const QJsonObject &image,
     record->name = QFileInfo(record->path).fileName();
     record->model = camera.value(QStringLiteral("model")).toString(record->model);
     record->imageWidth = camera.value(QStringLiteral("image_width"))
-                             .toInt(image.value(QStringLiteral("width")).toInt(record->imageWidth));
+                             .toInt(camera.value(QStringLiteral("image_samples"))
+                                        .toInt(image.value(QStringLiteral("width")).toInt(record->imageWidth)));
     record->imageHeight = camera.value(QStringLiteral("image_height"))
-                              .toInt(image.value(QStringLiteral("height")).toInt(record->imageHeight));
+                              .toInt(camera.value(QStringLiteral("image_lines"))
+                                         .toInt(image.value(QStringLiteral("height")).toInt(record->imageHeight)));
 
     if (!camera.isEmpty() && record->hasAdjusted && completedCalibrationRun)
     {
@@ -303,6 +307,11 @@ void applyImageMetadata(const QJsonObject &image,
         record->hasInitial = true;
         record->initialSource = QStringLiteral("project_camera_prior");
         record->adjustmentStatus = QStringLiteral("not_run");
+        if (record->model.compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0)
+        {
+            record->initialSource = QStringLiteral("embedded_rpc00b");
+            record->adjustmentStatus = QStringLiteral("rpc_fixed_model");
+        }
     }
 }
 

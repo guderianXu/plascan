@@ -1,4 +1,4 @@
-#include "tie_points/CreateTiePointsDialog.h"
+﻿#include "tie_points/CreateTiePointsDialog.h"
 
 #include "shared/WorkflowParameterDialogStyle.h"
 
@@ -23,18 +23,17 @@
 namespace
 {
 
-QLineEdit *makeIntegerEdit(QWidget *parent, const QString &text)
-{
-    auto *edit = new QLineEdit(text, parent);
-    edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9, ]+")), edit));
-    xjw::gui::dialogs::configureWorkflowInputWidget(edit, 240);
-    return edit;
-}
+    QLineEdit* makeIntegerEdit(QWidget* parent, const QString& text)
+    {
+        auto* edit = new QLineEdit(text, parent);
+        edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9, ]+")), edit));
+        xjw::gui::dialogs::configureWorkflowInputWidget(edit, 240);
+        return edit;
+    }
 
 } // namespace
 
-CreateTiePointsDialog::CreateTiePointsDialog(QWidget *parent)
-    : QDialog(parent)
+CreateTiePointsDialog::CreateTiePointsDialog(QWidget* parent) : QDialog(parent)
 {
     setWindowTitle(tr("创建连接点"));
     xjw::gui::dialogs::configureWorkflowParameterDialog(this);
@@ -82,7 +81,12 @@ bool CreateTiePointsDialog::useReferencePreselection() const
 
 bool CreateTiePointsDialog::useGuidedMatching() const
 {
-    return _guidedMatchingCheck && _guidedMatchingCheck->isChecked();
+    return guidedMatchingMode() != QLatin1String("off");
+}
+
+QString CreateTiePointsDialog::guidedMatchingMode() const
+{
+    return _guidedMatchingCombo ? _guidedMatchingCombo->currentData().toString() : QStringLiteral("off");
 }
 
 bool CreateTiePointsDialog::excludePinnedTiePoints() const
@@ -95,24 +99,19 @@ QString CreateTiePointsDialog::maskApplyMode() const
     return _maskModeCombo ? _maskModeCombo->currentData().toString() : QStringLiteral("none");
 }
 
-void CreateTiePointsDialog::setReferencePreselectionAvailable(bool available,
-                                                              int cameraCount,
-                                                              int imageCount)
+void CreateTiePointsDialog::setReferencePreselectionAvailable(bool available, int cameraCount, int imageCount)
 {
     if (_referencePreselectionCheck)
     {
         _referencePreselectionCheck->setEnabled(available);
         _referencePreselectionCheck->setChecked(false);
         _referencePreselectionCheck->setToolTip(
-            available
-                ? tr("已检测到 %1/%2 个相机参考，可生成参考预选匹配对。")
-                      .arg(cameraCount)
-                      .arg(imageCount)
-                : tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
+            available ? tr("已检测到 %1/%2 个相机参考，可生成参考预选匹配对。").arg(cameraCount).arg(imageCount)
+                      : tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
     }
 }
 
-int CreateTiePointsDialog::intFromEdit(const QLineEdit *edit, int fallback) const
+int CreateTiePointsDialog::intFromEdit(const QLineEdit* edit, int fallback) const
 {
     if (!edit)
     {
@@ -153,8 +152,7 @@ void CreateTiePointsDialog::updateKeypointLimitMode(bool guided)
     }
     else
     {
-        _keypointLimitPerMegapixel =
-            intFromEdit(_keypointLimitEdit, _keypointLimitPerMegapixel);
+        _keypointLimitPerMegapixel = intFromEdit(_keypointLimitEdit, _keypointLimitPerMegapixel);
         _keypointLimitLabel->setText(tr("关键点限制:"));
         _keypointLimitEdit->setText(formattedInteger(_keypointLimit));
     }
@@ -188,7 +186,7 @@ void CreateTiePointsDialog::setAdvancedExpanded(bool expanded)
 
 void CreateTiePointsDialog::buildUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
+    auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(18, 16, 18, 14);
     mainLayout->setSpacing(12);
     mainLayout->setSizeConstraint(QLayout::SetFixedSize);
@@ -196,7 +194,7 @@ void CreateTiePointsDialog::buildUi()
     _generalGroup = new QGroupBox(tr("一般"), this);
     _generalGroup->setObjectName(QStringLiteral("m_generalGroup"));
     _generalGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *generalLayout = new QFormLayout(_generalGroup);
+    auto* generalLayout = new QFormLayout(_generalGroup);
     generalLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     generalLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     generalLayout->setContentsMargins(16, 14, 16, 14);
@@ -223,15 +221,14 @@ void CreateTiePointsDialog::buildUi()
     _referencePreselectionCheck = new QCheckBox(tr("参考预选"), _generalGroup);
     _referencePreselectionCheck->setObjectName(QStringLiteral("m_referencePreselectionCheck"));
     _referencePreselectionCheck->setEnabled(false);
-    _referencePreselectionCheck->setToolTip(
-        tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
+    _referencePreselectionCheck->setToolTip(tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
     xjw::gui::dialogs::configureWorkflowCheckBox(_referencePreselectionCheck);
     generalLayout->addRow(QString(), _referencePreselectionCheck);
     mainLayout->addWidget(_generalGroup);
 
-    auto *advancedHeader = new QWidget(this);
+    auto* advancedHeader = new QWidget(this);
     advancedHeader->setObjectName(QStringLiteral("m_advancedHeader"));
-    auto *advancedHeaderLayout = new QHBoxLayout(advancedHeader);
+    auto* advancedHeaderLayout = new QHBoxLayout(advancedHeader);
     advancedHeaderLayout->setContentsMargins(28, 0, 28, 0);
     advancedHeaderLayout->setSpacing(6);
 
@@ -245,7 +242,7 @@ void CreateTiePointsDialog::buildUi()
     _advancedToggle->setArrowType(Qt::DownArrow);
     advancedHeaderLayout->addWidget(_advancedToggle, 0, Qt::AlignLeft);
 
-    auto *advancedLine = new QFrame(advancedHeader);
+    auto* advancedLine = new QFrame(advancedHeader);
     advancedLine->setFrameShape(QFrame::HLine);
     advancedLine->setFrameShadow(QFrame::Sunken);
     advancedHeaderLayout->addWidget(advancedLine, 1);
@@ -254,12 +251,12 @@ void CreateTiePointsDialog::buildUi()
     _advancedGroup = new QGroupBox(this);
     _advancedGroup->setObjectName(QStringLiteral("m_advancedGroup"));
     _advancedGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *advancedOuterLayout = new QVBoxLayout(_advancedGroup);
+    auto* advancedOuterLayout = new QVBoxLayout(_advancedGroup);
     advancedOuterLayout->setContentsMargins(16, 14, 16, 14);
 
     _advancedContent = new QWidget(_advancedGroup);
     _advancedContent->setObjectName(QStringLiteral("m_advancedContent"));
-    auto *advancedLayout = new QFormLayout(_advancedContent);
+    auto* advancedLayout = new QFormLayout(_advancedContent);
     advancedLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     advancedLayout->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     advancedLayout->setContentsMargins(0, 0, 8, 0);
@@ -281,19 +278,22 @@ void CreateTiePointsDialog::buildUi()
     _maskModeCombo->addItem(tr("无"), QStringLiteral("none"));
     _maskModeCombo->addItem(tr("关键点"), QStringLiteral("keypoints"));
     _maskModeCombo->addItem(tr("连接点"), QStringLiteral("tiepoints"));
-    _maskModeCombo->setToolTip(
-        tr("使用项目蒙版约束连接点流程：0 为有效区域，非 0 为排除区域。"));
+    _maskModeCombo->setToolTip(tr("使用项目蒙版约束连接点流程：0 为有效区域，非 0 为排除区域。"));
     xjw::gui::dialogs::configureWorkflowComboBox(_maskModeCombo, 240);
     advancedLayout->addRow(tr("将掩膜应用于:"), _maskModeCombo);
 
-    _guidedMatchingCheck = new QCheckBox(tr("指导图像匹配"), _advancedContent);
-    _guidedMatchingCheck->setObjectName(QStringLiteral("m_guidedMatchingCheck"));
-    xjw::gui::dialogs::configureWorkflowCheckBox(_guidedMatchingCheck);
-    connect(_guidedMatchingCheck,
-            &QCheckBox::toggled,
+    _guidedMatchingCombo = new QComboBox(_advancedContent);
+    _guidedMatchingCombo->setObjectName(QStringLiteral("m_guidedMatchingCombo"));
+    _guidedMatchingCombo->addItem(tr("关闭"), QStringLiteral("off"));
+    _guidedMatchingCombo->addItem(tr("自动（仅补救弱像对）"), QStringLiteral("auto"));
+    _guidedMatchingCombo->addItem(tr("强制（处理全部可靠像对）"), QStringLiteral("force"));
+    _guidedMatchingCombo->setToolTip(tr("自动模式跳过健康像对，并拒绝单应模型占优的退化几何。"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_guidedMatchingCombo, 240);
+    connect(_guidedMatchingCombo,
+            &QComboBox::currentIndexChanged,
             this,
-            &CreateTiePointsDialog::updateKeypointLimitMode);
-    advancedLayout->addRow(QString(), _guidedMatchingCheck);
+            [this](int) { updateKeypointLimitMode(useGuidedMatching()); });
+    advancedLayout->addRow(tr("指导图像匹配:"), _guidedMatchingCombo);
 
     _excludePinnedTiePointsCheck = new QCheckBox(tr("不包括固定的连接点"), _advancedContent);
     _excludePinnedTiePointsCheck->setObjectName(QStringLiteral("m_excludePinnedTiePointsCheck"));
@@ -303,17 +303,14 @@ void CreateTiePointsDialog::buildUi()
     advancedOuterLayout->addWidget(_advancedContent);
     mainLayout->addWidget(_advancedGroup);
 
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
-    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox, tr("创建"));
     connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(_advancedToggle, &QToolButton::toggled, this, [this](bool expanded)
-    {
-        setAdvancedExpanded(expanded);
-    });
+    connect(_advancedToggle, &QToolButton::toggled, this, [this](bool expanded) { setAdvancedExpanded(expanded); });
 
-    auto *buttonLayout = new QHBoxLayout;
+    auto* buttonLayout = new QHBoxLayout;
     buttonLayout->addStretch(1);
     buttonLayout->addWidget(buttonBox);
     buttonLayout->addStretch(1);

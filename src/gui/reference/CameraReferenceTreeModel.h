@@ -45,6 +45,8 @@ public:
     {
         TotalError,
         Camera,
+        RpcModelGroup,
+        RpcModel,
         UnmatchedGroup,
         UnmatchedRecord
     };

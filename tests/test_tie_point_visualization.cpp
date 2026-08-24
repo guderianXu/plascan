@@ -283,6 +283,26 @@ TEST(TiePointVisualizationTest, BoundsLargeCandidateResultsWithStableEvenSamplin
     EXPECT_TRUE(count_only.indices.empty());
 }
 
+TEST(TiePointVisualizationTest, ExcludesAlreadyStagedCandidates)
+{
+    QualityMetadata metadata;
+    metadata.sourcePointCount = 5;
+    metadata.reprojectionErrors = {0.5, 2.0, 3.0, 4.0, 5.0};
+    const std::vector<std::uint32_t> excluded{2U, 4U};
+
+    const auto candidates = queryPruneCandidates(
+        metadata,
+        {QualityCriterion::ReprojectionError, 1.0},
+        5,
+        nullptr,
+        std::numeric_limits<std::size_t>::max(),
+        &excluded);
+
+    ASSERT_TRUE(candidates.succeeded());
+    EXPECT_EQ(candidates.candidateCount, 2);
+    EXPECT_EQ(candidates.indices, (std::vector<std::uint32_t>{1U, 3U}));
+}
+
 TEST(TiePointVisualizationTest, RejectsMismatchedOrCancelledCandidateQueries)
 {
     QualityMetadata metadata;

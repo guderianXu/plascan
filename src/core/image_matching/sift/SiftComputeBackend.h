@@ -9,7 +9,6 @@
 #include "SiftBackendType.h"
 
 #include <opencv2/core.hpp>
-#include <opencv2/features2d.hpp>
 
 #include <QString>
 
@@ -32,6 +31,12 @@ namespace xjw::image_matching
         int deviceIndex = 0;
     };
 
+    struct SiftBidirectionalMatches
+    {
+        std::vector<SiftNearestMatch> forward;
+        std::vector<SiftNearestMatch> reverse;
+    };
+
     const char* siftBackendName(SiftComputeBackend backend);
     QString siftBackendDisplayName(SiftComputeBackend backend);
     /// 返回运行设备的硬件名称；CPU 后端没有单独设备名，返回空字符串。
@@ -48,5 +53,14 @@ namespace xjw::image_matching
                                                  const cv::Mat& queryDescriptors,
                                                  const cv::Mat& trainDescriptors,
                                                  int deviceIndex = 0);
+
+    SiftBidirectionalMatches matchSiftBidirectionallyOnGpu(SiftComputeBackend backend,
+                                                           const cv::Mat& descriptors0,
+                                                           const cv::Mat& descriptors1,
+                                                           int deviceIndex = 0);
+
+    /// 在拥有当前 worker 的 C++ 作用域结束前释放线程局部 GPU workspace。
+    /// Windows 上不能依赖进程/TLS 终止阶段的 CUDA runtime 析构顺序。
+    void releaseSiftGpuThreadWorkspaces();
 
 } // namespace xjw::image_matching

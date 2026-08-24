@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
 #include "FramePinholeCamera.h"
@@ -62,8 +62,6 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesLegacyCpu)
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = false;
-    options.minCeresCudaCameras = 1;
-    options.minCeresCudaObservations = 1;
 
     xjw::BAProblemStats stats;
     stats.cameraCount = 120;
@@ -101,45 +99,6 @@ TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
     EXPECT_EQ(stats.cameraCount, 2);
     EXPECT_EQ(stats.trackCount, 1);
     EXPECT_EQ(stats.observationCount, 2);
-}
-
-TEST(BundleAdjustQualityGateTest, AutoDoesNotSelectNativeCudaForPointOnlyProblem)
-{
-    xjw::BAProblemStats stats;
-    stats.cameraCount = 100;
-    stats.trackCount = 10000;
-    stats.observationCount = 1000000;
-
-    xjw::BAOptions options;
-    options.backend = xjw::BABackend::Auto;
-    options.refineCameraPose = false;
-    const auto selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
-    EXPECT_NE(selected, xjw::BABackend::NativeCuda);
-}
-
-TEST(BundleAdjustQualityGateTest, ExplicitNativeCudaFallsBackWhenControlPointsEnabled)
-{
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(0.0, 0.0, 0.0),
-        makeCamera(1.0, 0.0, 0.0),
-    };
-
-    xjw::BATrack track;
-    track.initialPoint = {{0.0, 0.0, 5.0}};
-    track.observations.push_back({0, 320.0, 240.0, 1.0});
-    track.observations.push_back({1, 300.0, 240.0, 1.0});
-    track.controlPointConstraints.push_back({{{0.0, 0.0, 5.0}}, 1.0, 1.0, 0});
-
-    xjw::BAOptions options;
-    options.backend = xjw::BABackend::NativeCuda;
-    options.enableControlPointConstraints = true;
-    options.allowBackendFallback = true;
-
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
-    EXPECT_EQ(result.requestedBackend, xjw::BABackend::NativeCuda);
-    EXPECT_NE(result.usedBackend, xjw::BABackend::NativeCuda);
-    EXPECT_TRUE(result.backendFallback);
-    EXPECT_FALSE(result.backendMessage.empty());
 }
 
 TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFails)

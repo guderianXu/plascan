@@ -62,20 +62,22 @@ struct DepthFrameResult
     cv::Size preparedRasterSize; ///< MVS 准备后的全分辨率影像尺寸；不随深度缓存释放丢失
     bool effectiveNativeFinalDepthGrid = false; ///< 该帧实际采用实验原生最终网格策略
     QJsonObject pixelDomainDiagnostics; ///< full-raster 参数到实际深度网格参数的显式审计
-    FramePinholeCamera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
-    std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
-    std::vector<int> geometrySourceViewIndices; ///< geometrySourceMask 的精确位序表，最多 16 个来源
-    std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
-    QJsonObject sourceAngleDiagnostics; ///< 场景推导上限、实验 cap 与实际源视图角度上限
-    bool sourceAngleCapEnabled = false; ///< 强类型安全标志；不依赖 JSON 诊断执行 shortfall 降级
+    FramePinholeCamera cameraModel;     ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
+    std::vector<int> sourceViewIndices; ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
+    std::vector<int> geometrySourceViewIndices;          ///< geometrySourceMask 的精确位序表，最多 16 个来源
+    std::vector<MvsSourcePlanEntry> sourceViewPlan;      ///< 实际源视图的可审计几何选择依据
+    QJsonObject sourceAngleDiagnostics;                  ///< 场景推导上限、实验 cap 与实际源视图角度上限
+    bool sourceAngleCapEnabled = false;                  ///< 强类型安全标志；不依赖 JSON 诊断执行 shortfall 降级
     bool completeVisibilityCandidatePoolEnabled = false; ///< 默认关闭的完整候选池实验
-    bool completePoolChangedLegacyPlan = false; ///< 本帧最终计划是否真正不同于 legacy early-stop
-    bool initialQualityAcceptanceAvailable = false; ///< 最终准入不得伪造初始阶段角色
+    bool completePoolChangedLegacyPlan = false;          ///< 本帧最终计划是否真正不同于 legacy early-stop
+    bool initialQualityAcceptanceAvailable = false;      ///< 最终准入不得伪造初始阶段角色
     DepthFrameAcceptance initialQualityAcceptance = DepthFrameAcceptance::Rejected;
-    int requestedSourceViewCount = 0; ///< 选择阶段请求的源视图数，不随缓存释放丢失
-    int sourceViewShortfall = 0; ///< 请求数与实际可用源视图数之差
-    std::string sourceViewShortfallReason; ///< 源视图不足的主要原因
-    QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
+    bool geometricGuidancePassExpected = false; ///< 当前帧是否满足冻结源深度第二轮的执行前提
+    bool geometricGuidancePassApplied = false;  ///< 第二轮是否实际成功，未执行结果不得被当作完整缓存复用
+    int requestedSourceViewCount = 0;           ///< 选择阶段请求的源视图数，不随缓存释放丢失
+    int sourceViewShortfall = 0;                ///< 请求数与实际可用源视图数之差
+    std::string sourceViewShortfallReason;      ///< 源视图不足的主要原因
+    QSharedPointer<cv::Mat> depthMap;           ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     QSharedPointer<cv::Mat> photometricConfidence; ///< 原始光度置信度 (CV_32F)，双通道实验启用时保留
     QSharedPointer<cv::Mat> geometricConfidence; ///< 独立跨视几何置信度 (CV_32F)，双通道实验启用时保留
@@ -93,6 +95,7 @@ struct DepthFrameResult
     QSharedPointer<DepthGeometryHypothesisRerankMaps> geometryRerankMaps; ///< 几何候选代价与独立性逐像素审计
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
     QSharedPointer<cv::Mat> targetedGapRecoveredMask; ///< 定向二源 PatchMatch 恢复像素 (CV_8U)
+    bool targetedGapRecoveredMaskExpected = false; ///< 流式释放后仍保留的权威存在性，用于检测工件丢失
     QSharedPointer<cv::Mat> residualReestimatedMask; ///< 一致性后局部 PatchMatch 恢复像素 (CV_8U)
     QSharedPointer<cv::Mat> learnedCandidateAcceptedMask; ///< 学习候选通过独立几何门控的像素 (CV_8U)
     QSharedPointer<cv::Mat> depthProvenance; ///< 最终深度来源码 (CV_8U, DepthProvenance)
@@ -151,6 +154,8 @@ struct DepthFrameResult
     {
         depthMap.clear();
         confidence.clear();
+        photometricConfidence.clear();
+        geometricConfidence.clear();
         normalMap.clear();
         supportCount.clear();
         photometricSourceMask.clear();
@@ -207,8 +212,18 @@ void runDepthMapBackgroundTaskWithExceptionBoundary(
 
 /// An explicit source-angle experiment must never promote a frame whose
 /// PatchMatch source plan is short. Repeated quality refreshes remain idempotent.
-void applySourceAngleCapShortfallSafety(DepthFrameResult &result);
-}
+void applySourceAngleCapShortfallSafety(DepthFrameResult& result);
+
+/// Post-consistency evidence is mandatory only after all publication counts
+/// have been recorded. Frames rejected before consistency remain publishable
+/// as diagnostics without pretending that geometry evidence exists.
+bool hasCompletedConsistencyPublication(const DepthFrameResult& result);
+
+/// Whether this frame was expected to enter cross-view consistency. The
+/// initial quality role is immutable, so a later rejection cannot erase the
+/// obligation to publish complete consistency evidence.
+bool expectsConsistencyPublication(const DepthFrameResult& result, int viewCount);
+} // namespace detail
 
 class DepthMapGenerator : public QObject
 {
@@ -461,25 +476,22 @@ private:
                                  const QString &stageLabel);
     void captureStageSnapshot(int frameIndex,
                               MvsStageSnapshotStage stage,
-                              const QString &boundary,
-                              const DepthFrameResult &result,
-                              const cv::Mat &depth,
-                              const cv::Mat &confidence,
-                              const cv::Mat &validMask = cv::Mat());
-    bool ensurePreparedRasterArtifact(
-        int frameIndex,
-        MvsPreparedRasterArtifact *artifact,
-        QString *errorMessage = nullptr);
+                              const QString& boundary,
+                              const DepthFrameResult& result,
+                              const cv::Mat& depth,
+                              const cv::Mat& confidence,
+                              const cv::Mat& validMask = cv::Mat());
+    bool
+    ensurePreparedRasterArtifact(int frameIndex, MvsPreparedRasterArtifact* artifact, QString* errorMessage = nullptr);
     void initializeWorkspaceManifest();
     void markManifestFrameRunning(int frameIndex);
-    void markManifestFrameFailed(int frameIndex, const QString &error);
-    bool persistWorkspaceManifest(QString *errorMsg = nullptr);
+    void markManifestFrameFailed(int frameIndex, const QString& error);
+    bool publishTerminalDepthCheckpoints();
+    bool persistWorkspaceManifest(QString* errorMsg = nullptr);
 
     /// 在任何全量像素解码前从影像头部补齐尺寸，并配置统一图像 provider。
-    bool probeImageMetadata(QString *errorMessage);
-    bool initializeImageProvider(
-        const MvsPipelineMemoryPolicyDecision &decision,
-        QString *errorMessage);
+    bool probeImageMetadata(QString* errorMessage);
+    bool initializeImageProvider(const MvsPipelineMemoryPolicyDecision& decision, QString* errorMessage);
     bool preloadImages(QString *errorMessage = nullptr);
     bool loadMvsImageFrame(int frameIndex,
                            const std::atomic_bool *cancelFlag,

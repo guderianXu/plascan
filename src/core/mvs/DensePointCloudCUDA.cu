@@ -1,212 +1,416 @@
-// =============================================================================
-// 文件: DensePointCloudCUDA.cu
-// 模块: MVS - GPU 稠密点云生成
-// =============================================================================
-
 #include "DensePointCloudCUDA.h"
-#include "DenseCloudBuilder.h"
+
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <cstdio>
-#include <cstring>
 
-namespace xjw {
-namespace mvs {
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <vector>
 
-// =============================================================================
-// Device Kernel
-// =============================================================================
-
-struct CamParams 
+namespace xjw::mvs
 {
-    float fx, cx, fy, cy;
-    float R_cw[9], T[3]; // R_cw * X_world + T = X_cam
-};
-
-/// 反投影 kernel
-/// valid[i] = 1 表示该像素输出有效点
-/// 输出：outXYZ[i*3], outRGB[i*3] (可为空时灰度)
-__global__ void kernelUnproject(
-    const float   *depth,    // H*W float
-    const uint8_t *mask,     // H*W uint8, can be nullptr (全有效)
-    const uint8_t *color,    // H*W*ch uint8, can be nullptr
-    int W, int H, int ch,    // ch=0/1/3
-    float minDepth, float maxDepth,
-    CamParams cam,
-    float   *outXYZ,         // H*W*3 float（稀疏填充，由 valid 控制）
-    uint8_t *outRGB,         // H*W*3 uint8
-    int32_t *valid)          // H*W int32
-{
-    int u = blockIdx.x * blockDim.x + threadIdx.x;
-    int v = blockIdx.y * blockDim.y + threadIdx.y;
-    if (u >= W || v >= H) return;
-
-    int idx = v * W + u;
-    valid[idx] = 0;
-
-    if (mask != nullptr && mask[idx] == 0) return;
-
-    float d = depth[idx];
-    if (d < minDepth || d > maxDepth) return;
-
-    // 反归一化像素 → 相机坐标
-    float xn = (u - cam.cx) / cam.fx;
-    float yn = (v - cam.cy) / cam.fy;
-    // d 是沿 z 轴的深度（COLMAP 约定）
-    float Xc = xn * d, Yc = yn * d, Zc = d;
-
-    // 相机坐标 → 世界坐标：X_world = R_cw^T * (X_cam - T)
-    // R_wc = R_cw^T
-    float Xt = Xc - cam.T[0], Yt = Yc - cam.T[1], Zt = Zc - cam.T[2];
-    float Xw = cam.R_cw[0]*Xt + cam.R_cw[3]*Yt + cam.R_cw[6]*Zt;
-    float Yw = cam.R_cw[1]*Xt + cam.R_cw[4]*Yt + cam.R_cw[7]*Zt;
-    float Zw = cam.R_cw[2]*Xt + cam.R_cw[5]*Yt + cam.R_cw[8]*Zt;
-
-    outXYZ[idx*3+0] = Xw;
-    outXYZ[idx*3+1] = Yw;
-    outXYZ[idx*3+2] = Zw;
-
-    // 颜色
-    if (ch == 3 && color != nullptr) {
-        outRGB[idx*3+0] = color[idx*3+2]; // B→R
-        outRGB[idx*3+1] = color[idx*3+1];
-        outRGB[idx*3+2] = color[idx*3+0]; // R→B
-    } else if (ch == 1 && color != nullptr) {
-        uint8_t g = color[idx];
-        outRGB[idx*3+0] = outRGB[idx*3+1] = outRGB[idx*3+2] = g;
-    } else {
-        outRGB[idx*3+0] = outRGB[idx*3+1] = outRGB[idx*3+2] = 128;
-    }
-
-    valid[idx] = 1;
-}
-
-// =============================================================================
-std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
-    const cv::Mat                 &depth,
-    const cv::Mat                 &mask,
-    const FramePinholeCamera                    &cam,
-    const cv::Mat                 &colorImg,
-    float                          minDepth,
-    float                          maxDepth,
-    std::string                   *errorMsg,
-    const DenseCloudOptions       *options)
-{
-    // CUDA 可用性检查
-    int devCnt = 0;
-    cudaGetDeviceCount(&devCnt);
-    if (devCnt == 0) {
-        // 回退 CPU
-        cv::Mat validMask = mask.empty() ? cv::Mat() : mask;
-        DenseCloudOptions opt; opt.minDepth = minDepth; opt.maxDepth = maxDepth;
-        return DenseCloudBuilder::unproject(depth, validMask, cam, colorImg, opt);
-    }
-
-#define GPU_CHECK(x) do { \
-    cudaError_t _e=(x); \
-    if(_e!=cudaSuccess){ \
-        if(errorMsg) *errorMsg=std::string("CUDA: ")+cudaGetErrorString(_e); \
-        goto cleanup_gpu; \
-    }} while(0)
-
-    const int W = depth.cols, H = depth.rows;
-    const int N = W * H;
-    const int ch = colorImg.empty() ? 0 : colorImg.channels();
-
-    // host → device
-    float   *d_depth = nullptr;
-    uint8_t *d_mask  = nullptr;
-    uint8_t *d_color = nullptr;
-    float   *d_xyz   = nullptr;
-    uint8_t *d_rgb   = nullptr;
-    int32_t *d_valid = nullptr;
-
-    std::vector<DensePoint> result;
-
-    GPU_CHECK(cudaMalloc(&d_depth, N * sizeof(float)));
-    GPU_CHECK(cudaMalloc(&d_xyz,   N * 3 * sizeof(float)));
-    GPU_CHECK(cudaMalloc(&d_rgb,   N * 3 * sizeof(uint8_t)));
-    GPU_CHECK(cudaMalloc(&d_valid, N * sizeof(int32_t)));
-
+    namespace
     {
-        cv::Mat depthF;
-        if (depth.type() == CV_32F) depthF = depth;
-        else depth.convertTo(depthF, CV_32F);
-        GPU_CHECK(cudaMemcpy(d_depth, depthF.ptr<float>(), N*sizeof(float), cudaMemcpyHostToDevice));
-    }
 
-    if (!mask.empty()) {
-        GPU_CHECK(cudaMalloc(&d_mask, N * sizeof(uint8_t)));
-        GPU_CHECK(cudaMemcpy(d_mask, mask.ptr<uint8_t>(), N*sizeof(uint8_t), cudaMemcpyHostToDevice));
-    }
+        struct CameraParameters
+        {
+            float focalX = 0.0f;
+            float focalY = 0.0f;
+            float principalX = 0.0f;
+            float principalY = 0.0f;
+            float cameraToWorld[9]{};
+            float cameraCenter[3]{};
+            int uAxisSign = 1;
+            int vAxisSign = 1;
+            int depthSign = 1;
+        };
 
-    if (!colorImg.empty()) {
-        cv::Mat contColor;
-        if (colorImg.isContinuous()) contColor = colorImg;
-        else colorImg.copyTo(contColor);
-        GPU_CHECK(cudaMalloc(&d_color, N * ch * sizeof(uint8_t)));
-        GPU_CHECK(cudaMemcpy(d_color, contColor.data, N*ch*sizeof(uint8_t), cudaMemcpyHostToDevice));
-    }
+        __global__ void unprojectKernel(const float* depth,
+                                        const std::uint8_t* mask,
+                                        const std::uint8_t* color,
+                                        int width,
+                                        int height,
+                                        int channels,
+                                        float minimumDepth,
+                                        float maximumDepth,
+                                        int subsample,
+                                        int clipAabb,
+                                        float minimumX,
+                                        float maximumX,
+                                        float minimumY,
+                                        float maximumY,
+                                        float minimumZ,
+                                        float maximumZ,
+                                        CameraParameters camera,
+                                        float* xyz,
+                                        std::uint8_t* rgb,
+                                        std::int32_t* valid)
+        {
+            const int column = blockIdx.x * blockDim.x + threadIdx.x;
+            const int row = blockIdx.y * blockDim.y + threadIdx.y;
+            if (column >= width || row >= height)
+            {
+                return;
+            }
 
+            const int index = row * width + column;
+            valid[index] = 0;
+            if ((row % subsample) != 0 || (column % subsample) != 0 || (mask != nullptr && mask[index] == 0))
+            {
+                return;
+            }
+
+            const float positiveDepth = depth[index];
+            if (!isfinite(positiveDepth) || positiveDepth < minimumDepth || positiveDepth > maximumDepth)
+            {
+                return;
+            }
+
+            const float normalizedX =
+                static_cast<float>(camera.uAxisSign) * (static_cast<float>(column) - camera.principalX) / camera.focalX;
+            const float normalizedY =
+                static_cast<float>(camera.vAxisSign) * (static_cast<float>(row) - camera.principalY) / camera.focalY;
+            const float cameraZ = static_cast<float>(camera.depthSign) * positiveDepth;
+            const float cameraX = normalizedX * cameraZ;
+            const float cameraY = normalizedY * cameraZ;
+            const float worldX = camera.cameraCenter[0] + camera.cameraToWorld[0] * cameraX +
+                                 camera.cameraToWorld[1] * cameraY + camera.cameraToWorld[2] * cameraZ;
+            const float worldY = camera.cameraCenter[1] + camera.cameraToWorld[3] * cameraX +
+                                 camera.cameraToWorld[4] * cameraY + camera.cameraToWorld[5] * cameraZ;
+            const float worldZ = camera.cameraCenter[2] + camera.cameraToWorld[6] * cameraX +
+                                 camera.cameraToWorld[7] * cameraY + camera.cameraToWorld[8] * cameraZ;
+            if (!isfinite(worldX) || !isfinite(worldY) || !isfinite(worldZ) ||
+                (clipAabb != 0 && (worldX < minimumX || worldX > maximumX || worldY < minimumY || worldY > maximumY ||
+                                   worldZ < minimumZ || worldZ > maximumZ)))
+            {
+                return;
+            }
+
+            xyz[index * 3] = worldX;
+            xyz[index * 3 + 1] = worldY;
+            xyz[index * 3 + 2] = worldZ;
+            if (channels == 3 && color != nullptr)
+            {
+                rgb[index * 3] = color[index * 3 + 2];
+                rgb[index * 3 + 1] = color[index * 3 + 1];
+                rgb[index * 3 + 2] = color[index * 3];
+            }
+            else if (channels == 1 && color != nullptr)
+            {
+                const std::uint8_t gray = color[index];
+                rgb[index * 3] = gray;
+                rgb[index * 3 + 1] = gray;
+                rgb[index * 3 + 2] = gray;
+            }
+            else
+            {
+                rgb[index * 3] = 128;
+                rgb[index * 3 + 1] = 128;
+                rgb[index * 3 + 2] = 128;
+            }
+            valid[index] = 1;
+        }
+
+        bool hasZeroDistortion(const FramePinholeCamera& camera)
+        {
+            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            return distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
+                   distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
+        }
+
+        std::string cudaErrorMessage(const char* operation, cudaError_t status)
+        {
+            return std::string(operation) + " failed: " + cudaGetErrorString(status);
+        }
+
+    } // namespace
+
+    bool DensePointCloudCUDA::isAvailable(int deviceIndex, std::string* errorMsg)
     {
-        CamParams cparam;
-        const FramePinholeCamera::Intrinsics intrinsics = cam.intrinsics();
-        const std::array<double, 9> rotation = cam.worldToCameraRotation();
-        const std::array<double, 3> translation = cam.worldToCameraTranslation();
-        cparam.fx = static_cast<float>(intrinsics.focalX);
-        cparam.cx = static_cast<float>(intrinsics.principalX);
-        cparam.fy = static_cast<float>(intrinsics.focalY);
-        cparam.cy = static_cast<float>(intrinsics.principalY);
+        if (errorMsg)
+        {
+            errorMsg->clear();
+        }
+        int deviceCount = 0;
+        const cudaError_t status = cudaGetDeviceCount(&deviceCount);
+        if (status != cudaSuccess)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = cudaErrorMessage("cudaGetDeviceCount", status);
+            }
+            (void)cudaGetLastError();
+            return false;
+        }
+        if (deviceIndex < 0 || deviceIndex >= deviceCount)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "CUDA dense-cloud device index is unavailable";
+            }
+            return false;
+        }
+        return true;
+    }
+
+    std::string DensePointCloudCUDA::deviceName(int deviceIndex)
+    {
+        cudaDeviceProp properties{};
+        if (cudaGetDeviceProperties(&properties, deviceIndex) != cudaSuccess)
+        {
+            return {};
+        }
+        return properties.name;
+    }
+
+    std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(const cv::Mat& depth,
+                                                              const cv::Mat& mask,
+                                                              const FramePinholeCamera& camera,
+                                                              const cv::Mat& colorImage,
+                                                              float minimumDepth,
+                                                              float maximumDepth,
+                                                              std::string* errorMsg,
+                                                              const DenseCloudOptions* options)
+    {
+        if (errorMsg)
+        {
+            errorMsg->clear();
+        }
+        DenseCloudOptions effectiveOptions;
+        if (options)
+        {
+            effectiveOptions = *options;
+        }
+        effectiveOptions.minDepth = minimumDepth;
+        effectiveOptions.maxDepth = maximumDepth;
+
+        std::string availabilityError;
+        if (!isAvailable(effectiveOptions.cudaDeviceIndex, &availabilityError))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = availabilityError;
+            }
+            return {};
+        }
+        if (!hasZeroDistortion(camera))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "CUDA dense-cloud unprojection requires a prepared zero-distortion camera";
+            }
+            return {};
+        }
+        if (depth.empty())
+        {
+            return {};
+        }
+
+        const std::int64_t elementCount64 = static_cast<std::int64_t>(depth.cols) * depth.rows;
+        if (elementCount64 <= 0 || elementCount64 > std::numeric_limits<int>::max() / 3)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "CUDA dense-cloud image is too large";
+            }
+            return {};
+        }
+        const int elementCount = static_cast<int>(elementCount64);
+        const int channels = colorImage.empty() ? 0 : colorImage.channels();
+        const cv::Mat continuousDepth = depth.isContinuous() ? depth : depth.clone();
+        const cv::Mat continuousMask = mask.empty() || mask.isContinuous() ? mask : mask.clone();
+        const cv::Mat continuousColor =
+            colorImage.empty() || colorImage.isContinuous() ? colorImage : colorImage.clone();
+
+        float* deviceDepth = nullptr;
+        std::uint8_t* deviceMask = nullptr;
+        std::uint8_t* deviceColor = nullptr;
+        float* deviceXyz = nullptr;
+        std::uint8_t* deviceRgb = nullptr;
+        std::int32_t* deviceValid = nullptr;
+        cudaStream_t stream = nullptr;
+        const auto cleanup = [&]()
+        {
+            if (stream)
+            {
+                cudaStreamSynchronize(stream);
+                cudaStreamDestroy(stream);
+            }
+            cudaFree(deviceDepth);
+            cudaFree(deviceMask);
+            cudaFree(deviceColor);
+            cudaFree(deviceXyz);
+            cudaFree(deviceRgb);
+            cudaFree(deviceValid);
+        };
+        const auto check = [&](cudaError_t status, const char* operation)
+        {
+            if (status == cudaSuccess)
+            {
+                return true;
+            }
+            if (errorMsg)
+            {
+                *errorMsg = cudaErrorMessage(operation, status);
+            }
+            return false;
+        };
+
+        if (!check(cudaSetDevice(effectiveOptions.cudaDeviceIndex), "cudaSetDevice") ||
+            !check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "CUDA stream creation") ||
+            !check(cudaMalloc(&deviceDepth, static_cast<std::size_t>(elementCount) * sizeof(float)),
+                   "CUDA depth allocation") ||
+            !check(cudaMalloc(&deviceXyz, static_cast<std::size_t>(elementCount) * 3 * sizeof(float)),
+                   "CUDA point allocation") ||
+            !check(cudaMalloc(&deviceRgb, static_cast<std::size_t>(elementCount) * 3 * sizeof(std::uint8_t)),
+                   "CUDA color allocation") ||
+            !check(cudaMalloc(&deviceValid, static_cast<std::size_t>(elementCount) * sizeof(std::int32_t)),
+                   "CUDA validity allocation") ||
+            !check(cudaMemcpyAsync(deviceDepth,
+                                   continuousDepth.ptr<float>(),
+                                   static_cast<std::size_t>(elementCount) * sizeof(float),
+                                   cudaMemcpyHostToDevice,
+                                   stream),
+                   "CUDA depth upload"))
+        {
+            cleanup();
+            return {};
+        }
+        if (!continuousMask.empty())
+        {
+            if (!check(cudaMalloc(&deviceMask, static_cast<std::size_t>(elementCount) * sizeof(std::uint8_t)),
+                       "CUDA mask allocation") ||
+                !check(cudaMemcpyAsync(deviceMask,
+                                       continuousMask.ptr<std::uint8_t>(),
+                                       static_cast<std::size_t>(elementCount) * sizeof(std::uint8_t),
+                                       cudaMemcpyHostToDevice,
+                                       stream),
+                       "CUDA mask upload"))
+            {
+                cleanup();
+                return {};
+            }
+        }
+        if (!continuousColor.empty())
+        {
+            if (!check(
+                    cudaMalloc(&deviceColor, static_cast<std::size_t>(elementCount) * channels * sizeof(std::uint8_t)),
+                    "CUDA color allocation") ||
+                !check(cudaMemcpyAsync(deviceColor,
+                                       continuousColor.data,
+                                       static_cast<std::size_t>(elementCount) * channels * sizeof(std::uint8_t),
+                                       cudaMemcpyHostToDevice,
+                                       stream),
+                       "CUDA color upload"))
+            {
+                cleanup();
+                return {};
+            }
+        }
+
+        CameraParameters parameters;
+        const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+        const FramePinholeCamera::Pose pose = camera.pose();
+        parameters.focalX = static_cast<float>(intrinsics.focalX);
+        parameters.focalY = static_cast<float>(intrinsics.focalY);
+        parameters.principalX = static_cast<float>(intrinsics.principalX);
+        parameters.principalY = static_cast<float>(intrinsics.principalY);
+        parameters.uAxisSign = intrinsics.uAxisSign;
+        parameters.vAxisSign = intrinsics.vAxisSign;
+        parameters.depthSign = pose.depthAxisFlipped ? -1 : 1;
         for (int index = 0; index < 9; ++index)
         {
-            cparam.R_cw[index] = static_cast<float>(rotation[index]);
+            parameters.cameraToWorld[index] =
+                static_cast<float>(pose.cameraToWorldRotation[static_cast<std::size_t>(index)]);
         }
         for (int index = 0; index < 3; ++index)
         {
-            cparam.T[index] = static_cast<float>(translation[index]);
+            parameters.cameraCenter[index] = static_cast<float>(pose.cameraCenter[static_cast<std::size_t>(index)]);
         }
 
-        const int bW = (options && options->cudaBlockW > 0) ? options->cudaBlockW : 16;
-        const int bH = (options && options->cudaBlockH > 0) ? options->cudaBlockH : 16;
-        dim3 block(bW, bH);
-        dim3 grid((W + bW - 1) / bW, (H + bH - 1) / bH);
-        kernelUnproject<<<grid, block>>>(
-            d_depth, d_mask, d_color,
-            W, H, ch, minDepth, maxDepth, cparam,
-            d_xyz, d_rgb, d_valid);
-        GPU_CHECK(cudaGetLastError());
-        GPU_CHECK(cudaDeviceSynchronize());
-    }
-
-    {
-        std::vector<float>   hXYZ(N*3);
-        std::vector<uint8_t> hRGB(N*3);
-        std::vector<int32_t> hValid(N);
-        GPU_CHECK(cudaMemcpy(hXYZ.data(),   d_xyz,   N*3*sizeof(float),   cudaMemcpyDeviceToHost));
-        GPU_CHECK(cudaMemcpy(hRGB.data(),   d_rgb,   N*3*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-        GPU_CHECK(cudaMemcpy(hValid.data(), d_valid, N*sizeof(int32_t),   cudaMemcpyDeviceToHost));
-
-        for (int i = 0; i < N; ++i) {
-            if (!hValid[i]) continue;
-            DensePoint pt;
-            pt.x = hXYZ[i*3]; pt.y = hXYZ[i*3+1]; pt.z = hXYZ[i*3+2];
-            pt.r = hRGB[i*3]; pt.g = hRGB[i*3+1]; pt.b = hRGB[i*3+2];
-            result.push_back(pt);
+        const int subsample = std::max(1, effectiveOptions.subsample);
+        const int blockWidth = std::clamp(effectiveOptions.cudaBlockW, 1, 32);
+        const int blockHeight = std::clamp(effectiveOptions.cudaBlockH, 1, std::max(1, 1024 / blockWidth));
+        const dim3 block(blockWidth, blockHeight);
+        const dim3 grid((depth.cols + blockWidth - 1) / blockWidth, (depth.rows + blockHeight - 1) / blockHeight);
+        unprojectKernel<<<grid, block, 0, stream>>>(deviceDepth,
+                                                    deviceMask,
+                                                    deviceColor,
+                                                    depth.cols,
+                                                    depth.rows,
+                                                    channels,
+                                                    minimumDepth,
+                                                    maximumDepth,
+                                                    subsample,
+                                                    effectiveOptions.clipAABB ? 1 : 0,
+                                                    effectiveOptions.minX,
+                                                    effectiveOptions.maxX,
+                                                    effectiveOptions.minY,
+                                                    effectiveOptions.maxY,
+                                                    effectiveOptions.minZ,
+                                                    effectiveOptions.maxZ,
+                                                    parameters,
+                                                    deviceXyz,
+                                                    deviceRgb,
+                                                    deviceValid);
+        if (!check(cudaGetLastError(), "CUDA dense-cloud kernel launch") ||
+            !check(cudaStreamSynchronize(stream), "CUDA dense-cloud synchronization"))
+        {
+            cleanup();
+            return {};
         }
+
+        std::vector<float> hostXyz(static_cast<std::size_t>(elementCount) * 3);
+        std::vector<std::uint8_t> hostRgb(static_cast<std::size_t>(elementCount) * 3);
+        std::vector<std::int32_t> hostValid(static_cast<std::size_t>(elementCount));
+        if (!check(cudaMemcpyAsync(
+                       hostXyz.data(), deviceXyz, hostXyz.size() * sizeof(float), cudaMemcpyDeviceToHost, stream),
+                   "CUDA point download") ||
+            !check(
+                cudaMemcpyAsync(
+                    hostRgb.data(), deviceRgb, hostRgb.size() * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream),
+                "CUDA color download") ||
+            !check(cudaMemcpyAsync(hostValid.data(),
+                                   deviceValid,
+                                   hostValid.size() * sizeof(std::int32_t),
+                                   cudaMemcpyDeviceToHost,
+                                   stream),
+                   "CUDA validity download") ||
+            !check(cudaStreamSynchronize(stream), "CUDA dense-cloud download synchronization"))
+        {
+            cleanup();
+            return {};
+        }
+        cleanup();
+
+        std::vector<DensePoint> result;
+        const std::size_t sampledColumns =
+            (static_cast<std::size_t>(depth.cols) + static_cast<std::size_t>(subsample) - 1) /
+            static_cast<std::size_t>(subsample);
+        const std::size_t sampledRows =
+            (static_cast<std::size_t>(depth.rows) + static_cast<std::size_t>(subsample) - 1) /
+            static_cast<std::size_t>(subsample);
+        result.reserve(sampledColumns * sampledRows);
+        for (int index = 0; index < elementCount; ++index)
+        {
+            if (hostValid[static_cast<std::size_t>(index)] == 0)
+            {
+                continue;
+            }
+            DensePoint point;
+            point.x = hostXyz[static_cast<std::size_t>(index) * 3];
+            point.y = hostXyz[static_cast<std::size_t>(index) * 3 + 1];
+            point.z = hostXyz[static_cast<std::size_t>(index) * 3 + 2];
+            point.r = hostRgb[static_cast<std::size_t>(index) * 3];
+            point.g = hostRgb[static_cast<std::size_t>(index) * 3 + 1];
+            point.b = hostRgb[static_cast<std::size_t>(index) * 3 + 2];
+            result.push_back(point);
+        }
+        return result;
     }
 
-cleanup_gpu:
-    if (d_depth) cudaFree(d_depth);
-    if (d_mask)  cudaFree(d_mask);
-    if (d_color) cudaFree(d_color);
-    if (d_xyz)   cudaFree(d_xyz);
-    if (d_rgb)   cudaFree(d_rgb);
-    if (d_valid) cudaFree(d_valid);
-
-    return result;
-
-#undef GPU_CHECK
-}
-
-} // namespace mvs
-} // namespace xjw
+} // namespace xjw::mvs

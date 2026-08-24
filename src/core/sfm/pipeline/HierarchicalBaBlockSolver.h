@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "graph/CovisibilityPartitioner.h"
 #include "reconstruction/SfmReconstruction.h"
 
@@ -10,20 +10,21 @@
 namespace xjw::hierarchical_ba_detail
 {
 
-struct BlockOutcome
-{
-    std::size_t blockIndex = 0;
-    std::vector<ImageId> cameraIds;
-    std::vector<Point3DId> pointIds;
-    int fixedTrackCount = 0;
-    BAResult result;
-    bool accepted = false;
-};
+    struct BlockOutcome
+    {
+        std::size_t blockIndex = 0;
+        std::vector<ImageId> cameraIds;
+        std::vector<Point3DId> pointIds;
+        int fixedTrackCount = 0;
+        BAResult result;
+        bool accepted = false;
+    };
 
-BlockOutcome solveBlock(std::size_t blockIndex,
-                        const CovisibilityBlock &block,
-                        const SfmReconstruction &reconstruction,
-                        const BAOptions &baseOptions,
-                        int threadsPerBlock);
+    BlockOutcome solveBlock(std::size_t blockIndex,
+                            const CovisibilityBlock& block,
+                            const SfmReconstruction& reconstruction,
+                            const std::vector<Point3DId>& candidatePointIds,
+                            const BAOptions& baseOptions,
+                            int threadsPerBlock);
 
 } // namespace xjw::hierarchical_ba_detail

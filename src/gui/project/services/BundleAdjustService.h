@@ -14,7 +14,7 @@
 // =============================================================================
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 #include "PlanetaryLaserJson.h"
 #include "quality/MarkerQualityReport.h"

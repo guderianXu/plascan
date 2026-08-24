@@ -2,8 +2,8 @@
 
 #include "DeterministicOpenCvRansac.h"
 #include "geometry/OpenCvCameraAdapter.h"
-#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
+#include <opencv2/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -127,7 +127,7 @@ PnpResult PnpSolver::solveWithDistortion(
     }
 
     // ---- 调用 OpenCV PnP RANSAC ----
-    const bool ok = opencv_compat::runDeterministicRansac(options.ransacSeed, [&]()
+    const bool ok = opencv_utils::runDeterministicRansac(options.ransacSeed, [&]()
     {
         return cv::solvePnPRansac(*ransacObjPts, *ransacImgPts, cameraMatrix, distCoeffs, rvec, tvec,
                                  useExtrinsicGuess,

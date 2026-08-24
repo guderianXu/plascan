@@ -159,6 +159,7 @@ TEST(VocabularyOverlapRetrieverTest, RetrievesExpectedPairFromSharedDescriptors)
     config.useTfidf = true;
     config.mutualTopK = true;
     config.keepOneWayTopK = false;
+    config.cycleClosureMaxPairsPerImage = 2;
     config.connectComponents = false;
     config.closeSequenceLoop = false;
     config.geometryCheck = false;
@@ -172,6 +173,8 @@ TEST(VocabularyOverlapRetrieverTest, RetrievesExpectedPairFromSharedDescriptors)
     EXPECT_EQ(result.acceptedPairs.front().indexB, 1);
     EXPECT_GT(result.acceptedPairs.front().bowScore, 0.5);
     EXPECT_TRUE(result.acceptedPairs.front().accepted);
+    EXPECT_NE(result.detail.find("pair_top_k=1"), std::string::npos);
+    EXPECT_NE(result.detail.find("cycle_closure_budget_per_image=2"), std::string::npos);
 }
 
 TEST(VocabularyOverlapRetrieverTest, RejectsDescriptorDimensionMismatch)

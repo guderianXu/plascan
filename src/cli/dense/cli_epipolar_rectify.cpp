@@ -20,6 +20,7 @@
 int main(int argc, char *argv[])
 {
     CLI::App app{"PlaScan 极线校正工具 — 将立体影像对校正为行对齐"};
+    cli::configureApp(app);
 
     std::string imgL, imgR, camL, camR, outPref;
     app.add_option("-L,--left",   imgL,    "左影像路径")->required();

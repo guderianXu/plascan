@@ -86,8 +86,8 @@ ActiveProblem prepareActiveProblem(const std::vector<FramePinholeCamera>& camera
         {
             continue;
         }
-        if (options.maxCeresInitialTrackRms > 0.0 &&
-            initial_rms > options.maxCeresInitialTrackRms)
+        if (options.maxInitialTrackRms > 0.0 &&
+            initial_rms > options.maxInitialTrackRms)
         {
             ++problem.rejectedInitialTracks;
             continue;

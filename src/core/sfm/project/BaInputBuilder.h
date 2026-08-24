@@ -9,7 +9,7 @@
  */
 
 #include "FramePinholeCamera.h"
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "model/MarkerSet.h"
 #include "project/ProjectMatchInputReader.h"
 #include "registration/ControlNetworkSolver.h"

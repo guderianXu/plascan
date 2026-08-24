@@ -50,7 +50,7 @@ struct AerialTriangulationOptions
 
     // 连接点前端配置。
     int keypointLimit = 40000; ///< 每幅影像检测关键点上限，0 表示前端约定的不限。
-    int tiepointLimit = 4000; ///< 每幅影像最终连接点配额，按网格均匀化。
+    int tiepointLimit = 8000; ///< 每幅影像最终连接点配额，按网格均匀化。
     QString maskApplyMode = QStringLiteral("none"); ///< none/keypoints/tie_points 等前端模式。
     bool excludeFixedTiePoints = true; ///< 删除跨帧像素位置近乎不动的伪连接点。
     bool guidedImageMatching = false; ///< 在已有几何/位姿时对弱 pair 执行引导补匹配。
@@ -139,6 +139,13 @@ struct PreparedAerialTriangulationInput
     bool hasTrustedFocalPrior = false; ///< EXIF/固定镜头目录已提供可复现焦距，不再做无标定粗搜索。
     QString focalPriorSource; ///< 诊断用来源，例如 exif_focal_length_35mm。
     int focalPriorSampleCount = 0; ///< 批次中通过一致性检查的元数据样本数。
+
+    // 与连接点前端保持相同的轨迹稀疏化约束。-1 表示调用方未提供，沿用 SfM 默认值；
+    // 0 表示显式不限。Workflow 会始终填入前端解析后的真实生效值，避免二次截断。
+    int maxTracksPerImage = -1;
+    int maxTracksPerGridCell = -1;
+    int trackThinningGridColumns = 0;
+    int trackThinningGridRows = 0;
 
     // 以下字段只由 AerialTriangulationPipeline 为焦距候选试算设置，GUI/CLI 不直接暴露。
     // 大工程不能让每个候选都完整注册全部影像，否则一次焦距粗搜会重复执行十余次全量 SfM。

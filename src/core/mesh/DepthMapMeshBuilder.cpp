@@ -731,6 +731,9 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         options.strictVolumetricMasks && result.depthViewCount >= minimum_depth_views;
     config.minimumDepthFreeSpaceViolations = std::max(4, result.usableViewCount / 3);
     config.relativeDepthTolerance = 0.03f;
+    config.computeBackend = options.computeBackend;
+    config.computeDeviceIndex = options.computeDeviceIndex;
+    config.gpuSlabDepth = options.gpuSlabDepth;
     if (progress)
     {
         config.progressFn = [progress](const std::string &stage, float fraction)
@@ -740,7 +743,8 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         progress(QStringLiteral("正在按多视轮廓重建物体表面..."), 5);
     }
     std::string error;
-    result.ok = VisualHullReconstructor::reconstruct(views, config, &result.mesh, &error);
+    result.ok = VisualHullReconstructor::reconstruct(
+        views, config, &result.mesh, &error, &result.executionInfo);
     result.usedDepthFreeSpaceCarving = config.enableDepthFreeSpaceCarving;
     if (result.ok)
     {
@@ -768,8 +772,9 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         fallback_config.enableDepthFreeSpaceCarving = false;
         TriMesh fallback_mesh;
         std::string fallback_error;
+        VisualHullExecutionInfo fallback_execution_info;
         if (VisualHullReconstructor::reconstruct(
-                views, fallback_config, &fallback_mesh, &fallback_error))
+                views, fallback_config, &fallback_mesh, &fallback_error, &fallback_execution_info))
         {
             const MeshConnectivityStats fallback_connectivity =
                 VisualHullReconstructor::analyzeConnectivity(fallback_mesh);
@@ -780,6 +785,7 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
                 result.connectivity = fallback_connectivity;
                 result.usedDepthFreeSpaceCarving = false;
                 result.retriedWithoutDepthCarving = true;
+                result.executionInfo = std::move(fallback_execution_info);
             }
         }
     }

@@ -4,11 +4,13 @@
  * @file BundleAdjustQuality.h
  * @brief 所有 BA 后端共享的结果复核、离群点过滤与约束质量门控。
  *
- * Ceres、CPU 和 native CUDA 的内部收敛判据并不等价。公共入口必须在后端返回后
+ * PlaMatrix 和 Legacy CPU 的内部收敛判据并不等价。公共入口必须在后端返回后
  * 用同一投影模型重新计算严格 RMS，才能让 GUI、CLI 和 SfM 获得可比较的结果。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustOptions.h"
+#include "BundleAdjustProblem.h"
+#include "BundleAdjustResult.h"
 
 #include <string>
 #include <vector>

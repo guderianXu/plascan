@@ -6,93 +6,85 @@
 
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "BundleAdjustPlaMatrixProjection.h"
 #include "FramePinholeCamera.h"
 
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double center_x, double center_y)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(920.0, 910.0, 512.0, 384.0);
-    camera.setDistortion(-0.015, 0.001, -0.0001, 0.0004, -0.0003);
-    camera.setPose({{1.0, 0.0, 0.0,
-                     0.0, 1.0, 0.0,
-                     0.0, 0.0, 1.0}},
-                   {{center_x, center_y, 0.0}});
-    return camera;
-}
-
-std::array<double, 2> project(const xjw::FramePinholeCamera& camera,
-                              const std::array<double, 3>& point)
-{
-    const double world[3] = {point[0], point[1], point[2]};
-    double pixel[2] = {0.0, 0.0};
-    EXPECT_TRUE(camera.projectWorldPoint(world, pixel));
-    return {{pixel[0], pixel[1]}};
-}
-
-double numericPointDerivative(const xjw::FramePinholeCamera& camera,
-                              std::array<double, 3> point,
-                              int parameter,
-                              int pixel_axis)
-{
-    constexpr double epsilon = 1e-6;
-    point[static_cast<std::size_t>(parameter)] += epsilon;
-    const auto plus = project(camera, point);
-    point[static_cast<std::size_t>(parameter)] -= 2.0 * epsilon;
-    const auto minus = project(camera, point);
-    return (plus[static_cast<std::size_t>(pixel_axis)] -
-            minus[static_cast<std::size_t>(pixel_axis)]) /
-           (2.0 * epsilon);
-}
-
-double numericCameraDerivative(const xjw::FramePinholeCamera& camera,
-                               const std::array<double, 3>& point,
-                               int parameter,
-                               int pixel_axis)
-{
-    constexpr double epsilon = 1e-7;
-    double delta[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    delta[parameter] = epsilon;
-    xjw::FramePinholeCamera plus_camera = camera;
-    plus_camera.applyDeltaPose(delta);
-    delta[parameter] = -epsilon;
-    xjw::FramePinholeCamera minus_camera = camera;
-    minus_camera.applyDeltaPose(delta);
-    const auto plus = project(plus_camera, point);
-    const auto minus = project(minus_camera, point);
-    return (plus[static_cast<std::size_t>(pixel_axis)] -
-            minus[static_cast<std::size_t>(pixel_axis)]) /
-           (2.0 * epsilon);
-}
-
-xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera>& truth_cameras,
-                       const std::array<double, 3>& truth,
-                       const std::array<double, 3>& initial)
-{
-    xjw::BATrack track;
-    track.initialPoint = initial;
-    for (std::size_t camera_index = 0; camera_index < truth_cameras.size(); ++camera_index)
+    xjw::FramePinholeCamera makeCamera(double center_x, double center_y)
     {
-        const auto pixel = project(truth_cameras[camera_index], truth);
-        track.observations.push_back({
-            static_cast<int>(camera_index), pixel[0], pixel[1],
-            camera_index % 2 == 0 ? 1.0 : 0.8});
+        xjw::FramePinholeCamera camera;
+        camera.setIntrinsics(920.0, 910.0, 512.0, 384.0);
+        camera.setDistortion(-0.015, 0.001, -0.0001, 0.0004, -0.0003);
+        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{center_x, center_y, 0.0}});
+        return camera;
     }
-    return track;
-}
 
-double pointDistance(const std::array<double, 3>& left,
-                     const std::array<double, 3>& right)
-{
-    const double dx = left[0] - right[0];
-    const double dy = left[1] - right[1];
-    const double dz = left[2] - right[2];
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
+    std::array<double, 2> project(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& point)
+    {
+        const double world[3] = {point[0], point[1], point[2]};
+        double pixel[2] = {0.0, 0.0};
+        EXPECT_TRUE(camera.projectWorldPoint(world, pixel));
+        return {{pixel[0], pixel[1]}};
+    }
+
+    double numericPointDerivative(const xjw::FramePinholeCamera& camera,
+                                  std::array<double, 3> point,
+                                  int parameter,
+                                  int pixel_axis)
+    {
+        constexpr double epsilon = 1e-6;
+        point[static_cast<std::size_t>(parameter)] += epsilon;
+        const auto plus = project(camera, point);
+        point[static_cast<std::size_t>(parameter)] -= 2.0 * epsilon;
+        const auto minus = project(camera, point);
+        return (plus[static_cast<std::size_t>(pixel_axis)] - minus[static_cast<std::size_t>(pixel_axis)]) /
+               (2.0 * epsilon);
+    }
+
+    double numericCameraDerivative(const xjw::FramePinholeCamera& camera,
+                                   const std::array<double, 3>& point,
+                                   int parameter,
+                                   int pixel_axis)
+    {
+        constexpr double epsilon = 1e-7;
+        double delta[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        delta[parameter] = epsilon;
+        xjw::FramePinholeCamera plus_camera = camera;
+        plus_camera.applyDeltaPose(delta);
+        delta[parameter] = -epsilon;
+        xjw::FramePinholeCamera minus_camera = camera;
+        minus_camera.applyDeltaPose(delta);
+        const auto plus = project(plus_camera, point);
+        const auto minus = project(minus_camera, point);
+        return (plus[static_cast<std::size_t>(pixel_axis)] - minus[static_cast<std::size_t>(pixel_axis)]) /
+               (2.0 * epsilon);
+    }
+
+    xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera>& truth_cameras,
+                           const std::array<double, 3>& truth,
+                           const std::array<double, 3>& initial)
+    {
+        xjw::BATrack track;
+        track.initialPoint = initial;
+        for (std::size_t camera_index = 0; camera_index < truth_cameras.size(); ++camera_index)
+        {
+            const auto pixel = project(truth_cameras[camera_index], truth);
+            track.observations.push_back(
+                {static_cast<int>(camera_index), pixel[0], pixel[1], camera_index % 2 == 0 ? 1.0 : 0.8});
+        }
+        return track;
+    }
+
+    double pointDistance(const std::array<double, 3>& left, const std::array<double, 3>& right)
+    {
+        const double dx = left[0] - right[0];
+        const double dy = left[1] - right[1];
+        const double dz = left[2] - right[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
 
 } // namespace
 
@@ -106,8 +98,7 @@ TEST(BundleAdjustPlaMatrixProjectionTest, AnalyticJacobiansMatchFiniteDifference
     const xjw::BAObservation observation{0, observed[0] + 0.4, observed[1] - 0.2, 0.75};
 
     xjw::detail::plamatrix_ba::ObservationLinearization linearization;
-    ASSERT_TRUE(xjw::detail::plamatrix_ba::linearizeObservation(
-        camera, point, observation, 3.0, &linearization));
+    ASSERT_TRUE(xjw::detail::plamatrix_ba::linearizeObservation(camera, point, observation, 3.0, &linearization));
 
     for (int pixel_axis = 0; pixel_axis < 2; ++pixel_axis)
     {
@@ -126,11 +117,11 @@ TEST(BundleAdjustPlaMatrixProjectionTest, AnalyticJacobiansMatchFiniteDifference
     }
 }
 
-TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem)
+TEST(BundleAdjustPlaMatrixBackendTest, SolvesFixedIntrinsicsJointProblem)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is unavailable in this build";
+        GTEST_SKIP() << "PlaMatrix backend is unavailable in this build";
     }
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu));
 
@@ -147,20 +138,14 @@ TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem
     initial_cameras[3].applyDeltaPose(camera_delta_3);
 
     std::vector<xjw::BATrack> tracks;
-    std::vector<std::array<double, 3>> truth_points;
     for (int row = 0; row < 4; ++row)
     {
         for (int col = 0; col < 5; ++col)
         {
-            const std::array<double, 3> truth{{
-                -1.6 + 0.8 * col,
-                -1.2 + 0.8 * row,
-                18.0 + 0.35 * ((row + col) % 3)}};
-            const std::array<double, 3> initial{{
-                truth[0] + 0.12 * ((col % 3) - 1),
-                truth[1] + 0.09 * ((row % 3) - 1),
-                truth[2] + 0.25 * (((row + col) % 3) - 1)}};
-            truth_points.push_back(truth);
+            const std::array<double, 3> truth{{-1.6 + 0.8 * col, -1.2 + 0.8 * row, 18.0 + 0.35 * ((row + col) % 3)}};
+            const std::array<double, 3> initial{{truth[0] + 0.12 * ((col % 3) - 1),
+                                                 truth[1] + 0.09 * ((row % 3) - 1),
+                                                 truth[2] + 0.25 * (((row + col) % 3) - 1)}};
             tracks.push_back(makeTrack(truth_cameras, truth, initial));
         }
     }
@@ -174,60 +159,37 @@ TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem
     base_options.huberDelta = 3.0;
     base_options.maxIterations = 40;
     base_options.stepTolerance = 1e-9;
+    base_options.maxDenseSchurCameras = 1;
     base_options.allowBackendFallback = false;
-
-    xjw::BAOptions ceres_options = base_options;
-    ceres_options.backend = xjw::BABackend::CeresCpu;
-    const xjw::BAResult ceres_result =
-        xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, ceres_options);
+    ASSERT_DOUBLE_EQ(base_options.maxPlaMatrixLinearTolerance, 2.0e-3);
 
     xjw::BAOptions plamatrix_options = base_options;
     plamatrix_options.backend = xjw::BABackend::PlaMatrixCpu;
+    plamatrix_options.plaMatrixPreconditionerClusterSize = 2;
     const xjw::BAResult plamatrix_result =
         xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, plamatrix_options);
 
-    ASSERT_TRUE(ceres_result.solutionUsable) << ceres_result.backendMessage;
     ASSERT_TRUE(plamatrix_result.solutionUsable) << plamatrix_result.backendMessage;
     EXPECT_EQ(plamatrix_result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_GT(plamatrix_result.plaMatrixAcceptedSteps, 0);
     EXPECT_GT(plamatrix_result.plaMatrixLinearizations, 0);
-    EXPECT_GE(plamatrix_result.plaMatrixObjectiveEvaluations,
-              plamatrix_result.plaMatrixLinearizations);
+    EXPECT_GT(plamatrix_result.plaMatrixAssemblySeconds, 0.0);
+    EXPECT_GT(plamatrix_result.plaMatrixObjectiveSeconds, 0.0);
+    EXPECT_GT(plamatrix_result.plaMatrixTrialStateSeconds, 0.0);
+    EXPECT_EQ(plamatrix_result.plaMatrixPreconditionerName, "cluster_jacobi_2");
+    EXPECT_GE(plamatrix_result.plaMatrixLinearToleranceMinimum, plamatrix_options.minPlaMatrixLinearTolerance);
+    EXPECT_LE(plamatrix_result.plaMatrixLinearToleranceMaximum, plamatrix_options.maxPlaMatrixLinearTolerance);
+    EXPECT_GE(plamatrix_result.plaMatrixObjectiveEvaluations, plamatrix_result.plaMatrixLinearizations);
     EXPECT_LE(plamatrix_result.plaMatrixObjectiveEvaluations,
-              plamatrix_result.plaMatrixLinearizations +
-                  plamatrix_result.plaMatrixAcceptedSteps +
+              plamatrix_result.plaMatrixLinearizations + plamatrix_result.plaMatrixAcceptedSteps +
                   plamatrix_result.plaMatrixRejectedSteps);
     if (plamatrix_result.plaMatrixRejectedSteps > 0)
     {
         EXPECT_LT(plamatrix_result.plaMatrixLinearizations,
-                  plamatrix_result.plaMatrixAcceptedSteps +
-                      plamatrix_result.plaMatrixRejectedSteps);
+                  plamatrix_result.plaMatrixAcceptedSteps + plamatrix_result.plaMatrixRejectedSteps);
     }
     EXPECT_LT(plamatrix_result.plaMatrixFinalCost, plamatrix_result.plaMatrixInitialCost);
-    EXPECT_NEAR(plamatrix_result.meanRmsAfter, ceres_result.meanRmsAfter, 2e-3);
-    EXPECT_NEAR(plamatrix_result.plaMatrixFinalCost, ceres_result.ceresFinalCost, 2e-2);
-
-    for (std::size_t camera_index = 0; camera_index < truth_cameras.size(); ++camera_index)
-    {
-        EXPECT_LT(pointDistance(plamatrix_result.refinedCameras[camera_index].cameraCenter(),
-                                ceres_result.refinedCameras[camera_index].cameraCenter()),
-                  2e-3);
-        const auto plamatrix_rotation =
-            plamatrix_result.refinedCameras[camera_index].cameraToWorldRotation();
-        const auto ceres_rotation =
-            ceres_result.refinedCameras[camera_index].cameraToWorldRotation();
-        for (std::size_t element = 0; element < plamatrix_rotation.size(); ++element)
-        {
-            EXPECT_NEAR(plamatrix_rotation[element], ceres_rotation[element], 2e-4);
-        }
-    }
-    ASSERT_EQ(plamatrix_result.points.size(), ceres_result.points.size());
-    for (std::size_t track_index = 0; track_index < tracks.size(); ++track_index)
-    {
-        EXPECT_LT(pointDistance(plamatrix_result.points[track_index].point,
-                                ceres_result.points[track_index].point),
-                  3e-3);
-    }
+    EXPECT_LT(plamatrix_result.meanRmsAfter, plamatrix_result.meanRmsBefore);
 
     const std::array<xjw::BABackend, 2> accelerated_backends{{
         xjw::BABackend::PlaMatrixCuda,
@@ -242,12 +204,10 @@ TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem
         xjw::BAOptions accelerated_options = base_options;
         accelerated_options.backend = backend;
         const xjw::BAResult accelerated_result =
-            xjw::BundleAdjust::optimizePoints(
-                initial_cameras, tracks, accelerated_options);
+            xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, accelerated_options);
 
         ASSERT_TRUE(accelerated_result.solutionUsable)
-            << xjw::BundleAdjust::backendName(backend) << ": "
-            << accelerated_result.backendMessage;
+            << xjw::BundleAdjust::backendName(backend) << ": " << accelerated_result.backendMessage;
         EXPECT_EQ(accelerated_result.usedBackend, backend);
         EXPECT_TRUE(accelerated_result.usedGpu);
         EXPECT_FALSE(accelerated_result.backendFallback);
@@ -257,34 +217,26 @@ TEST(BundleAdjustPlaMatrixBackendTest, MatchesCeresOnFixedIntrinsicsJointProblem
         EXPECT_GT(accelerated_result.plaMatrixSchurPatternReuses, 0);
         EXPECT_TRUE(accelerated_result.plaMatrixSchurAssemblyOnDevice);
         EXPECT_GT(accelerated_result.plaMatrixLinearSolveSeconds, 0.0);
-        EXPECT_NEAR(accelerated_result.meanRmsAfter,
-                    plamatrix_result.meanRmsAfter,
-                    1e-5);
-        EXPECT_NEAR(accelerated_result.plaMatrixFinalCost,
-                    plamatrix_result.plaMatrixFinalCost,
-                    5e-4);
-        for (std::size_t camera_index = 0;
-             camera_index < truth_cameras.size();
-             ++camera_index)
+        EXPECT_NEAR(accelerated_result.meanRmsAfter, plamatrix_result.meanRmsAfter, 1e-5);
+        EXPECT_NEAR(accelerated_result.plaMatrixFinalCost, plamatrix_result.plaMatrixFinalCost, 5e-4);
+        for (std::size_t camera_index = 0; camera_index < truth_cameras.size(); ++camera_index)
         {
-            EXPECT_LT(pointDistance(
-                          accelerated_result.refinedCameras[camera_index].cameraCenter(),
-                          plamatrix_result.refinedCameras[camera_index].cameraCenter()),
+            EXPECT_LT(pointDistance(accelerated_result.refinedCameras[camera_index].cameraCenter(),
+                                    plamatrix_result.refinedCameras[camera_index].cameraCenter()),
                       2e-4);
         }
         for (std::size_t track_index = 0; track_index < tracks.size(); ++track_index)
         {
-            EXPECT_LT(pointDistance(accelerated_result.points[track_index].point,
-                                    plamatrix_result.points[track_index].point),
-                      3e-4);
+            EXPECT_LT(
+                pointDistance(accelerated_result.points[track_index].point, plamatrix_result.points[track_index].point),
+                3e-4);
         }
     }
 }
 
 TEST(BundleAdjustPlaMatrixBackendTest, PointOnlyStationaryProblemIsUsable)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 12.0}};
     const xjw::BATrack track = makeTrack(cameras, truth, truth);
 
@@ -294,8 +246,7 @@ TEST(BundleAdjustPlaMatrixBackendTest, PointOnlyStationaryProblemIsUsable)
     options.enablePointFilter = false;
     options.allowBackendFallback = false;
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
@@ -306,8 +257,7 @@ TEST(BundleAdjustPlaMatrixBackendTest, PointOnlyStationaryProblemIsUsable)
 
 TEST(BundleAdjustPlaMatrixBackendTest, CancellationDoesNotPublishIntermediateState)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 12.0}};
     const std::array<double, 3> initial{{0.8, -0.5, 13.5}};
     const xjw::BATrack track = makeTrack(cameras, truth, initial);
@@ -317,13 +267,9 @@ TEST(BundleAdjustPlaMatrixBackendTest, CancellationDoesNotPublishIntermediateSta
     options.refineCameraPose = false;
     options.enablePointFilter = false;
     options.allowBackendFallback = false;
-    options.progressCallback = [](int, int, double, int)
-    {
-        return false;
-    };
+    options.progressCallback = [](int, int, double, int) { return false; };
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
 
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Cancelled);
     EXPECT_FALSE(result.solutionUsable);
@@ -335,8 +281,7 @@ TEST(BundleAdjustPlaMatrixBackendTest, CancellationDoesNotPublishIntermediateSta
 
 TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsAreAcceptedWithoutFallback)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 12.0}};
 
     xjw::BAOptions options;
@@ -346,8 +291,8 @@ TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsAreAcceptedWithoutFallbac
     options.enablePointFilter = false;
     options.allowBackendFallback = false;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        cameras, {makeTrack(cameras, truth, truth)}, options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {makeTrack(cameras, truth, truth)}, options);
 
     EXPECT_EQ(result.requestedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
@@ -358,12 +303,11 @@ TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsAreAcceptedWithoutFallbac
 
 TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsRemainOnPlaMatrixWhenFallbackIsAllowed)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is unavailable in this build";
+        GTEST_SKIP() << "PlaMatrix backend is unavailable in this build";
     }
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 12.0}};
 
     xjw::BAOptions options;
@@ -373,8 +317,8 @@ TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsRemainOnPlaMatrixWhenFall
     options.enablePointFilter = false;
     options.allowBackendFallback = true;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        cameras, {makeTrack(cameras, truth, truth)}, options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {makeTrack(cameras, truth, truth)}, options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     EXPECT_EQ(result.requestedBackend, xjw::BABackend::PlaMatrixCpu);
@@ -385,12 +329,9 @@ TEST(BundleAdjustPlaMatrixBackendTest, SharedIntrinsicsRemainOnPlaMatrixWhenFall
 
 TEST(BundleAdjustPlaMatrixBackendTest, AcceleratedBackendsRejectInvalidDeviceWithoutCpuFallback)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
-        makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-2.0, 0.0), makeCamera(2.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 12.0}};
-    for (const xjw::BABackend backend : {
-             xjw::BABackend::PlaMatrixCuda,
-             xjw::BABackend::PlaMatrixOpenCl})
+    for (const xjw::BABackend backend : {xjw::BABackend::PlaMatrixCuda, xjw::BABackend::PlaMatrixOpenCl})
     {
         xjw::BAOptions options;
         options.backend = backend;
@@ -399,8 +340,8 @@ TEST(BundleAdjustPlaMatrixBackendTest, AcceleratedBackendsRejectInvalidDeviceWit
         options.enablePointFilter = false;
         options.allowBackendFallback = false;
 
-        const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-            cameras, {makeTrack(cameras, truth, truth)}, options);
+        const xjw::BAResult result =
+            xjw::BundleAdjust::optimizePoints(cameras, {makeTrack(cameras, truth, truth)}, options);
 
         EXPECT_EQ(result.requestedBackend, backend);
         EXPECT_EQ(result.usedBackend, backend);

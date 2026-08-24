@@ -212,7 +212,7 @@ sample/line 统一减 `0.5`；ISIS LidarData 的 projected measures 只可用于
 
 ## 7. 求解、服务、CLI 与 GUI
 
-- 核心 `bundle_adjust` 通过独立 `BALaserRangeConstraint` 参数块接入 PlaMatrix CPU/CUDA/OpenCL BA；Legacy CPU 和 Native CUDA 不会静默忽略该能力，Auto 按规模选择 PlaMatrix，GPU 失败只回退 PlaMatrix CPU。
+- 核心 `bundle_adjust` 通过独立 `BALaserRangeConstraint` 参数块接入 PlaMatrix CPU/CUDA/OpenCL BA；Legacy CPU 不会静默忽略该能力，Auto 按规模选择 PlaMatrix，GPU 失败只回退 PlaMatrix CPU。
 - `BundleAdjustService` 加载 JSON、按求解相机顺序建立影像别名、调用适配器并写出 `planetary_laser_range_summary`，其中包含接受/跳过 shot、fixed/constrained/free 数量、忽略的 projected measures、range RMS 前后值，以及逐 shot 优化落点、相机索引和相机坐标系杆臂。服务拒绝用未建立索引对应关系的影像列表猜测相机顺序。
 - 行星激光 dry-run 仍会执行 JSON、传感器模型、坐标系和影像别名预校验；它只跳过实际求解与结果写回，不能让无效输入伪装成检查成功。
 - CLI 使用 `--laser-range-data`；必须显式提供 `--laser-range-camera-frame`。ISIS 输入还要提供目标、body frame、laser frame、相机模型、range 类型和三分量杆臂上下文；工程 UUID 自动合并，`--laser-range-image-alias` 用于把 ISIS `serialNumber` 等产品标识绑定到明确的相机索引。只有显式给出 `--laser-range-allow-unmapped-measures` 时，才允许忽略未映射的真实 `measured` 像点。
@@ -268,7 +268,7 @@ planetary_linescan_ba_cli `
 - ISIS 千米/米换算、显式上下文、球面协方差到 XYZ 的雅可比转换及 projected measure 保护；
 - shot 唯一相机映射、完整 ISIS serial 优先、工程 UUID/显式别名合并、未映射真实像点默认拒绝、坐标系/杆臂 frame、line-scan/round-trip 拒绝和 Free 可观性；
 - 各向同性像点协方差到标量权重的精确映射，以及各向异性/相关协方差的显式拒绝；
-- PlaMatrix 的 Fixed、Constrained、Free、杆臂姿态耦合、独立统计、不支持后端诊断，以及质量拒绝后禁止无 range 的 Legacy 回退；Ceres 仅作为可选同数据对照；
+- PlaMatrix 的 Fixed、Constrained、Free、杆臂姿态耦合、独立统计、不支持后端诊断，以及质量拒绝后禁止无 range 的 Legacy 回退，并执行 CPU/CUDA/OpenCL 同数据一致性检查；
 - `BundleAdjustService` 的 SI/ISIS 端到端关联、严格相机顺序、结果/杆臂写出和 line-scan 拒绝；
 - GUI 平差预览和质量摘要中的行星激光 shot/range 指标，包括初始零残差退化为正残差的告警；
 - 参考数据识别只把具有 ISIS `id/time/range/sigmaRange/latitude/longitude/radius` 点签名的 JSON 判为 LidarData，不会把普通 `points` 数组误分类；CLI 单独给出 range 权重或 Huber 参数而未给数据文件时会明确报错。

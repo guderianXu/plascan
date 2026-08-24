@@ -11,6 +11,9 @@ namespace xjw::image_matching
     SiftRawFeatures extractCudaSift(const SiftExtractionRequest& request);
     std::vector<SiftNearestMatch>
     matchCudaSift(const cv::Mat& queryDescriptors, const cv::Mat& trainDescriptors, int deviceIndex);
+    SiftBidirectionalMatches
+    matchCudaSiftBidirectionally(const cv::Mat& descriptors0, const cv::Mat& descriptors1, int deviceIndex);
+    void releaseCudaSiftThreadWorkspaces();
 #endif
 
 #if defined(PLASCAN_HAS_OPENCL_SIFT)
@@ -98,9 +101,7 @@ namespace xjw::image_matching
     {
         const QString backendName = siftBackendDisplayName(backend);
         const QString deviceName = siftBackendDeviceName(backend, deviceIndex).trimmed();
-        return deviceName.isEmpty()
-            ? backendName
-            : QStringLiteral("%1 · %2").arg(backendName, deviceName);
+        return deviceName.isEmpty() ? backendName : QStringLiteral("%1 · %2").arg(backendName, deviceName);
     }
 
     bool isSiftBackendAvailable(SiftComputeBackend backend, int deviceIndex)
@@ -210,6 +211,31 @@ namespace xjw::image_matching
             break;
         }
         throw std::runtime_error(std::string("SIFT GPU matching backend is unavailable: ") + siftBackendName(backend));
+    }
+
+    SiftBidirectionalMatches matchSiftBidirectionallyOnGpu(SiftComputeBackend backend,
+                                                           const cv::Mat& descriptors0,
+                                                           const cv::Mat& descriptors1,
+                                                           int deviceIndex)
+    {
+        if (backend == SiftComputeBackend::Cuda)
+        {
+#if defined(PLASCAN_HAS_CUDA_SIFT)
+            return matchCudaSiftBidirectionally(descriptors0, descriptors1, deviceIndex);
+#endif
+        }
+
+        SiftBidirectionalMatches result;
+        result.forward = matchSiftOnGpu(backend, descriptors0, descriptors1, deviceIndex);
+        result.reverse = matchSiftOnGpu(backend, descriptors1, descriptors0, deviceIndex);
+        return result;
+    }
+
+    void releaseSiftGpuThreadWorkspaces()
+    {
+#if defined(PLASCAN_HAS_CUDA_SIFT)
+        releaseCudaSiftThreadWorkspaces();
+#endif
     }
 
 } // namespace xjw::image_matching

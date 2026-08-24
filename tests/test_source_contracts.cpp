@@ -1241,32 +1241,288 @@ TEST(MvsSchedulerContractTest, LargeHybridBatchKeepsBoundedOpenClFullFrame)
     const QString scheduler =
         readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
 
-    expectContainsAll(scheduler, {
-        "recommendedOpenClFullFrameFloorPerDevice(",
-        "schedulingPolicy.guaranteedOpenClFullFramesPerDevice",
-        "schedulingPolicy.maximumOpenClInFlightTasksPerDevice",
-        "!claim.requiresFullFrame",
-        "OpenCL完整帧 %1/%2",
-    });
+    expectContainsAll(scheduler,
+                      {
+                          "recommendedOpenClFullFrameFloorPerDevice(",
+                          "schedulingPolicy.guaranteedOpenClFullFramesPerDevice",
+                          "schedulingPolicy.maximumOpenClInFlightTasksPerDevice",
+                          "!claim.requiresFullFrame",
+                          "OpenCL完整帧 %1/%2",
+                      });
 }
 
-TEST(MvsDepthArtifactContractTest, OptionalTargetedRecoveryMaskIsCheckedBeforeRead)
+TEST(MvsDepthArtifactContractTest, AuthoritativeTargetedRecoveryMaskIsCheckedBeforeRead)
 {
-    const QString source =
-        readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString targetedRecoveryLoad = sectionBetween(
-        source,
-        "const QString targeted_recovered_path = storage_dir.filePath(",
-        "const QString provenance_path = storage_dir.filePath(");
+    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString streamingConsistency = sectionBetween(source,
+                                                        "bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()",
+                                                        "bool DepthMapGenerator::saveDepthFrameArtifacts");
+    const QString targetedRecoveryLoad = sectionBetween(streamingConsistency,
+                                                        "const QString targeted_recovered_path =",
+                                                        "const FramePinholeCamera reference_camera");
 
-    expectContainsAll(targetedRecoveryLoad, {
-        "QFileInfo::exists(targeted_recovered_path)",
-        "xjw::common::io::readImage(",
-    });
-    EXPECT_LT(indexOfOrFail(targetedRecoveryLoad,
-                            "QFileInfo::exists(targeted_recovered_path)"),
-              indexOfOrFail(targetedRecoveryLoad,
-                            "xjw::common::io::readImage("));
+    expectContainsAll(targetedRecoveryLoad,
+                      {
+                          "targetedGapRecoveredMaskExpected",
+                          "if (!QFileInfo::exists(targeted_recovered_path))",
+                          "else if (QFileInfo::exists(targeted_recovered_path))",
+                          "xjw::common::io::readImage(",
+                      });
+    EXPECT_LT(indexOfOrFail(targetedRecoveryLoad, "if (!QFileInfo::exists(targeted_recovered_path))"),
+              indexOfOrFail(targetedRecoveryLoad, "xjw::common::io::readImage("));
+}
+
+TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString saveBlock = sectionBetween(
+        source, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
+    const QString photometricFailureBlock =
+        sectionBetween(saveBlock, "if (saveRawDepth && !photometricSourceMaskSaved)", "bool geometrySourceMaskSaved");
+    expectContainsAll(photometricFailureBlock,
+                      {
+                          "markManifestFrameFailed(frameIndex, message)",
+                          "emit errorOccurred(message)",
+                          "return false;",
+                      });
+    const QString geometrySourceContractBlock =
+        sectionBetween(saveBlock, "if (geometry_source_contract.persistMask)", "const bool inverseDepthMeanSaved");
+    EXPECT_EQ(countOccurrences(geometrySourceContractBlock, "markManifestFrameFailed(frameIndex, message)"), 2);
+    const QString finalConsistencyArtifactsBlock = sectionBetween(
+        saveBlock, "const bool final_consistency_artifacts =", "if (!missing_required_artifacts.empty())");
+    expectContainsAll(finalConsistencyArtifactsBlock,
+                      {
+                          "final_artifacts && consistency_publication_completed",
+                          "if (final_consistency_artifacts)",
+                          "require_artifact(geometrySupportSaved",
+                          "require_artifact(inverseDepthSpreadSaved",
+                          "if (final_consistency_artifacts &&",
+                          "require_artifact(inverseDepthMeanSaved",
+                          "require_artifact(crossViewRepairedMaskSaved",
+                      });
+    EXPECT_LT(indexOfOrFail(finalConsistencyArtifactsBlock, "final_artifacts && consistency_publication_completed"),
+              indexOfOrFail(finalConsistencyArtifactsBlock, "require_artifact(geometrySupportSaved"));
+
+    expectContainsAll(saveBlock,
+                      {
+                          "QStringList missing_required_artifacts",
+                          "require_artifact(rawSaved",
+                          "require_artifact(confidenceSaved",
+                          "require_artifact(maskSaved",
+                          "require_artifact(supportMaskSaved",
+                          "require_artifact(depthProvenanceSaved",
+                          "require_artifact(missingReasonSaved",
+                          "const bool final_artifacts = stageLabel != QStringLiteral(\"初始\")",
+                          "consistency_publication_expected != consistency_publication_completed",
+                          "已在写盘和公共发布前失败关闭",
+                          "const bool final_consistency_artifacts =",
+                          "final_artifacts && consistency_publication_completed",
+                          "if (final_consistency_artifacts)",
+                          "require_artifact(geometrySupportSaved",
+                          "require_artifact(inverseDepthSpreadSaved",
+                          "if (final_consistency_artifacts &&",
+                          "_effectiveSceneProfile == MvsSceneProfile::OrbitalObject",
+                          "require_artifact(inverseDepthMeanSaved",
+                          "require_artifact(crossViewRepairedMaskSaved",
+                          "require_artifact(adaptiveGeometrySupportWeightSaved",
+                          "require_artifact(adaptiveGeometryEffectiveViewCountSaved",
+                          "require_artifact(adaptiveGeometryConflictRatioSaved",
+                          "markManifestFrameFailed(frameIndex, message)",
+                          "emit errorOccurred(message)",
+                      });
+
+    const int failClosedGate = indexOfOrFail(saveBlock, "if (!missing_required_artifacts.empty())");
+    const int publication = indexOfOrFail(saveBlock, "if (previewSaved && rawSaved && savePreviewPng)");
+    const QString failClosedBlock = sectionBetween(
+        saveBlock, "if (!missing_required_artifacts.empty())", "if (previewSaved && rawSaved && savePreviewPng)");
+    expectContainsAll(failClosedBlock,
+                      {
+                          "markManifestFrameFailed(frameIndex, message)",
+                          "emit errorOccurred(message)",
+                          "return false;",
+                      });
+    const int markCompleted = indexOfOrFail(saveBlock, "_workspaceManifest.markCompleted(record)");
+    const int emitArtifact = indexOfOrFail(saveBlock, "emit depthMapArtifactSaved(artifact)");
+    const int emitDepthSaved = indexOfOrFail(saveBlock, "emit depthMapSaved(");
+    const int manifestPersist = indexOfOrFail(saveBlock, "persistWorkspaceManifest(&manifestError)");
+    const QString publicationTail =
+        sectionBetween(saveBlock, "MvsDepthFrameRecord record;", "return previewSaved && rawSaved;");
+    EXPECT_EQ(countOccurrences(publicationTail, "if (final_artifacts)"), 2);
+    expectContainsAll(publicationTail,
+                      {
+                          "record.status = final_artifacts",
+                          "_workspaceManifest.upsertFrame(record)",
+                          "_workspaceManifest.markCompleted(record)",
+                          "emit depthMapArtifactSaved(artifact)",
+                      });
+    EXPECT_LT(indexOfOrFail(publicationTail, "if (final_artifacts)"),
+              indexOfOrFail(publicationTail, "_workspaceManifest.markCompleted(record)"));
+    EXPECT_LT(failClosedGate, publication);
+    EXPECT_LT(failClosedGate, markCompleted);
+    EXPECT_LT(failClosedGate, emitArtifact);
+    EXPECT_LT(manifestPersist, emitDepthSaved);
+    EXPECT_LT(manifestPersist, emitArtifact);
+}
+
+TEST(MvsDepthArtifactContractTest, StreamingPublicationPreservesGuidedDataAndRequiredPhotometricEvidence)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString streamingConsistency = sectionBetween(source,
+                                                        "bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()",
+                                                        "bool DepthMapGenerator::saveDepthFrameArtifacts");
+    const QString finalAssembly =
+        sectionBetween(source,
+                       "DepthFrameResult artifact_result = _depthFrames[replacement.frameIndex]",
+                       "const QString targeted_recovered_path = storage_dir.filePath(");
+    expectContainsAll(finalAssembly,
+                      {
+                          "depth_%1_photometric_source_mask.bin",
+                          "loadDepthMatStorage(",
+                          "photometric_source_mask.type() != CV_32SC1",
+                          "photometric_source_mask.size() != filtered_depth.size()",
+                          "artifact_result.photometricSourceMask =",
+                          "return false;",
+                      });
+
+    const QString streamingTargetedMaskLoad =
+        sectionBetween(streamingConsistency,
+                       "const QString targeted_recovered_path =",
+                       "const FramePinholeCamera reference_camera");
+    expectContainsAll(streamingTargetedMaskLoad,
+                      {
+                          "targetedGapRecoveredMaskExpected",
+                          "if (!QFileInfo::exists(targeted_recovered_path))",
+                          "else if (QFileInfo::exists(targeted_recovered_path))",
+                          "xjw::common::io::readImage(",
+                          "targeted_gap_recovered_mask.type() != CV_8UC1",
+                          "targeted_gap_recovered_mask.size() != filtered_depth.size()",
+                          "return false;",
+                      });
+    EXPECT_EQ(countOccurrences(streamingConsistency, "_depthFrames[frame_index].targetedGapRecoveredMask"), 1);
+    EXPECT_GE(countOccurrences(streamingConsistency, "targeted_gap_recovered_mask"), 4);
+
+    const QString committedDepthReload = sectionBetween(
+        streamingConsistency, "cv::Mat filtered_depth;", "cv::Mat filtered_confidence;");
+    expectContainsAll(committedDepthReload,
+                      {
+                          "!load_result.ok",
+                          "filtered_depth.empty()",
+                          "filtered_depth.type() != CV_32FC1",
+                          "filtered_depth.size() != replacement.expectedDepthSize",
+                          "remove_pending_files()",
+                          "markManifestFrameFailed(replacement.frameIndex, message)",
+                          "return false;",
+                      });
+    EXPECT_FALSE(committedDepthReload.contains(QStringLiteral("if (load_result.ok &&")));
+
+    const QString streamingMissingReasonLoad =
+        sectionBetween(streamingConsistency,
+                       "const QString reason_path =",
+                       "const cv::Mat consistent_mask = makeDepthConsistencyMask(");
+    expectContainsAll(streamingMissingReasonLoad,
+                      {
+                          "reason_map.empty()",
+                          "reason_map.type() != CV_8UC1",
+                          "reason_map.size() != filtered_depth.size()",
+                          "remove_pending_files()",
+                          "emit errorOccurred(message)",
+                          "return false;",
+                      });
+    EXPECT_FALSE(streamingMissingReasonLoad.contains(QStringLiteral("initializeDepthMissingReasonMap(")));
+
+    const QString targetedMaskSave = sectionBetween(
+        source, "bool targetedGapRecoveredMaskSaved = false", "bool residualReestimatedMaskSaved = false");
+    expectContainsAll(targetedMaskSave,
+                      {
+                          "targeted_gap_recovered_mask_expected",
+                          "result.targetedGapRecoveredMaskExpected",
+                          "result.targetedGapRecoveredMask && !result.targetedGapRecoveredMask->empty()",
+                          "targetedGapRecoveredMaskSaved",
+                          "QFileInfo::exists(stale_path)",
+                          "QFile::remove(stale_path)",
+                          "markManifestFrameFailed(frameIndex, message)",
+                          "return false;",
+                      });
+
+    const QString initialCompletion = sectionBetween(
+        source, "else if (res.success && claim.requiresFullFrame", "DepthFrameResult storedResult = res;");
+    expectContainsAll(initialCompletion,
+                      {
+                          "res.geometricGuidancePassExpected =",
+                          "_config.patchMatch.enableGeometricGuidancePass",
+                          "res.sourceViewIndices.size() >= 2",
+                          "res.geometricGuidancePassApplied = false",
+                      });
+
+    const QString streamingTransition =
+        sectionBetween(source,
+                       "if (keepDepthFramesInMemory.load() && _config.adaptiveDepthCacheMemory)",
+                       "// ── 阶段 1.5：双视图深度图左右一致性检查");
+    expectContainsAll(streamingTransition,
+                      {
+                          "saveDepthFrameArtifacts(",
+                          "QStringLiteral(\"初始\")",
+                          "keepDepthFramesInMemory = false",
+                          "releaseStoredDepthFrameStreamingPixelStorage(_depthFrames)",
+                      });
+    EXPECT_LT(indexOfOrFail(streamingTransition, "saveDepthFrameArtifacts("),
+              indexOfOrFail(streamingTransition, "keepDepthFramesInMemory = false"));
+    EXPECT_LT(indexOfOrFail(streamingTransition, "saveDepthFrameArtifacts("),
+              indexOfOrFail(streamingTransition, "releaseStoredDepthFrameStreamingPixelStorage(_depthFrames)"));
+
+    const QString workerStore = sectionBetween(source, "DepthFrameResult storedResult = res;", "if (!res.success)");
+    expectContainsAll(workerStore,
+                      {
+                          "std::lock_guard<std::mutex> lock(depthFramesMutex)",
+                          "if (!keepDepthFramesInMemory.load())",
+                          "storedResult.releaseStreamingPixelStorage()",
+                          "_depthFrames[i] = storedResult",
+                      });
+    EXPECT_LT(indexOfOrFail(workerStore, "std::lock_guard<std::mutex> lock(depthFramesMutex)"),
+              indexOfOrFail(workerStore, "if (!keepDepthFramesInMemory.load())"));
+    EXPECT_LT(indexOfOrFail(workerStore, "if (!keepDepthFramesInMemory.load())"),
+              indexOfOrFail(workerStore, "_depthFrames[i] = storedResult"));
+
+    const QString terminalPublisher = sectionBetween(source,
+                                                     "bool DepthMapGenerator::publishTerminalDepthCheckpoints()",
+                                                     "bool DepthMapGenerator::ensurePreparedRasterArtifact");
+    expectContainsAll(terminalPublisher,
+                      {
+                          "terminal.consistencyPublicationExpected =",
+                          "terminal.geometricGuidancePassExpected = frame.geometricGuidancePassExpected",
+                          "terminal.geometricGuidancePassApplied = frame.geometricGuidancePassApplied",
+                          "MvsWorkspaceManifest publication_validation = _workspaceManifest",
+                          "cache_reusable",
+                      });
+
+    const QString artifactSaver = sectionBetween(
+        source, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
+    expectContainsAll(artifactSaver,
+                      {
+                          "const bool durable_publication = !_workspaceManifestPath.isEmpty()",
+                          "durable_publication ? _config.intermediateDir",
+                          "_streamConsistencyStorageEnabled || durable_publication",
+                          "preview_directory + \"/depth_\"",
+                      });
+
+    const QString initialCheckpointGate = sectionBetween(
+        source, "if (!saveQueue.waitUntilIdle(&_cancelled))", "// ── 阶段 1.25：冻结来源深度引导的第二轮 PatchMatch");
+    expectContainsAll(initialCheckpointGate,
+                      {
+                          "if (saveQueue.failed())",
+                          "saveQueue.cancel()",
+                          "saveQueue.stop()",
+                          "emitFinishedOnce(false)",
+                          "return;",
+                      });
+    const int initialSaveFailureGate = indexOfOrFail(initialCheckpointGate, "if (saveQueue.failed())");
+    EXPECT_LT(initialSaveFailureGate,
+              indexOfOrFail(initialCheckpointGate, "return;", initialSaveFailureGate));
+
+    EXPECT_LT(indexOfOrFail(terminalPublisher, "persistWorkspaceManifest(&manifest_error)"),
+              indexOfOrFail(terminalPublisher, "emit depthMapSaved("));
+    EXPECT_LT(indexOfOrFail(terminalPublisher, "emit depthMapSaved("),
+              indexOfOrFail(terminalPublisher, "emit depthMapArtifactSaved("));
 }
 
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
@@ -1279,36 +1535,40 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
     const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
 
-    expectContainsAll(scheduler, {
-        "estimateDepthRangeFromVisiblePoints",
-        "buildHintDepthFromVisiblePoints",
-        "buildSparseSupportMaskFromVisiblePoints",
-        "const std::vector<size_t> visibleSparsePointIndices",
-        "visibleSparsePointIndices)",
-        "patchMatchWorkSize",
-        "collectProjectedSparseDepthSamples",
-        "buildHintDepthFromProjectedSamples",
-        "makeDepthPyramidConfig",
-        "pyramid_sparse_hints",
-        "const cv::Size hint_size = patchMatchWorkSize",
-        "hint_size.width",
-        "hint_size.height",
-        "workRefSparseSamples",
-        "buildHintDepthFromProjectedSamples(refIdx",
-        "buildSparseSupportMaskFromProjectedSamples(refIdx",
-    });
-    expectContainsAll(header, {
-        "ProjectedSparseDepthSample",
-        "buildSparseSeedDepthFromProjectedSamples",
-    });
-    expectNotContainsAll(scheduler, {
-        "cv::Mat hintDepth = buildHintDepthFromVisiblePoints(refIdx, W, H, visibleSparsePointIndices);",
-        "buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam",
-        "buildHintDepthForCamera(refIdx,\n                                                         fineHintCam",
-    });
+    expectContainsAll(scheduler,
+                      {
+                          "estimateDepthRangeFromVisiblePoints",
+                          "buildHintDepthFromVisiblePoints",
+                          "buildSparseSupportMaskFromVisiblePoints",
+                          "const std::vector<size_t> visibleSparsePointIndices",
+                          "visibleSparsePointIndices)",
+                          "patchMatchWorkSize",
+                          "collectProjectedSparseDepthSamples",
+                          "buildHintDepthFromProjectedSamples",
+                          "makeDepthPyramidConfig",
+                          "pyramid_sparse_hints",
+                          "const cv::Size hint_size = patchMatchWorkSize",
+                          "hint_size.width",
+                          "hint_size.height",
+                          "workRefSparseSamples",
+                          "buildHintDepthFromProjectedSamples(refIdx",
+                          "buildSparseSupportMaskFromProjectedSamples(refIdx",
+                      });
+    expectContainsAll(header,
+                      {
+                          "ProjectedSparseDepthSample",
+                          "buildSparseSeedDepthFromProjectedSamples",
+                      });
+    expectNotContainsAll(
+        scheduler,
+        {
+            "cv::Mat hintDepth = buildHintDepthFromVisiblePoints(refIdx, W, H, visibleSparsePointIndices);",
+            "buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam",
+            "buildHintDepthForCamera(refIdx,\n                                                         fineHintCam",
+        });
 
-    const QString supportBlock =
-        sectionBetween(scheduler, "const std::vector<ProjectedSparseDepthSample> workRefSparseSamples", "timing.hintMs = elapsedMs");
+    const QString supportBlock = sectionBetween(
+        scheduler, "const std::vector<ProjectedSparseDepthSample> workRefSparseSamples", "timing.hintMs = elapsedMs");
     expectContainsAll(supportBlock, {
         "support_mask_config",
         "pyramid_config.levels[pyramid_config.activeLevelCount - 1].patchMatch",
@@ -1607,46 +1867,77 @@ TEST(MvsHeterogeneousSchedulingContractTest,
     });
 }
 
+TEST(MvsAdaptivePatchMatchContractTest, AuxiliaryEvidenceCrossesEveryAdaptiveBackendBranch)
+{
+    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString adaptive_helper =
+        sectionBetween(generator, "bool estimatePatchMatchWithAdaptiveCuda(", "float sourceGeometryReliabilityWeight");
+    const QString adaptive_backend =
+        sectionBetween(generator, "class AdaptivePatchMatchBackend final", "} // namespace");
+
+    expectContainsAll(adaptive_helper,
+                      {
+                          "const PatchMatchAuxiliaryInput* auxiliaryInput = nullptr",
+                          "PatchMatchAuxiliaryOutput* auxiliaryOutput = nullptr",
+                      });
+    EXPECT_EQ(countOccurrences(adaptive_helper, "PatchMatchDepthEstimator::estimate("), 3);
+    EXPECT_EQ(countOccurrences(adaptive_helper, "auxiliaryInput"), 4);
+    EXPECT_EQ(countOccurrences(adaptive_helper, "auxiliaryOutput"), 4);
+
+    expectContainsAll(adaptive_backend,
+                      {
+                          "auxiliary_input.sourceDepthMaps = request.sourceDepthMaps.empty()",
+                          ": &request.sourceDepthMaps",
+                          "auxiliary_output.photometricSourceMask =",
+                          "&result.photometricSourceMask",
+                          "&auxiliary_input",
+                          "&auxiliary_output",
+                          "selectedSourceCount(",
+                      });
+    EXPECT_FALSE(adaptive_backend.contains(
+        QStringLiteral("supportCount.setTo(\n"
+                       "            cv::Scalar(static_cast<int>(request.sourceImages.size()))")));
+}
+
 TEST(MeshReconstructionContractTest, ClosedSurfaceNormalsUseNeighborhoodConsistency)
 {
     const QString source = readSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructor.cpp"));
-    const QString orientation = sectionBetween(source,
-                                               "void orientNormalsOutwardFromCentroid",
-                                               "PlaPointCloud pointXYZRGBToCloud");
+    const QString orientation =
+        sectionBetween(source, "void orientNormalsOutwardFromCentroid", "PlaPointCloud pointXYZRGBToCloud");
 
-    expectContainsAll(orientation, {
-        "plapoint::search::KdTree",
-        "nearestKSearch",
-        "#pragma omp parallel for",
-        "component_outward_score",
-    });
-    expectNotContainsAll(orientation, {
-        "if (outward_dot < 0.0)",
-    });
+    expectContainsAll(orientation,
+                      {
+                          "plapoint::search::KdTree",
+                          "nearestKSearch",
+                          "#pragma omp parallel for",
+                          "component_outward_score",
+                      });
+    expectNotContainsAll(orientation,
+                         {
+                             "if (outward_dot < 0.0)",
+                         });
 }
 
 TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
 {
-    const QString gui_sources =
-        readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    const QString dialog_sources =
-        readSourceFile(QStringLiteral("src/gui/cmake/GuiDialogSources.cmake"));
-    const QString layout_readme =
-        readSourceFile(QStringLiteral("src/gui/dialogs/README.md"));
-    const QString workspace_ui =
-        readSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.ui"));
+    const QString gui_sources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    const QString dialog_sources = readSourceFile(QStringLiteral("src/gui/cmake/GuiDialogSources.cmake"));
+    const QString layout_readme = readSourceFile(QStringLiteral("src/gui/dialogs/README.md"));
+    const QString workspace_ui = readSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.ui"));
 
-    expectContainsAll(gui_sources, {
-        "include(${CMAKE_CURRENT_LIST_DIR}/GuiDialogSources.cmake)",
-        "views/CameraSceneWidget.cpp",
-        "views/CameraSceneViewMath.cpp",
-        "views/ObjRenderPreparation.cpp",
-    });
-    expectNotContainsAll(gui_sources, {
-        "dialogs/application/AboutDialog.cpp",
-        "dialogs/reconstruction/GenerateModelDialog.cpp",
-        "dialogs/tie_points/MatchViewerDialog.cpp",
-    });
+    expectContainsAll(gui_sources,
+                      {
+                          "include(${CMAKE_CURRENT_LIST_DIR}/GuiDialogSources.cmake)",
+                          "views/CameraSceneWidget.cpp",
+                          "views/CameraSceneViewMath.cpp",
+                          "views/ObjRenderPreparation.cpp",
+                      });
+    expectNotContainsAll(gui_sources,
+                         {
+                             "dialogs/application/AboutDialog.cpp",
+                             "dialogs/reconstruction/GenerateModelDialog.cpp",
+                             "dialogs/tie_points/MatchViewerDialog.cpp",
+                         });
     expectContainsAll(dialog_sources, {
         "GUI_APPLICATION_DIALOG_SOURCES",
         "GUI_CAMERA_DIALOG_SOURCES",

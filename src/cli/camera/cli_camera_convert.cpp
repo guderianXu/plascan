@@ -90,6 +90,7 @@ void printWarnings(const std::vector<std::string> &warnings)
 int main(int argc, char *argv[])
 {
     CLI::App app{"PlaScan 相机格式转换工具 — 输出 tsai 和 image_camera.lis"};
+    cli::configureApp(app);
 
     std::string formatName = "auto";
     std::string inputPath;

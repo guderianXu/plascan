@@ -64,3 +64,62 @@ function(plascan_deploy_vcpkg_runtime target_name)
     COMMENT
       "Deploying ${_plascan_vcpkg_runtime_dll_count} vcpkg runtime DLLs for ${target_name}")
 endfunction()
+
+function(plascan_deploy_source_dependency_runtime target_name)
+  if(NOT WIN32 OR NOT PLASCAN_SOURCE_DEPENDENCY_PREFIX)
+    return()
+  endif()
+  if(NOT TARGET "${target_name}")
+    message(FATAL_ERROR
+      "plascan_deploy_source_dependency_runtime: target does not exist: ${target_name}")
+  endif()
+
+  set(_plascan_source_runtime_dirs "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/bin")
+  file(GLOB _plascan_opencv_runtime_dirs
+    LIST_DIRECTORIES true
+    "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/*/*/bin")
+  list(APPEND _plascan_source_runtime_dirs ${_plascan_opencv_runtime_dirs})
+  list(REMOVE_DUPLICATES _plascan_source_runtime_dirs)
+
+  set(_plascan_source_runtime_dlls)
+  foreach(_plascan_runtime_dir IN LISTS _plascan_source_runtime_dirs)
+    if(IS_DIRECTORY "${_plascan_runtime_dir}")
+      file(GLOB _plascan_runtime_dir_dlls
+        CONFIGURE_DEPENDS LIST_DIRECTORIES false
+        "${_plascan_runtime_dir}/*.dll")
+      list(APPEND _plascan_source_runtime_dlls ${_plascan_runtime_dir_dlls})
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _plascan_source_runtime_dlls)
+  if(_plascan_source_runtime_dlls)
+    add_custom_command(TARGET "${target_name}" POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        ${_plascan_source_runtime_dlls}
+        "$<TARGET_FILE_DIR:${target_name}>"
+      COMMAND_EXPAND_LISTS
+      VERBATIM
+        COMMENT "Deploying source-built Qt/OpenCV/GDAL/AprilTag runtime DLLs for ${target_name}")
+  endif()
+
+  foreach(_plascan_plugin_group IN ITEMS platforms imageformats iconengines styles tls)
+    set(_plascan_plugin_dir
+      "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/plugins/${_plascan_plugin_group}")
+    if(NOT IS_DIRECTORY "${_plascan_plugin_dir}")
+      continue()
+    endif()
+    file(GLOB _plascan_plugin_dlls
+      CONFIGURE_DEPENDS LIST_DIRECTORIES false
+      "${_plascan_plugin_dir}/*.dll")
+    if(_plascan_plugin_dlls)
+      add_custom_command(TARGET "${target_name}" POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+          "$<TARGET_FILE_DIR:${target_name}>/${_plascan_plugin_group}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+          ${_plascan_plugin_dlls}
+          "$<TARGET_FILE_DIR:${target_name}>/${_plascan_plugin_group}"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+        COMMENT "Deploying source-built Qt ${_plascan_plugin_group} plugins")
+    endif()
+  endforeach()
+endfunction()

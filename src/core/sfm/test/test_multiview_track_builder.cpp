@@ -10,25 +10,23 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
-    const std::array<double, 9> rotation = {1.0, 0.0, 0.0,
-                                            0.0, 1.0, 0.0,
-                                            0.0, 0.0, 1.0};
-    const std::array<double, 3> center = {cx, cy, cz};
-    camera.setPose(rotation, center);
-    return camera;
-}
+    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
+    {
+        xjw::FramePinholeCamera camera;
+        camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
+        const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+        const std::array<double, 3> center = {cx, cy, cz};
+        camera.setPose(rotation, center);
+        return camera;
+    }
 
-xjw::FeatureKeypoint projectPoint(const xjw::FramePinholeCamera &camera, const std::array<double, 3> &xyz)
-{
-    const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
-    double projected[2] = {0.0, 0.0};
-    EXPECT_TRUE(camera.projectWorldPoint(worldPoint, projected));
-    return xjw::FeatureKeypoint{static_cast<float>(projected[0]), static_cast<float>(projected[1])};
-}
+    xjw::FeatureKeypoint projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& xyz)
+    {
+        const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
+        double projected[2] = {0.0, 0.0};
+        EXPECT_TRUE(camera.projectWorldPoint(worldPoint, projected));
+        return xjw::FeatureKeypoint{static_cast<float>(projected[0]), static_cast<float>(projected[1])};
+    }
 
 } // namespace
 
@@ -54,16 +52,16 @@ TEST(MultiViewTrackBuilderTest, DefaultBuildMatchesExplicitDefaultOptions)
     builder.addMatchPair(1, 2, {{20, 30, 0.7f}});
 
     const xjw::MultiViewTrackBuildResult default_result = builder.build();
-    const xjw::MultiViewTrackBuildResult explicit_result =
-        builder.build(xjw::MultiViewTrackBuilder::BuildOptions{});
+    const xjw::MultiViewTrackBuildResult explicit_result = builder.build(xjw::MultiViewTrackBuilder::BuildOptions{});
 
     ASSERT_EQ(default_result.tracks.size(), explicit_result.tracks.size());
-    ASSERT_EQ(default_result.trackConfidenceScores.size(),
-              explicit_result.trackConfidenceScores.size());
+    ASSERT_EQ(default_result.trackConfidenceScores.size(), explicit_result.trackConfidenceScores.size());
     EXPECT_EQ(default_result.totalComponents, explicit_result.totalComponents);
     EXPECT_EQ(default_result.acceptedComponents, explicit_result.acceptedComponents);
     EXPECT_EQ(default_result.rejectedConflictComponents, explicit_result.rejectedConflictComponents);
     EXPECT_EQ(default_result.rejectedConflictEdges, explicit_result.rejectedConflictEdges);
+    EXPECT_EQ(default_result.rejectedInconsistentBridgeEdges, explicit_result.rejectedInconsistentBridgeEdges);
+    EXPECT_EQ(default_result.acceptedSupportedBridgeEdges, explicit_result.acceptedSupportedBridgeEdges);
     EXPECT_EQ(default_result.prunedByQualityThinning, explicit_result.prunedByQualityThinning);
     EXPECT_EQ(default_result.prunedStationaryTracks, explicit_result.prunedStationaryTracks);
     EXPECT_EQ(default_result.trackLengthHistogram, explicit_result.trackLengthHistogram);
@@ -72,18 +70,65 @@ TEST(MultiViewTrackBuilderTest, DefaultBuildMatchesExplicitDefaultOptions)
 
     for (std::size_t track_index = 0; track_index < default_result.tracks.size(); ++track_index)
     {
-        const xjw::Track &default_track = default_result.tracks[track_index];
-        const xjw::Track &explicit_track = explicit_result.tracks[track_index];
+        const xjw::Track& default_track = default_result.tracks[track_index];
+        const xjw::Track& explicit_track = explicit_result.tracks[track_index];
         ASSERT_EQ(default_track.elements.size(), explicit_track.elements.size());
         EXPECT_DOUBLE_EQ(default_track.confidence, explicit_track.confidence);
         for (std::size_t element_index = 0; element_index < default_track.elements.size(); ++element_index)
         {
-            EXPECT_EQ(default_track.elements[element_index].imageId,
-                      explicit_track.elements[element_index].imageId);
+            EXPECT_EQ(default_track.elements[element_index].imageId, explicit_track.elements[element_index].imageId);
             EXPECT_EQ(default_track.elements[element_index].featureIdx,
                       explicit_track.elements[element_index].featureIdx);
         }
     }
+}
+
+TEST(MultiViewTrackBuilderTest, RejectsUnsupportedLowConfidenceBridgeBetweenEstablishedTracks)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.addMatchPair(0, 1, {{10, 20, 0.95f}});
+    builder.addMatchPair(2, 3, {{30, 40, 0.94f}});
+    builder.addMatchPair(1, 2, {{20, 30, 0.20f}});
+
+    const xjw::MultiViewTrackBuildResult result = builder.build();
+
+    ASSERT_EQ(result.tracks.size(), 2u);
+    EXPECT_EQ(result.rejectedInconsistentBridgeEdges, 1);
+    EXPECT_EQ(result.acceptedSupportedBridgeEdges, 0);
+    EXPECT_EQ(result.trackLengthHistogram.at(2), 2);
+}
+
+TEST(MultiViewTrackBuilderTest, AcceptsBridgeBackedByExactThreeObservationCycle)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.addMatchPair(0, 1, {{10, 20, 0.95f}});
+    builder.addMatchPair(2, 3, {{30, 40, 0.94f}});
+    builder.addMatchPair(1, 2, {{20, 30, 0.80f}});
+    builder.addMatchPair(1, 4, {{20, 50, 0.70f}});
+    builder.addMatchPair(2, 4, {{30, 50, 0.70f}});
+
+    const xjw::MultiViewTrackBuildResult result = builder.build();
+
+    ASSERT_EQ(result.tracks.size(), 1u);
+    EXPECT_EQ(result.tracks.front().length(), 5u);
+    EXPECT_EQ(result.rejectedInconsistentBridgeEdges, 0);
+    EXPECT_EQ(result.acceptedSupportedBridgeEdges, 1);
+}
+
+TEST(MultiViewTrackBuilderTest, RejectsSingleEdgeBridgeBetweenMatureComponentsEvenAtHighConfidence)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.addMatchPair(0, 1, {{10, 20, 0.99f}});
+    builder.addMatchPair(3, 4, {{40, 50, 0.99f}});
+    builder.addMatchPair(1, 2, {{20, 30, 0.98f}});
+    builder.addMatchPair(4, 5, {{50, 60, 0.98f}});
+    builder.addMatchPair(2, 3, {{30, 40, 0.97f}});
+
+    const xjw::MultiViewTrackBuildResult result = builder.build();
+
+    ASSERT_EQ(result.tracks.size(), 2u);
+    EXPECT_EQ(result.trackLengthHistogram.at(3), 2);
+    EXPECT_EQ(result.rejectedInconsistentBridgeEdges, 1);
 }
 
 TEST(MultiViewTrackBuilderTest, SplitsConflictingComponentsInsteadOfDroppingAllTracks)
@@ -277,8 +322,8 @@ TEST(CorrespondenceTrackThinnerTest, EnforcesPerImageLimitAndPrefersLongTracks)
         xjw::ImageData image;
         image.id = imageId;
         image.keypoints = imageId < 2
-            ? std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}, {20.0f, 20.0f}, {30.0f, 30.0f}}
-            : std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}};
+                              ? std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}, {20.0f, 20.0f}, {30.0f, 30.0f}}
+                              : std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}};
         image.point3DIds.resize(image.keypoints.size(), xjw::kInvalidPoint3DId);
         reconstruction.addImage(image);
         graph.addImage(imageId, image.keypoints.size());
@@ -362,7 +407,7 @@ TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 
     EXPECT_EQ(stats.numCreated, 1);
     ASSERT_EQ(reconstruction.numPoints3D(), 1);
-    const xjw::ScenePoint3D &point = reconstruction.points3D().begin()->second;
+    const xjw::ScenePoint3D& point = reconstruction.points3D().begin()->second;
     EXPECT_EQ(point.track.length(), 3);
 }
 
@@ -382,7 +427,7 @@ TEST(KnownPoseMultiViewTriangulationTest, SplitsGeometryInconsistentComponent)
     {
         xjw::ImageData image;
         image.id = imageId;
-        const std::array<double, 3> &point = imageId < 2 ? leftPoint : rightPoint;
+        const std::array<double, 3>& point = imageId < 2 ? leftPoint : rightPoint;
         image.keypoints.push_back(projectPoint(cameras[static_cast<std::size_t>(imageId)], point));
         image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
         reconstruction.addImage(image);
@@ -414,6 +459,403 @@ TEST(KnownPoseMultiViewTriangulationTest, SplitsGeometryInconsistentComponent)
 
     EXPECT_EQ(stats.numCreated, 2);
     EXPECT_EQ(reconstruction.numPoints3D(), 2);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, KeepsNativeTwoViewTrack)
+{
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    const std::vector<xjw::FramePinholeCamera> cameras{camera0, camera1};
+    for (xjw::ImageId imageId = 0; imageId < 2; ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    const xjw::TriangulationStats stats = triangulator.triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 1);
+    EXPECT_EQ(stats.createdTwoViewTracks, 1);
+    EXPECT_EQ(stats.suppressedTwoViewFragments, 0);
+    ASSERT_EQ(reconstruction.numPoints3D(), 1);
+    EXPECT_EQ(reconstruction.points3D().begin()->second.track.length(), 2);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, DefersPureTwoViewTrackAfterBootstrap)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        if (imageId < 2)
+        {
+            track.elements.push_back({imageId, 0});
+        }
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    const xjw::TriangulationStats stats = xjw::Triangulator(reconstruction, graph).triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 0);
+    EXPECT_EQ(stats.deferredPureTwoViewTracks, 1);
+    EXPECT_EQ(reconstruction.numPoints3D(), 0u);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, KeepsTwoViewCandidateWithPotentialThirdViewSupport)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.addMatches(1, 2, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Track track;
+    track.elements.push_back({0, 0});
+    track.elements.push_back({1, 0});
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    const xjw::TriangulationStats stats = xjw::Triangulator(reconstruction, graph).triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 1);
+    EXPECT_EQ(stats.deferredPureTwoViewTracks, 0);
+    ASSERT_EQ(reconstruction.numPoints3D(), 1u);
+}
+
+TEST(IncrementalTriangulationTest, DefersNewPureTwoViewPointAfterThirdImageRegisters)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> xyz = {8.0, 0.5, 40.0};
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+    }
+    graph.addMatches(0, 2, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    const xjw::TriangulationStats stats = xjw::Triangulator(reconstruction, graph).triangulateImage(2, options);
+
+    EXPECT_EQ(stats.numCreated, 0);
+    EXPECT_EQ(stats.deferredPureTwoViewTracks, 1);
+    EXPECT_EQ(reconstruction.numPoints3D(), 0u);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, SuppressesTwoViewResidualWhenLongConsensusExists)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+        makeCamera(80.0, 0.0, 0.0),
+        makeCamera(88.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> mainPoint = {8.0, 0.5, 40.0};
+    const std::array<double, 3> residualPoint = {84.0, -0.5, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    for (xjw::ImageId imageId = 0; imageId < static_cast<xjw::ImageId>(cameras.size()); ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        const auto& xyz = imageId < 3 ? mainPoint : residualPoint;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.addMatches(1, 2, {xjw::FeatureMatch{0, 0}});
+    graph.addMatches(2, 3, {xjw::FeatureMatch{0, 0}}); // erroneous bridge
+    graph.addMatches(3, 4, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    options.maxReprojError = 1.0;
+    options.completeMaxReprojError = 1.0;
+    const xjw::TriangulationStats stats = triangulator.triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 1);
+    EXPECT_EQ(stats.createdLongTracks, 1);
+    EXPECT_EQ(stats.createdTwoViewTracks, 0);
+    EXPECT_EQ(stats.suppressedTwoViewFragments, 1);
+    ASSERT_EQ(reconstruction.numPoints3D(), 1);
+    EXPECT_EQ(reconstruction.points3D().begin()->second.track.length(), 3);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, RejectsTransitiveTwoViewCandidateWithoutDirectMatch)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(80.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> consistentPoint = {8.0, 0.5, 40.0};
+    const std::array<double, 3> bridgePoint = {84.0, 12.0, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    for (xjw::ImageId imageId = 0; imageId < 3; ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        const auto& xyz = imageId == 1 ? bridgePoint : consistentPoint;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.addMatches(1, 2, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    options.maxReprojError = 0.01;
+    options.completeMaxReprojError = 0.01;
+    const xjw::TriangulationStats stats = triangulator.triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 0);
+    EXPECT_GT(stats.indirectTwoViewCandidates, 0);
+    EXPECT_EQ(reconstruction.numPoints3D(), 0);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, RejectsUnstableTwoViewFragmentFromLongTrack)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(0.1, 0.0, 0.0),
+        makeCamera(50.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> shallowPoint = {0.05, 0.2, 100.0};
+    const std::array<double, 3> bridgePoint = {52.0, 15.0, 35.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    for (xjw::ImageId imageId = 0; imageId < 3; ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        const auto& xyz = imageId < 2 ? shallowPoint : bridgePoint;
+        image.keypoints.push_back(projectPoint(cameras[imageId], xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.addMatches(1, 2, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.001;
+    options.maxReprojError = 0.01;
+    options.completeMaxReprojError = 0.01;
+    const xjw::TriangulationStats stats = triangulator.triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 0);
+    EXPECT_GT(stats.unstableTwoViewCandidates, 0);
+    EXPECT_EQ(reconstruction.numPoints3D(), 0);
+}
+
+TEST(KnownPoseMultiViewTriangulationTest, UsesLocalMultiviewDepthOnlyWhenBothImagesHaveSupport)
+{
+    struct Outcome
+    {
+        xjw::TriangulationStats stats;
+        std::size_t pointCount = 0;
+    };
+    const auto runCase = [](int referenceCount)
+    {
+        const std::vector<xjw::FramePinholeCamera> cameras{
+            makeCamera(0.0, 0.0, 0.0),
+            makeCamera(1.0, 0.0, 0.0),
+            makeCamera(2.0, 0.0, 0.0),
+        };
+        xjw::SfmReconstruction reconstruction;
+        xjw::CorrespondenceGraph graph;
+        std::vector<xjw::Track> tracks;
+        std::vector<xjw::ImageData> images(cameras.size());
+        for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+        {
+            images[imageId].id = imageId;
+        }
+
+        for (int index = 0; index < referenceCount; ++index)
+        {
+            const std::array<double, 3> referencePoint{
+                0.02 * (index - referenceCount / 2),
+                0.015 * (index % 3 - 1),
+                40.0 + 0.05 * index,
+            };
+            xjw::Track track;
+            for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+            {
+                images[imageId].keypoints.push_back(projectPoint(cameras[imageId], referencePoint));
+                track.elements.push_back({imageId, static_cast<xjw::FeatureIdx>(index)});
+            }
+            tracks.push_back(std::move(track));
+            graph.addMatches(
+                0, 1, {xjw::FeatureMatch{static_cast<xjw::FeatureIdx>(index), static_cast<xjw::FeatureIdx>(index)}});
+            graph.addMatches(
+                1, 2, {xjw::FeatureMatch{static_cast<xjw::FeatureIdx>(index), static_cast<xjw::FeatureIdx>(index)}});
+        }
+
+        const std::array<double, 3> inconsistentTwoViewPoint{0.0, 0.0, 80.0};
+        xjw::Track twoViewTrack;
+        const xjw::FeatureIdx twoViewFeature = static_cast<xjw::FeatureIdx>(referenceCount);
+        for (xjw::ImageId imageId = 0; imageId < 2; ++imageId)
+        {
+            images[imageId].keypoints.push_back(projectPoint(cameras[imageId], inconsistentTwoViewPoint));
+            twoViewTrack.elements.push_back({imageId, twoViewFeature});
+        }
+        tracks.push_back(twoViewTrack);
+        graph.addMatches(0, 1, {xjw::FeatureMatch{twoViewFeature, twoViewFeature}});
+
+        for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+        {
+            images[imageId].point3DIds.resize(images[imageId].keypoints.size(), xjw::kInvalidPoint3DId);
+            reconstruction.addImage(images[imageId]);
+            reconstruction.registerImage(imageId, cameras[imageId]);
+            graph.addImage(imageId, images[imageId].keypoints.size());
+        }
+        graph.buildCorrespondences();
+
+        xjw::TriangulatorOptions options;
+        options.minTriAngle = 0.1;
+        options.maxReprojError = 0.1;
+        options.completeMaxReprojError = 0.1;
+        options.deferPureTwoViewTracks = false;
+        const xjw::TriangulationStats stats =
+            xjw::Triangulator(reconstruction, graph).triangulateTracks(tracks, options);
+        return Outcome{stats, reconstruction.numPoints3D()};
+    };
+
+    const Outcome supported = runCase(5);
+    EXPECT_EQ(supported.stats.localDepthInconsistentTwoViewPoints, 1);
+    EXPECT_EQ(supported.stats.createdTwoViewTracks, 0);
+    EXPECT_EQ(supported.pointCount, 5u);
+
+    const Outcome sparse = runCase(2);
+    EXPECT_EQ(sparse.stats.localDepthInconsistentTwoViewPoints, 0);
+    EXPECT_EQ(sparse.stats.createdTwoViewTracks, 1);
+    EXPECT_EQ(sparse.pointCount, 3u);
+}
+
+TEST(TriangulationFilterTest, RemovesBadObservationWithoutDeletingSupportedPoint)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+    for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        xjw::FeatureKeypoint keypoint = projectPoint(cameras[imageId], xyz);
+        if (imageId == 2)
+        {
+            keypoint.x += 100.0f;
+        }
+        image.keypoints.push_back(keypoint);
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, cameras[imageId]);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.buildCorrespondences();
+
+    const xjw::Point3DId pointId = reconstruction.addPoint3DWithTrack(xyz, track);
+    xjw::Triangulator triangulator(reconstruction, graph);
+    EXPECT_EQ(triangulator.filterPoints(2.0, 0.1), 0);
+
+    ASSERT_TRUE(reconstruction.hasPoint3D(pointId));
+    EXPECT_EQ(reconstruction.point3D(pointId).track.length(), 2);
+    EXPECT_EQ(reconstruction.image(2).point3DIds[0], xjw::kInvalidPoint3DId);
+    EXPECT_LT(reconstruction.point3D(pointId).error, 1.0e-6);
 }
 
 TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeRejectingObservation)
@@ -460,7 +902,7 @@ TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeReject
     EXPECT_EQ(stats.numCreated, 1);
     EXPECT_EQ(stats.createdLongTracks, 1);
     ASSERT_EQ(reconstruction.numPoints3D(), 1);
-    const xjw::ScenePoint3D &point = reconstruction.points3D().begin()->second;
+    const xjw::ScenePoint3D& point = reconstruction.points3D().begin()->second;
     EXPECT_EQ(point.track.length(), 3);
     EXPECT_LT(point.error, 0.32);
 }

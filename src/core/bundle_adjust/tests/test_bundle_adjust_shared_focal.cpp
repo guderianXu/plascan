@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 
 #include <array>
@@ -157,11 +157,11 @@ TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInit
     EXPECT_GT(shared.refinedSharedFocalScale, 1.0);
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixJointlyRefinesSharedFocalAndPoints)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU reference backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU reference backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -179,7 +179,7 @@ TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
     const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.minSharedFocalScale = 0.5;
@@ -193,7 +193,7 @@ TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
     const xjw::BAResult result =
         xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
 
-    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     ASSERT_TRUE(result.solutionUsable);
     ASSERT_FALSE(result.refinedCameras.empty());
     EXPECT_GT(result.refinedCameras.front().focalX(), 1200.0);
@@ -202,11 +202,11 @@ TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
     EXPECT_EQ(result.refinedIntrinsicCount, static_cast<int>(initialCameras.size()));
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInputs)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixUsesOneAbsoluteFocalForHeterogeneousInputs)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -224,7 +224,7 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
     const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.minSharedFocalScale = 0.5;
@@ -238,7 +238,7 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
     const xjw::BAResult result =
         xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
 
-    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     ASSERT_TRUE(result.solutionUsable);
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
 
@@ -284,11 +284,11 @@ TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesAvailablePlaMatrixGpu
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresRefinesIndependentCalibrationGroups)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixRefinesIndependentCalibrationGroups)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -306,7 +306,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRefinesIndependentCalibrationGroups)
     const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.cameraCalibrationGroupIds = {0, 0, 1, 1};
@@ -339,9 +339,9 @@ TEST(BundleAdjustSharedFocalTest, CeresRefinesIndependentCalibrationGroups)
 
 TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -358,7 +358,7 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
     };
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.stageSharedFocalRefinement = true;
@@ -399,11 +399,11 @@ TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
     EXPECT_NE(result.backendMessage.find("标定分组"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedPinholeIntrinsics)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -420,7 +420,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
     };
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.refineSharedFocalAspectRatio = true;
@@ -477,11 +477,11 @@ TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFo
     EXPECT_NE(result.backendMessage.find("主点优化"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistortion)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedBrownConradyDistortion)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -502,7 +502,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
     };
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -528,7 +528,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
         initialCameras, makeWideCalibrationTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
-    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu) << result.backendMessage;
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu) << result.backendMessage;
     EXPECT_EQ(result.selfCalibrationStagesRun, 3);
     ASSERT_FALSE(result.refinedCameras.empty());
     const xjw::FramePinholeCamera::Distortion distortion =
@@ -544,11 +544,11 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
     EXPECT_LT(result.meanRmsAfter, 0.25);
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed)
+TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionFixed)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     std::vector<xjw::FramePinholeCamera> truthCameras{
@@ -573,7 +573,7 @@ TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -713,9 +713,9 @@ TEST(BundleAdjustSharedFocalTest, LegacyRejectsMultipleCalibrationGroups)
 TEST(BundleAdjustSharedFocalTest,
      AutoDoesNotQualityFallbackMultipleGroupsToLegacy)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> cameras{

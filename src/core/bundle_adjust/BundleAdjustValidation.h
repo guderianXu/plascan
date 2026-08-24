@@ -9,7 +9,10 @@
  * 它不修改调用方配置，也不执行任何数值优化。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustOptions.h"
+#include "BundleAdjustProblem.h"
+#include "BundleAdjustResult.h"
+#include "BundleAdjustTypes.h"
 
 #include <cstddef>
 #include <string>

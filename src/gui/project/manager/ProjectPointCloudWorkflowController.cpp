@@ -863,48 +863,41 @@ void ProjectPointCloudWorkflowController::startFusion(
                     context->request, frame_count).fusion;
             const xjw::mvs::FusionFrameLoader loader =
                 [stored, cameras, fusion_config, context](
-                    int index,
-                    xjw::mvs::FusionFrameInput *frame,
-                    std::string *error_message)
+                    int index, xjw::mvs::FusionFrameInput* frame, std::string* error_message)
+            {
+                xjw::FramePinholeCamera camera;
+                if (!cameraForImage(cameras, stored.frames[static_cast<std::size_t>(index)].refImage, &camera))
                 {
-                    xjw::FramePinholeCamera camera;
-                    if (!cameraForImage(cameras,
-                                        stored.frames[static_cast<std::size_t>(index)].refImage,
-                                        &camera))
+                    if (error_message)
                     {
-                        if (error_message)
-                        {
-                            *error_message = "Missing camera for stored depth frame";
-                        }
-                        return false;
+                        *error_message = "Missing camera for stored depth frame";
                     }
-                    auto loaded = xjw::core::project::buildStoredFusionFrame(
-                        stored.frames[static_cast<std::size_t>(index)],
-                        camera,
-                        fusion_config,
-                        static_cast<int>(stored.frames.size()),
-                        context->request.fusionMaxImageDim);
-                    if (!loaded.status.ok)
+                    return false;
+                }
+                auto loaded = xjw::core::project::buildStoredFusionFrame(stored.frames[static_cast<std::size_t>(index)],
+                                                                         camera,
+                                                                         fusion_config,
+                                                                         static_cast<int>(stored.frames.size()),
+                                                                         context->request.fusionMaxImageDim);
+                if (!loaded.status.ok)
+                {
+                    if (error_message)
                     {
-                        if (error_message)
-                        {
-                            *error_message = xjw::common::io::toUtf8Path(
-                                loaded.status.errorMessage);
-                        }
-                        return false;
+                        *error_message = xjw::common::io::toUtf8Path(loaded.status.errorMessage);
                     }
-                    *frame = std::move(loaded.frame);
-                    frame->viewIndex = index;
-                    frame->sourceImageIndices =
-                        xjw::core::project::storedFusionSourceIndices(
-                            stored.frames, index);
-                    return true;
-                };
+                    return false;
+                }
+                *frame = std::move(loaded.frame);
+                frame->viewIndex = index;
+                frame->sourceImageIndices = xjw::core::project::storedFusionSourceIndices(stored.frames, index);
+                return true;
+            };
 
             xjw::mvs::StreamingDepthFusionConfig config;
             config.minConsistentViews = context->request.minConsistentViews;
             config.depthConsistency = context->request.depthConsistency;
             config.workerCount = std::max(1, context->request.threads);
+            config.computeBackend = context->request.patchMatchBackend;
             config.neighborCount = fusionNeighborCount(context->request, frame_count);
             config.cacheFrameLimit = 32;
             config.useColor = context->calculateColors;
@@ -1019,39 +1012,43 @@ void ProjectPointCloudWorkflowController::startFusion(
             task.record[QStringLiteral("quality_profile")] = context->request.qualityProfile;
             task.record[QStringLiteral("depth_filter_mode")] =
                 context->request.depthFilterMode;
-            task.record[QStringLiteral("scene_profile")] =
-                sceneProfileFromStoredFrames(stored.frames);
+            task.record[QStringLiteral("scene_profile")] = sceneProfileFromStoredFrames(stored.frames);
             task.record[QStringLiteral("mvs_backend_requested")] =
                 patchMatchBackendText(context->request.patchMatchBackend);
-            task.record[QStringLiteral("mvs_backend_actual")] =
-                mvsBackendFromStoredFrames(stored.frames);
+            task.record[QStringLiteral("mvs_backend_actual")] = mvsBackendFromStoredFrames(stored.frames);
             task.record[QStringLiteral("mvs_backend_selected_in_dialog")] =
                 patchMatchBackendText(context->request.patchMatchBackend);
-            task.record[QStringLiteral("mvs_backend_request_applied")] =
-                !context->reusedDepthMaps;
-            task.record[QStringLiteral("depth_maps_reused")] =
-                context->reusedDepthMaps;
-            task.record[QStringLiteral("calculate_point_colors")] =
-                context->calculateColors;
+            task.record[QStringLiteral("mvs_backend_request_applied")] = !context->reusedDepthMaps;
+            task.record[QStringLiteral("fusion_unprojection_backend_requested")] = QString::fromLatin1(
+                xjw::mvs::denseCloudComputeBackendId(fused.unprojectionExecution.requestedBackend));
+            task.record[QStringLiteral("fusion_unprojection_backend_actual")] =
+                fused.mixedUnprojectionBackends
+                    ? QStringLiteral("mixed")
+                    : QString::fromLatin1(
+                          xjw::mvs::denseCloudComputeBackendId(fused.unprojectionExecution.actualBackend));
+            task.record[QStringLiteral("fusion_unprojection_device_index")] =
+                fused.unprojectionExecution.deviceIndex;
+            task.record[QStringLiteral("fusion_unprojection_device_name")] =
+                QString::fromUtf8(fused.unprojectionExecution.deviceName.c_str());
+            task.record[QStringLiteral("fusion_unprojection_backend_fallback")] =
+                fused.unprojectionExecution.fallbackUsed;
+            task.record[QStringLiteral("fusion_unprojection_backend_fallback_reason")] =
+                QString::fromUtf8(fused.unprojectionExecution.fallbackReason.c_str());
+            task.record[QStringLiteral("fusion_consistency_backend")] = QStringLiteral("cpu");
+            task.record[QStringLiteral("depth_maps_reused")] = context->reusedDepthMaps;
+            task.record[QStringLiteral("calculate_point_colors")] = context->calculateColors;
             task.record[QStringLiteral("point_confidence_available")] = false;
             task.record[QStringLiteral("point_cloud_processing")] = QJsonObject{
                 {QStringLiteral("stage"), QStringLiteral("statistical_outlier_removal")},
                 {QStringLiteral("requested"),
-                 xjw::core::project::processingDeviceId(
-                     processing_report.requestedDevice)},
+                 xjw::core::project::processingDeviceId(processing_report.requestedDevice)},
                 {QStringLiteral("actual"),
-                 processing_skipped
-                     ? QStringLiteral("skipped")
-                     : xjw::core::project::processingDeviceId(
-                           processing_report.actualDevice)},
+                 processing_skipped ? QStringLiteral("skipped")
+                                    : xjw::core::project::processingDeviceId(processing_report.actualDevice)},
                 {QStringLiteral("used_fallback"), processing_report.usedFallback},
-                {QStringLiteral("fallback_reason"),
-                 QString::fromStdString(processing_report.fallbackReason)},
-                {QStringLiteral("input_points"),
-                 static_cast<qint64>(before_processing)},
-                {QStringLiteral("output_points"),
-                 static_cast<qint64>(cloud.size())}
-            };
+                {QStringLiteral("fallback_reason"), QString::fromStdString(processing_report.fallbackReason)},
+                {QStringLiteral("input_points"), static_cast<qint64>(before_processing)},
+                {QStringLiteral("output_points"), static_cast<qint64>(cloud.size())}};
             if (!stored.frames.empty())
             {
                 task.record[QStringLiteral("source_depth_config_hash")] =

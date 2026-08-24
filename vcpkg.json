@@ -19,22 +19,6 @@
     "libzip",
     "opencl",
     {
-      "name": "opencv",
-      "default-features": false,
-      "features": [
-        "calib3d",
-        "contrib",
-        "dnn",
-        "highgui",
-        "intrinsics",
-        "jpeg",
-        "openjpeg",
-        "png",
-        "thread",
-        "tiff"
-      ]
-    },
-    {
       "name": "qtbase",
       "default-features": false,
       "features": [
@@ -100,31 +84,5 @@
       "platform": "linux"
     }
   ],
-  "default-features": [],
-  "features": {
-    "ceres-cuda": {
-      "description": "Enable the optional CUDA-capable Ceres reference backend for BA parity tests.",
-      "dependencies": [
-        {
-          "name": "ceres",
-          "default-features": false,
-          "features": [
-            "cuda"
-          ]
-        }
-      ]
-    },
-    "ceres-reference": {
-      "description": "Enable the optional CPU Ceres EigenSparse reference backend for BA parity tests.",
-      "dependencies": [
-        {
-          "name": "ceres",
-          "default-features": false,
-          "features": [
-            "eigensparse"
-          ]
-        }
-      ]
-    }
-  }
+  "default-features": []
 }

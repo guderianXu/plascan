@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "BundleAdjustPlaMatrixConstraints.h"
 #include "FramePinholeCamera.h"
 
@@ -120,11 +120,11 @@ xjw::BALaserRangeConstraint makeLaserShot(
 } // namespace
 
 TEST(BundleAdjustPlaMatrixConstraintParityTest,
-     GcpLidarScalePoseAndLaserRangeMatchCeresAcrossBackends)
+     GcpLidarScalePoseAndLaserRangeMatchAcrossBackends)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres backend is unavailable";
+        GTEST_SKIP() << "PlaMatrix backend is unavailable";
     }
     const std::vector<xjw::FramePinholeCamera> truth_cameras{
         makeConstraintCamera(-3.0, 0.0),
@@ -185,13 +185,18 @@ TEST(BundleAdjustPlaMatrixConstraintParityTest,
     options.stepTolerance = 1e-9;
     options.allowBackendFallback = false;
 
-    auto ceres_options = options;
-    ceres_options.backend = xjw::BABackend::CeresCpu;
-    const auto ceres = xjw::BundleAdjust::optimizePoints(
-        initial_cameras, tracks, ceres_options);
-    ASSERT_TRUE(ceres.solutionUsable) << ceres.backendMessage;
+    auto plamatrix_options = options;
+    plamatrix_options.backend = xjw::BABackend::PlaMatrixCpu;
+    const auto plamatrix = xjw::BundleAdjust::optimizePoints(
+        initial_cameras, tracks, plamatrix_options);
+    ASSERT_TRUE(plamatrix.solutionUsable) << plamatrix.backendMessage;
 
-    std::vector<xjw::BABackend> backends{xjw::BABackend::PlaMatrixCpu};
+    EXPECT_GT(plamatrix.controlPointConstraintCount, 0);
+    EXPECT_GT(plamatrix.laserConstraintCount, 0);
+    EXPECT_GT(plamatrix.scaleBarConstraintCount, 0);
+    EXPECT_EQ(plamatrix.laserRangeConstraintCount, 1);
+
+    std::vector<xjw::BABackend> backends;
     for (const auto backend : {
              xjw::BABackend::PlaMatrixCuda,
              xjw::BABackend::PlaMatrixOpenCl})
@@ -211,11 +216,11 @@ TEST(BundleAdjustPlaMatrixConstraintParityTest,
             << xjw::BundleAdjust::backendName(backend) << ": " << result.backendMessage;
         EXPECT_EQ(result.usedBackend, backend);
         EXPECT_FALSE(result.backendFallback);
-        EXPECT_EQ(result.controlPointConstraintCount, ceres.controlPointConstraintCount);
-        EXPECT_EQ(result.laserConstraintCount, ceres.laserConstraintCount);
-        EXPECT_EQ(result.scaleBarConstraintCount, ceres.scaleBarConstraintCount);
+        EXPECT_EQ(result.controlPointConstraintCount, plamatrix.controlPointConstraintCount);
+        EXPECT_EQ(result.laserConstraintCount, plamatrix.laserConstraintCount);
+        EXPECT_EQ(result.scaleBarConstraintCount, plamatrix.scaleBarConstraintCount);
         EXPECT_EQ(result.laserRangeConstraintCount, 1);
-        EXPECT_NEAR(result.meanRmsAfter, ceres.meanRmsAfter, 2e-3)
+        EXPECT_NEAR(result.meanRmsAfter, plamatrix.meanRmsAfter, 2e-3)
             << "backend=" << xjw::BundleAdjust::backendName(backend)
             << ", iterations=" << result.points.front().iterations
             << ", accepted=" << result.plaMatrixAcceptedSteps
@@ -225,13 +230,13 @@ TEST(BundleAdjustPlaMatrixConstraintParityTest,
         for (std::size_t camera_index : {2u, 3u})
         {
             EXPECT_LT(distance(result.refinedCameras[camera_index].cameraCenter(),
-                               ceres.refinedCameras[camera_index].cameraCenter()),
+                               plamatrix.refinedCameras[camera_index].cameraCenter()),
                       5e-3);
         }
         ASSERT_EQ(result.laserRangeShots.size(), 1u);
-        ASSERT_EQ(ceres.laserRangeShots.size(), 1u);
+        ASSERT_EQ(plamatrix.laserRangeShots.size(), 1u);
         EXPECT_LT(distance(result.laserRangeShots[0].point,
-                           ceres.laserRangeShots[0].point),
+                           plamatrix.laserRangeShots[0].point),
                   5e-3);
     }
 }

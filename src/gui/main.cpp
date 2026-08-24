@@ -29,6 +29,7 @@
 #include "platform/ProjectFileIntegration.h"
 #include "runtime/PythonRuntimeManager.h"
 #include "runtime/PythonRuntimeLocator.h"
+#include "runtime/GeospatialRuntimePaths.h"
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
@@ -195,6 +196,8 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("PlaScan"));
     app.setApplicationVersion(QStringLiteral(PLASCAN_VERSION));
     app.setDesktopFileName(QStringLiteral("plascan"));
+    const xjw::gui::runtime::GeospatialDataPaths geospatial_paths =
+        xjw::gui::runtime::configureGeospatialDataPaths(QCoreApplication::applicationDirPath());
     const bool python_runtime_available = bindPythonRuntime();
     applyApplicationStyle(app);
 
@@ -222,6 +225,15 @@ int main(int argc, char *argv[])
     QDir(baseDir).mkpath(QStringLiteral("logs"));
     Logger::instance()->setLogDirectory(QDir(baseDir).filePath(QStringLiteral("logs")));
     LOG_INFO("PlaScan GUI started");
+    if (geospatial_paths.projData.isEmpty())
+    {
+        LOG_ERROR("PROJ data directory was not found; coordinate-system operations may fail. executable_dir=%s",
+                  QCoreApplication::applicationDirPath().toUtf8().constData());
+    }
+    else
+    {
+        LOG_INFO("PlaScan PROJ data bound: %s", geospatial_paths.projData.toUtf8().constData());
+    }
     configureOpenClDevicePolicy();
 
     const auto association_result =

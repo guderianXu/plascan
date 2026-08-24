@@ -1,6 +1,7 @@
 include(PlascanTestRuntime)
 
 add_executable(test_mask_generation
+    test_interactive_mask_algorithms.cpp
     test_mask_generation.cpp
 )
 

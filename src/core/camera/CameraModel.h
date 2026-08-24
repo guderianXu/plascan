@@ -16,7 +16,8 @@ namespace xjw
 enum class CameraModelType
 {
     FramePinhole,
-    PlanetaryLineScan
+    PlanetaryLineScan,
+    RationalPolynomial
 };
 
 /** @brief Image coordinate using OpenCV's zero-based pixel-centre convention. */
@@ -50,11 +51,12 @@ struct CameraGroundProjection
 };
 
 /**
- * @brief Read-only geometry shared by frame and time-dependent line-scan cameras.
+ * @brief Read-only geometry shared by frame, time-dependent line-scan and RPC cameras.
  *
  * The common boundary intentionally contains only pixel/ray/ground operations.
  * Intrinsic parameters, pose updates and bundle-adjustment residuals remain on
- * the concrete models because a pushbroom image has no single static pose.
+ * the concrete models because pushbroom and RPC images have no single static pose.
+ * RPC ray queries return a documented local chord over the model's height range.
  */
 class CameraModel
 {

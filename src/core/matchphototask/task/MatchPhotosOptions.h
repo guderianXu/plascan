@@ -36,6 +36,52 @@ enum class ReferencePreselectionGeometry
     SparseScene
 };
 
+enum class GuidedMatchingMode
+{
+    Disabled,
+    Automatic,
+    Forced
+};
+
+inline QString guidedMatchingModeName(GuidedMatchingMode mode)
+{
+    switch (mode)
+    {
+    case GuidedMatchingMode::Disabled:
+        return QStringLiteral("off");
+    case GuidedMatchingMode::Automatic:
+        return QStringLiteral("auto");
+    case GuidedMatchingMode::Forced:
+        return QStringLiteral("force");
+    }
+    return QStringLiteral("off");
+}
+
+inline bool guidedMatchingEnabled(GuidedMatchingMode mode)
+{
+    return mode != GuidedMatchingMode::Disabled;
+}
+
+inline GuidedMatchingMode guidedMatchingModeFromName(
+    const QString &name,
+    GuidedMatchingMode fallback = GuidedMatchingMode::Disabled)
+{
+    const QString normalized = name.trimmed().toLower();
+    if (normalized == QLatin1String("off") || normalized == QLatin1String("disabled"))
+    {
+        return GuidedMatchingMode::Disabled;
+    }
+    if (normalized == QLatin1String("auto") || normalized == QLatin1String("automatic"))
+    {
+        return GuidedMatchingMode::Automatic;
+    }
+    if (normalized == QLatin1String("force") || normalized == QLatin1String("forced"))
+    {
+        return GuidedMatchingMode::Forced;
+    }
+    return fallback;
+}
+
 struct MatchPhotosOptions
 {
     MatchPhotosProfile profile = MatchPhotosProfile::Auto;
@@ -87,7 +133,10 @@ struct MatchPhotosOptions
     int tiePointGridRows = 4;
     bool enableGeometryVerification = true;
     bool enableTrackBuild = true;
-    bool enableGuidedMatching = false;
+    // Automatic 只补救几何可靠但支持度、内点率或覆盖率偏弱的像对；Forced
+    // 对所有具备可靠基础矩阵或可信参考位姿的像对执行引导搜索。
+    GuidedMatchingMode guidedMatchingMode = GuidedMatchingMode::Disabled;
+    bool guidedUseReferenceCameraPoses = false;
     bool guidedRequireMultiViewConsistency = true;
     bool useExplicitKeypointLimit = false;
     bool useGenericPreselection = true;

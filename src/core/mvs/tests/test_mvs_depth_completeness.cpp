@@ -66,12 +66,21 @@ TEST(DepthCompletenessMetricsTest, SerializesUnavailableInputsWithoutFakeZeros)
     EXPECT_FALSE(json.value(QStringLiteral("available")).toBool(true));
     EXPECT_FALSE(json.contains(QStringLiteral("mask_pixel_count")));
     EXPECT_FALSE(json.contains(QStringLiteral("output_filter_retention_ratio")));
+    EXPECT_FALSE(json.contains(QStringLiteral("published_post_consistency_valid_count")));
+    EXPECT_FALSE(json.contains(QStringLiteral("published_consistency_retention_ratio")));
+    EXPECT_FALSE(json.value(QStringLiteral("consistency_publication_fallback_applied")).toBool());
     EXPECT_EQ(json.value(QStringLiteral("restored_from_prefilter_count")).toInt(-1), 0);
 }
 
 TEST(DepthCompletenessMetricsTest, SerializesCrossViewGeometryEvidence)
 {
     xjw::mvs::DepthCompletenessDiagnostics diagnostics;
+    diagnostics.preConsistencyValidCount = 1000;
+    diagnostics.postConsistencyValidCount = 80;
+    diagnostics.consistencyRetentionRatio = 0.08f;
+    diagnostics.publishedPostConsistencyValidCount = 1000;
+    diagnostics.publishedConsistencyRetentionRatio = 1.0f;
+    diagnostics.consistencyPublicationFallbackApplied = true;
     diagnostics.consistencyConfirmedObservationCount = 120;
     diagnostics.consistencyOccludedObservationCount = 30;
     diagnostics.consistencyContradictedObservationCount = 12;
@@ -80,6 +89,14 @@ TEST(DepthCompletenessMetricsTest, SerializesCrossViewGeometryEvidence)
     diagnostics.crossViewRepairedCount = 19;
 
     const QJsonObject json = xjw::mvs::depthCompletenessDiagnosticsToJson(diagnostics);
+
+    EXPECT_EQ(json.value(QStringLiteral("post_consistency_valid_count")).toInt(), 80);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("consistency_retention_ratio")).toDouble(),
+                     static_cast<double>(diagnostics.consistencyRetentionRatio));
+    EXPECT_EQ(json.value(QStringLiteral("published_post_consistency_valid_count")).toInt(), 1000);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("published_consistency_retention_ratio")).toDouble(),
+                     static_cast<double>(diagnostics.publishedConsistencyRetentionRatio));
+    EXPECT_TRUE(json.value(QStringLiteral("consistency_publication_fallback_applied")).toBool());
 
     EXPECT_EQ(json.value(QStringLiteral("consistency_confirmed_observation_count")).toInt(), 120);
     EXPECT_EQ(json.value(QStringLiteral("consistency_occluded_observation_count")).toInt(), 30);
@@ -98,8 +115,7 @@ TEST(DepthCompletenessMetricsTest, RestoresOnlyLocallySupportedSmallInteriorHole
     depth(cv::Rect(10, 10, 3, 3)).setTo(0.0f);
     candidate(cv::Rect(10, 10, 3, 3)).setTo(2.05f);
 
-    const int restored = xjw::mvs::restoreSmallInteriorDepthHoles(
-        depth, candidate, confidence, mask);
+    const int restored = xjw::mvs::restoreSmallInteriorDepthHoles(depth, candidate, confidence, mask);
 
     EXPECT_EQ(restored, 9);
     EXPECT_EQ(cv::countNonZero(depth(cv::Rect(10, 10, 3, 3)) > 0.0f), 9);

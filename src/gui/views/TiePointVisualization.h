@@ -93,6 +93,7 @@ PruneCandidateQueryResult queryPruneCandidates(
     qsizetype pointCount,
     const std::atomic_bool *cancellationFlag = nullptr,
     std::size_t maximumReturnedIndices =
-        std::numeric_limits<std::size_t>::max());
+        std::numeric_limits<std::size_t>::max(),
+    const std::vector<std::uint32_t> *excludedIndices = nullptr);
 
 } // namespace xjw::gui::tie_points

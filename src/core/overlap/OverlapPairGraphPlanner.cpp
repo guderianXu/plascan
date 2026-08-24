@@ -215,32 +215,116 @@ OverlapPairGraphEdge *addOrUpdateEdge(std::unordered_map<std::uint64_t, OverlapP
     return &acceptedIt->second;
 }
 
-DisjointSet buildComponents(const std::unordered_map<std::uint64_t, OverlapPairGraphEdge> &accepted, int imageCount)
+DisjointSet buildComponents(const std::unordered_map<std::uint64_t, OverlapPairGraphEdge>& accepted, int imageCount)
 {
     DisjointSet components(imageCount);
-    for (const auto &entry : accepted)
+    for (const auto& entry : accepted)
     {
-        const OverlapPairGraphEdge &edge = entry.second;
+        const OverlapPairGraphEdge& edge = entry.second;
         components.unite(edge.indexA, edge.indexB);
     }
     return components;
 }
 
-std::vector<int> edgeDegrees(const std::unordered_map<std::uint64_t, OverlapPairGraphEdge> &accepted,
-                             int imageCount)
+std::vector<int> edgeDegrees(const std::unordered_map<std::uint64_t, OverlapPairGraphEdge>& accepted, int imageCount)
 {
     std::vector<int> degrees(static_cast<std::size_t>(imageCount), 0);
-    for (const auto &entry : accepted)
+    for (const auto& entry : accepted)
     {
-        const OverlapPairGraphEdge &edge = entry.second;
+        const OverlapPairGraphEdge& edge = entry.second;
         ++degrees[static_cast<std::size_t>(edge.indexA)];
         ++degrees[static_cast<std::size_t>(edge.indexB)];
     }
     return degrees;
 }
 
-int addBowComponentBridges(std::unordered_map<std::uint64_t, OverlapPairGraphEdge> *accepted,
-                           const std::unordered_map<std::uint64_t, OverlapPairGraphEdge> &inputByKey,
+int addCycleClosureEdges(std::unordered_map<std::uint64_t, OverlapPairGraphEdge>* accepted,
+                         const std::unordered_map<std::uint64_t, OverlapPairGraphEdge>& inputByKey,
+                         int imageCount,
+                         double minSimilarity,
+                         int maxPairsPerImage)
+{
+    if (!accepted || imageCount < 3 || maxPairsPerImage <= 0)
+    {
+        return 0;
+    }
+
+    std::vector<std::unordered_set<int>> adjacency(static_cast<std::size_t>(imageCount));
+    for (const auto& entry : *accepted)
+    {
+        const OverlapPairGraphEdge& edge = entry.second;
+        adjacency[static_cast<std::size_t>(edge.indexA)].insert(edge.indexB);
+        adjacency[static_cast<std::size_t>(edge.indexB)].insert(edge.indexA);
+    }
+
+    struct Candidate
+    {
+        const OverlapPairGraphEdge* edge = nullptr;
+        int commonNeighborCount = 0;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(inputByKey.size());
+    for (const auto& entry : inputByKey)
+    {
+        if (accepted->find(entry.first) != accepted->end() || entry.second.bowScore < minSimilarity)
+        {
+            continue;
+        }
+
+        const auto& leftNeighbors = adjacency[static_cast<std::size_t>(entry.second.indexA)];
+        const auto& rightNeighbors = adjacency[static_cast<std::size_t>(entry.second.indexB)];
+        const auto& smaller = leftNeighbors.size() <= rightNeighbors.size() ? leftNeighbors : rightNeighbors;
+        const auto& larger = leftNeighbors.size() <= rightNeighbors.size() ? rightNeighbors : leftNeighbors;
+        int commonNeighborCount = 0;
+        for (int neighbor : smaller)
+        {
+            if (larger.find(neighbor) != larger.end())
+            {
+                ++commonNeighborCount;
+            }
+        }
+        if (commonNeighborCount > 0)
+        {
+            candidates.push_back({&entry.second, commonNeighborCount});
+        }
+    }
+
+    std::sort(candidates.begin(),
+              candidates.end(),
+              [](const Candidate& left, const Candidate& right)
+              {
+                  if (left.commonNeighborCount != right.commonNeighborCount)
+                  {
+                      return left.commonNeighborCount > right.commonNeighborCount;
+                  }
+                  if (left.edge->bowScore != right.edge->bowScore)
+                  {
+                      return left.edge->bowScore > right.edge->bowScore;
+                  }
+                  return pairKey(left.edge->indexA, left.edge->indexB) <
+                         pairKey(right.edge->indexA, right.edge->indexB);
+              });
+
+    std::vector<int> addedByImage(static_cast<std::size_t>(imageCount), 0);
+    int addedCount = 0;
+    for (const Candidate& candidate : candidates)
+    {
+        const OverlapPairGraphEdge& edge = *candidate.edge;
+        if (addedByImage[static_cast<std::size_t>(edge.indexA)] >= maxPairsPerImage ||
+            addedByImage[static_cast<std::size_t>(edge.indexB)] >= maxPairsPerImage)
+        {
+            continue;
+        }
+        addOrUpdateEdge(accepted, inputByKey, edge.indexA, edge.indexB, OverlapPairGraphSource::BowCycleClosure);
+        ++addedByImage[static_cast<std::size_t>(edge.indexA)];
+        ++addedByImage[static_cast<std::size_t>(edge.indexB)];
+        ++addedCount;
+    }
+    return addedCount;
+}
+
+int addBowComponentBridges(std::unordered_map<std::uint64_t, OverlapPairGraphEdge>* accepted,
+                           const std::unordered_map<std::uint64_t, OverlapPairGraphEdge>& inputByKey,
                            int imageCount,
                            int maxBridgeCount)
 {
@@ -343,20 +427,19 @@ void addSequenceLoopEdges(std::unordered_map<std::uint64_t, OverlapPairGraphEdge
     }
 }
 
-std::string makeDetail(const OverlapPairGraphPlan &plan)
+std::string makeDetail(const OverlapPairGraphPlan& plan)
 {
     std::ostringstream stream;
     stream << "components_before=" << plan.componentCountBeforeRepair
-           << " components_after=" << plan.componentCountAfterRepair
-           << " bow_bridges=" << plan.bowBridgeCount
-           << " sequence_bridges=" << plan.sequenceBridgeCount
+           << " components_after=" << plan.componentCountAfterRepair << " cycle_closures=" << plan.cycleClosureCount
+           << " bow_bridges=" << plan.bowBridgeCount << " sequence_bridges=" << plan.sequenceBridgeCount
            << " accepted=" << plan.edges.size();
     return stream.str();
 }
 
 } // namespace
 
-const char *overlapPairGraphSourceId(OverlapPairGraphSource source)
+const char* overlapPairGraphSourceId(OverlapPairGraphSource source)
 {
     switch (source)
     {
@@ -364,6 +447,8 @@ const char *overlapPairGraphSourceId(OverlapPairGraphSource source)
         return "bow_mutual_top_k";
     case OverlapPairGraphSource::BowOneWayTopK:
         return "bow_one_way_top_k";
+    case OverlapPairGraphSource::BowCycleClosure:
+        return "bow_cycle_closure";
     case OverlapPairGraphSource::BowComponentBridge:
         return "bow_component_bridge";
     case OverlapPairGraphSource::SequenceBridge:
@@ -374,8 +459,8 @@ const char *overlapPairGraphSourceId(OverlapPairGraphSource source)
     return "unknown";
 }
 
-OverlapPairGraphPlan OverlapPairGraphPlanner::plan(const std::vector<OverlapPairGraphInputEdge> &edges,
-                                                   const OverlapPairGraphPlannerOptions &options)
+OverlapPairGraphPlan OverlapPairGraphPlanner::plan(const std::vector<OverlapPairGraphInputEdge>& edges,
+                                                   const OverlapPairGraphPlannerOptions& options)
 {
     OverlapPairGraphPlan plan;
     const int imageCount = std::max(0, options.imageCount);
@@ -388,40 +473,36 @@ OverlapPairGraphPlan OverlapPairGraphPlanner::plan(const std::vector<OverlapPair
     const int topK = std::max(1, options.topK);
     const int minPairsPerImage = std::max(0, options.minPairsPerImage);
     const double minSimilarity = std::max(0.0, options.minSimilarity);
-    const std::unordered_map<std::uint64_t, OverlapPairGraphEdge> inputByKey =
-        uniqueInputEdges(edges, imageCount);
-    const std::vector<std::vector<Neighbor>> topNeighbors =
-        buildTopNeighbors(inputByKey, imageCount, minSimilarity);
+    const std::unordered_map<std::uint64_t, OverlapPairGraphEdge> inputByKey = uniqueInputEdges(edges, imageCount);
+    const std::vector<std::vector<Neighbor>> topNeighbors = buildTopNeighbors(inputByKey, imageCount, minSimilarity);
 
     std::unordered_map<std::uint64_t, OverlapPairGraphEdge> accepted;
-    for (const auto &entry : inputByKey)
+    for (const auto& entry : inputByKey)
     {
-        const OverlapPairGraphEdge &edge = entry.second;
+        const OverlapPairGraphEdge& edge = entry.second;
         const bool aHasB = containsTopNeighbor(topNeighbors, edge.indexA, edge.indexB, topK);
         const bool bHasA = containsTopNeighbor(topNeighbors, edge.indexB, edge.indexA, topK);
         if (options.mutualTopK)
         {
             if (aHasB && bHasA)
             {
-                addOrUpdateEdge(&accepted, inputByKey, edge.indexA, edge.indexB,
-                                OverlapPairGraphSource::BowMutualTopK);
+                addOrUpdateEdge(&accepted, inputByKey, edge.indexA, edge.indexB, OverlapPairGraphSource::BowMutualTopK);
             }
         }
         else if (aHasB || bHasA)
         {
-            addOrUpdateEdge(&accepted, inputByKey, edge.indexA, edge.indexB,
-                            OverlapPairGraphSource::BowOneWayTopK);
+            addOrUpdateEdge(&accepted, inputByKey, edge.indexA, edge.indexB, OverlapPairGraphSource::BowOneWayTopK);
         }
     }
 
     if (options.keepOneWayTopK)
     {
         std::vector<int> degrees = edgeDegrees(accepted, imageCount);
-        std::vector<const OverlapPairGraphEdge *> candidates;
+        std::vector<const OverlapPairGraphEdge*> candidates;
         candidates.reserve(inputByKey.size());
-        for (const auto &entry : inputByKey)
+        for (const auto& entry : inputByKey)
         {
-            const OverlapPairGraphEdge &edge = entry.second;
+            const OverlapPairGraphEdge& edge = entry.second;
             const bool aHasB = containsTopNeighbor(topNeighbors, edge.indexA, edge.indexB, topK);
             const bool bHasA = containsTopNeighbor(topNeighbors, edge.indexB, edge.indexA, topK);
             if (aHasB || bHasA)
@@ -429,27 +510,26 @@ OverlapPairGraphPlan OverlapPairGraphPlanner::plan(const std::vector<OverlapPair
                 candidates.push_back(&edge);
             }
         }
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const OverlapPairGraphEdge *left, const OverlapPairGraphEdge *right)
-        {
-            if (left->bowScore != right->bowScore)
-            {
-                return left->bowScore > right->bowScore;
-            }
-            return pairKey(left->indexA, left->indexB) < pairKey(right->indexA, right->indexB);
-        });
+        std::sort(candidates.begin(),
+                  candidates.end(),
+                  [](const OverlapPairGraphEdge* left, const OverlapPairGraphEdge* right)
+                  {
+                      if (left->bowScore != right->bowScore)
+                      {
+                          return left->bowScore > right->bowScore;
+                      }
+                      return pairKey(left->indexA, left->indexB) < pairKey(right->indexA, right->indexB);
+                  });
 
-        for (const OverlapPairGraphEdge *edge : candidates)
+        for (const OverlapPairGraphEdge* edge : candidates)
         {
-            if (minPairsPerImage > 0 &&
-                degrees[static_cast<std::size_t>(edge->indexA)] >= minPairsPerImage &&
+            if (minPairsPerImage > 0 && degrees[static_cast<std::size_t>(edge->indexA)] >= minPairsPerImage &&
                 degrees[static_cast<std::size_t>(edge->indexB)] >= minPairsPerImage)
             {
                 continue;
             }
-            OverlapPairGraphEdge *acceptedEdge =
-                addOrUpdateEdge(&accepted, inputByKey, edge->indexA, edge->indexB,
-                                OverlapPairGraphSource::BowOneWayTopK);
+            OverlapPairGraphEdge* acceptedEdge = addOrUpdateEdge(
+                &accepted, inputByKey, edge->indexA, edge->indexB, OverlapPairGraphSource::BowOneWayTopK);
             if (acceptedEdge && acceptedEdge->sources.size() == 1)
             {
                 ++degrees[static_cast<std::size_t>(edge->indexA)];
@@ -458,13 +538,16 @@ OverlapPairGraphPlan OverlapPairGraphPlanner::plan(const std::vector<OverlapPair
         }
     }
 
+    // 只扩展能与已接受边组成三角闭环的候选。相比继续提高全局 Top-K，这类
+    // 影像对已有共同邻居作为共视证据，且仍会进入后续完整匹配与 USAC 门控。
+    plan.cycleClosureCount =
+        addCycleClosureEdges(&accepted, inputByKey, imageCount, minSimilarity, options.cycleClosureMaxPairsPerImage);
+
     plan.componentCountBeforeRepair = buildComponents(accepted, imageCount).componentCount();
     if (options.connectComponents)
     {
-        plan.bowBridgeCount = addBowComponentBridges(&accepted,
-                                                     inputByKey,
-                                                     imageCount,
-                                                     std::max(0, options.componentBridgeMaxPairs));
+        plan.bowBridgeCount =
+            addBowComponentBridges(&accepted, inputByKey, imageCount, std::max(0, options.componentBridgeMaxPairs));
         if (options.useSequenceFallback)
         {
             // BoW 的连通性只代表外观相似，不代表这些边都能通过几何验证。

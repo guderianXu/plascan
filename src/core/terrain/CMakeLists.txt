@@ -1,4 +1,28 @@
+set(TERRAIN_GPU_SOURCES)
+if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER)
+    list(APPEND TERRAIN_GPU_SOURCES TerrainCudaBackend.cu)
+    set(TERRAIN_HAS_CUDA TRUE)
+    message(STATUS "terrain: CUDA backend enabled")
+else()
+    list(APPEND TERRAIN_GPU_SOURCES TerrainNoCudaBackend.cpp)
+    set(TERRAIN_HAS_CUDA FALSE)
+    message(STATUS "terrain: CUDA backend unavailable")
+endif()
+
+if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
+    list(APPEND TERRAIN_GPU_SOURCES TerrainOpenClBackend.cpp)
+    set(TERRAIN_HAS_OPENCL TRUE)
+    message(STATUS "terrain: OpenCL backend enabled")
+else()
+    list(APPEND TERRAIN_GPU_SOURCES TerrainNoOpenClBackend.cpp)
+    set(TERRAIN_HAS_OPENCL FALSE)
+    message(STATUS "terrain: OpenCL backend unavailable")
+endif()
+
 add_library(terrain STATIC
+    TerrainComputeBackend.cpp
+    OrthoProjectorGpu.cpp
+    ${TERRAIN_GPU_SOURCES}
     TerrainPipeline.cpp
     SmallBodyGlobalProducts.cpp
     SmallBodyGlobalProductGenerator.cpp
@@ -20,6 +44,21 @@ add_library(terrain STATIC
     ObjMtlLoader.cpp
     projection/AsteroidProjection.cpp
 )
+
+if(TERRAIN_HAS_CUDA)
+    set_target_properties(terrain PROPERTIES
+        CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    )
+    target_compile_options(terrain PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+    )
+endif()
+
+if(TERRAIN_HAS_OPENCL)
+    target_link_libraries(terrain PRIVATE OpenCL::OpenCL)
+endif()
 
 target_include_directories(terrain PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

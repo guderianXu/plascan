@@ -480,7 +480,8 @@ int executeRefinementTransaction(
 
 int main(int argc, char **argv)
 {
-    CLI::App app{"Refine dense point clouds and write a quality report"};
+    CLI::App app{"PlaScan 稠密点云细化与质量报告工具"};
+    cli::configureApp(app);
 
     std::string inputPath;
     std::string outputPath;

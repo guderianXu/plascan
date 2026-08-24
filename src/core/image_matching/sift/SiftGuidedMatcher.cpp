@@ -1,10 +1,12 @@
 #include "SiftGuidedMatcher.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
 #include <utility>
+
+#include <opencv2/core/hal/intrin.hpp>
 
 namespace xjw::image_matching
 {
@@ -30,20 +32,21 @@ namespace xjw::image_matching
 
         std::vector<int> unmatchedIndices(int count, const std::vector<int>& used)
         {
-            std::unordered_set<int> usedSet;
-            usedSet.reserve(used.size());
+            std::vector<std::uint8_t> used_mask(static_cast<std::size_t>(std::max(0, count)), 0);
+            int used_count = 0;
             for (const int index : used)
             {
-                if (index >= 0 && index < count)
+                if (index >= 0 && index < count && !used_mask[static_cast<std::size_t>(index)])
                 {
-                    usedSet.insert(index);
+                    used_mask[static_cast<std::size_t>(index)] = 1;
+                    ++used_count;
                 }
             }
             std::vector<int> result;
-            result.reserve(static_cast<std::size_t>(std::max(0, count - static_cast<int>(usedSet.size()))));
+            result.reserve(static_cast<std::size_t>(std::max(0, count - used_count)));
             for (int index = 0; index < count; ++index)
             {
-                if (!usedSet.contains(index))
+                if (!used_mask[static_cast<std::size_t>(index)])
                 {
                     result.push_back(index);
                 }
@@ -63,9 +66,8 @@ namespace xjw::image_matching
             double c = 0.0;
         };
 
-        EpipolarLine targetEpipolarLine(const std::array<double, 9>& fundamental,
-                                        const cv::Point2f& queryPoint,
-                                        bool reverse)
+        EpipolarLine
+        targetEpipolarLine(const std::array<double, 9>& fundamental, const cv::Point2f& queryPoint, bool reverse)
         {
             if (reverse)
             {
@@ -78,9 +80,8 @@ namespace xjw::image_matching
                     fundamental[6] * queryPoint.x + fundamental[7] * queryPoint.y + fundamental[8]};
         }
 
-        double oppositeLineNormSquared(const std::array<double, 9>& fundamental,
-                                       const cv::Point2f& targetPoint,
-                                       bool reverse)
+        double
+        oppositeLineNormSquared(const std::array<double, 9>& fundamental, const cv::Point2f& targetPoint, bool reverse)
         {
             double x = 0.0;
             double y = 0.0;
@@ -101,9 +102,7 @@ namespace xjw::image_matching
         {
         public:
             SpatialFeatureGrid(const FeatureSet& features, const std::vector<int>& indices, int cellSize)
-                : _indices(indices),
-                  _cellSize(std::max(8, cellSize)),
-                  _width(std::max(1, features.imageWidth)),
+                : _indices(indices), _cellSize(std::max(8, cellSize)), _width(std::max(1, features.imageWidth)),
                   _height(std::max(1, features.imageHeight)),
                   _columns(std::max(1, (_width + _cellSize - 1) / _cellSize)),
                   _rows(std::max(1, (_height + _cellSize - 1) / _cellSize)),
@@ -144,20 +143,19 @@ namespace xjw::image_matching
 
                 const double maximum_x = static_cast<double>(std::max(0, _width - 1));
                 const double maximum_y = static_cast<double>(std::max(0, _height - 1));
-                const std::array<cv::Point2f, 4> corners{{{0.0f, 0.0f},
-                                                          {static_cast<float>(maximum_x), 0.0f},
-                                                          {0.0f, static_cast<float>(maximum_y)},
-                                                          {static_cast<float>(maximum_x),
-                                                           static_cast<float>(maximum_y)}}};
+                const std::array<cv::Point2f, 4> corners{
+                    {{0.0f, 0.0f},
+                     {static_cast<float>(maximum_x), 0.0f},
+                     {0.0f, static_cast<float>(maximum_y)},
+                     {static_cast<float>(maximum_x), static_cast<float>(maximum_y)}}};
                 double maximum_opposite_norm_squared = 0.0;
                 for (const cv::Point2f& corner : corners)
                 {
                     maximum_opposite_norm_squared =
-                        std::max(maximum_opposite_norm_squared,
-                                 oppositeLineNormSquared(fundamental, corner, reverse));
+                        std::max(maximum_opposite_norm_squared, oppositeLineNormSquared(fundamental, corner, reverse));
                 }
-                const double perpendicular_band = std::max(0.0, thresholdPixels) *
-                    std::sqrt(1.0 + maximum_opposite_norm_squared / line_norm_squared);
+                const double perpendicular_band =
+                    std::max(0.0, thresholdPixels) * std::sqrt(1.0 + maximum_opposite_norm_squared / line_norm_squared);
 
                 result->insert(result->end(), _outsideIndices.cbegin(), _outsideIndices.cend());
                 if (std::abs(line.b) >= std::abs(line.a) && std::abs(line.b) > 1e-15)
@@ -170,10 +168,8 @@ namespace xjw::image_matching
                         const double x1 = static_cast<double>(std::min(_width, (column + 1) * _cellSize));
                         const double y0 = -(line.a * x0 + line.c) / line.b;
                         const double y1 = -(line.a * x1 + line.c) / line.b;
-                        appendColumnCells(column,
-                                          std::min(y0, y1) - vertical_padding,
-                                          std::max(y0, y1) + vertical_padding,
-                                          result);
+                        appendColumnCells(
+                            column, std::min(y0, y1) - vertical_padding, std::max(y0, y1) + vertical_padding, result);
                     }
                 }
                 else if (std::abs(line.a) > 1e-15)
@@ -186,10 +182,8 @@ namespace xjw::image_matching
                         const double y1 = static_cast<double>(std::min(_height, (row + 1) * _cellSize));
                         const double x0 = -(line.b * y0 + line.c) / line.a;
                         const double x1 = -(line.b * y1 + line.c) / line.a;
-                        appendRowCells(row,
-                                       std::min(x0, x1) - horizontal_padding,
-                                       std::max(x0, x1) + horizontal_padding,
-                                       result);
+                        appendRowCells(
+                            row, std::min(x0, x1) - horizontal_padding, std::max(x0, x1) + horizontal_padding, result);
                     }
                 }
             }
@@ -218,8 +212,7 @@ namespace xjw::image_matching
                 }
                 const int first_column =
                     std::clamp(static_cast<int>(std::floor(minimumX / _cellSize)), 0, _columns - 1);
-                const int last_column =
-                    std::clamp(static_cast<int>(std::floor(maximumX / _cellSize)), 0, _columns - 1);
+                const int last_column = std::clamp(static_cast<int>(std::floor(maximumX / _cellSize)), 0, _columns - 1);
                 for (int column = first_column; column <= last_column; ++column)
                 {
                     const auto& cell = _cells[static_cast<std::size_t>(row * _columns + column)];
@@ -244,8 +237,17 @@ namespace xjw::image_matching
         {
             const float* query = queryDescriptors.ptr<float>(queryIndex);
             const float* train = trainDescriptors.ptr<float>(trainIndex);
-            float distance = 0.0f;
-            for (int column = 0; column < queryDescriptors.cols; ++column)
+            const int width = queryDescriptors.cols;
+            const int vector_width = cv::VTraits<cv::v_float32>::vlanes();
+            cv::v_float32 vector_distance = cv::vx_setzero_f32();
+            int column = 0;
+            for (; column <= width - vector_width; column += vector_width)
+            {
+                const cv::v_float32 difference = cv::v_sub(cv::vx_load(query + column), cv::vx_load(train + column));
+                vector_distance = cv::v_muladd(difference, difference, vector_distance);
+            }
+            float distance = cv::v_reduce_sum(vector_distance);
+            for (; column < width; ++column)
             {
                 const float difference = query[column] - train[column];
                 distance += difference * difference;
@@ -256,28 +258,60 @@ namespace xjw::image_matching
         struct GuidedCandidate
         {
             int peerIndex = -1;
-            float distance = std::numeric_limits<float>::infinity();
-            float ratio = 1.0f;
+            float bestSquaredDistance = std::numeric_limits<float>::infinity();
+            float secondSquaredDistance = std::numeric_limits<float>::infinity();
+
+            float distance() const
+            {
+                return std::sqrt(bestSquaredDistance);
+            }
+
+            float ratio() const
+            {
+                return std::isfinite(secondSquaredDistance) && secondSquaredDistance > 1e-12f
+                           ? std::sqrt(bestSquaredDistance / secondSquaredDistance)
+                           : 0.0f;
+            }
         };
 
-        struct GuidedCandidateSearchResult
+        void updateCandidate(GuidedCandidate* candidate, int peer_index, float squared_distance)
         {
-            std::vector<GuidedCandidate> candidates;
+            if (!candidate)
+            {
+                return;
+            }
+            if (squared_distance < candidate->bestSquaredDistance ||
+                (squared_distance == candidate->bestSquaredDistance && peer_index < candidate->peerIndex))
+            {
+                candidate->secondSquaredDistance = candidate->bestSquaredDistance;
+                candidate->bestSquaredDistance = squared_distance;
+                candidate->peerIndex = peer_index;
+            }
+            else if (squared_distance < candidate->secondSquaredDistance)
+            {
+                candidate->secondSquaredDistance = squared_distance;
+            }
+        }
+
+        struct SymmetricCandidateSearchResult
+        {
+            std::vector<GuidedCandidate> candidates0;
+            std::vector<GuidedCandidate> candidates1;
             SiftGuidedMatchDiagnostics diagnostics;
             bool canceled = false;
         };
 
-        GuidedCandidateSearchResult guidedCandidates(const FeatureSet& queryFeatures,
-                                                     const FeatureSet& trainFeatures,
-                                                     const std::vector<int>& queryIndices,
-                                                     const std::vector<int>& trainIndices,
-                                                     const std::array<double, 9>& fundamental,
-                                                     bool reverse,
-                                                     const SiftGuidedMatchOptions& options)
+        SymmetricCandidateSearchResult guidedCandidates(const FeatureSet& features0,
+                                                        const FeatureSet& features1,
+                                                        const std::vector<int>& indices0,
+                                                        const std::vector<int>& indices1,
+                                                        const std::array<double, 9>& fundamental,
+                                                        const SiftGuidedMatchOptions& options)
         {
-            GuidedCandidateSearchResult search_result;
-            search_result.candidates.resize(queryIndices.size());
-            if (queryIndices.empty() || trainIndices.empty())
+            SymmetricCandidateSearchResult search_result;
+            search_result.candidates0.resize(static_cast<std::size_t>(features0.size()));
+            search_result.candidates1.resize(static_cast<std::size_t>(features1.size()));
+            if (indices0.empty() || indices1.empty())
             {
                 return search_result;
             }
@@ -287,28 +321,22 @@ namespace xjw::image_matching
                 return search_result;
             }
 
-            const SpatialFeatureGrid train_grid(trainFeatures, trainIndices, options.spatialCellSizePixels);
+            const SpatialFeatureGrid train_grid(features1, indices1, options.spatialCellSizePixels);
             const std::uint64_t check_interval =
                 static_cast<std::uint64_t>(std::max(1, options.cancellationCheckInterval));
             std::vector<int> train_candidates;
-            train_candidates.reserve(std::min<std::size_t>(trainIndices.size(), 1024U));
-            for (int query_row = 0; query_row < static_cast<int>(queryIndices.size()); ++query_row)
+            train_candidates.reserve(std::min<std::size_t>(indices1.size(), 1024U));
+            for (const int index0 : indices0)
             {
                 if (cancellationRequested(options))
                 {
                     search_result.canceled = true;
                     return search_result;
                 }
-                const int query_index = queryIndices[static_cast<std::size_t>(query_row)];
-                const cv::Point2f query_point =
-                    queryFeatures.keypoints[static_cast<std::size_t>(query_index)].pt;
+                const cv::Point2f query_point = features0.keypoints[static_cast<std::size_t>(index0)].pt;
                 train_grid.findCandidates(
-                    fundamental, query_point, reverse, options.epipolarThresholdPixels, &train_candidates);
-
-                float best_squared_distance = std::numeric_limits<float>::infinity();
-                float second_squared_distance = std::numeric_limits<float>::infinity();
-                GuidedCandidate best;
-                for (const int train_index : train_candidates)
+                    fundamental, query_point, false, options.epipolarThresholdPixels, &train_candidates);
+                for (const int index1 : train_candidates)
                 {
                     ++search_result.diagnostics.spatialCandidates;
                     if (search_result.diagnostics.spatialCandidates % check_interval == 0 &&
@@ -317,38 +345,19 @@ namespace xjw::image_matching
                         search_result.canceled = true;
                         return search_result;
                     }
-                    const cv::Point2f point0 = reverse
-                                                   ? trainFeatures.keypoints[static_cast<std::size_t>(train_index)].pt
-                                                   : query_point;
-                    const cv::Point2f point1 = reverse
-                                                   ? query_point
-                                                   : trainFeatures.keypoints[static_cast<std::size_t>(train_index)].pt;
+                    const cv::Point2f point1 = features1.keypoints[static_cast<std::size_t>(index1)].pt;
+                    const cv::Point2f point0 = query_point;
                     if (sampsonDistance(fundamental, point0, point1) > options.epipolarThresholdPixels)
                     {
                         continue;
                     }
                     ++search_result.diagnostics.descriptorComparisons;
-                    const float squared_distance = squaredDescriptorDistance(
-                        queryFeatures.descriptors, query_index, trainFeatures.descriptors, train_index);
-                    if (squared_distance < best_squared_distance ||
-                        (squared_distance == best_squared_distance && train_index < best.peerIndex))
-                    {
-                        second_squared_distance = best_squared_distance;
-                        best_squared_distance = squared_distance;
-                        best.peerIndex = train_index;
-                    }
-                    else if (squared_distance < second_squared_distance)
-                    {
-                        second_squared_distance = squared_distance;
-                    }
-                }
-                if (best.peerIndex >= 0)
-                {
-                    best.distance = std::sqrt(best_squared_distance);
-                    best.ratio = std::isfinite(second_squared_distance) && second_squared_distance > 1e-12f
-                                     ? std::sqrt(best_squared_distance / second_squared_distance)
-                                     : 0.0f;
-                    search_result.candidates[static_cast<std::size_t>(query_row)] = best;
+                    const float squared_distance =
+                        squaredDescriptorDistance(features0.descriptors, index0, features1.descriptors, index1);
+                    updateCandidate(
+                        &search_result.candidates0[static_cast<std::size_t>(index0)], index1, squared_distance);
+                    updateCandidate(
+                        &search_result.candidates1[static_cast<std::size_t>(index1)], index0, squared_distance);
                 }
             }
             return search_result;
@@ -365,8 +374,7 @@ namespace xjw::image_matching
     {
         SiftGuidedMatchResult result;
         if (!features0.isConsistent() || !features1.isConsistent() || features0.descriptors.type() != CV_32F ||
-            features1.descriptors.type() != CV_32F ||
-            features0.descriptors.cols != features1.descriptors.cols)
+            features1.descriptors.type() != CV_32F || features0.descriptors.cols != features1.descriptors.cols)
         {
             return result;
         }
@@ -382,53 +390,32 @@ namespace xjw::image_matching
             return result;
         }
 
-        const GuidedCandidateSearchResult forward =
-            guidedCandidates(features0, features1, unmatched0, unmatched1, fundamental, false, options);
-        result.diagnostics.spatialCandidates += forward.diagnostics.spatialCandidates;
-        result.diagnostics.descriptorComparisons += forward.diagnostics.descriptorComparisons;
-        if (forward.canceled || cancellationRequested(options))
+        const SymmetricCandidateSearchResult search =
+            guidedCandidates(features0, features1, unmatched0, unmatched1, fundamental, options);
+        result.diagnostics = search.diagnostics;
+        if (search.canceled || cancellationRequested(options))
         {
             result.canceled = true;
             return result;
-        }
-        const GuidedCandidateSearchResult reverse =
-            guidedCandidates(features1, features0, unmatched1, unmatched0, fundamental, true, options);
-        result.diagnostics.spatialCandidates += reverse.diagnostics.spatialCandidates;
-        result.diagnostics.descriptorComparisons += reverse.diagnostics.descriptorComparisons;
-        if (reverse.canceled || cancellationRequested(options))
-        {
-            result.canceled = true;
-            return result;
-        }
-        std::vector<int> reverseRowByFeature(static_cast<std::size_t>(features1.size()), -1);
-        for (int row = 0; row < static_cast<int>(unmatched1.size()); ++row)
-        {
-            reverseRowByFeature[static_cast<std::size_t>(unmatched1[static_cast<std::size_t>(row)])] = row;
         }
 
-        for (int row = 0; row < static_cast<int>(forward.candidates.size()); ++row)
+        for (const int index0 : unmatched0)
         {
-            const GuidedCandidate& candidate = forward.candidates[static_cast<std::size_t>(row)];
-            if (candidate.peerIndex < 0 || candidate.ratio > options.maximumDescriptorRatio)
+            const GuidedCandidate& candidate = search.candidates0[static_cast<std::size_t>(index0)];
+            if (candidate.peerIndex < 0 || candidate.ratio() > options.maximumDescriptorRatio)
             {
                 continue;
             }
-            const int reverseRow = reverseRowByFeature[static_cast<std::size_t>(candidate.peerIndex)];
-            if (reverseRow < 0 || reverseRow >= static_cast<int>(reverse.candidates.size()))
+            const GuidedCandidate& reverseCandidate = search.candidates1[static_cast<std::size_t>(candidate.peerIndex)];
+            if (reverseCandidate.peerIndex != index0 || reverseCandidate.ratio() > options.maximumDescriptorRatio)
             {
                 continue;
             }
-            const GuidedCandidate& reverseCandidate = reverse.candidates[static_cast<std::size_t>(reverseRow)];
-            const int index0 = unmatched0[static_cast<std::size_t>(row)];
-            if (reverseCandidate.peerIndex != index0 || reverseCandidate.ratio > options.maximumDescriptorRatio)
-            {
-                continue;
-            }
-            const float distance = std::max(candidate.distance, reverseCandidate.distance);
-            const double residual = sampsonDistance(
-                fundamental,
-                features0.keypoints[static_cast<std::size_t>(index0)].pt,
-                features1.keypoints[static_cast<std::size_t>(candidate.peerIndex)].pt);
+            const float distance = std::max(candidate.distance(), reverseCandidate.distance());
+            const double residual =
+                sampsonDistance(fundamental,
+                                features0.keypoints[static_cast<std::size_t>(index0)].pt,
+                                features1.keypoints[static_cast<std::size_t>(candidate.peerIndex)].pt);
             if (!std::isfinite(residual) || residual > options.epipolarThresholdPixels)
             {
                 continue;
@@ -436,19 +423,26 @@ namespace xjw::image_matching
             result.matches.push_back({index0,
                                       candidate.peerIndex,
                                       std::clamp(1.0f - 0.5f * distance * distance, 0.0f, 1.0f),
-                                      candidate.ratio,
-                                      reverseCandidate.ratio,
+                                      candidate.ratio(),
+                                      reverseCandidate.ratio(),
                                       static_cast<float>(residual)});
         }
-        std::stable_sort(result.matches.begin(),
-                         result.matches.end(),
-                         [](const SiftGuidedMatch& left, const SiftGuidedMatch& right)
-                         { return left.confidence > right.confidence; });
+        const auto stronger_match = [](const SiftGuidedMatch& left, const SiftGuidedMatch& right)
+        {
+            if (left.confidence != right.confidence)
+            {
+                return left.confidence > right.confidence;
+            }
+            return std::pair(left.index0, left.index1) < std::pair(right.index0, right.index1);
+        };
         if (options.maximumAdditionalMatches > 0 &&
             static_cast<int>(result.matches.size()) > options.maximumAdditionalMatches)
         {
+            const auto middle = result.matches.begin() + options.maximumAdditionalMatches;
+            std::nth_element(result.matches.begin(), middle, result.matches.end(), stronger_match);
             result.matches.resize(static_cast<std::size_t>(options.maximumAdditionalMatches));
         }
+        std::sort(result.matches.begin(), result.matches.end(), stronger_match);
         return result;
     }
 

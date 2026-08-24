@@ -245,6 +245,31 @@ TEST(CameraReferenceTreeModelTest, DisabledCameraDoesNotAffectTotalError)
     EXPECT_FALSE(model.index(0, Model::XColumn).data().isValid());
 }
 
+TEST(CameraReferenceTreeModelTest, ShowsEmbeddedRpcModelAsGeographicReference)
+{
+    using Model = reference::CameraReferenceTreeModel;
+    const QJsonObject metadata{{QStringLiteral("images"), QJsonArray{
+        QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-1")},
+                    {QStringLiteral("path"), QStringLiteral("D:/images/rpc.tif")},
+                    {QStringLiteral("camera"), QJsonObject{
+                        {QStringLiteral("model"), QStringLiteral("rpc")},
+                        {QStringLiteral("long_off"), 113.5},
+                        {QStringLiteral("lat_off"), 34.5},
+                        {QStringLiteral("height_off"), 120.0}}}}}}};
+    Model model;
+    model.setReferenceData(camera_reference::CameraReferenceSet{}, metadata,
+                           reference::ReferenceDisplayMode::Source);
+
+    ASSERT_EQ(model.rowCount(), 2);
+    const QModelIndex group = model.index(1, Model::LabelColumn);
+    ASSERT_EQ(model.rowCount(group), 1);
+    EXPECT_EQ(model.headerData(Model::XColumn, Qt::Horizontal).toString(), QStringLiteral("经度 (°)"));
+    EXPECT_DOUBLE_EQ(model.index(0, Model::XColumn, group).data().toDouble(), 113.5);
+    EXPECT_DOUBLE_EQ(model.index(0, Model::YColumn, group).data().toDouble(), 34.5);
+    EXPECT_DOUBLE_EQ(model.index(0, Model::ZColumn, group).data().toDouble(), 120.0);
+    EXPECT_TRUE(model.index(0, Model::StatusColumn, group).data().toString().contains(QStringLiteral("RPC00B")));
+}
+
 TEST(CameraReferenceBuilderTest, PreservesMatchedAndUnmatchedRawObservations)
 {
     xjw::gui::reference_import::MetashapeCameraReferenceImportResult imported;

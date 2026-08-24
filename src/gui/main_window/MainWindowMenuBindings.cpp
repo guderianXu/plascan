@@ -2,6 +2,8 @@
 
 #include <QAction>
 #include <QStatusBar>
+#include <QToolBar>
+#include <QToolButton>
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QSignalBlocker>
@@ -175,6 +177,36 @@ void MainWindow::setupMenuConnections()
     {
         connect(_mainMenu->showMaskOverlayAction(), &QAction::toggled,
                 _canvas, &CanvasWidget::setShowMaskOverlay);
+    }
+    if (_mainMenu->rectangleMaskAction())
+    {
+        connect(_mainMenu->rectangleMaskAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::useRectangleMaskTool);
+    }
+    if (_mainMenu->scissorsMaskAction())
+    {
+        connect(_mainMenu->scissorsMaskAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::useScissorsMaskTool);
+    }
+    if (_mainMenu->smartPaintMaskAction())
+    {
+        connect(_mainMenu->smartPaintMaskAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::useSmartPaintMaskTool);
+    }
+    if (_mainMenu->magicWandMaskAction())
+    {
+        connect(_mainMenu->magicWandMaskAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::useMagicWandMaskTool);
+    }
+    if (_mainMenu->maskEditorSettingsAction())
+    {
+        connect(_mainMenu->maskEditorSettingsAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::showMaskEditorSettings);
+    }
+    if (_mainMenu->resetMaskSelectionAction())
+    {
+        connect(_mainMenu->resetMaskSelectionAction(), &QAction::triggered,
+                _canvas, &CanvasWidget::resetMaskSelection);
     }
     if (_mainMenu->showDepthOverlayAction())
     {
@@ -405,6 +437,10 @@ void MainWindow::setupMenuConnections()
                 modeAction->setChecked(true);
             }
         });
+        connect(_canvas,
+                &CanvasWidget::maskSelectionActiveChanged,
+                _mainMenu,
+                &MainMenu::setMaskSelectionActive);
         if (_mainMenu->toggleCameraThumbnailsAction())
         {
             connect(_mainMenu->toggleCameraThumbnailsAction(), &QAction::toggled,
@@ -439,8 +475,23 @@ void MainWindow::setupMenuConnections()
         }
         if (_mainMenu->lockCameraImageAction())
         {
-            connect(_mainMenu->lockCameraImageAction(), &QAction::toggled,
+            QAction *lock_action = _mainMenu->lockCameraImageAction();
+            QAction *show_image_action = _mainMenu->toggleCameraImagesAction();
+            lock_action->setEnabled(
+                show_image_action && show_image_action->isChecked());
+            if (show_image_action)
+            {
+                connect(show_image_action, &QAction::toggled,
+                        lock_action, &QAction::setEnabled);
+            }
+            connect(lock_action, &QAction::toggled,
                     modelView, &CameraSceneWidget::setCameraImageLocked);
+            connect(modelView, &CameraSceneWidget::cameraImageLockedChanged,
+                    lock_action, [lock_action](bool locked)
+            {
+                const QSignalBlocker blocker(lock_action);
+                lock_action->setChecked(locked);
+            });
         }
     }
     if (_mainMenu->toggleHenanUniversityBrandAction())
@@ -463,6 +514,78 @@ void MainWindow::setupMenuConnections()
     if (_workspaceCenter && _workspaceCenter->modelView())
     {
         auto *modelView = _workspaceCenter->modelView();
+        auto sync_point_tool_actions = [this](CameraSceneWidget::PointInteractionMode mode)
+        {
+            const QSignalBlocker navigation_blocker(_mainMenu->navigationAction());
+            const QSignalBlocker rectangle_blocker(_mainMenu->rectangleSelectionAction());
+            const QSignalBlocker circle_blocker(_mainMenu->circleSelectionAction());
+            const QSignalBlocker freehand_blocker(_mainMenu->freehandSelectionAction());
+            _mainMenu->navigationAction()->setChecked(
+                mode == CameraSceneWidget::PointInteractionMode::Navigation);
+            _mainMenu->rectangleSelectionAction()->setChecked(
+                mode == CameraSceneWidget::PointInteractionMode::RectangleSelection);
+            _mainMenu->circleSelectionAction()->setChecked(
+                mode == CameraSceneWidget::PointInteractionMode::CircleSelection);
+            _mainMenu->freehandSelectionAction()->setChecked(
+                mode == CameraSceneWidget::PointInteractionMode::FreehandSelection);
+            auto *selection_button = _mainMenu->toolBar()->findChild<QToolButton *>(
+                QStringLiteral("toolButtonPointSelection"));
+            if (selection_button
+                && mode != CameraSceneWidget::PointInteractionMode::Navigation)
+            {
+                QAction *selection_action = _mainMenu->rectangleSelectionAction();
+                if (mode == CameraSceneWidget::PointInteractionMode::CircleSelection)
+                {
+                    selection_action = _mainMenu->circleSelectionAction();
+                }
+                else if (mode == CameraSceneWidget::PointInteractionMode::FreehandSelection)
+                {
+                    selection_action = _mainMenu->freehandSelectionAction();
+                }
+                selection_button->setDefaultAction(selection_action);
+            }
+        };
+        auto activate_point_tool = [this, modelView, sync_point_tool_actions](
+                                       CameraSceneWidget::PointInteractionMode mode)
+        {
+            QString error_message;
+            if (!modelView->setPointInteractionMode(mode, &error_message))
+            {
+                sync_point_tool_actions(modelView->pointInteractionMode());
+                QMessageBox::warning(this, tr("点云选择"), error_message);
+                return;
+            }
+            _workspaceCenter->showModelView();
+            statusBar()->showMessage(
+                mode == CameraSceneWidget::PointInteractionMode::Navigation
+                    ? tr("已切换到导航工具")
+                    : tr("选择点云后按 Delete 删除，按 Ctrl+Z 撤销"),
+                3500);
+        };
+        connect(_mainMenu->navigationAction(), &QAction::triggered, this,
+                [activate_point_tool]()
+        {
+            activate_point_tool(CameraSceneWidget::PointInteractionMode::Navigation);
+        });
+        connect(_mainMenu->rectangleSelectionAction(), &QAction::triggered, this,
+                [activate_point_tool]()
+        {
+            activate_point_tool(CameraSceneWidget::PointInteractionMode::RectangleSelection);
+        });
+        connect(_mainMenu->circleSelectionAction(), &QAction::triggered, this,
+                [activate_point_tool]()
+        {
+            activate_point_tool(CameraSceneWidget::PointInteractionMode::CircleSelection);
+        });
+        connect(_mainMenu->freehandSelectionAction(), &QAction::triggered, this,
+                [activate_point_tool]()
+        {
+            activate_point_tool(CameraSceneWidget::PointInteractionMode::FreehandSelection);
+        });
+        connect(modelView, &CameraSceneWidget::pointInteractionModeChanged,
+                this, sync_point_tool_actions);
+        sync_point_tool_actions(modelView->pointInteractionMode());
+
         connect(modelView, &CameraSceneWidget::manualPruneApplied, this,
                 [this](int removedCount, int remainingCount)
         {

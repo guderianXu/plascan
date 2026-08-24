@@ -1,20 +1,18 @@
 #version 440
 
 layout(location = 0) in vec3 position;
+layout(location = 1) in vec2 texCoord;
 
-layout(std140, binding = 0) uniform ProjectedImageUniforms
+layout(std140, binding = 0) uniform ImagePlaneUniforms
 {
     mat4 uMVP;
-    mat4 uSourceView;
-    vec4 intrinsics;
-    vec4 imageGeometry;
     vec4 composition;
 } ubuf;
 
-layout(location = 0) out vec3 sourceCameraPosition;
+layout(location = 0) out vec2 uv;
 
 void main()
 {
     gl_Position = ubuf.uMVP * vec4(position, 1.0);
-    sourceCameraPosition = (ubuf.uSourceView * vec4(position, 1.0)).xyz;
+    uv = texCoord;
 }

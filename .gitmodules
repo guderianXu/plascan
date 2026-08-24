@@ -4,3 +4,18 @@
 [submodule "3rdparty/plapoint"]
 	path = 3rdparty/plapoint
 	url = https://github.com/guderianXu/plapoint.git
+[submodule "3rdparty/qt"]
+	path = 3rdparty/qt
+	url = https://code.qt.io/qt/qt5.git
+[submodule "3rdparty/opencv"]
+	path = 3rdparty/opencv
+	url = https://github.com/opencv/opencv.git
+[submodule "3rdparty/PoissonRecon"]
+	path = 3rdparty/PoissonRecon
+	url = https://github.com/mkazhdan/PoissonRecon.git
+[submodule "3rdparty/apriltag"]
+	path = 3rdparty/apriltag
+	url = https://github.com/AprilRobotics/apriltag.git
+[submodule "3rdparty/gdal"]
+	path = 3rdparty/gdal
+	url = https://github.com/OSGeo/gdal.git

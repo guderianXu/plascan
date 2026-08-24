@@ -19,7 +19,8 @@ QString imagePath(int index)
 
 QString cameraPath(int index)
 {
-    return QDir::cleanPath(QStringLiteral("/tmp/plascan_pair_plan/img_%1.tsai").arg(index, 4, 10, QLatin1Char('0')));
+        return QDir::cleanPath(
+            QStringLiteral("/tmp/plascan_pair_plan/img_%1.tsai").arg(index, 4, 10, QLatin1Char('0')));
 }
 
 QStringList imagePaths(int count)
@@ -77,10 +78,10 @@ TEST(SfmPairPlannerTest, SequenceLoopClosureConnectsTailBackToHead)
         xjw::aerial_triangulation::planSfmMatchPairs(imagePaths(8), cameraPaths(8), options);
 
     const QString loopKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(7), imagePath(0));
-    const auto loopIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                     [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                         return candidate.pairKey == loopKey;
-                                     });
+    const auto loopIt = std::find_if(plan.pairCandidates.begin(),
+                                     plan.pairCandidates.end(),
+                                     [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                     { return candidate.pairKey == loopKey; });
 
     ASSERT_NE(loopIt, plan.pairCandidates.end());
     EXPECT_TRUE(plan.usedSequenceLoopClosure);
@@ -103,14 +104,14 @@ TEST(SfmPairPlannerTest, SequenceLoopClosureDoesNotBoostExistingWindowPairs)
 
     const QString nearKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(1));
     const QString windowEdgeKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(8));
-    const auto nearIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                     [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                         return candidate.pairKey == nearKey;
-                                     });
-    const auto edgeIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                     [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                         return candidate.pairKey == windowEdgeKey;
-                                     });
+    const auto nearIt = std::find_if(plan.pairCandidates.begin(),
+                                     plan.pairCandidates.end(),
+                                     [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                     { return candidate.pairKey == nearKey; });
+    const auto edgeIt = std::find_if(plan.pairCandidates.begin(),
+                                     plan.pairCandidates.end(),
+                                     [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                     { return candidate.pairKey == windowEdgeKey; });
 
     ASSERT_NE(nearIt, plan.pairCandidates.end());
     ASSERT_NE(edgeIt, plan.pairCandidates.end());
@@ -200,14 +201,14 @@ TEST(SfmPairPlannerTest, PairPlanRecordsPerPairSourcesAndPriority)
 
     const QString sequenceKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(3));
     const QString spatialKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(20));
-    const auto sequenceIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                         [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                             return candidate.pairKey == sequenceKey;
-                                         });
-    const auto spatialIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                        [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                            return candidate.pairKey == spatialKey;
-                                        });
+    const auto sequenceIt = std::find_if(plan.pairCandidates.begin(),
+                                         plan.pairCandidates.end(),
+                                         [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                         { return candidate.pairKey == sequenceKey; });
+    const auto spatialIt = std::find_if(plan.pairCandidates.begin(),
+                                        plan.pairCandidates.end(),
+                                        [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                        { return candidate.pairKey == spatialKey; });
     ASSERT_NE(sequenceIt, plan.pairCandidates.end());
     ASSERT_NE(spatialIt, plan.pairCandidates.end());
 
@@ -250,14 +251,14 @@ TEST(SfmPairPlannerTest, PairPlanUsesViewingDirectionAndBaselineScoresForSpatial
 
     const QString oppositeKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(2));
     const QString alignedKey = xjw::aerial_triangulation::canonicalSfmPairKey(imagePath(0), imagePath(3));
-    const auto oppositeIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                         [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                             return candidate.pairKey == oppositeKey;
-                                         });
-    const auto alignedIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
-                                        [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate) {
-                                            return candidate.pairKey == alignedKey;
-                                        });
+    const auto oppositeIt = std::find_if(plan.pairCandidates.begin(),
+                                         plan.pairCandidates.end(),
+                                         [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                         { return candidate.pairKey == oppositeKey; });
+    const auto alignedIt = std::find_if(plan.pairCandidates.begin(),
+                                        plan.pairCandidates.end(),
+                                        [&](const xjw::aerial_triangulation::SfmPairCandidate& candidate)
+                                        { return candidate.pairKey == alignedKey; });
 
     ASSERT_NE(oppositeIt, plan.pairCandidates.end());
     ASSERT_NE(alignedIt, plan.pairCandidates.end());
@@ -267,6 +268,19 @@ TEST(SfmPairPlannerTest, PairPlanUsesViewingDirectionAndBaselineScoresForSpatial
     EXPECT_GT(alignedIt->baselineScore, 0.0);
     EXPECT_GT(oppositeIt->baselineScore, 0.0);
     EXPECT_GT(alignedIt->priorityScore, oppositeIt->priorityScore);
+}
+
+TEST(SfmPairPlannerTest, BaselineScoreRejectsBothTinyAndExcessiveSpacing)
+{
+    xjw::aerial_triangulation::SfmPairPlannerOptions options;
+    options.knownCameraCenters = {{0.0, 0.0, 0.0}, {0.1, 0.0, 0.0}, {1.5, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+
+    const auto tiny = xjw::aerial_triangulation::computeSfmPairGeometryScores(options, 4, 0, 1, 1.0);
+    const auto preferred = xjw::aerial_triangulation::computeSfmPairGeometryScores(options, 4, 0, 2, 1.0);
+    const auto excessive = xjw::aerial_triangulation::computeSfmPairGeometryScores(options, 4, 0, 3, 1.0);
+
+    EXPECT_GT(preferred.baselineScore, tiny.baselineScore);
+    EXPECT_GT(preferred.baselineScore, excessive.baselineScore);
 }
 
 TEST(SfmPairPlannerTest, KnownCameraCentersWithoutCameraFilesStillRestrictLargeProject)

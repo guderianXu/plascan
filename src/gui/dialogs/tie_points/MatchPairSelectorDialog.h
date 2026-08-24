@@ -71,6 +71,9 @@ private slots:
     // 后台匹配扫描完成后回到 GUI 线程填表
     void onMatchPairsLoaded();
 
+    // 点击可排序表头时切换排序规则；新列首次点击默认从大到小。
+    void onSortSectionClicked(int column);
+
 private:
     // 只包含后台线程可安全读取的数据快照，避免 worker 访问 ProjectManager/QWidget。
     struct MatchDataSnapshot {
@@ -122,6 +125,8 @@ private:
                                 int generation);
     // 将 _currentMatches 填充到表格
     void populateMatchTable();
+    // 按当前表头规则稳定排序；缺失统计始终排在有效数值之后。
+    void sortCurrentMatches();
     // 扫描期间切换刷新/查看按钮状态
     void setMatchControlsBusy(bool busy);
     // 完整 catalog 扫描的逐文件进度，必须在 GUI 线程调用
@@ -170,6 +175,8 @@ private:
     QList<MatchInfo> _currentMatches;
     // 当前在表格中选中的匹配对索引（-1 表示无选中）
     int _selectedMatchIndex;
+    int _sortColumn = 0;
+    Qt::SortOrder _sortOrder = Qt::AscendingOrder;
 
     // 防抖刷新计时器（300ms 内多次触发只刷新一次）
     QTimer *_refreshTimer = nullptr;

@@ -46,6 +46,7 @@ int main(int argc, char *argv[])
     }
     QGuiApplication application(argc, argv);
     CLI::App app{"PlaScan 标靶 PDF 生成工具"};
+    cli::configureApp(app);
 
     std::string family_name;
     std::string ids_text;

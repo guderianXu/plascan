@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run CTest with a portable default parallelism of half the logical CPUs."""
+"""Run CTest with a portable default parallelism using all logical CPUs."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from collections.abc import Mapping, Sequence
 
 
 def default_parallel_jobs(logical_cpus: int | None = None) -> int:
-    """Return half the available logical CPUs, with at least one worker."""
+    """Return all available logical CPUs, with at least one worker."""
     cpu_count = os.cpu_count() if logical_cpus is None else logical_cpus
     if cpu_count is None or cpu_count < 1:
         cpu_count = 1
-    return max(1, cpu_count // 2)
+    return cpu_count
 
 
 def has_parallel_override(ctest_args: Sequence[str]) -> bool:

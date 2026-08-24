@@ -33,8 +33,10 @@ public:
     void setAvailableImages(const QStringList &images);
     void setProjectRoot(const QString &projectRoot);
     void setDefaultDemPath(const QString &demPath);
+    void setDefaultRpcDemPath(const QString &demPath);
     void setDefaultPointCloudPath(const QString &pointCloudPath);
     void setImageReadiness(const QStringList &cameraReadyImages, int maskCount);
+    void setRpcImageReadiness(const QStringList &rpcReadyImages);
 
 signals:
     void requestRunMapProject(const QJsonObject &settings);
@@ -59,6 +61,7 @@ private slots:
     void onSettingsModified();
     void onDemPathChanged();
     void onSurfaceChanged();
+    void onProductModeChanged();
     void onPixelSizeEdited();
     void onBoundsEdited();
     void onResolutionModeChanged();
@@ -82,6 +85,7 @@ private:
     void updateLocalEstimateSummary();
     void applyImageReadiness();
     void applyPendingImageSelection();
+    bool isRpcMode() const;
     QStringList selectedImages() const;
     QJsonObject currentSettings() const;
     bool validateSettings(const QJsonObject &settings, QString *errorMessage) const;
@@ -90,6 +94,9 @@ private:
                                     const QString &fallbackKey = QString());
 
     QScrollArea *_contentScrollArea = nullptr;
+    QGroupBox *_productModeGroup = nullptr;
+    QComboBox *_productModeCombo = nullptr;
+    QLabel *_productModeHint = nullptr;
     QGroupBox *_projectionGroup = nullptr;
     QGroupBox *_parametersGroup = nullptr;
     QGroupBox *_regionGroup = nullptr;
@@ -152,8 +159,10 @@ private:
 
     QString _projectRoot;
     QString _defaultDemPath;
+    QString _defaultRpcDemPath;
     QString _defaultPointCloudPath;
     QStringList _cameraReadyImages;
+    QStringList _rpcReadyImages;
     QStringList _pendingSelectedImages;
     QJsonObject _lastEstimate;
     double _demPixelSizeX = 0.0;

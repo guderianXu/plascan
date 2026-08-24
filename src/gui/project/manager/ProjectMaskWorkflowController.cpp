@@ -12,8 +12,8 @@
 #include "ProjectOpenGuard.h"
 #include "io/PathIO.h"
 
-#include "OpenCvCompat.h"
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <QDateTime>
 #include <QDir>
@@ -23,6 +23,7 @@
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QPointer>
+#include <QSaveFile>
 #include <QSet>
 
 #include <atomic>
@@ -83,13 +84,15 @@ namespace
 
     bool isPathInsideDirectory(const QString& path, const QString& directory)
     {
-        const QString cleanPath = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-        QString cleanDirectory = QDir::cleanPath(QFileInfo(directory).absoluteFilePath());
+        const QString cleanPath = QDir::fromNativeSeparators(
+            QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+        QString cleanDirectory = QDir::fromNativeSeparators(
+            QDir::cleanPath(QFileInfo(directory).absoluteFilePath()));
         if (cleanPath.isEmpty() || cleanDirectory.isEmpty())
         {
             return false;
         }
-        cleanDirectory += QDir::separator();
+        cleanDirectory += QLatin1Char('/');
 #ifdef Q_OS_WIN
         return cleanPath.startsWith(cleanDirectory, Qt::CaseInsensitive);
 #else
@@ -114,6 +117,12 @@ namespace
         int inferenceInputSize = 0;
         bool engineReused = false;
         bool cancelled = false;
+    };
+
+    struct InteractiveMaskSaveResult
+    {
+        bool saved = false;
+        QString errorMessage;
     };
 
     xjw::mask::MaskGenerationOptions generationOptions(const QJsonObject& settings)
@@ -201,6 +210,154 @@ ProjectMaskWorkflowController::ProjectMaskWorkflowController(ProjectData* projec
 void ProjectMaskWorkflowController::setActiveImagePath(const QString& imagePath)
 {
     _activeImagePath = imagePath;
+}
+
+void ProjectMaskWorkflowController::saveInteractiveMask(const QString& imagePath,
+                                                        const QImage& mask,
+                                                        const QString& method,
+                                                        quint64 revision)
+{
+    if (!_projectData || !_projectData->hasProject() || imagePath.trimmed().isEmpty() || mask.isNull())
+    {
+        emit interactiveMaskSaveFailed(
+            imagePath, revision, QStringLiteral("当前项目或照片不可用，无法保存蒙版。"));
+        return;
+    }
+
+    const QString projectPath = _projectData->currentProjectPath();
+    const QString resolvedImage = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+        projectPath, imagePath);
+    const QString resolvedKey = xjw::common::project::normalizePath(resolvedImage);
+    bool belongsToProject = false;
+    for (const QString &projectImage : _projectData->getAllImages())
+    {
+        const QString resolved = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            projectPath, projectImage);
+        if (xjw::common::project::normalizePath(resolved) == resolvedKey)
+        {
+            belongsToProject = true;
+            break;
+        }
+    }
+    if (!belongsToProject)
+    {
+        emit interactiveMaskSaveFailed(
+            imagePath, revision, QStringLiteral("当前照片不属于活动项目，未保存蒙版。"));
+        return;
+    }
+
+    _pendingInteractiveImagePath = resolvedImage;
+    _pendingInteractiveMask = mask.convertToFormat(QImage::Format_Grayscale8);
+    _pendingInteractiveMethod = method;
+    _pendingInteractiveRevision = revision;
+    _hasPendingInteractiveSave = true;
+    startNextInteractiveSave();
+}
+
+void ProjectMaskWorkflowController::startNextInteractiveSave()
+{
+    if (_interactiveSaveRunning || !_hasPendingInteractiveSave || !_projectData)
+    {
+        return;
+    }
+
+    const QString imagePath = _pendingInteractiveImagePath;
+    const QImage mask = _pendingInteractiveMask;
+    const QString method = _pendingInteractiveMethod;
+    const quint64 revision = _pendingInteractiveRevision;
+    _hasPendingInteractiveSave = false;
+    _pendingInteractiveMask = QImage();
+
+    const QString projectPath = _projectData->currentProjectPath();
+    const QString chunkId = _projectData->activeChunkId();
+    const QString maskPath = xjw::common::project::ProjectIO::maskOutputPathForImage(
+        projectPath, imagePath);
+    _interactiveSaveRunning = true;
+    QPointer<ProjectMaskWorkflowController> self(this);
+    xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [mask, maskPath]()
+        {
+            InteractiveMaskSaveResult result;
+            if (maskPath.isEmpty() || !QDir().mkpath(QFileInfo(maskPath).absolutePath()))
+            {
+                result.errorMessage = QStringLiteral("无法创建蒙版输出目录：%1")
+                                          .arg(QFileInfo(maskPath).absolutePath());
+                return result;
+            }
+
+            QSaveFile output(maskPath);
+            if (!output.open(QIODevice::WriteOnly))
+            {
+                result.errorMessage = QStringLiteral("无法写入蒙版：%1").arg(maskPath);
+                return result;
+            }
+            if (!mask.save(&output, "PNG"))
+            {
+                output.cancelWriting();
+                result.errorMessage = QStringLiteral("蒙版 PNG 编码失败：%1").arg(maskPath);
+                return result;
+            }
+            if (!output.commit())
+            {
+                result.errorMessage = QStringLiteral("无法原子提交蒙版：%1").arg(maskPath);
+                return result;
+            }
+            result.saved = true;
+            return result;
+        },
+        [self, projectPath, chunkId, imagePath, maskPath, method, revision](
+            ProjectMaskWorkflowController *controller,
+            xjw::gui::tasks::TaskOutcome<InteractiveMaskSaveResult> outcome)
+        {
+            if (!self || controller != self.data())
+            {
+                return;
+            }
+            self->_interactiveSaveRunning = false;
+            if (!outcome.succeeded() || !outcome.value->saved)
+            {
+                if (self->matchesSession(projectPath, chunkId))
+                {
+                    const QString message = outcome.succeeded()
+                        ? outcome.value->errorMessage
+                        : outcome.errorMessage;
+                    emit self->interactiveMaskSaveFailed(imagePath, revision, message);
+                }
+                self->startNextInteractiveSave();
+                return;
+            }
+            if (!self->matchesSession(projectPath, chunkId))
+            {
+                self->startNextInteractiveSave();
+                return;
+            }
+
+            QJsonObject meta = self->_projectData->coreFilesMeta();
+            QJsonArray images = meta.value(QStringLiteral("images")).toArray();
+            for (int index = 0; index < images.size(); ++index)
+            {
+                QJsonObject image = images.at(index).toObject();
+                const QString candidate = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                    projectPath, image.value(QStringLiteral("path")).toString());
+                if (xjw::common::project::normalizePath(candidate)
+                    != xjw::common::project::normalizePath(imagePath))
+                {
+                    continue;
+                }
+                image.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
+                image.insert(QStringLiteral("mask_method"), method);
+                image.insert(QStringLiteral("mask_updated_at"),
+                             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+                images.replace(index, image);
+                break;
+            }
+            meta.insert(QStringLiteral("images"), images);
+            xjw::gui::project::persistProjectMeta(self->_projectData, meta, true);
+            emit self->projectMetadataUpdated(projectPath);
+            emit self->interactiveMaskSaved(imagePath, revision);
+            self->startNextInteractiveSave();
+        });
 }
 
 void ProjectMaskWorkflowController::openDialog()
@@ -713,6 +870,8 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
 void ProjectMaskWorkflowController::cancelActiveTask()
 {
     _cancellation.requestCancellation();
+    _hasPendingInteractiveSave = false;
+    _pendingInteractiveMask = QImage();
 }
 
 bool ProjectMaskWorkflowController::matchesSession(const QString& projectPath, const QString& chunkId) const

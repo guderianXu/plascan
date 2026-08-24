@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "plascan-source-dependencies",
+  "version-string": "1.1.7",
+  "builtin-baseline": "3c5d90a305ff00ca841f085a74a7ce74ee777dee",
+  "dependencies": [
+    "gtest",
+    "json-c",
+    "libgeotiff",
+    "libjpeg-turbo",
+    "libpng",
+    "libzip",
+    "opencl",
+    "openjpeg",
+    "proj",
+    "tiff",
+    {
+      "name": "vulkan",
+      "platform": "!osx"
+    },
+    {
+      "name": "vulkan-loader",
+      "default-features": false,
+      "features": [
+        "xcb"
+      ],
+      "platform": "linux"
+    },
+    "zlib",
+    "zstd"
+  ]
+}

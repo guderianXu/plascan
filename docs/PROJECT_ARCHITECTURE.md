@@ -10,8 +10,8 @@ plascan/
 │   ├── common/     # 通用工具库 (日志, IO, 模型与项目公共能力)
 │   ├── core/       # 核心算法库 (相机, 特征, 匹配, 标记控制网, SfM, MVS, LiDAR, 蒙版, 网格, 地形)
 │   └── gui/        # Qt6 图形界面
-├── cmake/          # 全局 CMake 模块 (依赖查找、包管理、Windows 运行时部署)
-├── 3rdparty/       # 第三方库源码 (LightGlue)
+├── cmake/          # 全局 CMake 模块 (依赖查找、源码依赖 superbuild、运行时部署)
+├── 3rdparty/       # git submodule：PlaMatrix、PlaPoint、Qt、OpenCV、GDAL 与算法依赖
 ├── resources/      # 静态资源 (深度学习模型权重, 图标)
 ├── scripts/        # 按 models/workflows/bench/env/validation 分类的辅助脚本
 ├── tools/          # 独立工具 (匹配转 CSV)
@@ -27,7 +27,7 @@ plascan/
 └── CLAUDE.md       # AI 助手配置 (代码规范, 项目约定)
 ```
 
-`scripts/env/run_tests.py` 是跨平台统一测试入口：默认以逻辑核数量的一半并行执行 CTest，并允许通过
+`scripts/env/run_tests.py` 是跨平台统一测试入口：默认使用全部逻辑线程并行执行 CTest，并允许通过
 `CTEST_PARALLEL_LEVEL`、`--jobs` 或原生 CTest `--parallel/-j` 参数覆盖。
 
 ## 代码规范
@@ -103,15 +103,21 @@ core/
 ├── CMakeLists.txt              # 注册所有子模块
 │
 ├── camera/                     # 相机模型
-│   ├── CameraModel.h/cpp       # 面阵/线阵共享的只读像点、射线和空间点投影抽象
+│   ├── CameraModel.h/cpp       # 面阵/线阵/RPC 共享的只读像点、射线和空间点投影抽象
 │   ├── FramePinholeCamera*.h/cpp # CameraModel 面阵实现及 Tsai/Brown-Conrady 状态、投影和文件 IO
 │   ├── PlanetaryLineScanCamera*.h/cpp # CameraModel 线阵实现、USGSCSM ISD、逐行时间与月固系时变姿轨
+│   ├── RpcCameraModel.h/cpp、RpcCameraCoordinates.cpp # RPC00B、WGS84 坐标转换、正反投影和近似射线
+│   ├── RpcCameraImageCorrection.cpp # RPC 归一化影像仿射改正的校验与应用
+│   ├── RpcCameraIO.h/cpp       # GDAL RPC metadata domain 与关联 RPC/RPB 旁车导入
+│   ├── RpcBiasAdjustment.h/cpp # 基于控制点的 RPC 平移/归一化影像仿射偏差估计
+│   ├── RpcStereoIntersection.h/cpp # 双 RPC 像点的 ECEF 迭代前方交会
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
 │   ├── ColmapImageUndistorter.h/cpp # 复杂 COLMAP 模型的导入边界预去畸变
-│   ├── ProjectCameraIO.h/cpp   # FramePinholeCamera JSON/TSAI 与项目元数据适配
+│   ├── ProjectCameraIO.h/cpp、ProjectRpcCameraIO.cpp # FramePinhole/RPC 项目元数据适配
 │   └── test/                      # 相机测试与诊断程序
 │       ├── FramePinholeCamera_tests.cpp
+│       ├── RpcCameraModel_tests.cpp
 │       ├── CameraBaseline_tests.cpp
 │       ├── CameraFormatConverter_tests.cpp
 │       ├── test_tsai_loader.cpp
@@ -188,7 +194,9 @@ core/
 │   │   ├── MatchingStage.h/cpp      # Auto SIFT 或 TensorRT 匹配，生成任务内像对结果
 │   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryVerifier 并填入残差/标志
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
-│   │   └── GuidedMatchStage.h/cpp   # 基础矩阵极线约束下的 SIFT 双向引导重匹配
+│   │   ├── GuidedMatchStage.h/cpp   # 三态 SIFT 双向引导重匹配及任务调度
+│   │   ├── GuidedMatchPolicy.h/cpp  # 弱像对、H/F 退化和自适应核线带策略
+│   │   └── ReferencePoseEpipolarGeometry.h/cpp # 可信参考相机 E/F 推导与一致性检查
 │   ├── tie_points/
 │   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
 │   └── tests/                       # matchphototask 模块级测试
@@ -206,9 +214,11 @@ core/
 │   └── README.md                # 工作流、支持族、sidecar 和 CLI 说明
 │
 ├── bundle_adjust/              # 光束法平差
-│   ├── BundleAdjust.h/cpp      # BA 公共接口、独立行星激光 range shot、自动后端选择和状态回传
-│   ├── BundleAdjustCeres.h/cpp # 仅在 PLASCAN_ENABLE_CERES_REFERENCE 下启用的数值对照后端
-│   ├── BundleAdjustCeresPlanning.h/cpp # 可选 Ceres 对照求解规划
+│   ├── BundleAdjustTypes.h     # 后端、状态、能力和问题规模
+│   ├── BundleAdjustProblem.h   # 观测、轨迹以及 GCP/比例尺/LiDAR 约束
+│   ├── BundleAdjustOptions.h   # 数值、标定、后端选择与任务控制配置
+│   ├── BundleAdjustResult.h    # 相机/点结果及跨后端诊断统计
+│   ├── BundleAdjustSolver.h + BundleAdjust.cpp # BA 求解器门面、自动后端选择和统一质量门控
 │   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
 │   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeCamera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustPlaMatrix.h/cpp # PlaMatrix 联合相机/点/内参 Schur-LM 后端
@@ -220,9 +230,6 @@ core/
 │   ├── BundleAdjustPlaMatrixRuntime.h/cpp # CUDA/OpenCL 设备可用性和显式设备索引校验
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
 │   ├── BundleAdjustQuality.h/cpp # 跨后端正深度、离群点统计和物方约束质量门控
-│   ├── BundleAdjustNativeCuda.h/cpp/.cu # PlaScan 自研 CUDA 后端入口和 GPU 点块求解
-│   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 FramePinholeCamera/BATrack 扁平化为 CUDA 连续工作集
-│   ├── BundleAdjustNativeCudaTypes.h / *Kernels.cuh # CUDA 侧数据类型、点块 kernel 和设备函数
 │   ├── README.md               # 调用链、后端能力、状态、规范与质量门控
 │   ├── tools/                  # BA 后端基准及真实 sfm_sparse_points/TSAI 重放加载器
 │   └── tests/                  # BA 模块级后端、投影模型、自动选择和约束回归测试
@@ -241,6 +248,7 @@ core/
 │
 ├── mask/                       # 照片蒙版生成与合成
 │   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
+│   ├── InteractiveMaskAlgorithms.h/cpp # 矩形、连通域魔棒、颜色感知画笔与边缘吸附路径
 │   ├── u2net/                  # U2Net ONNX 自动蒙版子模块
 │   │   ├── U2NetMaskGenerator.h/cpp # Auto/TensorRT/OpenCV CPU 后端选择、回退策略与状态
 │   │   ├── U2NetTensorRtBackend.cpp # ONNX 首次构建/复用本机 engine 并执行 GPU 推理
@@ -327,12 +335,14 @@ core/
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
 │   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
-│   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
+│   ├── DepthMapFusion.h/cpp    # 深度图融合；流式窗口可用 CUDA/OpenCL 反投影，几何一致性仍在 CPU
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
 │   ├── EpipolarRectifier.h/cpp # 极线校正、工作相机深度范围转换及原相机 Z_cam 回投
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
-│   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
-│   ├── DenseCloudBuilder.h/cpp # 密集云构建器与点云过滤
+│   ├── DensePointCloudCUDA.h/cu # CUDA 深度图反投影
+│   ├── DensePointCloudOpenCL.h/cpp # OpenCL 深度图反投影与设备查询
+│   ├── DensePointCloudNoOpenCL.cpp # 无 OpenCL 构建的稳定接口存根
+│   ├── DenseCloudBuilder.h/cpp # CPU/CUDA/OpenCL 密集云构建、实际后端报告与点云过滤
 │   ├── SparseCloudPreprocessor.h/cpp  # 稀疏云预处理
 │   └── tests/                  # MVS 单元与流水线测试
 │       ├── test_mvs_rectifier.cpp
@@ -348,21 +358,22 @@ core/
 │   ├── PointCloudWorkflowConfig.h/cpp # 点云/深度质量档位到核心配置的统一转换
 │   └── ProjectWorkflowOperations.h/cpp # 稀疏点后处理与地形产品等项目工作流入口
 │
-├── dense_match/                # 密集匹配模块 (新, 将逐步替换 mvs 中的匹配)
-│   ├── README.md               # 模块文档 (详见该文件)
-│   ├── DenseMatchTypes.h       # CostFunction/StereoAlgorithm/SubpixelMode 枚举
+├── dense_match/                # CPU/CUDA/OpenCL 立体密集匹配
+│   ├── README.md               # 模块文档
+│   ├── DenseMatchTypes.h       # 计算后端、代价、算法和子像素枚举
 │   ├── DenseMatchConfig.h      # 参数配置结构体
-│   ├── CostFunctions.h/cpp/cu  # 5 种代价函数 (AD/SD/NCC/Census/TernaryCensus)
-│   ├── BlockMatcher.h/cpp      # WTA 块匹配 (CPU/CUDA 自动调度)
-│   ├── SgmMatcher.h/cpp        # SGM/MGM 半全局匹配 (8方向路径聚合)
+│   ├── DenseMatchBackend.h/cpp # auto/cpu/cuda/opencl 解析、可用性与严格后端选择
+│   ├── CostFunctions.h/cpp/cu  # CPU/CUDA 五种代价及 CUDA WTA/置信度/子像素
+│   ├── OpenClCostFunctions.cpp # OpenCL 1.2 设备、运行时缓存与数据调度
+│   ├── OpenClCostKernels.h     # OpenCL 代价卷、WTA、置信度和抛物线子像素 kernel
+│   ├── BlockMatcher.h/cpp      # 设备驻留的 CUDA/OpenCL WTA 块匹配
+│   ├── SgmMatcher.h/cpp        # GPU 代价/选择 + CPU 8 方向路径聚合
 │   ├── SubpixelRefiner.h/cpp   # 子像素视差精化 (抛物线拟合)
 │   ├── DisparityValidator.h/cpp # L-R 一致性/中值滤波/Speckle 过滤
 │   ├── DenseMatchService.h/cpp # 服务层: 编排完整匹配流水线
 │   ├── opencv/
 │   │   └── OpenCVSgbmWrapper.h/cpp  # OpenCV SGBM 封装 (对比算法)
-│   └── tests/ (6 个测试文件, 22 项)
-│
-│   └── tests/
+│   └── tests/                  # 后端解析、严格失败与 CPU/GPU 数值一致性测试
 │
 ├── mesh/                       # 网格重建与纹理映射
 │   ├── MeshTypes.h             # 网格类型
@@ -419,19 +430,31 @@ core/
 │   ├── VisibilityOccupancyCleanup/HandleRepair/WellComposedRepair.* # 占据体分量、柄和良构拓扑修复
 │   ├── VisibilityOccupancyDistanceField/BoundaryExtractor/SurfaceBuilder.* # 闭合载体距离场、边界和表面构造
 │   ├── VisibilityOccupancyCarrierSubdivision/Fairer/FieldProjector.* # 保拓扑载体细分、平滑和距离场投影
-│   ├── VisualHullReconstructor.h/cpp # 显式 legacy/诊断 Visual Hull 路径
+│   ├── RegularGrid3D.h         # CPU/CUDA/OpenCL 共用的规则三维网格布局
+│   ├── VisualHullFieldEvaluator.h/cpp # Visual Hull 体素场 CPU 参考语义
+│   ├── VisualHullFieldBackend.h/cpp # CPU/CUDA/OpenCL 体素场调度与输入打包
+│   ├── VisualHullFieldCUDA.cu  # CUDA 轮廓/深度自由空间体素场评估
+│   ├── VisualHullFieldOpenCL.cpp # OpenCL 轮廓/深度自由空间体素场评估
+│   ├── VisualHullFieldNoCUDA.cpp/VisualHullFieldNoOpenCL.cpp # 无 GPU 后端构建存根
+│   ├── VisualHullReconstructor.h/cpp # Visual Hull 体素场、拓扑闭运算和表面提取
 │   ├── ModelOutputPolicy.h/cpp    # 模型/纹理 run 隔离目录、所有权标记与未发布目录安全回收
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务；保留 PLY 几何并可写 OBJ/MTL/相机纹理图集
 ├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
 │   ├── DemDomTypes.h           # DEM/DOM 类型
 │   ├── DemGridAggregator.h/cpp # mean/median/NMAD/P80/count/confidence/error weighted 聚合
-│   ├── DemMosaic.h/cpp         # 多 tile DEM mosaic 与按质量融合
+│   ├── DemMosaic.h/cpp         # CPU/CUDA/OpenCL 同网格多 tile DEM mosaic
 │   ├── TerrainProductManifest.h/cpp # DEM/DOM/error/count/confidence/coverage 产品记录
 │   ├── DemGenerator.h/cpp      # DEM 生成
 │   ├── DemGeneratorFromDepth.cpp  # 从深度图生成 DEM
 │   ├── DomGenerator.h/cpp      # DOM 正射影像生成
 │   ├── OrthoGenerationOptions.h/cpp # 正射投影、尺寸、区域、融合和覆盖处理的类型化参数
-│   ├── OrthoProjector.h/cpp    # DEM 高程点到项目相机的逐像元反投影与候选融合
+│   ├── TerrainComputeBackend.h/cpp # auto/cpu/cuda/opencl 解析、设备查询与执行报告
+│   ├── TerrainGpuBackend.h     # 正射投影和 DEM mosaic 的 GPU 数据契约
+│   ├── TerrainCudaBackend.cu   # CUDA 正射投影与 DEM mosaic kernel
+│   ├── TerrainOpenClBackend.cpp # OpenCL 正射投影与 DEM mosaic kernel
+│   ├── TerrainNoCudaBackend.cpp/TerrainNoOpenClBackend.cpp # 无 GPU 后端构建存根
+│   ├── OrthoProjector.h/cpp    # CPU/GPU 调度、DEM 反投影与候选融合
+│   ├── OrthoProjectorGpu.h/cpp # 正射影像 GPU 输入打包、执行与结果还原
 │   ├── OrthoProjectorGrid.cpp  # DEM 边界裁剪、X/Y 像元、最大尺寸与像素预算规划
 │   ├── OrthoProjectorSupport.cpp # 影像/蒙版加载、颜色校正、锐度、重影和小孔洞处理
 │   ├── OrthoProjectorInternal.h # 正射投影内部帧与颜色候选结构
@@ -445,6 +468,12 @@ core/
 │   ├── projection/
 │   │   └── AsteroidProjection.h/cpp  # 小行星投影
 │   └── tests/                  # 平面/正射、质量栅格与小天体全球产品测试
+│
+├── stereo_dem/                 # 带 RPC 的地理立体像对到 DEM/DOM
+│   ├── RpcStereoDemGenerator.h/cpp # SIFT 同名点、RPC 前方交会、UTM 点云和 DEM 产品编排
+│   ├── RpcDomGenerator.h/cpp   # DEM 网格反算 WGS84、RPC 正射采样和 RGB+Alpha DOM
+│   ├── RpcGeospatialSupport.h/cpp # WGS84/UTM 坐标转换与 DEM 行坐标反算
+│   └── tests/                  # 仓库 RPC 像对的 DEM/DOM 端到端回归
 │
 ├── qc/                         # 重建质量检查和外部参考验证
 │   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率、GCP/检查点/比例尺报告
@@ -513,7 +542,7 @@ image measure 类型。ISIS `LidarData` 缺失的目标/frame/传感器模型/ra
 求解相机索引提供稳定别名，工程 `image_uuid` 由 GUI/CLI 自动按相机顺序合并。完整 ID 唯一命中优先于
 filename/stem 回退。当前一个 shot 只允许一台同期相机；ISIS 多 `simultaneousImages` 共享同一落点的完整行为
 尚未实现。像点协方差当前只接受可精确转成核心标量权重的 `sigma^2 I`；各向异性或相关矩阵明确拒绝。
-`ephemeris_time_s` 只保留到报告，尚无 SPICE/逐行时变轨迹求值。Auto 模式的 Ceres range 候选失败或被质量
+`ephemeris_time_s` 只保留到报告，尚无 SPICE/逐行时变轨迹求值。Auto 模式的 PlaMatrix range 候选失败或被质量
 门控拒绝时直接失败，禁止回退到不支持测距约束的 Legacy。行星激光 dry-run 仍执行数据、传感器模型、
 坐标系和别名预校验；初始落点与杆臂修正后的发射点重合时也会在求解前拒绝。
 
@@ -530,7 +559,7 @@ P0 每景只优化月固系一个 6DoF 刚性偏差，并明确限制为 `MOON_M
 
 该链路由 `src/core/lidar/tests/test_planetary_laser_json.cpp` 和
 `test_planetary_laser_ba_adapter.cpp` 覆盖格式、ISIS 协方差、projected/measured 类型、像点权重与关联安全边界；
-`src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp` 覆盖 Fixed/Constrained/Free、杆臂和后端能力；
+`src/core/bundle_adjust/tests/test_bundle_adjust_plamatrix_constraints.cpp` 覆盖 Fixed/Constrained/Free、杆臂和后端能力；
 `tests/test_bundle_adjust_service_planetary_laser.cpp` 覆盖 SI/ISIS 服务端别名/工程 UUID 关联、严格相机顺序、结果写出与
 line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和质量摘要。
 `tests/test_reference_dataset_planetary_laser.cpp` 验证 ISIS 点签名识别，并防止普通 `points` JSON 被误分类。
@@ -547,7 +576,7 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 该调度只依赖共视网络和计算规模，不按航测、转台、相机编号或轨迹形状推断场景。
 最终共享内参 BA 同样不硬分类“对地/环拍”：`BundleAdjustAdaptiveCameraModel` 在粗解上对
 `f/aspect/cx/cy/k1/k2/k3/p1/p2` 分别计算结构消元后的增量信息评分、典型扰动敏感度和几何/像面覆盖证据，
-再生成 Ceres `SubsetManifold` 掩码。弱平行块保留低阶模型，汇聚、多高度且外围覆盖充分时才逐项扩展；
+再生成 PlaMatrix 参数掩码。弱平行块保留低阶模型，汇聚、多高度且外围覆盖充分时才逐项扩展；
 请求、调度、有效和实际写回状态连同逐参数可靠度、门控证据均进入 SfM 诊断。完整已知位姿路径固定
 输入标定；多轮重三角化/BA 对已应用状态做累计，后续 no-op 不会把前轮有效自标定误判成失败。多起点与
 迭代轮次可沿用上一轮内参作为数值初值，但所有相对边界和弱先验都锚定到 `IncrementalSfm::run()`
@@ -556,10 +585,8 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 60 次上限，后续已有可复用镜头种子时恢复配置迭代数。局部/分块固定内参子问题不携带全局位置式参考，
 且不允许 Legacy 做不等价模型回退。
 
-`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 FramePinholeCamera/BATrack
-观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，
-因此需要联合相机 BA 时 Auto 不会选择该后端。PlaMatrix 在同一非线性问题中联合优化相机、三维点、
-分组完整 Brown 内参和物方约束。Legacy CPU 保留 point-only 固定相机问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
+`bundle_adjust` 由 PlaMatrix 在同一非线性问题中联合优化相机、三维点、分组完整 Brown 内参和物方约束。
+Legacy CPU 保留 point-only 固定相机问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
 正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
 `plamatrix_cpu`、`plamatrix_cuda` 和 `plamatrix_opencl` 是正式联合 BA 路径：PlaScan
 负责完整 Brown-Conrady 投影、解析相机/点/内参雅可比、物方约束、gauge、取消与统一质量复核，PlaMatrix 负责通用 Huber
@@ -572,8 +599,8 @@ CPU 稠密路径直接按固定 slot 顺序装配 Schur 下三角，不再经过
 128 阶以上用自动 block size 的 POTRF/TRSM/SYRK 分块 Cholesky。报告分别记录小块求逆、Schur 累加、
 CSR 转换、Cholesky、三角求解、残差检查和点块回代，以便把装配与线性求解回归分开定位。
 三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按规模选择 PlaMatrix CPU/CUDA/OpenCL，
-GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有同数据 Ceres 对照回归。
-行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU / Native CUDA 静默忽略
+GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有跨 PlaMatrix 后端一致性回归。
+行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU 静默忽略
 该约束。结果单独返回参与求解的 shot 数、优化前后 range RMS 和逐 shot 落点/残差，不污染普通影像
 重投影 RMS、track 过滤计数或有效 track 比例。
 
@@ -636,10 +663,11 @@ gui/
 │   │   ├── CameraCalibrationData.h/cpp   # 固化空三输入先验/最终内参，按图像中心转换 cx/cy
 │   │   └── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
 │   ├── image/                  # 蒙版等单影像处理
-│   │   └── GenerateMaskDialog.h/cpp # 经典/U2Net/BiRefNet 方法、真实设备/尺寸、模型状态与下载入口
+│   │   ├── GenerateMaskDialog.h/cpp # 经典/U2Net/BiRefNet 方法、真实设备/尺寸、模型状态与下载入口
+│   │   └── MaskEditorSettingsDialog.h/cpp # 交互蒙版的添加/擦除、容差、笔刷、吸附和透明度设置
 │   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
 │   │   ├── MapProjectDialog.h/cpp         # 正射对话框生命周期、运行进度与取消
-│   │   ├── MapProjectDialogLayout.cpp     # 投影、参数、区域、输出和进度分组布局
+│   │   ├── MapProjectDialogLayout.cpp     # 产品模式、双栏参数、输出和进度分组布局
 │   │   ├── MapProjectDialogSettings.cpp   # 稳定 token、设置往返、输入校验与控件联动
 │   │   └── MapProjectDialogEstimate.cpp   # DEM 元数据读取、真实像元/范围和内存估算
 │   ├── tie_points/             # 连接点创建/清理/查看与重叠分析；清理对话框将阈值滑块连到后台候选预览
@@ -648,10 +676,10 @@ gui/
 │
 ├── widgets/                    # 自定义 Qt 控件
 │   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
+│   ├── MaskEditor.h/cpp                # 蒙版编辑状态、图形预览、撤销/重做与快捷键交互
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
-│   ├── DualImageViewer.h/cpp           # 双图并列查看器，显式选择稀疏连线或左右影像视差目标
+│   ├── DualImageViewer.h/cpp           # 双图并列匹配查看器，协调左右影像与稀疏连线
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
-│   ├── DisparityHeatmapOverlay.h/cpp   # 异步视差热力图，按目标 viewport 变换做像素配准
 │   ├── PhotoStripWidget.h/cpp          # 可视区缩略图、有界预取队列与 LRU 缓存
 │   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中任务、实时用时和进度
 │   ├── MatchPointBatchItem.h/cpp       # 匹配查看器单图元批量端点绘制，避免逐点 QGraphicsItem
@@ -668,12 +696,13 @@ gui/
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器；含参考激光 JSON 导入、frame/坐标系确认和 BA 启动
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
-│   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成、取消及结果登记
+│   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成/交互保存、取消及结果登记
 │   │   ├── ProjectMaskInferenceAdapter.h/cpp         # U2Net/BiRefNet 后端适配和实际模型/设备/engine 元数据
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建与连接点质量剔除，产出一致的 PLY/sidecar 并通知三维视图刷新
 │   │   ├── ProjectPointCloudWorkflowController.h/cpp # 点云工作流协调：深度估计/复用、流式融合与结果登记
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 局部 DEM、原生小天体全球 DEM/DOM、取消与 Chunk 隔离登记
+│   │   ├── ProjectTerrainRpcProducts.cpp             # RPC 立体 DEM/正射 DOM 异步执行、取消、质量成果与项目登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
@@ -852,11 +881,13 @@ DOM 输入；模型支持 OBJ、PLY，OBJ 的 MTL 与其引用纹理会一起复
 
 ```text
 MenuWorkflowController
-  -> MapProjectDialog（DEM/彩色点云、投影参考、输出估算、进度与取消）
+  -> MapProjectDialog（常规/RPC 产品模式、DEM/彩色点云、投影参考、输出估算、进度与取消）
   -> ProjectManager -> ProjectTerrainProductsManager
   -> GuiTaskRunner::runGuardedWithOutcome
-  -> core/project_workflows::runOrthoProduct
-  -> TerrainPipeline -> OrthoGenerationOptions
+  -> 产品模式分流
+       ├─ 常规 -> core/project_workflows::runOrthoProduct -> TerrainPipeline
+       └─ RPC -> stereo_dem::RpcDomGenerator
+  -> OrthoGenerationOptions
        ├─ DEM + Images -> OrthoProjector
        └─ PointCloud + PointColors -> PointCloudDomGenerator
   -> DemDomIO（RGB+覆盖 Alpha GeoTIFF 或 RGBA PNG）
@@ -876,6 +907,20 @@ MenuWorkflowController
 并受统一像素预算限制。若有效 DEM 表面没有任何相机影像覆盖，核心直接失败，不登记全黑成果。有效覆盖
 会进入 GeoTIFF/PNG Alpha；当前 `ortho_projector_v1` 尚未建立逐相机地形遮挡深度缓冲，
 因此陡峭地形仍需质量复核，不能把 Alpha 当作遮挡正确性的证明。
+
+新增计算后端统一接受 Auto、CPU、CUDA 和 OpenCL：只有 Auto 会按 CUDA → OpenCL GPU → CPU
+顺序降级；显式 CUDA/OpenCL 在构建未包含后端、设备不可用、索引非法或执行失败时直接报错，
+不静默替换为 CPU。MVS 与 terrain 的执行报告保存实际后端、设备和 Auto 回退原因。各路径的设备边界如下：
+
+| 模块 | CUDA/OpenCL 执行范围 | 当前 CPU 边界 |
+|---|---|---|
+| `dense_match` | Block Match 的代价卷、WTA、置信度和抛物线子像素保持设备驻留；SGM 负责代价卷和最终选择 | SGM/MGM 路径递推，以及 L-R、中值、Speckle 和影像支持验证；OpenCV SGBM 也是 CPU-only |
+| MVS 密集云/融合 | `DenseCloudBuilder` 深度反投影；流式窗口融合可显式用 GPU 预计算参考帧世界坐标图 | 重投影一致性与观测融合；融合 `Auto` 保持 CPU 以避免额外全图缓冲，全局多帧 BFS 的显式 GPU 请求会失败 |
+| Mesh Visual Hull | 规则网格上的轮廓、连续距离场和深度自由空间体素评估 | 输入准备、拓扑闭运算、MC33/Marching Cubes 表面提取和后处理 |
+| Terrain | DEM 正射逐像元投影、候选融合和同网格 DEM mosaic | `ghost_filter`、孔洞连通域与颜色传播；显式 GPU + `ghost_filter` 会失败，Auto 回退 CPU |
+
+Terrain OpenCL 正射投影使用双精度世界坐标，设备须支持 `cl_khr_fp64` 或 `cl_amd_fp64`。
+流式 MVS 的 GPU 后端只改变反投影执行位置，不改变 CPU 上的多视几何准入与融合语义。
 
 深度图的磁盘 manifest 哈希覆盖估计参数、影像路径/大小/修改时间、相机内外参、
 匹配对质量约束和稀疏点云内容。项目结果中的深度批次还记录当前影像、相机与正式空三结果的
@@ -1045,8 +1090,9 @@ A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节�
 法向。稀疏 SfM 点不注入 TSDF，因为它们不具备深度像素的自由空间和实测表面语义。
 
 过滤后的有向点由 `ScreenedPoissonSurfaceBuilder` 交给官方
-[PoissonRecon](https://github.com/mkazhdan/PoissonRecon) Screened Poisson 实现；源码固定在 commit
-`262b0f539d404057d1f36e1adc07fc9388678899`。默认参数为 depth 9、`pointWeight=4`、
+[PoissonRecon](https://github.com/mkazhdan/PoissonRecon) Screened Poisson 实现；源码通过
+`3rdparty/PoissonRecon` submodule 固定在 commit `262b0f539d404057d1f36e1adc07fc9388678899`。默认参数为
+depth 9、`pointWeight=4`、
 `samplesPerNode=1.5`、scale 1.1、8 次求解迭代、CG 精度 `1e-3`，并启用 manifold 提取。无效样本和零
 法向被拒绝，`pointWeight` 必须严格大于 0，不能静默退化为非 screened Poisson。这里的官方适配器与
 PlaPoint 通用表面重建中的 Poisson/PCG 后端是两条独立实现，环拍稀疏全局载体使用前者。
@@ -1277,6 +1323,7 @@ cli/
 ├── reconstruction/           # 可独立执行的重建阶段与诊断工具；tests/ 就近维护
 ├── workflows/                # GUI“工作流程”菜单入口；Options/Runner/Progress/Report 分责；tests/ 就近维护
 ├── quality/                  # 模型影像质量验收；tests/ 就近维护
+├── terrain/                  # RPC 立体 DEM/DOM 入口
 ├── common/                   # 公共路径/token/控制台/JSON/输出策略/摄影测量列表基础设施
 │   └── tests/                # 公共解析测试与 CliTestSupport
 └── third_party/              # CLI11 单头文件依赖
@@ -1305,13 +1352,16 @@ CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `t
 跳过未映射 shot 和忽略未映射真实 measured 像点均需单独显式开关。CLI 不进行最近时间关联或隐式坐标转换。
 
 **统一约定**：
-- `--help` / `-h` — 打印参数说明
-- `--config <file>` — JSON 配置文件（可与命令行参数合并，命令行优先）
-- `-V` / `--verbose` — 详细诊断日志
+- `--help` / `-h` — 打印中文参数说明；CLI11 入口还提供 `--version`
+- 稳定参数使用 `--kebab-case`，枚举值使用可持久化的英文 ID
 - 退出码: 0=成功, 1=参数错误, 2=I/O 错误, 3=算法错误
 - 进度/错误信息 → stderr，结果信息 → stdout
+- `--verbose`、JSON 配置文件等只在需要它们的命令中提供，不属于全局参数
 - `three_d_reconstruction_cli` 支持 `--stop-after-sfm`、`--skip-mvs`、`--skip-mesh` 分阶段运行，用于大数据 benchmark 和问题定位。
 - `scripts/bench/run_photogrammetry_benchmarks.py` 扫描 `prepared/plascan/image_camera.lis`，批量调用三维重建 CLI 并汇总 JSON。
+
+GUI/CLI 的工作流映射、按钮语义、稳定枚举值和用户示例集中维护在
+`docs/GUI_CLI_GUIDE.md`，避免在架构文档中复制易过期的完整命令帮助。
 
 **标准摄影测量流程与 CLI 覆盖**:
 
@@ -1336,7 +1386,7 @@ CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `t
 ```bash
 # 两影像 + 两相机 → 密集点云
 rectify_cli -L L.tif -R R.tif --camL camL.txt --camR camR.txt -o rect
-dense_match_cli -L rect_L.tif -R rect_R.tif -o disp.tif --cuda
+dense_match_cli -L rect_L.tif -R rect_R.tif -o disp.tif --device cuda
 triangulate_cli -d disp.tif --rect-params rect.xml \
     --camL camL.txt --camR camR.txt -o cloud.ply
 ```
@@ -1351,15 +1401,27 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 ## 六、构建系统
 
-- **根**: `CMakeLists.txt` — 强制使用 vcpkg manifest toolchain，CUDA 按标准工具链自动查找
+- **根**: `CMakeLists.txt` — 强制使用 vcpkg manifest toolchain；也可切换到 Qt/OpenCV/GDAL/AprilTag 源码依赖 superbuild
 - **依赖**: `cmake/PlascanPackages.cmake` (统一 find_package)
+- **源码依赖**: `cmake/PlascanSourceDependencies.cmake` 固定 Qt 6.11.2、OpenCV 5.0.0、
+  GDAL 3.12.4 和 AprilTag 3.4.5，只初始化 Qt 的 `qtbase` 与 `qtshadertools`，并安装到 source-deps preset
+  的共享前缀；PoissonRecon 从固定 submodule 直接提供头文件；`cmake/source-deps/vcpkg.json` 仅提供
+  PROJ、libgeotiff、libtiff、zlib 和图像编解码等底层依赖
+- **OpenCV 边界**: C++ 与 Python 运行时均要求 OpenCV 5；C++ 直接使用拆分后的 `features`、`geometry`
+  和 `stereo` 模块，不保留 OpenCV 4 头文件、模块名或调用签名兼容层
+- **ONNX Runtime**: 固定 1.29.0 官方预编译包并校验 SHA-256，下载归档跨 preset 缓存在
+  `build/env/downloads/onnxruntime/1.29.0/`，也可显式指定离线归档
+- **TensorRT SDK**: Windows 标准配置入口默认探测并复用 TensorRT 10.15.1.29 CUDA 13.1 C++ SDK；用户一次性
+  接受 NVIDIA 许可后可自动下载、校验并安装到 `build/env/sdk/tensorrt/10.15.1.29/`。SDK 不可用时保留
+  原生 CUDA 后端，神经网络推理自动回退 ONNX Runtime CPU；CUDA 不可用时整体回退 CPU
 - **Core**: 每个子模块独立 `CMakeLists.txt`, 通过 `plascan_core_add_optional_module()` 注册
 - **NVRTC**: 由显式配置的 CUDA Toolkit/TensorRT SDK 提供，不拼接环境管理器私有路径
-- **CUDA**: 检测到标准 CUDA 编译器后全局 `enable_language(CUDA)`；可通过 `PLASCAN_ENABLE_CUDA=OFF` 关闭
+- **CUDA**: 默认探测标准 CUDA 编译器并全局 `enable_language(CUDA)`；探测失败自动回退 CPU，也可通过
+  `PLASCAN_ENABLE_CUDA=OFF` 显式关闭
 - **Linux CUDA/OpenCL 开发构建**: `linux-vcpkg-cuda-opencl-release` 使用独立 vcpkg installed tree，
-  同时启用原生 CUDA、PlaMatrix CUDA/OpenCL，不安装 Ceres；本机 CUDA 13.1 基线固定 GCC 13 host compiler 与 `sm_89`，
+  同时启用原生 CUDA、PlaMatrix CUDA/OpenCL；本机 CUDA 13.1 基线固定 GCC 13 host compiler 与 `sm_89`，
   并通过项目 `cuda` vcpkg overlay 显式传递 CUDA compiler，避免混用系统旧版 `nvcc`；
-  TensorRT 保持外部可选 SDK，不由 vcpkg 提供
+  TensorRT 不由 vcpkg 提供，Linux 使用外部 SDK，Windows 可由标准配置脚本安装固定 SDK
 - **测试**: `-DBUILD_TESTS=ON` → CTest；按改动范围优先跑相关测试，再决定是否跑全量
 ## GUI 模块边界（2026-08）
 

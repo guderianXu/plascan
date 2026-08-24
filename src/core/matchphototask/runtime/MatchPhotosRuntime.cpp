@@ -1,4 +1,4 @@
-#include "MatchPhotosRuntime.h"
+﻿#include "MatchPhotosRuntime.h"
 
 #include "MatchPhotosParallelism.h"
 #include "inference/tensorrt/TensorRtEngineBuilder.h"
@@ -861,7 +861,7 @@ int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 int imageWidth,
                                 int imageHeight)
 {
-    if (plan.enableGuidedMatching && options.keypointLimitPerMegapixel > 0 &&
+    if (guidedMatchingEnabled(plan.guidedMatchingMode) && options.keypointLimitPerMegapixel > 0 &&
         imageWidth > 0 && imageHeight > 0)
     {
         const double megapixels = static_cast<double>(imageWidth) *

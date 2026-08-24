@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustTypes.h"
 
 #include <plamatrix/optimization/block_schur.h>
 

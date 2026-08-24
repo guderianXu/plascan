@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
 

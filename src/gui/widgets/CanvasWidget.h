@@ -3,6 +3,7 @@
 #include <QGraphicsView>
 #include "LayerRenderer.h"
 #include "DepthOverlayData.h"
+#include "MaskEditor.h"
 #include <QFutureWatcher>
 #include <QImage>
 #include <QJsonObject>
@@ -67,6 +68,15 @@ public slots:
     void setDepthOverlayEnabled(bool enabled);
     void setDepthOverlayLevel(xjw::gui::views::DepthOverlayLevel level);
     void setDepthIntensityVisible(bool visible);
+    void useRectangleMaskTool();
+    void useScissorsMaskTool();
+    void useSmartPaintMaskTool();
+    void useMagicWandMaskTool();
+    void showMaskEditorSettings();
+    void resetMaskSelection();
+    void undoMaskEdit();
+    void redoMaskEdit();
+    void confirmInteractiveMaskSaved(const QString &imagePath, quint64 revision);
 
 public slots:
     // 控制是否在视图上叠加显示兴趣点
@@ -103,6 +113,11 @@ signals:
     void featureResidualAvailabilityChanged(bool available);
     // 照片区域被右键时发送原始影像像素坐标；视图旋转和缩放不会改变该坐标。
     void imageContextRequested(const QString &imagePath, const QPointF &originalPixel);
+    void interactiveMaskEditRequested(const QString &imagePath,
+                                      const QImage &mask,
+                                      const QString &method,
+                                      quint64 revision);
+    void maskSelectionActiveChanged(bool active);
 
 private:
     // 在后台加载当前影像的 `.pimatch` 观测，主线程只负责更新场景。
@@ -112,6 +127,8 @@ private:
     void clearFeatureCacheForImage(const QString &imagePath);
     void refreshDepthOverlay();
     void setDepthInspectionActive(bool active);
+    void setMaskTool(MaskEditor::Tool tool);
+    void reloadEditableMask();
     bool shouldRenderFeatureDiagnostics() const { return !_depthInspectionActive; }
 
 protected:
@@ -123,11 +140,14 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     LayerRenderer *_layerRenderer{};
     xjw::gui::widgets::DepthOverlayController *_depthOverlayController{};
+    MaskEditor *_maskEditor{};
     bool _showInterestPoints{true};  // 默认启用特征点显示
     bool _showMaskOverlay{true}; // 默认显示照片蒙版轮廓
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
@@ -138,6 +158,8 @@ private:
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _matchObservationCache;
     int _featureLoadGeneration{0};
     int _residualLoadGeneration{0};
+    int _maskLoadGeneration{0};
+    quint64 _maskSavedRevision{};
     int _viewRotationDegrees{0};
     bool _singleImageReady{false};
     bool _depthOverlayEnabled{false};

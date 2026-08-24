@@ -1,6 +1,6 @@
 #include "OpenCVSgbmWrapper.h"
 
-#include "OpenCvCompat.h"
+#include <opencv2/stereo.hpp>
 
 #include <algorithm>
 #include <cmath>

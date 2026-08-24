@@ -85,8 +85,7 @@ TEST(MatchPhotosAlgorithmSelectorTest, AutoUsesResolvedCpuBackend)
         options, std::move(plan), xjw::image_matching::SiftComputeBackend::Cpu);
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
-    EXPECT_EQ(plan.executionBackend,
-              xjw::image_matching::SiftComputeBackend::Cpu);
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Cpu);
     EXPECT_TRUE(plan.backendFallback);
     EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.backendReason.contains(QStringLiteral("OpenCV CPU")));
@@ -105,8 +104,7 @@ TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCudaUsesResolvedCudaBackend)
         options, std::move(plan), xjw::image_matching::SiftComputeBackend::Cuda);
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
-    EXPECT_EQ(plan.executionBackend,
-              xjw::image_matching::SiftComputeBackend::Cuda);
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Cuda);
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCpuUsesCpuSiftBackend)
@@ -120,8 +118,7 @@ TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCpuUsesCpuSiftBackend)
         options, std::move(plan), xjw::image_matching::SiftComputeBackend::Cpu);
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
-    EXPECT_EQ(plan.executionBackend,
-              xjw::image_matching::SiftComputeBackend::Cpu);
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Cpu);
     EXPECT_FALSE(plan.backendFallback);
 }
 
@@ -136,8 +133,7 @@ TEST(MatchPhotosAlgorithmSelectorTest, ExplicitMetalUsesMetalBackend)
         options, std::move(plan), xjw::image_matching::SiftComputeBackend::Metal);
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
-    EXPECT_EQ(plan.executionBackend,
-              xjw::image_matching::SiftComputeBackend::Metal);
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Metal);
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, RejectsCpuForCudaOnlyAlgorithm)
@@ -156,12 +152,12 @@ TEST(MatchPhotosAlgorithmSelectorTest, GuidedMatchingRemainsExplicit)
 {
     xjw::matchphotos::MatchPhotosOptions options;
     options.profile = xjw::matchphotos::MatchPhotosProfile::DifficultTexture;
-    options.enableGuidedMatching = true;
+    options.guidedMatchingMode = xjw::matchphotos::GuidedMatchingMode::Automatic;
 
     const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
 
     EXPECT_TRUE(plan.valid);
-    EXPECT_TRUE(plan.enableGuidedMatching);
+    EXPECT_EQ(plan.guidedMatchingMode, xjw::matchphotos::GuidedMatchingMode::Automatic);
     EXPECT_GE(plan.maxKeypoints, 12000);
 }
 

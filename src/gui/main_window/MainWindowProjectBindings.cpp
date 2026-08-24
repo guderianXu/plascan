@@ -558,7 +558,9 @@ void MainWindow::setupProjectManager()
                     options.maxTiePointsPerImage = dlg.tiePointLimit();
                     options.excludeStationaryTiePoints = dlg.excludePinnedTiePoints();
                     options.matchThreshold = 0.15f;
-                    options.enableGuidedMatching = dlg.useGuidedMatching();
+                    options.guidedMatchingMode =
+                        xjw::matchphotos::guidedMatchingModeFromName(
+                            dlg.guidedMatchingMode());
                     options.useGenericPreselection = dlg.useGenericPreselection();
                     options.useReferencePreselection = dlg.useReferencePreselection();
                     options.maskApplyMode = dlg.maskApplyMode();
@@ -663,7 +665,7 @@ void MainWindow::setupProjectManager()
                 }
 
                 auto *modelView = _workspaceCenter->modelView();
-                modelView->clearTiePointPrunePreview();
+                modelView->clearTiePointPruneSession();
                 _workspaceCenter->showTiePointCloudFile(selection.sparseCloudPath, sidecarPath);
 
                 CleanTiePointsDialog dlg(this);
@@ -798,7 +800,33 @@ void MainWindow::setupProjectManager()
                         [&dlg, modelView](int candidateCount)
                         {
                             dlg.setCandidateCount(candidateCount,
-                                                  modelView->tiePointQualityPointCount());
+                                                  modelView->tiePointPruneRemainingPointCount());
+                        });
+                connect(&dlg,
+                        &CleanTiePointsDialog::stageDeleteRequested,
+                        &dlg,
+                        [this, modelView, &dlg](DialogCriterion criterion,
+                                               double level)
+                        {
+                            int staged_deletion_count = 0;
+                            int remaining_point_count = 0;
+                            QString error_message;
+                            if (!modelView->stageTiePointPrunePreview(
+                                    &staged_deletion_count,
+                                    &remaining_point_count,
+                                    &error_message))
+                            {
+                                statusBar()->showMessage(error_message, 3000);
+                                return;
+                            }
+                            dlg.confirmStagedDeletion(criterion,
+                                                      level,
+                                                      staged_deletion_count,
+                                                      remaining_point_count);
+                            statusBar()->showMessage(
+                                tr("已暂删 %1 个连接点；确定后应用，取消则恢复。")
+                                    .arg(staged_deletion_count),
+                                3000);
                         });
                 connect(modelView,
                         &CameraSceneWidget::tiePointQualityMetadataReady,
@@ -854,48 +882,26 @@ void MainWindow::setupProjectManager()
 
                 if (dlg.exec() != QDialog::Accepted)
                 {
-                    modelView->clearTiePointPrunePreview();
+                    modelView->clearTiePointPruneSession();
                     return;
                 }
 
-                const int candidateCount = dlg.candidateCount();
-                const int totalPointCount = dlg.totalPointCount();
+                const int candidateCount = dlg.stagedDeletionCount();
+                const int totalPointCount = candidateCount + dlg.remainingPointCount();
                 if (!dlg.deleteRequested())
                 {
-                    statusBar()->showMessage(
-                        tr("已在三维视图高亮 %1 / %2 个候选剔除点（%3，阈值 %4）。")
-                            .arg(candidateCount)
-                            .arg(totalPointCount)
-                            .arg(dlg.criterionText())
-                            .arg(QString::number(dlg.level(), 'g', 5)),
-                        5000);
+                    modelView->clearTiePointPruneSession();
                     return;
                 }
 
                 if (candidateCount <= 0 || totalPointCount <= 0
                     || candidateCount >= totalPointCount)
                 {
-                    modelView->clearTiePointPrunePreview();
+                    modelView->clearTiePointPruneSession();
                     QMessageBox::warning(
                         this,
                         tr("清理连接点"),
                         tr("候选点数无效，已取消删除。请调整阈值，保留至少一个连接点。"));
-                    return;
-                }
-
-                const auto answer = QMessageBox::question(
-                    this,
-                    tr("删除候选连接点"),
-                    tr("将删除 %1 / %2 个连接点，并生成新的稀疏点云成果。\n"
-                       "现有深度图、稠密点云、模型、DEM 和 DOM 将失效，需重新生成。\n\n"
-                       "是否继续？")
-                        .arg(candidateCount)
-                        .arg(totalPointCount),
-                    QMessageBox::Yes | QMessageBox::No,
-                    QMessageBox::No);
-                if (answer != QMessageBox::Yes)
-                {
-                    statusBar()->showMessage(tr("已取消删除，候选点仍保持高亮。"), 3000);
                     return;
                 }
 
@@ -1010,6 +1016,28 @@ void MainWindow::setupProjectManager()
             openProjectFromPath(p);
         });
         connect(_mainMenu, &MainMenu::clearRecentRequested, this, &MainWindow::onClearRecentRequested);
+    }
+
+    if (_canvas)
+    {
+        connect(_canvas,
+                &CanvasWidget::interactiveMaskEditRequested,
+                _projectManager,
+                &ProjectManager::saveInteractiveMask);
+        connect(_projectManager,
+                &ProjectManager::interactiveMaskSaved,
+                _canvas,
+                &CanvasWidget::confirmInteractiveMaskSaved);
+        connect(_projectManager,
+                &ProjectManager::interactiveMaskSaveFailed,
+                this,
+                [](const QString &imagePath, quint64 revision, const QString &message)
+                {
+                    LOG_ERROR(QStringLiteral("交互蒙版保存失败: image=%1 revision=%2 error=%3")
+                                  .arg(imagePath)
+                                  .arg(revision)
+                                  .arg(message));
+                });
     }
 
     connect(_projectManager, &ProjectManager::masksGenerated, this, [this](const QStringList &imagePaths)

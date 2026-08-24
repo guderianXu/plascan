@@ -55,10 +55,16 @@ function(add_plascan_cli name)
     if(CLI_COMPILE_DEFINITIONS)
         target_compile_definitions(${name} PRIVATE ${CLI_COMPILE_DEFINITIONS})
     endif()
+    target_compile_definitions(${name} PRIVATE
+        PLASCAN_VERSION="${CMAKE_PROJECT_VERSION}"
+    )
 
     set_target_properties(${name} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
+    if(WIN32)
+        plascan_deploy_onnxruntime(${name})
+    endif()
     if(CLI_WITH_NVRTC_RPATH)
         set_target_properties(${name} PROPERTIES
             BUILD_RPATH_USE_ORIGIN TRUE
@@ -75,3 +81,4 @@ add_subdirectory(dense)
 add_subdirectory(reconstruction)
 add_subdirectory(workflows)
 add_subdirectory(quality)
+add_subdirectory(terrain)

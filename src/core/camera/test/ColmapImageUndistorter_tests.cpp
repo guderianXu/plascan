@@ -115,11 +115,13 @@ TEST(ColmapImageUndistorterTest, ConverterPublishesPreparedRasterMaskAndPinholeC
     ASSERT_FALSE(valid.empty());
     EXPECT_EQ(cv::countNonZero(valid), 96 * 72);
     EXPECT_TRUE(std::filesystem::is_regular_file(result.preUndistortManifestPath));
-    std::ifstream list(result.imageCameraList);
-    const std::string list_text{
-        std::istreambuf_iterator<char>(list), std::istreambuf_iterator<char>()};
-    EXPECT_NE(list_text.find("images/frame.png cameras/frame.tsai"),
-              std::string::npos);
+    {
+        std::ifstream list(result.imageCameraList);
+        const std::string list_text{
+            std::istreambuf_iterator<char>(list), std::istreambuf_iterator<char>()};
+        EXPECT_NE(list_text.find("images/frame.png cameras/frame.tsai"),
+                  std::string::npos);
+    }
     EXPECT_TRUE(result.warnings.empty());
     std::filesystem::remove_all(root);
 }

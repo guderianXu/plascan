@@ -8,10 +8,13 @@
 #include "ImageMatchFile.h"
 #include "GuiTaskRunner.h"
 #include "io/PathIO.h"
+#include "image/MaskEditorSettingsDialog.h"
 
 #include <QtConcurrent>
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QImageReader>
+#include <QKeyEvent>
 #include <QPointer>
 
 #include <opencv2/imgcodecs.hpp>
@@ -53,6 +56,21 @@ CanvasWidget::CanvasWidget(QWidget *parent)
 
     // 渲染器：负责把影像层加入到 scene
     _layerRenderer = new LayerRenderer(scene, this);
+    _maskEditor = new MaskEditor(scene, this);
+    connect(_maskEditor,
+            &MaskEditor::maskChanged,
+            this,
+            [this](const QImage &mask, const QString &method, quint64 revision)
+            {
+                if (!_currentImagePath.trimmed().isEmpty())
+                {
+                    emit interactiveMaskEditRequested(_currentImagePath, mask, method, revision);
+                }
+            });
+    connect(_maskEditor,
+            &MaskEditor::selectionActiveChanged,
+            this,
+            &CanvasWidget::maskSelectionActiveChanged);
     _depthOverlayController = new xjw::gui::widgets::DepthOverlayController(this);
     connect(_depthOverlayController,
             &xjw::gui::widgets::DepthOverlayController::overlayReady,
@@ -97,6 +115,7 @@ CanvasWidget::CanvasWidget(QWidget *parent)
     // 缩放体验：以鼠标位置为锚点缩放；拖拽时以鼠标为锚点
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setResizeAnchor(QGraphicsView::AnchorUnderMouse);
+    setFocusPolicy(Qt::StrongFocus);
 
     // 鼠标/交互将在后续扩展中实现
     // 特征点加载 watcher 在每次请求时创建，并用 generation guard 丢弃过期结果。
@@ -155,6 +174,12 @@ void CanvasWidget::showImage(const QString &path)
     // 两类回调各自比较代次，不能共用一个未声明的“像对加载”计数器。
     ++_featureLoadGeneration;
     ++_residualLoadGeneration;
+    ++_maskLoadGeneration;
+    _maskSavedRevision = 0;
+    if (_maskEditor)
+    {
+        _maskEditor->setImage({}, {});
+    }
     _singleImageReady = false;
     emit displayImageReadyChanged(false);
 
@@ -222,6 +247,11 @@ void CanvasWidget::showImage(const QString &path)
         if (!self->_layerRenderer->addImageLayer(image, 0))
         {
             return;
+        }
+        if (self->_maskEditor)
+        {
+            self->_maskEditor->setImage(image, self->_layerRenderer->imageBounds());
+            self->_maskEditor->setOverlayVisible(self->_showMaskOverlay);
         }
 
         // 新影像已经替换旧影像；在同一次事件回调内重置后立即适配，界面不会绘制
@@ -569,11 +599,17 @@ void CanvasWidget::reloadMaskOverlay()
     }
 
     _layerRenderer->clearMaskLayers();
-    if (!_showMaskOverlay || _currentImagePath.trimmed().isEmpty())
+    if (_currentImagePath.trimmed().isEmpty())
     {
         return;
     }
     if (isDepthMapPreviewPath(_currentImagePath))
+    {
+        return;
+    }
+
+    reloadEditableMask();
+    if (!_showMaskOverlay)
     {
         return;
     }
@@ -585,6 +621,52 @@ void CanvasWidget::reloadMaskOverlay()
         return;
     }
     _layerRenderer->addMaskContourLayer(maskPath);
+}
+
+void CanvasWidget::reloadEditableMask()
+{
+    if (!_maskEditor || _currentImagePath.trimmed().isEmpty())
+    {
+        return;
+    }
+    const QString imagePath = _currentImagePath;
+    const QString projectPath = property("currentProjectPath").toString();
+    const QString maskPath = xjw::common::project::ProjectIO::findMaskForImage(projectPath, imagePath);
+    const int generation = ++_maskLoadGeneration;
+    const quint64 editorRevision = _maskEditor->revision();
+    if (editorRevision != _maskSavedRevision)
+    {
+        return;
+    }
+    if (maskPath.isEmpty())
+    {
+        _maskEditor->setMask({});
+        return;
+    }
+
+    auto *watcher = new QFutureWatcher<QImage>(this);
+    QPointer<CanvasWidget> self(this);
+    connect(watcher,
+            &QFutureWatcher<QImage>::finished,
+            watcher,
+            [self, watcher, imagePath, generation, editorRevision]()
+            {
+                const QImage mask = watcher->result();
+                watcher->deleteLater();
+                if (!self || !self->_maskEditor || generation != self->_maskLoadGeneration
+                    || QDir::cleanPath(imagePath) != QDir::cleanPath(self->_currentImagePath)
+                    || editorRevision != self->_maskEditor->revision())
+                {
+                    return;
+                }
+                self->_maskEditor->setMask(mask);
+            });
+    watcher->setFuture(QtConcurrent::run([maskPath]()
+    {
+        QImageReader reader(maskPath);
+        reader.setAutoTransform(false);
+        return reader.read();
+    }));
 }
 
 void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
@@ -654,8 +736,107 @@ void CanvasWidget::setShowMaskOverlay(bool show)
         return;
     }
     _showMaskOverlay = show;
+    if (_maskEditor)
+    {
+        _maskEditor->setOverlayVisible(show);
+    }
     reloadMaskOverlay();
     emit maskOverlayVisibilityChanged(show);
+}
+
+void CanvasWidget::useRectangleMaskTool()
+{
+    setMaskTool(MaskEditor::Tool::Rectangle);
+}
+
+void CanvasWidget::useScissorsMaskTool()
+{
+    setMaskTool(MaskEditor::Tool::Scissors);
+}
+
+void CanvasWidget::useSmartPaintMaskTool()
+{
+    setMaskTool(MaskEditor::Tool::SmartPaint);
+}
+
+void CanvasWidget::useMagicWandMaskTool()
+{
+    setMaskTool(MaskEditor::Tool::MagicWand);
+}
+
+void CanvasWidget::showMaskEditorSettings()
+{
+    MaskEditorSettingsDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted || !_maskEditor)
+    {
+        return;
+    }
+    const MaskEditorSettings settings = dialog.settings();
+    saveMaskEditorSettings(settings);
+    _maskEditor->setSettings(settings);
+}
+
+void CanvasWidget::resetMaskSelection()
+{
+    if (_maskEditor)
+    {
+        _maskEditor->resetSelection();
+    }
+}
+
+void CanvasWidget::undoMaskEdit()
+{
+    if (_maskEditor)
+    {
+        _maskEditor->undo();
+    }
+}
+
+void CanvasWidget::redoMaskEdit()
+{
+    if (_maskEditor)
+    {
+        _maskEditor->redo();
+    }
+}
+
+void CanvasWidget::confirmInteractiveMaskSaved(const QString &imagePath, quint64 revision)
+{
+    if (!_maskEditor || revision != _maskEditor->revision()
+        || QDir::cleanPath(imagePath) != QDir::cleanPath(_currentImagePath) || !_layerRenderer)
+    {
+        return;
+    }
+    _maskSavedRevision = revision;
+    _layerRenderer->clearMaskLayers();
+    if (!_showMaskOverlay)
+    {
+        return;
+    }
+    const QString maskPath = xjw::common::project::ProjectIO::findMaskForImage(
+        property("currentProjectPath").toString(), _currentImagePath);
+    if (!maskPath.isEmpty())
+    {
+        _layerRenderer->addMaskContourLayer(maskPath);
+    }
+}
+
+void CanvasWidget::setMaskTool(MaskEditor::Tool tool)
+{
+    if (!_maskEditor || !_singleImageReady)
+    {
+        return;
+    }
+    _maskEditor->setTool(tool);
+    if (!_showMaskOverlay)
+    {
+        _showMaskOverlay = true;
+        _maskEditor->setOverlayVisible(true);
+        reloadMaskOverlay();
+        emit maskOverlayVisibilityChanged(true);
+    }
+    setCursor(Qt::CrossCursor);
+    setFocus(Qt::ShortcutFocusReason);
 }
 
 void CanvasWidget::reloadInterestPoints(const QString &imagePath)
@@ -815,6 +996,13 @@ void CanvasWidget::mousePressEvent(QMouseEvent *event)
 {
     if (!event) return;
 
+    if (_maskEditor
+        && _maskEditor->mousePress(mapToScene(event->pos()), event->button(), event->modifiers()))
+    {
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton)
     {
         _isPanning = false;
@@ -829,6 +1017,12 @@ void CanvasWidget::mousePressEvent(QMouseEvent *event)
 void CanvasWidget::mouseMoveEvent(QMouseEvent *event)
 {
     if (!event) return;
+
+    if (_maskEditor && _maskEditor->mouseMove(mapToScene(event->pos()), event->buttons()))
+    {
+        event->accept();
+        return;
+    }
 
     if (event->buttons() & Qt::LeftButton)
     {
@@ -860,6 +1054,13 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent *event)
 {
     if (!event) return;
 
+    if (_maskEditor
+        && _maskEditor->mouseRelease(mapToScene(event->pos()), event->button(), event->modifiers()))
+    {
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton)
     {
         if (_isPanning)
@@ -878,6 +1079,44 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent *event)
     }
 
     QGraphicsView::mouseReleaseEvent(event);
+}
+
+void CanvasWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event && _maskEditor
+        && _maskEditor->mouseDoubleClick(mapToScene(event->pos()), event->button(), event->modifiers()))
+    {
+        event->accept();
+        return;
+    }
+    QGraphicsView::mouseDoubleClickEvent(event);
+}
+
+void CanvasWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (!event)
+    {
+        return;
+    }
+    if (event->key() == Qt::Key_Escape && _maskEditor && _maskEditor->selectionActive())
+    {
+        resetMaskSelection();
+        event->accept();
+        return;
+    }
+    if (event->matches(QKeySequence::Undo) && _maskEditor && _maskEditor->canUndo())
+    {
+        undoMaskEdit();
+        event->accept();
+        return;
+    }
+    if (event->matches(QKeySequence::Redo) && _maskEditor && _maskEditor->canRedo())
+    {
+        redoMaskEdit();
+        event->accept();
+        return;
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 void CanvasWidget::contextMenuEvent(QContextMenuEvent *event)

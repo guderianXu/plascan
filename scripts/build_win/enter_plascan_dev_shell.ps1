@@ -235,10 +235,7 @@ function Set-PlascanWindowsBuildEnvironment
 
     if ([string]::IsNullOrWhiteSpace($env:CTEST_PARALLEL_LEVEL))
     {
-        $env:CTEST_PARALLEL_LEVEL = [Math]::Max(
-            1,
-            [int] [Math]::Floor([Environment]::ProcessorCount / 2)
-        ).ToString()
+        $env:CTEST_PARALLEL_LEVEL = [Math]::Max(1, [Environment]::ProcessorCount).ToString()
     }
 
     if ($HeadlessQt)

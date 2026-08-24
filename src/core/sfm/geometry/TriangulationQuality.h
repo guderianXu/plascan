@@ -8,7 +8,7 @@
  * 分别实现基线角、正深度或相机方向回退而产生不一致。
  */
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "FramePinholeCamera.h"
 
 #include <array>

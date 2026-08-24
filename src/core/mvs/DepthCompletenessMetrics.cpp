@@ -321,15 +321,21 @@ QJsonObject depthCompletenessDiagnosticsToJson(
         object.insert(QStringLiteral("output_filter_retention_ratio"),
                       diagnostics.outputFilterRetentionRatio);
     }
-    insert_count(QStringLiteral("pre_consistency_valid_count"),
-                 diagnostics.preConsistencyValidCount);
-    insert_count(QStringLiteral("post_consistency_valid_count"),
-                 diagnostics.postConsistencyValidCount);
+    insert_count(QStringLiteral("pre_consistency_valid_count"), diagnostics.preConsistencyValidCount);
+    insert_count(QStringLiteral("post_consistency_valid_count"), diagnostics.postConsistencyValidCount);
     if (diagnostics.consistencyRetentionRatio >= 0.0f)
     {
-        object.insert(QStringLiteral("consistency_retention_ratio"),
-                      diagnostics.consistencyRetentionRatio);
+        object.insert(QStringLiteral("consistency_retention_ratio"), diagnostics.consistencyRetentionRatio);
     }
+    insert_count(QStringLiteral("published_post_consistency_valid_count"),
+                 diagnostics.publishedPostConsistencyValidCount);
+    if (diagnostics.publishedConsistencyRetentionRatio >= 0.0f)
+    {
+        object.insert(QStringLiteral("published_consistency_retention_ratio"),
+                      diagnostics.publishedConsistencyRetentionRatio);
+    }
+    object.insert(QStringLiteral("consistency_publication_fallback_applied"),
+                  diagnostics.consistencyPublicationFallbackApplied);
     object.insert(QStringLiteral("consistency_confirmed_observation_count"),
                   diagnostics.consistencyConfirmedObservationCount);
     object.insert(QStringLiteral("consistency_occluded_observation_count"),
@@ -338,12 +344,9 @@ QJsonObject depthCompletenessDiagnosticsToJson(
                   diagnostics.consistencyContradictedObservationCount);
     object.insert(QStringLiteral("consistency_unverifiable_observation_count"),
                   diagnostics.consistencyUnverifiableObservationCount);
-    object.insert(QStringLiteral("consistency_rejected_pixel_count"),
-                  diagnostics.consistencyRejectedPixelCount);
-    object.insert(QStringLiteral("cross_view_repaired_count"),
-                  diagnostics.crossViewRepairedCount);
-    insert_count(QStringLiteral("pre_fusion_postprocess_valid_count"),
-                 diagnostics.preFusionPostprocessValidCount);
+    object.insert(QStringLiteral("consistency_rejected_pixel_count"), diagnostics.consistencyRejectedPixelCount);
+    object.insert(QStringLiteral("cross_view_repaired_count"), diagnostics.crossViewRepairedCount);
+    insert_count(QStringLiteral("pre_fusion_postprocess_valid_count"), diagnostics.preFusionPostprocessValidCount);
     insert_count(QStringLiteral("post_confidence_filter_valid_count"),
                  diagnostics.postConfidenceFilterValidCount);
     insert_count(QStringLiteral("post_fusion_postprocess_valid_count"),

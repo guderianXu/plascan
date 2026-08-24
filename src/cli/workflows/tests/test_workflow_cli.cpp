@@ -830,7 +830,8 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
     expectContainsAll(options, {
         R"(std::string pointCloudBackend = "auto")",
         "--point-cloud-backend",
-        "auto prefers CUDA, then OpenCL, then CPU",
+        "auto 对小规模滤波/法向估计使用 CPU",
+        "HeightGrid/Poisson 使用各自策略",
     });
     expectContainsAll(config, {
         R"(normalized == QStringLiteral("opencl"))",
@@ -847,6 +848,8 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         "requestedDevice=%4, actualDevice=%5",
         "processingReportWasSkipped",
         R"(QStringLiteral("skipped"))",
+        R"(QStringLiteral("selection_reason"))",
+        "report.selectionReason",
         "processingDeviceUnavailableReason",
         "dense_point_cloud_backend_actual_by_stage",
         "mvs_backend_actual",
@@ -1147,6 +1150,8 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     EXPECT_EQ(tiePointOptions.value(QStringLiteral("max_tie_points_per_image")).toInt(), 4000);
     const QJsonObject pipelineInput = report.value(QStringLiteral("pipeline_input")).toObject();
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+    EXPECT_EQ(pipelineInput.value(QStringLiteral("max_tracks_per_image")).toInt(), 4000);
+    EXPECT_EQ(pipelineInput.value(QStringLiteral("max_tracks_per_grid_cell")).toInt(), 63);
     EXPECT_EQ(QDir::cleanPath(pipelineInput.value(QStringLiteral("output_dir")).toString()),
               QDir::cleanPath(chunkRoot.filePath(QStringLiteral("reconstruction/sparse/sfm_sparse"))));
     const QString sharedImagesDir = QDir(root).filePath(QStringLiteral("headless.files/shared/images"));

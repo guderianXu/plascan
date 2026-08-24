@@ -16,6 +16,7 @@
 #include "ui_MatchPairSelectorDialog.h"
 
 #include <QComboBox>
+#include <QCollator>
 #include <QTableWidget>
 #include <QPushButton>
 #include <QProgressBar>
@@ -339,6 +340,9 @@ void MatchPairSelectorDialog::setupTable()
     _matchTable->setSelectionMode(QAbstractItemView::SingleSelection);
     _matchTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     _matchTable->horizontalHeader()->setStretchLastSection(true);
+    _matchTable->horizontalHeader()->setSectionsClickable(true);
+    _matchTable->horizontalHeader()->setSortIndicatorShown(true);
+    _matchTable->horizontalHeader()->setSortIndicator(_sortColumn, _sortOrder);
     _matchTable->verticalHeader()->setVisible(false);
     _matchTable->setAlternatingRowColors(true);
     
@@ -347,6 +351,8 @@ void MatchPairSelectorDialog::setupTable()
             this, &MatchPairSelectorDialog::onMatchPairSelected);
     connect(_matchTable, &QTableWidget::cellDoubleClicked,
             this, &MatchPairSelectorDialog::onMatchPairDoubleClicked);
+    connect(_matchTable->horizontalHeader(), &QHeaderView::sectionClicked,
+            this, &MatchPairSelectorDialog::onSortSectionClicked);
 }
 
 // loadProjectImages: 从项目管理器读取所有影像，填充顶部下拉框并默认选中第一项
@@ -426,6 +432,7 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
 
 void MatchPairSelectorDialog::populateMatchTable()
 {
+    sortCurrentMatches();
     _matchTable->setRowCount(0);
     _selectedMatchIndex = -1;
     _viewDetailBtn->setEnabled(false);
@@ -515,6 +522,89 @@ void MatchPairSelectorDialog::populateMatchTable()
     {
         _statusLabel->setText(tr("找到 %1 个匹配对").arg(_currentMatches.size()));
     }
+}
+
+void MatchPairSelectorDialog::onSortSectionClicked(int column)
+{
+    if (column < 0 || column > 3)
+    {
+        return;
+    }
+
+    if (_sortColumn == column)
+    {
+        _sortOrder = _sortOrder == Qt::DescendingOrder
+            ? Qt::AscendingOrder
+            : Qt::DescendingOrder;
+    }
+    else
+    {
+        _sortColumn = column;
+        _sortOrder = Qt::DescendingOrder;
+    }
+    _matchTable->horizontalHeader()->setSortIndicator(_sortColumn, _sortOrder);
+    populateMatchTable();
+}
+
+void MatchPairSelectorDialog::sortCurrentMatches()
+{
+    QCollator filename_collator;
+    filename_collator.setCaseSensitivity(Qt::CaseInsensitive);
+    filename_collator.setNumericMode(true);
+
+    const int sort_column = _sortColumn;
+    const Qt::SortOrder sort_order = _sortOrder;
+    std::stable_sort(_currentMatches.begin(), _currentMatches.end(),
+                     [&filename_collator, sort_column, sort_order](const MatchInfo &left,
+                                                                  const MatchInfo &right)
+    {
+        const auto compare_filenames = [&filename_collator](const MatchInfo &lhs, const MatchInfo &rhs)
+        {
+            return filename_collator.compare(lhs.imageName, rhs.imageName);
+        };
+        if (sort_column == 0)
+        {
+            const int comparison = compare_filenames(left, right);
+            return sort_order == Qt::AscendingOrder ? comparison < 0 : comparison > 0;
+        }
+
+        const auto has_metric = [sort_column](const MatchInfo &info)
+        {
+            return sort_column == 1 ? !info.matchFilePath.isEmpty() : info.hasTrackValidity;
+        };
+        const bool left_has_metric = has_metric(left);
+        const bool right_has_metric = has_metric(right);
+        if (left_has_metric != right_has_metric)
+        {
+            return left_has_metric;
+        }
+        if (!left_has_metric)
+        {
+            return compare_filenames(left, right) < 0;
+        }
+
+        const auto metric = [sort_column](const MatchInfo &info)
+        {
+            if (sort_column == 1)
+            {
+                return info.totalPoints;
+            }
+            if (sort_column == 2)
+            {
+                return info.validPoints;
+            }
+            return info.invalidPoints;
+        };
+        const int left_metric = metric(left);
+        const int right_metric = metric(right);
+        if (left_metric == right_metric)
+        {
+            return compare_filenames(left, right) < 0;
+        }
+        return sort_order == Qt::AscendingOrder
+            ? left_metric < right_metric
+            : left_metric > right_metric;
+    });
 }
 
 void MatchPairSelectorDialog::setMatchControlsBusy(bool busy)
@@ -1132,7 +1222,18 @@ void MatchPairSelectorDialog::onViewDetailedMatch()
     if (_projectManager) {
         viewer->setProjectPath(_projectManager->currentProjectPath());
     }
-    viewer->setMatchVariants(info.variants, info.matchFilePath);
+    QVector<MatchViewerDialog::MatchPairOption> pair_options;
+    pair_options.reserve(_currentMatches.size());
+    for (const MatchInfo &match : _currentMatches)
+    {
+        MatchViewerDialog::MatchPairOption option;
+        option.imageA = _currentImage;
+        option.imageB = match.imagePath;
+        option.matchFile = match.matchFilePath;
+        option.variants = match.variants;
+        pair_options.append(option);
+    }
+    viewer->setAvailablePairs(pair_options, _currentImage, info.imagePath);
 
     viewer->exec();
 }

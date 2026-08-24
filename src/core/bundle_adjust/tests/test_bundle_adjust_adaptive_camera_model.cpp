@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustAdaptiveCameraModel.h"
+#include "BundleAdjustSolver.h"
 
 #include <algorithm>
 #include <array>
@@ -523,11 +524,11 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest,
-     NarrowFieldCeresCanEstimateLargeK1Coefficient)
+     NarrowFieldPlaMatrixCanEstimateLargeK1Coefficient)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> referenceCameras = narrowAerialCameras();
@@ -549,7 +550,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -777,11 +778,11 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     }
 }
 
-TEST(BundleAdjustAdaptiveCameraModelTest, CeresHonorsIndividualIntrinsicMask)
+TEST(BundleAdjustAdaptiveCameraModelTest, PlaMatrixHonorsIndividualIntrinsicMask)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     std::vector<xjw::FramePinholeCamera> cameras = orbitalCameras();
@@ -802,7 +803,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, CeresHonorsIndividualIntrinsicMask)
             -0.002 - 1.0e-6 * static_cast<double>(index));
     }
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -848,11 +849,11 @@ TEST(BundleAdjustAdaptiveCameraModelTest, CeresHonorsIndividualIntrinsicMask)
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest,
-     FocalOnlyCeresUsesStableReferencePrior)
+     FocalOnlyPlaMatrixUsesStableReferencePrior)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     std::vector<xjw::FramePinholeCamera> referenceCameras = aerialCameras();
@@ -871,7 +872,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -900,9 +901,9 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
 TEST(BundleAdjustAdaptiveCameraModelTest,
      DistortionPriorRemainsAnchoredAcrossRounds)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     const std::vector<xjw::FramePinholeCamera> referenceCameras = aerialCameras();
@@ -926,7 +927,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
@@ -963,9 +964,9 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
 TEST(BundleAdjustAdaptiveCameraModelTest,
      StableIntrinsicReferencePreventsBoundsFromCompoundingAcrossRounds)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
-        GTEST_SKIP() << "Ceres CPU backend is not available";
+        GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
     std::vector<xjw::FramePinholeCamera> referenceCameras = orbitalCameras();
@@ -1004,7 +1005,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::CeresCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;

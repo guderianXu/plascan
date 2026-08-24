@@ -22,6 +22,9 @@ DEM/DOM、质量栅格、有效参数和覆盖统计都会进入项目结果记�
 
 - `DemMosaic` 支持 first、last、mean、median、min、max、confidence-weighted 和
   inverse-error-weighted 的多 DEM tile 融合。
+- 同网格 mosaic 的逐像元融合可使用 CUDA 或 OpenCL；GPU kernel 同时输出高程、有效/覆盖
+  掩膜、贡献计数、平均置信度和平均三角化误差。median 在设备上执行确定性的次序统计，
+  不会为每个像元分配可变长设备内存。
 - 分块处理避免大范围 DEM mosaic 必须一次性全部驻留内存。
 - `DomGenerator` 保留旧的对齐影像合成及纹理网格 DOM 能力；项目内“生成正射影像”入口在
   有项目相机元数据时走下述 `OrthoProjector` 相机反投影链路。
@@ -52,6 +55,28 @@ MapProjectDialog
   双线性采样影像，并记录有效表面、直接影像覆盖和孔洞填充掩膜。
 - `TerrainPipeline` 把后台阶段和百分比回传 GUI，并在安全检查点响应取消；任务完成后把
   已解析参数、网格、相机贡献数和覆盖统计写入 `ortho_results`。
+
+### CPU / CUDA / OpenCL 后端
+
+- `compute_backend` 接受 `auto`、`cpu`、`cuda`、`opencl`，`compute_device_index` 为 `-1`
+  时扫描并选择对应后端的首个兼容 GPU。默认 `auto` 按 CUDA、OpenCL、CPU 顺序解析。
+- CUDA/OpenCL kernel 完成输出像元的 DEM 双线性采样、Brown-Conrady 相机投影、项目蒙版判断、
+  影像双线性采样、视角/边缘/锐度权重，以及 mosaic、weighted-average、first-valid 融合。
+  相机影像和参数在一次投影内打包上传，输出影像与掩膜在 kernel 完成后一次下载。
+- 显式 `cuda` 或 `opencl` 不会静默改用 CPU：构建未包含后端、设备索引无效、驱动错误、
+  内存不足或 kernel 失败都会直接返回错误。`auto` 才会继续尝试下一后端并记录原因。
+- OpenCL 正射路径使用双精度世界坐标，设备必须提供 `cl_khr_fp64` 或 `cl_amd_fp64`；这避免
+  大地坐标转成单精度后丢失亚像元精度。DEM mosaic kernel 只使用单精度，不要求 FP64，
+  因而可使用更广泛的 OpenCL GPU。
+- 点云着色 DOM 与无相机参数的兼容 DOM 当前仅有 CPU 路径；显式 GPU 会失败，`auto` 会记录
+  实际 CPU 后端及回退原因。
+- `ghost_filter` 的每像元可变长鲁棒中值筛选目前保留在 CPU。显式 GPU 加该选项会明确失败；
+  `auto` 会回退 CPU。孔洞连通域和颜色传播也在投影 kernel 完成后运行于 CPU。
+- `OrthoProjectionResult::computeExecution` 和流水线 JSON 的 `compute_backend`、
+  `compute_device_index`、`compute_device_name`、`compute_fallback_reason` 报告实际执行设备，
+  不以请求值冒充实际值。
+- GPU kernel 作为一个有界批次提交；取消在上传前、kernel 返回后和后处理期间检查，不能抢占
+  已经提交的单个 kernel。CPU-only 构建始终保留完整功能。
 
 ### 当前支持范围
 

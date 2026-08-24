@@ -35,8 +35,11 @@ struct DepthCompletenessDiagnostics
     int outputFilterRemovedCount = 0;
     float outputFilterRetentionRatio = -1.0f;
     int preConsistencyValidCount = -1;
-    int postConsistencyValidCount = -1;
-    float consistencyRetentionRatio = -1.0f;
+    int postConsistencyValidCount = -1;          ///< 一致性过滤实际保留数，不含发布回退恢复的原始深度
+    float consistencyRetentionRatio = -1.0f;     ///< 实际保留率；质量门只能使用该值
+    int publishedPostConsistencyValidCount = -1; ///< 最终发布载体中的有效数，可能包含安全回退
+    float publishedConsistencyRetentionRatio = -1.0f;
+    bool consistencyPublicationFallbackApplied = false;
     int consistencyConfirmedObservationCount = 0;
     int consistencyOccludedObservationCount = 0;
     int consistencyContradictedObservationCount = 0;

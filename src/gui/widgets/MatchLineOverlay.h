@@ -7,8 +7,6 @@
 #include <QLineF>
 #include <QTransform>
 
-#include <array>
-
 #include "MatchSpatialIndex.h"
 #include "MatchGpuRenderer.h"
 
@@ -18,7 +16,7 @@ class ImageViewWidget;
 // 职责：
 // - 根据匹配点数据和两个视图的可见区域，动态绘制连接线
 // - 只绘制可见区域内的连接线以提高性能
-// - 支持视觉样式配置（颜色、宽度、透明度）
+// - 支持视觉样式配置（宽度、透明度）
 // - 支持过滤（只显示内点、限制最大数量）
 class MatchLineOverlay : public QRhiWidget
 {
@@ -39,7 +37,6 @@ public:
     void setInlierMask(const QVector<bool> &inlierMask);
     
     // 显示选项
-    void setLineColor(const QColor &color);
     void setLineWidth(qreal width);
     void setOpacity(qreal opacity); // 0.0 - 1.0
     void setMaxDisplayCount(int maxCount); // 0 = 无限制
@@ -47,7 +44,6 @@ public:
     void setShowEndPoints(bool show); // 是否在连线两端画小圆点
     
     // 获取当前设置
-    QColor lineColor() const { return _lineColor; }
     qreal lineWidth() const { return _lineWidth; }
     qreal opacity() const { return _opacity; }
     int maxDisplayCount() const { return _maxDisplayCount; }
@@ -55,9 +51,6 @@ public:
     bool showEndPoints() const { return _showEndPoints; }
     // 获取当前可见匹配（由外部组件查询以同步点的可见性）
     QVector<int> visibleMatches() const;
-    // 五彩斑斓模式设置
-    void setRainbowMode(bool enabled);
-    bool rainbowMode() const { return _rainbowMode; }
     // 高亮/展示控制：仅显示指定索引（当启用时，覆盖层只绘制这些索引）
     void setHighlightedIndices(const QVector<int> &indices);
     void clearHighlightedIndices();
@@ -96,13 +89,11 @@ private:
     xjw::gui::match_viewer::MatchSpatialIndex _rightSpatialIndex;
     
     // 显示选项
-    QColor _lineColor;
     qreal _lineWidth;
     qreal _opacity;
     int _maxDisplayCount;
     bool _showOnlyInliers;
     bool _showEndPoints;
-    bool _rainbowMode; // 五彩斑斓模式：每条线颜色不同
 
     // 是否只绘制高亮索引（如果为true，则仅绘制 _highlightIndices 中的索引）
     bool _showOnlyHighlighted;
@@ -117,8 +108,6 @@ private:
     mutable QVector<QLineF> _defaultLines;
     mutable QVector<QLineF> _inlierLines;
     mutable QVector<QLineF> _outlierLines;
-    static constexpr int RainbowBatchCount = 64;
-    mutable std::array<QVector<QLineF>, RainbowBatchCount> _rainbowLines;
     MatchGpuRenderer _gpuRenderer;
     mutable quint64 _gpuGeneration = 1;
     bool _rhiReady = false;

@@ -9,8 +9,8 @@
 #include "log/Logger.h"
 
 #include "DeterministicOpenCvRansac.h"
-#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
+#include <opencv2/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -210,13 +210,13 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
         }
 
         cv::Mat maskF, maskH;
-        const int pairSeed = opencv_compat::stableRansacSeed(pair.id1, pair.id2, 0x53454c45u);
-        opencv_compat::runDeterministicRansac(pairSeed, [&]()
+        const int pairSeed = opencv_utils::stableRansacSeed(pair.id1, pair.id2, 0x53454c45u);
+        opencv_utils::runDeterministicRansac(pairSeed, [&]()
         {
             cv::findFundamentalMat(pts1, pts2, cv::FM_RANSAC, ransacThresh, 0.999, maskF);
             return 0;
         });
-        opencv_compat::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
+        opencv_utils::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
         {
             cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
             return 0;
@@ -341,15 +341,14 @@ bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
     const double ransacThresh = 1.0; // 像素
     cv::Mat maskE, maskH;
 
-    const int pairSeed = opencv_compat::stableRansacSeed(id1, id2, 0x494e4954u);
-    cv::Mat E = opencv_compat::runDeterministicRansac(pairSeed, [&]()
+    const int pairSeed = opencv_utils::stableRansacSeed(id1, id2, 0x494e4954u);
+    cv::Mat E = opencv_utils::runDeterministicRansac(pairSeed, [&]()
     {
-        return xjw::opencv_compat::findEssentialMat(
-            pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, maskE);
+        return cv::findEssentialMat(pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, 1000, maskE);
     });
     int E_inliers = cv::countNonZero(maskE);
 
-    cv::Mat H = opencv_compat::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
+    cv::Mat H = opencv_utils::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
     {
         return cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
     });

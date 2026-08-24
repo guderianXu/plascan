@@ -173,3 +173,35 @@ TEST(OverlapPairGraphPlannerTest, AddsRingClosureForSequenceLoop)
     ASSERT_NE(loop, nullptr);
     EXPECT_TRUE(hasSource(*loop, xjw::OverlapPairGraphSource::SequenceLoop));
 }
+
+TEST(OverlapPairGraphPlannerTest, AddsOnlyCycleSupportedAppearanceCandidates)
+{
+    const std::vector<xjw::OverlapPairGraphInputEdge> input{
+        edge(0, 1, 0.95),
+        edge(1, 2, 0.90),
+        edge(0, 3, 0.85),
+        edge(2, 4, 0.84),
+        edge(3, 5, 0.75),
+        edge(4, 6, 0.74),
+        edge(0, 2, 0.60),
+        edge(3, 4, 0.55),
+    };
+
+    xjw::OverlapPairGraphPlannerOptions options;
+    options.imageCount = 7;
+    options.topK = 2;
+    options.minPairsPerImage = 0;
+    options.mutualTopK = true;
+    options.keepOneWayTopK = false;
+    options.cycleClosureMaxPairsPerImage = 2;
+    options.connectComponents = false;
+    options.closeSequenceLoop = false;
+
+    const xjw::OverlapPairGraphPlan plan = xjw::OverlapPairGraphPlanner::plan(input, options);
+
+    const xjw::OverlapPairGraphEdge* cycle = findEdge(plan.edges, 0, 2);
+    ASSERT_NE(cycle, nullptr);
+    EXPECT_TRUE(hasSource(*cycle, xjw::OverlapPairGraphSource::BowCycleClosure));
+    EXPECT_EQ(findEdge(plan.edges, 3, 4), nullptr);
+    EXPECT_EQ(plan.cycleClosureCount, 1);
+}

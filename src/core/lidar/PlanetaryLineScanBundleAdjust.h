@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "IsisControlNetworkPvl.h"
 #include "PlanetaryLaserShot.h"
 #include "PlanetaryLineScanCamera.h"
@@ -30,8 +30,8 @@ struct PlanetaryLineScanBaOptions
 {
     BABackend backend = BABackend::Auto;
     int plaMatrixDevice = 0;
-    int minPlaMatrixGpuCameras = 128;
-    int minPlaMatrixGpuObservations = 30000;
+    int minPlaMatrixGpuCameras = BAOptions::kDefaultMinPlaMatrixGpuCameras;
+    int minPlaMatrixGpuObservations = BAOptions::kDefaultMinPlaMatrixGpuObservations;
     int maxDenseSchurCameras = 200;
     bool allowBackendFallback = true;
     std::shared_ptr<std::atomic<bool>> cancelFlag;

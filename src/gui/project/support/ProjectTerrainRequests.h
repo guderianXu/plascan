@@ -21,7 +21,16 @@ inline constexpr std::int64_t kSmallBodyHardMaximumPixelCount = 50000000;
 enum class DemGenerationMode
 {
     Planar,
+    ImageStereo,
     SmallBodyGlobal
+};
+
+struct ImageStereoDemRequestOptions
+{
+    QStringList sourceImages;
+    double gridResolutionMeters = 2.0;
+    int maximumFeatures = 20000;
+    double maximumReprojectionErrorPixels = 1.5;
 };
 
 struct SmallBodyGlobalDemOptions
@@ -165,6 +174,7 @@ struct DemGenerationRequest
     QString dataType = QStringLiteral("float32");
 
     DemGenerationMode mode = DemGenerationMode::Planar;
+    ImageStereoDemRequestOptions imageStereoOptions;
     QString sourceSurfacePath;
     SmallBodyGlobalDemOptions smallBodyOptions;
 
@@ -173,11 +183,48 @@ struct DemGenerationRequest
         return mode == DemGenerationMode::SmallBodyGlobal;
     }
 
+    bool isImageStereo() const
+    {
+        return mode == DemGenerationMode::ImageStereo;
+    }
+
     bool validate(QString *errorMessage = nullptr) const
     {
         if (errorMessage)
         {
             errorMessage->clear();
+        }
+
+        if (isImageStereo())
+        {
+            QStringList unique_images;
+            for (const QString &path : imageStereoOptions.sourceImages)
+            {
+                const QString normalized = path.trimmed();
+                if (!normalized.isEmpty() && !unique_images.contains(normalized, Qt::CaseInsensitive))
+                {
+                    unique_images.append(normalized);
+                }
+            }
+            if (unique_images.size() < 2)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("请至少勾选两张具有相机信息且存在重叠区域的影像。");
+                }
+                return false;
+            }
+            if (!(imageStereoOptions.gridResolutionMeters > 0.0)
+                || imageStereoOptions.maximumFeatures < 100
+                || !(imageStereoOptions.maximumReprojectionErrorPixels > 0.0))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("影像立体 DEM 的分辨率、特征点数或重投影阈值无效。");
+                }
+                return false;
+            }
+            return true;
         }
 
         if (isSmallBodyGlobal())
@@ -233,8 +280,15 @@ struct DemGenerationRequest
     }
 };
 
+enum class OrthoGenerationMode
+{
+    Standard,
+    Rpc
+};
+
 struct OrthoGenerationRequest
 {
+    OrthoGenerationMode mode = OrthoGenerationMode::Standard;
     QStringList sourceImages;
     QString demPath;
     QString pointCloudPath;
@@ -255,6 +309,10 @@ struct OrthoGenerationRequest
         }
 
         OrthoGenerationRequest parsed;
+        parsed.mode = settings.value(QStringLiteral("product_mode")).toString()
+                    == QLatin1String("rpc")
+            ? OrthoGenerationMode::Rpc
+            : OrthoGenerationMode::Standard;
         const QJsonArray images = settings.value(QStringLiteral("images")).toArray();
         parsed.sourceImages.reserve(images.size());
         for (const QJsonValue &value : images)
@@ -289,6 +347,14 @@ struct OrthoGenerationRequest
         {
             return false;
         }
+        if (isRpc() && sourceImages.isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("请至少选择一张带内嵌地理定位模型的影像。");
+            }
+            return false;
+        }
         if (outputPath.trimmed().isEmpty() && demPath.trimmed().isEmpty() &&
             sourceImages.isEmpty())
         {
@@ -301,9 +367,16 @@ struct OrthoGenerationRequest
         return true;
     }
 
+    bool isRpc() const
+    {
+        return mode == OrthoGenerationMode::Rpc;
+    }
+
     QJsonObject toResolvedSettings() const
     {
         QJsonObject settings = options.toResolvedJson();
+        settings[QStringLiteral("product_mode")] = isRpc()
+            ? QStringLiteral("rpc") : QStringLiteral("standard");
         settings[QStringLiteral("images")] = QJsonArray::fromStringList(sourceImages);
         settings[QStringLiteral("dem_path")] = demPath;
         settings[QStringLiteral("point_cloud_path")] = pointCloudPath;

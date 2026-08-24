@@ -261,7 +261,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
-    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox, tr("生成"));
     _okButton = buttonBox->button(QDialogButtonBox::Ok);
     mainLayout->addWidget(buttonBox);
 

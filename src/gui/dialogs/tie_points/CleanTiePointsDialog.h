@@ -44,16 +44,25 @@ public:
     QString criterionText() const;
     double level() const;
     bool deleteRequested() const;
+    bool hasStagedDeletion(Criterion criterion) const;
+    double stagedLevel(Criterion criterion) const;
+    int stagedDeletionCount() const;
+    int remainingPointCount() const;
     CriterionConfiguration criterionConfiguration(Criterion criterion) const;
     void setCriterionConfiguration(Criterion criterion,
                                    const CriterionConfiguration &configuration);
     void setCandidateCount(int candidateCount, int totalCount);
+    void confirmStagedDeletion(Criterion criterion,
+                               double level,
+                               int stagedDeletionCount,
+                               int remainingPointCount);
     int candidateCount() const;
     int totalPointCount() const;
 
 signals:
     void previewRequested(CleanTiePointsDialog::Criterion criterion, double level);
     void previewCleared();
+    void stageDeleteRequested(CleanTiePointsDialog::Criterion criterion, double level);
 
 private:
     void initializeCriterionConfigurations();
@@ -81,7 +90,9 @@ private:
     QPushButton *_okButton{};
     QPushButton *_deleteButton{};
     QHash<int, CriterionConfiguration> _criterionConfigurations;
+    QHash<int, double> _stagedLevels;
     int _candidateCount = -1;
     int _totalPointCount = -1;
-    bool _deleteRequested = false;
+    int _stagedDeletionCount = 0;
+    int _remainingPointCount = -1;
 };

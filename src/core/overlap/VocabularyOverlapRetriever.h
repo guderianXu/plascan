@@ -36,6 +36,7 @@ struct VocabularyOverlapConfig
     bool useTfidf = true;
     bool mutualTopK = true;
     bool keepOneWayTopK = true;
+    int cycleClosureMaxPairsPerImage = 0;
     bool connectComponents = true;
     bool useSequenceFallback = true;
     int sequenceWindow = 1;

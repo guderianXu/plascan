@@ -3,10 +3,6 @@
 #include "BundleAdjustProjection.h"
 #include "FramePinholeCamera.h"
 
-#ifdef PLASCAN_TEST_HAS_CERES
-#  include <ceres/jet.h>
-#endif
-
 #include <cmath>
 
 TEST(BundleAdjustProjectionTest, MatchesCameraProjectWorldPointForTsaiCamera)
@@ -90,22 +86,3 @@ TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
     EXPECT_NEAR(actual[0], expected[0], 1e-9);
     EXPECT_NEAR(actual[1], expected[1], 1e-9);
 }
-
-#ifdef PLASCAN_TEST_HAS_CERES
-TEST(BundleAdjustProjectionTest, AutoDiffProjectionRejectsPointBehindPhysicalCamera)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(800.0, 800.0, 320.0, 240.0);
-    camera.setPose({{1.0, 0.0, 0.0,
-                     0.0, 1.0, 0.0,
-                     0.0, 0.0, 1.0}},
-                   {{0.0, 0.0, 0.0}});
-
-    using Jet = ceres::Jet<double, 3>;
-    Jet world[3] = {Jet(0.0), Jet(0.0), Jet(-5.0)};
-    Jet pixel[2] = {Jet(0.0), Jet(0.0)};
-
-    const auto projection_camera = xjw::ba::makeProjectionCamera(camera);
-    EXPECT_FALSE(xjw::ba::project(projection_camera, world, pixel));
-}
-#endif

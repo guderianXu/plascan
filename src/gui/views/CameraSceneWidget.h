@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // 文件: CameraSceneWidget.h
 // 功能: 可复用相机三维场景控件声明
 // 职责:
@@ -116,6 +116,14 @@ public:
         Foreground
     };
 
+    enum class PointInteractionMode
+    {
+        Navigation,
+        RectangleSelection,
+        CircleSelection,
+        FreehandSelection
+    };
+
     // 构造函数，初始化 RHI 渲染控件并设置默认视角
     explicit CameraSceneWidget(QWidget *parent = nullptr);
     ~CameraSceneWidget() override;
@@ -145,11 +153,19 @@ public:
     bool requestTiePointPrunePreview(
         const TiePointPrunePreviewQuery &query,
         QString *errorMessage = nullptr);
+    bool stageTiePointPrunePreview(int *stagedDeletionCount = nullptr,
+                                   int *remainingPointCount = nullptr,
+                                   QString *errorMessage = nullptr);
     void clearTiePointPrunePreview();
+    void clearTiePointPruneSession();
     int tiePointPrunePreviewCandidateCount() const;
+    int tiePointPruneRemainingPointCount() const;
 
     bool setManualPruneModeEnabled(bool enabled, QString *errorMessage = nullptr);
     bool isManualPruneModeEnabled() const { return _manualPruneMode; }
+    bool setPointInteractionMode(PointInteractionMode mode,
+                                 QString *errorMessage = nullptr);
+    PointInteractionMode pointInteractionMode() const { return _pointInteractionMode; }
     bool undoLastManualPrune(QString *errorMessage = nullptr);
 
     /// 设置是否显示操控球（Gizmo 旋转环），用于减少视线遮挡
@@ -179,6 +195,8 @@ signals:
     void manualPruneUndone(int restoredCount);
     void manualPruneSaved(const QString &path, int remainingCount);
     void manualPruneSaveFailed(const QString &errorMessage);
+    void pointInteractionModeChanged(PointInteractionMode mode);
+    void cameraImageLockedChanged(bool locked);
 
 protected:
     // RHI 初始化：创建当前图形后端的渲染资源和管线。
@@ -224,6 +242,7 @@ private:
     enum class LeftDragMode
     {
         None,
+        Pan,
         Orbit,
         GizmoOrbit,
         GizmoAxis
@@ -241,6 +260,7 @@ private:
     QPointF projectToScreen(const QVector3D &p, bool *ok = nullptr) const;
     SceneMatrices sceneMatrices() const;
     bool cameraImageRegistrationActive() const;
+    bool cameraImageNavigationLocked() const;
     QSize displayedCameraImageSize() const;
 
     // 将向量从本地空间旋转到当前视图空间（应用 _viewRot）
@@ -278,6 +298,7 @@ private:
     void applyOrbitDrag(const QPoint &pixelDelta);
 
     bool isNavigationDragging() const;
+    bool isPointSelectionToolActive() const;
 
     // 将场景平移偏移量限制在合理范围（±45% 画布尺寸），避免场景移出屏幕
     void clampSceneOffset();
@@ -329,6 +350,7 @@ private:
         QByteArray scalarData;
         xjw::gui::tie_points::QualityMetadata metadata;
         TiePointPrunePreviewQuery query;
+        std::vector<std::uint32_t> stagedIndices;
         int strideBytes = 0;
         int generation = 0;
         int loadGeneration = 0;
@@ -382,12 +404,12 @@ private:
     // 当点云/模型数据变更后调用，标记缓存失效并重新计算
     void invalidateCache() const;
 
-    void startManualPointSelection(const QRect &screenRect);
+    void startManualPointSelection(const ScreenSelectionRegion &region);
     struct ManualSelectionRequest
     {
         QByteArray vertexData;
         QByteArray scalarData;
-        QRect screenRect;
+        ScreenSelectionRegion region;
         QMatrix4x4 clipMatrix;
         QSize viewportSize;
         QPointF sceneOffset;
@@ -453,6 +475,7 @@ private:
 
     struct RhiImagePipelineSet
     {
+        QScopedPointer<QRhiBuffer> vertexBuffer;
         QScopedPointer<QRhiBuffer> uniformBuffer;
         QScopedPointer<QRhiTexture> texture;
         QScopedPointer<QRhiSampler> sampler;
@@ -460,6 +483,7 @@ private:
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
         QSize textureSize;
         QString uploadedImageKey;
+        QString uploadedGeometryKey;
         bool pipelineDirty = true;
     };
 
@@ -535,15 +559,12 @@ private:
     static_assert(offsetof(SceneUniforms, scalarRange) == 60 * sizeof(float));
     static_assert(sizeof(SceneUniforms) == 64 * sizeof(float));
 
-    struct alignas(16) ProjectedImageUniforms
+    struct alignas(16) ImagePlaneUniforms
     {
         std::array<float, 16> mvp{};
-        std::array<float, 16> sourceView{};
-        std::array<float, 4> intrinsics{};
-        std::array<float, 4> imageGeometry{};
         std::array<float, 4> composition{};
     };
-    static_assert(sizeof(ProjectedImageUniforms) == 44 * sizeof(float));
+    static_assert(sizeof(ImagePlaneUniforms) == 20 * sizeof(float));
 
     struct alignas(16) CameraPlaneUniforms
     {
@@ -701,6 +722,9 @@ private:
     bool _tiePointPrunePreviewWorkerActive = false;
     int _tiePointPrunePreviewGeneration = 0;
     int _tiePointPrunePreviewCandidateCount = 0;
+    std::vector<std::uint32_t> _tiePointPrunePreviewIndices;
+    std::vector<std::uint32_t> _stagedTiePointPruneIndices;
+    QByteArray _tiePointPruneSourceScalarData;
     QImage _meshTextureImage;
     QImage _meshTextureUploadImage;
     QString _meshTexturePath;
@@ -753,7 +777,7 @@ private:
     bool _showCameraThumbnails = true;
     bool _showCameraLocalAxes = true;
     bool _showCameraImage = false;
-    CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Foreground;
+    CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Background;
     bool _cameraImageLocked = false;
     int _activeCameraImagePoseIndex = -1;
     int _lockedCameraImagePoseIndex = -1;
@@ -777,9 +801,12 @@ private:
     QSet<QString> _thumbnailCacheKeysPendingCommit;
     QString _highlightedCameraPath;
     bool _manualPruneMode = false;
+    PointInteractionMode _pointInteractionMode = PointInteractionMode::Navigation;
     bool _manualSelecting = false;
     QPoint _manualSelectStart;
     QRect _manualSelectRect;
+    QPolygonF _manualSelectPolygon;
+    ScreenSelectionShape _manualSelectionShape = ScreenSelectionShape::Rectangle;
     std::vector<PointVertexIndex> _manualPreviewIndices;
     bool _manualPreviewValid = false;
     bool _manualPreviewUsesScreenRect = false;

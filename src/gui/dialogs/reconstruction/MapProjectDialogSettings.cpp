@@ -6,11 +6,13 @@
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
 #include <QWidget>
@@ -61,6 +63,10 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
 {
     _applyingSettings = true;
 
+    selectComboValue(
+        _productModeCombo,
+        settings.value(QStringLiteral("product_mode")).toString(QStringLiteral("standard")));
+
     const QString surfaceType =
         settings.value(QStringLiteral("surface_type")).toString(QStringLiteral("dem"));
     selectComboValue(_surfaceCombo, surfaceType);
@@ -85,6 +91,11 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
              && !_defaultPointCloudPath.isEmpty())
     {
         _demEdit->setText(_defaultPointCloudPath);
+    }
+    else if (surfaceType == QStringLiteral("dem")
+             && isRpcMode() && !_defaultRpcDemPath.isEmpty())
+    {
+        _demEdit->setText(_defaultRpcDemPath);
     }
     else if (surfaceType == QStringLiteral("dem") && !_defaultDemPath.isEmpty())
     {
@@ -235,6 +246,51 @@ void MapProjectDialog::onSurfaceChanged()
     onSettingsModified();
 }
 
+bool MapProjectDialog::isRpcMode() const
+{
+    return _productModeCombo
+        && _productModeCombo->currentData().toString() == QLatin1String("rpc");
+}
+
+void MapProjectDialog::onProductModeChanged()
+{
+    if (!_applyingSettings)
+    {
+        _surfaceCombo->setCurrentIndex(0);
+        const QString preferred_dem = isRpcMode() && !_defaultRpcDemPath.isEmpty()
+            ? _defaultRpcDemPath : _defaultDemPath;
+        if (!preferred_dem.isEmpty())
+        {
+            _demEdit->setText(preferred_dem);
+        }
+        const QString current_output = QDir::cleanPath(_outputEdit->text().trimmed());
+        if (!_projectRoot.isEmpty()
+            && (current_output.endsWith(QStringLiteral("assets/ortho/relative_dom.tif"))
+                || current_output.endsWith(QStringLiteral("assets/ortho/rpc_dom.tif"))))
+        {
+            _outputEdit->setText(QDir(_projectRoot).filePath(isRpcMode()
+                ? QStringLiteral("assets/ortho/rpc_dom.tif")
+                : QStringLiteral("assets/ortho/relative_dom.tif")));
+        }
+    }
+    applyImageReadiness();
+    if (isRpcMode())
+    {
+        const QSignalBlocker blocker(_imageList);
+        for (int index = 0; index < _imageList->count(); ++index)
+        {
+            QListWidgetItem *item = _imageList->item(index);
+            if (item && item->data(Qt::UserRole).toBool())
+            {
+                item->setCheckState(Qt::Checked);
+            }
+        }
+    }
+    updateControlAvailability();
+    updateImageSummary();
+    onSettingsModified();
+}
+
 void MapProjectDialog::onPixelSizeEdited()
 {
     if (!_applyingSettings && !_updatingEstimate)
@@ -283,6 +339,7 @@ void MapProjectDialog::onImageSelectionChanged()
 
 void MapProjectDialog::updateControlAvailability()
 {
+    const bool rpcMode = isRpcMode();
     const bool pointCloud =
         _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
     const bool cylindrical = pointCloud && _cylindricalProjectionRadio->isChecked();
@@ -301,14 +358,27 @@ void MapProjectDialog::updateControlAvailability()
     }
     _resetBoundsButton->setEnabled(!_running && boundsEnabled && _hasDemEstimate);
     _estimateButton->setEnabled(!_running);
-    _useProjectMasksCheck->setEnabled(!_running && !pointCloud && _maskCount > 0);
+    _projectionGroup->setVisible(!rpcMode);
+    _regionGroup->setVisible(!rpcMode);
+    _surfaceCombo->setEnabled(!_running && !rpcMode);
+    _productModeHint->setText(rpcMode
+        ? tr("使用影像内嵌的地理定位模型按 DEM 网格反投影，输出带坐标参考的 GeoTIFF。")
+        : tr("使用项目框幅式相机或彩色点云，支持平面和小天体投影及自定义输出区域。"));
+    _fillHolesCheck->setVisible(!rpcMode);
+    _ghostFilterCheck->setVisible(!rpcMode);
+    _colorCorrectionCheck->setVisible(!rpcMode);
+    _sharpnessWeightingCheck->setVisible(!rpcMode);
+    _useProjectMasksCheck->setVisible(!rpcMode);
+    _useProjectMasksCheck->setEnabled(!_running && !rpcMode && !pointCloud && _maskCount > 0);
     _demGridProjectionRadio->setEnabled(!_running && !pointCloud);
     _planarProjectionRadio->setEnabled(!_running && pointCloud);
     _cylindricalProjectionRadio->setEnabled(!_running && pointCloud);
     _blendCombo->setEnabled(!_running && !pointCloud);
-    _colorSourceLabel->setText(pointCloud
-        ? tr("点颜色 RGB（由表面类型决定）")
-        : tr("影像（由表面类型决定）"));
+    _colorSourceLabel->setText(rpcMode
+        ? tr("带地理定位模型的 GeoTIFF 影像")
+        : (pointCloud
+               ? tr("点颜色 RGB（由表面类型决定）")
+               : tr("影像（由表面类型决定）")));
     _ghostFilterCheck->setEnabled(!_running && !pointCloud);
     _colorCorrectionCheck->setEnabled(!_running && !pointCloud);
     _sharpnessWeightingCheck->setEnabled(!_running && !pointCloud);
@@ -338,6 +408,13 @@ void MapProjectDialog::updateImageSummary()
     if (!_imageReadinessSet)
     {
         _imageReadinessLabel->setText(tr("相机参数与蒙版状态将在打开项目后检查"));
+    }
+    else if (isRpcMode())
+    {
+        _imageReadinessLabel->setText(
+            tr("已检测到内嵌地理定位模型 %1 / %2 张；导入 GeoTIFF 时会自动读取")
+                .arg(_rpcReadyImages.size())
+                .arg(totalCount));
     }
 }
 
@@ -387,6 +464,8 @@ QStringList MapProjectDialog::selectedImages() const
 QJsonObject MapProjectDialog::currentSettings() const
 {
     QJsonObject settings;
+    settings.insert(QStringLiteral("product_mode"),
+                    isRpcMode() ? QStringLiteral("rpc") : QStringLiteral("standard"));
     const bool pointCloud =
         _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
     const QString projectionType = !pointCloud
@@ -448,13 +527,15 @@ bool MapProjectDialog::validateSettings(const QJsonObject &settings, QString *er
         return false;
     };
 
+    const bool rpcMode = settings.value(QStringLiteral("product_mode")).toString()
+        == QLatin1String("rpc");
     const bool pointCloud =
         settings.value(QStringLiteral("surface_type")).toString() == QStringLiteral("point_cloud");
     if (!pointCloud && settings.value(QStringLiteral("images")).toArray().isEmpty())
     {
         return fail(tr("请至少勾选一张输入影像。"));
     }
-    if (!pointCloud && _imageReadinessSet && _cameraReadyCount <= 0)
+    if (!pointCloud && !rpcMode && _imageReadinessSet && _cameraReadyCount <= 0)
     {
         return fail(tr("所选项目没有已就绪的相机参数，请先完成相机初始化或空中三角测量。"));
     }
@@ -483,11 +564,20 @@ bool MapProjectDialog::validateSettings(const QJsonObject &settings, QString *er
         return fail(tr("正射影像输出路径不能是目录。"));
     }
     const QString suffix = QFileInfo(outputPath).suffix().toLower();
+    if (rpcMode && suffix != QStringLiteral("tif") && suffix != QStringLiteral("tiff"))
+    {
+        return fail(tr("地理正射产品必须输出为保留坐标参考的 .tif 或 .tiff 文件。"));
+    }
     if (suffix != QStringLiteral("tif")
         && suffix != QStringLiteral("tiff")
         && suffix != QStringLiteral("png"))
     {
         return fail(tr("输出文件必须使用 .tif、.tiff 或 .png 扩展名。"));
+    }
+
+    if (rpcMode)
+    {
+        return true;
     }
 
     QString sizingMode = settings.value(QStringLiteral("sizing_mode")).toString();

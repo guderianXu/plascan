@@ -139,6 +139,10 @@ public:
     /// 删除三维点，并清理关联观测
     void deletePoint3D(Point3DId id);
 
+    /// 从三维点轨迹中删除单个观测，并同步清理影像反向关联。
+    /// 不会自动删除剩余观测不足两个的三维点，由调用方决定整点生命周期。
+    bool removeObservation(Point3DId id, ImageId imageId, FeatureIdx featureIdx);
+
     /// 三维点总数
     size_t numPoints3D() const
     {

@@ -189,6 +189,30 @@ TEST(MapProjectDialogTest, ExposesSupportedWorkflowAndActualDemDefaults)
     EXPECT_EQ(runButton->text(), QStringLiteral("生成"));
 }
 
+TEST(MapProjectDialogTest, RpcModeUsesCompactDemGridWorkflow)
+{
+    MapProjectDialog dialog;
+    dialog.setAvailableImages({QStringLiteral("left.tif"), QStringLiteral("right.tif")});
+    dialog.setImageReadiness({}, 0);
+    dialog.setRpcImageReadiness({QStringLiteral("left.tif"), QStringLiteral("right.tif")});
+    auto *mode = requiredWidget<QComboBox>(&dialog, "orthoProductModeCombo");
+    auto *projection = requiredWidget<QGroupBox>(&dialog, "orthoProjectionGroup");
+    auto *region = requiredWidget<QGroupBox>(&dialog, "orthoRegionGroup");
+    auto *imageList = requiredWidget<QListWidget>(&dialog, "orthoImageList");
+    auto *hint = requiredWidget<QLabel>(&dialog, "orthoProductModeHint");
+
+    ASSERT_NE(mode, nullptr);
+    mode->setCurrentIndex(mode->findData(QStringLiteral("rpc")));
+
+    EXPECT_TRUE(projection->isHidden());
+    EXPECT_TRUE(region->isHidden());
+    EXPECT_TRUE(hint->text().contains(QStringLiteral("地理定位模型")));
+    EXPECT_FALSE(mode->currentText().contains(QStringLiteral("RPC")));
+    ASSERT_EQ(imageList->count(), 2);
+    EXPECT_EQ(imageList->item(0)->checkState(), Qt::Checked);
+    EXPECT_EQ(imageList->item(1)->checkState(), Qt::Checked);
+}
+
 TEST(MapProjectDialogTest, SwitchesToPointCloudPlanarAndGlobalProjection)
 {
     DialogFixture fixture;

@@ -12,7 +12,7 @@
 #include "triangulation/Triangulator.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pose/PnpSolver.h"
-#include "BundleAdjust.h"
+#include "BundleAdjustSolver.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "Intersection.h"
 
@@ -21,90 +21,90 @@ using namespace xjw;
 namespace
 {
 
-struct LowRatioPnpCase
-{
-    std::vector<std::array<double, 3>> worldPoints;
-    std::vector<std::array<double, 2>> imagePoints;
-    double fu = 768.0;
-    double fv = 768.0;
-    double cu = 320.0;
-    double cv = 240.0;
-};
-
-LowRatioPnpCase makeLowRatioPnpCase()
-{
-    LowRatioPnpCase data;
-    data.worldPoints.reserve(85);
-    data.imagePoints.reserve(85);
-
-    for (int i = 0; i < 20; ++i)
+    struct LowRatioPnpCase
     {
-        const double x = (static_cast<double>(i % 5) - 2.0) * 0.35;
-        const double y = (static_cast<double>(i / 5) - 1.5) * 0.28;
-        const double z = 5.0 + static_cast<double>(i % 4) * 0.2;
-        data.worldPoints.push_back({{x, y, z}});
-        data.imagePoints.push_back({{
-            data.fu * x / z + data.cu + (i % 2 == 0 ? 0.2 : -0.2),
-            data.fv * y / z + data.cv + (i % 3 == 0 ? -0.15 : 0.15),
-        }});
-    }
+        std::vector<std::array<double, 3>> worldPoints;
+        std::vector<std::array<double, 2>> imagePoints;
+        double fu = 768.0;
+        double fv = 768.0;
+        double cu = 320.0;
+        double cv = 240.0;
+    };
 
-    for (int i = 0; i < 65; ++i)
+    LowRatioPnpCase makeLowRatioPnpCase()
     {
-        const double x = -2.0 + static_cast<double>(i % 13) * 0.31;
-        const double y = -1.8 + static_cast<double>(i % 11) * 0.29;
-        const double z = 4.5 + static_cast<double>(i % 7) * 0.35;
-        data.worldPoints.push_back({{x, y, z}});
-        data.imagePoints.push_back({{
-            40.0 + static_cast<double>((i * 37) % 560),
-            30.0 + static_cast<double>((i * 53) % 420),
-        }});
-    }
+        LowRatioPnpCase data;
+        data.worldPoints.reserve(85);
+        data.imagePoints.reserve(85);
 
-    return data;
-}
-
-std::array<double, 2> projectWithCameraCenter(const std::array<double, 3> &point,
-                                              const std::array<double, 3> &cameraCenter,
-                                              double fu,
-                                              double fv,
-                                              double cu,
-                                              double cv)
-{
-    const double x = point[0] - cameraCenter[0];
-    const double y = point[1] - cameraCenter[1];
-    const double z = point[2] - cameraCenter[2];
-    return {{fu * x / z + cu, fv * y / z + cv}};
-}
-
-LowRatioPnpCase makeSmallSamplePnpCase(int inlierCount, int outlierCount)
-{
-    LowRatioPnpCase data;
-    data.worldPoints.reserve(static_cast<std::size_t>(inlierCount + outlierCount));
-    data.imagePoints.reserve(static_cast<std::size_t>(inlierCount + outlierCount));
-
-    for (int i = 0; i < inlierCount + outlierCount; ++i)
-    {
-        const double x = (static_cast<double>(i % 4) - 1.5) * 0.45;
-        const double y = (static_cast<double>(i / 4) - 1.5) * 0.35;
-        const double z = 4.8 + static_cast<double>(i % 3) * 0.25;
-        const std::array<double, 3> point{{x, y, z}};
-        data.worldPoints.push_back(point);
-        if (i < inlierCount)
+        for (int i = 0; i < 20; ++i)
         {
-            data.imagePoints.push_back(projectWithCameraCenter(
-                point, {{0.0, 0.0, 0.0}}, data.fu, data.fv, data.cu, data.cv));
-        }
-        else
-        {
+            const double x = (static_cast<double>(i % 5) - 2.0) * 0.35;
+            const double y = (static_cast<double>(i / 5) - 1.5) * 0.28;
+            const double z = 5.0 + static_cast<double>(i % 4) * 0.2;
+            data.worldPoints.push_back({{x, y, z}});
             data.imagePoints.push_back({{
-                45.0 + static_cast<double>((i * 137) % 510),
-                35.0 + static_cast<double>((i * 173) % 390),
+                data.fu * x / z + data.cu + (i % 2 == 0 ? 0.2 : -0.2),
+                data.fv * y / z + data.cv + (i % 3 == 0 ? -0.15 : 0.15),
             }});
         }
+
+        for (int i = 0; i < 65; ++i)
+        {
+            const double x = -2.0 + static_cast<double>(i % 13) * 0.31;
+            const double y = -1.8 + static_cast<double>(i % 11) * 0.29;
+            const double z = 4.5 + static_cast<double>(i % 7) * 0.35;
+            data.worldPoints.push_back({{x, y, z}});
+            data.imagePoints.push_back({{
+                40.0 + static_cast<double>((i * 37) % 560),
+                30.0 + static_cast<double>((i * 53) % 420),
+            }});
+        }
+
+        return data;
     }
-    return data;
-}
+
+    std::array<double, 2> projectWithCameraCenter(const std::array<double, 3>& point,
+                                                  const std::array<double, 3>& cameraCenter,
+                                                  double fu,
+                                                  double fv,
+                                                  double cu,
+                                                  double cv)
+    {
+        const double x = point[0] - cameraCenter[0];
+        const double y = point[1] - cameraCenter[1];
+        const double z = point[2] - cameraCenter[2];
+        return {{fu * x / z + cu, fv * y / z + cv}};
+    }
+
+    LowRatioPnpCase makeSmallSamplePnpCase(int inlierCount, int outlierCount)
+    {
+        LowRatioPnpCase data;
+        data.worldPoints.reserve(static_cast<std::size_t>(inlierCount + outlierCount));
+        data.imagePoints.reserve(static_cast<std::size_t>(inlierCount + outlierCount));
+
+        for (int i = 0; i < inlierCount + outlierCount; ++i)
+        {
+            const double x = (static_cast<double>(i % 4) - 1.5) * 0.45;
+            const double y = (static_cast<double>(i / 4) - 1.5) * 0.35;
+            const double z = 4.8 + static_cast<double>(i % 3) * 0.25;
+            const std::array<double, 3> point{{x, y, z}};
+            data.worldPoints.push_back(point);
+            if (i < inlierCount)
+            {
+                data.imagePoints.push_back(
+                    projectWithCameraCenter(point, {{0.0, 0.0, 0.0}}, data.fu, data.fv, data.cu, data.cv));
+            }
+            else
+            {
+                data.imagePoints.push_back({{
+                    45.0 + static_cast<double>((i * 137) % 510),
+                    35.0 + static_cast<double>((i * 173) % 390),
+                }});
+            }
+        }
+        return data;
+    }
 
 } // namespace
 
@@ -115,15 +115,23 @@ TEST(TriangulatorParamsTest, DefaultsAreTightened)
     TriangulatorOptions opts;
 
     // 最小三角化角度已从 1.5° 收紧到 2.0°
-    EXPECT_GE(opts.minTriAngle, 2.0)
-        << "minTriAngle should be >= 2.0 degrees to reject poorly-conditioned points";
+    EXPECT_GE(opts.minTriAngle, 2.0) << "minTriAngle should be >= 2.0 degrees to reject poorly-conditioned points";
 
     // 最大重投影误差已从 4.0 收紧到 2.5
-    EXPECT_LE(opts.maxReprojError, 2.5)
-        << "maxReprojError should be <= 2.5 pixels";
+    EXPECT_LE(opts.maxReprojError, 2.5) << "maxReprojError should be <= 2.5 pixels";
 
     EXPECT_LE(opts.continueMaxReprojError, 2.5);
     EXPECT_LE(opts.completeMaxReprojError, 2.5);
+    EXPECT_GT(opts.twoViewFragmentMaxReprojError, 0.0);
+    EXPECT_LE(opts.twoViewFragmentMaxReprojError, opts.maxReprojError);
+    EXPECT_GT(opts.twoViewFragmentPixelSigma, 0.0);
+    EXPECT_GT(opts.twoViewFragmentMaxRelativeDepthUncertainty, 0.0);
+    EXPECT_LE(opts.twoViewFragmentMaxRelativeDepthUncertainty, 0.02);
+    EXPECT_TRUE(opts.enableTwoViewLocalDepthConsistency);
+    EXPECT_GT(opts.twoViewLocalDepthRadiusPixels, 0.0);
+    EXPECT_GE(opts.twoViewLocalDepthMinReferences, 3);
+    EXPECT_GT(opts.twoViewLocalDepthMaxMadFraction, 0.0);
+    EXPECT_GT(opts.twoViewLocalDepthMaxDeviation, opts.twoViewLocalDepthMaxMadFraction);
 }
 
 // ─── IncrementalSfm 参数验证 ────────────────────────────────────
@@ -133,16 +141,13 @@ TEST(IncrementalSfmParamsTest, FilterParamsTightened)
     IncrementalSfmOptions opts;
 
     // 过滤重投影误差
-    EXPECT_LE(opts.filterMaxReprojError, 2.0)
-        << "filterMaxReprojError should be <= 2.0";
+    EXPECT_LE(opts.filterMaxReprojError, 2.0) << "filterMaxReprojError should be <= 2.0";
 
     // 过滤三角化角度
-    EXPECT_GE(opts.filterMinTriAngle, 2.0)
-        << "filterMinTriAngle should be >= 2.0";
+    EXPECT_GE(opts.filterMinTriAngle, 2.0) << "filterMinTriAngle should be >= 2.0";
 
     // 短轨迹过滤
-    EXPECT_GE(opts.filterMinTrackLen, 2)
-        << "filterMinTrackLen should be >= 2";
+    EXPECT_GE(opts.filterMinTrackLen, 2) << "filterMinTrackLen should be >= 2";
 }
 
 TEST(IncrementalSfmParamsTest, BAIntervals)
@@ -187,8 +192,7 @@ TEST(PnpParamsTest, MaxReprojErrorTightened)
     PnpOptions opts;
 
     // 从 8.0 收紧到 4.0
-    EXPECT_LE(opts.maxReprojError, 4.0)
-        << "PnP maxReprojError should be <= 4.0 to reduce registration outliers";
+    EXPECT_LE(opts.maxReprojError, 4.0) << "PnP maxReprojError should be <= 4.0 to reduce registration outliers";
     EXPECT_LE(opts.initialPosePrefilterMaxReprojError, 48.0);
 }
 
@@ -200,16 +204,8 @@ TEST(PnpParamsTest, SmallSampleAcceptsTwelveFullyConsistentCorrespondences)
     opts.smallSampleThreshold = 20;
     opts.smallSampleMinInlierRatio = 0.80;
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_TRUE(result.success);
     EXPECT_EQ(result.numInliers, 12);
@@ -228,16 +224,8 @@ TEST(PnpParamsTest, SmallSampleRejectsTwelveOfSixteenInliers)
     opts.smallSampleThreshold = 20;
     opts.smallSampleMinInlierRatio = 0.80;
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.numInliers, 12);
@@ -269,20 +257,9 @@ TEST(PnpParamsTest, InitialPoseGuessUsesCameraCenterConvention)
     opts.maxIterations = 1000;
     opts.useInitialPose = true;
     opts.initialCameraCenter = trueCenter;
-    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
-                                          0.0, 1.0, 0.0,
-                                          0.0, 0.0, 1.0}};
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}};
 
-    const PnpResult result = PnpSolver::solve(worldPoints,
-                                              imagePoints,
-                                              fu,
-                                              fv,
-                                              cu,
-                                              cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result = PnpSolver::solve(worldPoints, imagePoints, fu, fv, cu, cv, 1, 1, false, opts);
 
     ASSERT_TRUE(result.success);
     EXPECT_GE(result.numInliers, 25);
@@ -304,20 +281,10 @@ TEST(PnpParamsTest, InitialPosePrefilterRecoversLowRatioInliers)
     opts.initialPosePrefilterMaxReprojError = 12.0;
     opts.initialPosePrefilterMinCandidates = 10;
     opts.initialCameraCenter = {{0.0, 0.0, 0.0}};
-    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
-                                          0.0, 1.0, 0.0,
-                                          0.0, 0.0, 1.0}};
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}};
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_TRUE(result.success);
     EXPECT_GE(result.numInliers, 18);
@@ -336,20 +303,10 @@ TEST(PnpParamsTest, InitialPosePrefilterReportsCandidatesBelowActivationThreshol
     opts.initialPosePrefilterMaxReprojError = 12.0;
     opts.initialPosePrefilterMinCandidates = 1000;
     opts.initialCameraCenter = {{0.0, 0.0, 0.0}};
-    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
-                                          0.0, 1.0, 0.0,
-                                          0.0, 0.0, 1.0}};
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}};
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_FALSE(result.usedInitialPosePrefilter);
     EXPECT_GT(result.prefilterCandidateCount, 0);
@@ -365,16 +322,8 @@ TEST(PnpParamsTest, AcceptsLowRatioWhenAbsoluteInlierSupportIsEnough)
     opts.minNumInliers = 10;
     opts.allowRelaxedInlierRatio = true;
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_TRUE(result.success);
     EXPECT_GE(result.numInliers, 18);
@@ -391,16 +340,8 @@ TEST(PnpParamsTest, RelaxedInlierRatioThresholdIsConfigurable)
     strictRelaxedOpts.allowRelaxedInlierRatio = true;
     strictRelaxedOpts.relaxedMinInlierRatio = 0.24;
 
-    const PnpResult strictRelaxed = PnpSolver::solve(data.worldPoints,
-                                                     data.imagePoints,
-                                                     data.fu,
-                                                     data.fv,
-                                                     data.cu,
-                                                     data.cv,
-                                                     1,
-                                                     1,
-                                                     false,
-                                                     strictRelaxedOpts);
+    const PnpResult strictRelaxed = PnpSolver::solve(
+        data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, strictRelaxedOpts);
 
     EXPECT_FALSE(strictRelaxed.success);
     EXPECT_GE(strictRelaxed.numInliers, 18);
@@ -409,16 +350,8 @@ TEST(PnpParamsTest, RelaxedInlierRatioThresholdIsConfigurable)
     PnpOptions looseRelaxedOpts = strictRelaxedOpts;
     looseRelaxedOpts.relaxedMinInlierRatio = 0.20;
 
-    const PnpResult looseRelaxed = PnpSolver::solve(data.worldPoints,
-                                                    data.imagePoints,
-                                                    data.fu,
-                                                    data.fv,
-                                                    data.cu,
-                                                    data.cv,
-                                                    1,
-                                                    1,
-                                                    false,
-                                                    looseRelaxedOpts);
+    const PnpResult looseRelaxed = PnpSolver::solve(
+        data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, looseRelaxedOpts);
 
     EXPECT_TRUE(looseRelaxed.success);
     EXPECT_GE(looseRelaxed.inlierRatio, looseRelaxedOpts.relaxedMinInlierRatio);
@@ -433,16 +366,8 @@ TEST(PnpParamsTest, RejectsLowRatioByDefault)
     opts.maxIterations = 50000;
     opts.minNumInliers = 10;
 
-    const PnpResult result = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult result =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     EXPECT_FALSE(result.success);
     EXPECT_GE(result.numInliers, 18);
@@ -460,32 +385,16 @@ TEST(PnpParamsTest, DeterministicSeedIsIndependentOfExternalOpenCvRngState)
     opts.ransacSeed = 20260711;
 
     cv::setRNGSeed(17);
-    const PnpResult first = PnpSolver::solve(data.worldPoints,
-                                             data.imagePoints,
-                                             data.fu,
-                                             data.fv,
-                                             data.cu,
-                                             data.cv,
-                                             1,
-                                             1,
-                                             false,
-                                             opts);
+    const PnpResult first =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     cv::setRNGSeed(918273);
     for (int i = 0; i < 1000; ++i)
     {
         static_cast<void>(cv::theRNG().next());
     }
-    const PnpResult second = PnpSolver::solve(data.worldPoints,
-                                              data.imagePoints,
-                                              data.fu,
-                                              data.fv,
-                                              data.cu,
-                                              data.cv,
-                                              1,
-                                              1,
-                                              false,
-                                              opts);
+    const PnpResult second =
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
 
     ASSERT_EQ(first.success, second.success);
     ASSERT_EQ(first.numInliers, second.numInliers);
@@ -513,16 +422,8 @@ TEST(PnpParamsTest, DeterministicSeedRestoresCallingThreadOpenCvRngState)
     cv::RNG expectedRng = cv::theRNG();
     const unsigned expectedNext = expectedRng.next();
 
-    static_cast<void>(PnpSolver::solve(data.worldPoints,
-                                       data.imagePoints,
-                                       data.fu,
-                                       data.fv,
-                                       data.cu,
-                                       data.cv,
-                                       1,
-                                       1,
-                                       false,
-                                       opts));
+    static_cast<void>(
+        PnpSolver::solve(data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts));
 
     EXPECT_EQ(cv::theRNG().next(), expectedNext);
 }
@@ -540,19 +441,13 @@ TEST(PnpParamsTest, DeterministicSeedProducesSameResultAcrossConcurrentWorkers)
     futures.reserve(8);
     for (int worker = 0; worker < 8; ++worker)
     {
-        futures.push_back(std::async(std::launch::async, [&data, opts]()
-        {
-            return PnpSolver::solve(data.worldPoints,
-                                    data.imagePoints,
-                                    data.fu,
-                                    data.fv,
-                                    data.cu,
-                                    data.cv,
-                                    1,
-                                    1,
-                                    false,
-                                    opts);
-        }));
+        futures.push_back(std::async(
+            std::launch::async,
+            [&data, opts]()
+            {
+                return PnpSolver::solve(
+                    data.worldPoints, data.imagePoints, data.fu, data.fv, data.cu, data.cv, 1, 1, false, opts);
+            }));
     }
 
     const PnpResult reference = futures.front().get();
@@ -571,9 +466,15 @@ TEST(PnpParamsTest, DeterministicSeedProducesSameResultAcrossConcurrentWorkers)
 TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
 {
     const std::array<double, 9> identity{{
-        1.0, 0.0, 0.0,
-        0.0, 1.0, 0.0,
-        0.0, 0.0, 1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
     }};
     const std::array<double, 3> trueCenter{{0.25, -0.12, 0.35}};
 
@@ -616,14 +517,17 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
     options.initialCameraCenter = trueCenter;
     options.ransacSeed = 20260730;
 
-    const PnpResult pinholeResult =
-        PnpSolver::solve(worldPoints, imagePoints,
-                         camera.focalX(), camera.focalY(),
-                         camera.principalX(), camera.principalY(),
-                         camera.uAxisSign(), camera.vAxisSign(),
-                         camera.depthAxisFlipped(), options);
-    const PnpResult result =
-        PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+    const PnpResult pinholeResult = PnpSolver::solve(worldPoints,
+                                                     imagePoints,
+                                                     camera.focalX(),
+                                                     camera.focalY(),
+                                                     camera.principalX(),
+                                                     camera.principalY(),
+                                                     camera.uAxisSign(),
+                                                     camera.vAxisSign(),
+                                                     camera.depthAxisFlipped(),
+                                                     options);
+    const PnpResult result = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
 
     EXPECT_FALSE(pinholeResult.success)
         << "Synthetic case must distinguish the calibrated distortion path from the pinhole overload";
@@ -652,9 +556,15 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
 TEST(IntersectionDistortionTest, RecoversWorldPointFromDistortedPixels)
 {
     const std::array<double, 9> identity{{
-        1.0, 0.0, 0.0,
-        0.0, 1.0, 0.0,
-        0.0, 0.0, 1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
     }};
     FramePinholeCamera camera1;
     camera1.setIntrinsics(900.0, 875.0, 640.0, 480.0);
@@ -671,8 +581,7 @@ TEST(IntersectionDistortionTest, RecoversWorldPointFromDistortedPixels)
     ASSERT_TRUE(camera2.projectWorldPoint(expectedPoint.data(), pixel2));
 
     const Intersection::Result result =
-        Intersection::intersectPair(camera1, pixel1[0], pixel1[1],
-                                    camera2, pixel2[0], pixel2[1]);
+        Intersection::intersectPair(camera1, pixel1[0], pixel1[1], camera2, pixel2[0], pixel2[1]);
 
     ASSERT_TRUE(result.valid);
     for (std::size_t index = 0; index < expectedPoint.size(); ++index)
@@ -690,8 +599,7 @@ TEST(BAParamsTest, FilterReprojErrorTightened)
     BAOptions opts;
 
     // 从 4.0 收紧到 2.5
-    EXPECT_LE(opts.filterMaxReprojError, 2.5)
-        << "BA filterMaxReprojError should be <= 2.5";
+    EXPECT_LE(opts.filterMaxReprojError, 2.5) << "BA filterMaxReprojError should be <= 2.5";
 }
 
 // ─── SparsePointCloudProcessor 选项默认值验证 ───────────────────
@@ -734,8 +642,7 @@ TEST(IncrementalSfmParamsTest, ChiralityThresholdSofterThanInlierThreshold)
     IncrementalSfmOptions opts;
 
     // chirality 阈值应独立于 initMinNumInliers，且更宽松
-    EXPECT_GT(opts.initMinChiralityInliers, 0)
-        << "chirality threshold should be positive";
+    EXPECT_GT(opts.initMinChiralityInliers, 0) << "chirality threshold should be positive";
     EXPECT_LE(opts.initMinChiralityInliers, opts.initMinNumInliers)
         << "chirality threshold should be softer (<=) than main inlier threshold";
 }
@@ -745,30 +652,24 @@ TEST(IncrementalSfmParamsTest, MaxInitPairCandidatesReasonable)
     IncrementalSfmOptions opts;
 
     // 多候选重试策略需要至少 1 个候选
-    EXPECT_GE(opts.maxInitPairCandidates, 1)
-        << "Should try at least 1 candidate pair";
-    EXPECT_LE(opts.maxInitPairCandidates, 50)
-        << "Candidate limit should be bounded";
-    EXPECT_GE(opts.maxInitPairCandidates, 5)
-        << "Should try multiple candidates for robustness";
+    EXPECT_GE(opts.maxInitPairCandidates, 1) << "Should try at least 1 candidate pair";
+    EXPECT_LE(opts.maxInitPairCandidates, 50) << "Candidate limit should be bounded";
+    EXPECT_GE(opts.maxInitPairCandidates, 5) << "Should try multiple candidates for robustness";
 }
 
 TEST(IncrementalSfmParamsTest, IterativeBARoundsReasonable)
 {
     IncrementalSfmOptions opts;
 
-    EXPECT_GE(opts.iterativeBARounds, 1)
-        << "At least 1 round of iterative BA needed";
-    EXPECT_LE(opts.iterativeBARounds, 10)
-        << "iterativeBARounds should be bounded";
+    EXPECT_GE(opts.iterativeBARounds, 1) << "At least 1 round of iterative BA needed";
+    EXPECT_LE(opts.iterativeBARounds, 10) << "iterativeBARounds should be bounded";
 }
 
 TEST(IncrementalSfmParamsTest, NegativeDepthFilterEnabled)
 {
     IncrementalSfmOptions opts;
 
-    EXPECT_TRUE(opts.filterNegativeDepth)
-        << "Negative depth filtering should be enabled by default";
+    EXPECT_TRUE(opts.filterNegativeDepth) << "Negative depth filtering should be enabled by default";
 }
 
 TEST(IncrementalSfmParamsTest, KnownPoseBaUsesSoftPriorsAndKeepsIntrinsicsFixed)
@@ -779,8 +680,6 @@ TEST(IncrementalSfmParamsTest, KnownPoseBaUsesSoftPriorsAndKeepsIntrinsicsFixed)
         << "Known external orientations should be soft priors, not hard-fixed poses";
     EXPECT_TRUE(opts.keepIntrinsicsFixedInKnownPoseBa)
         << "Aerial weak-geometry BA should not release intrinsics in the first pass";
-    EXPECT_GT(opts.knownPosePriorPositionSigmaScale, 0.0)
-        << "Soft pose prior needs a positive adaptive sigma scale";
-    EXPECT_GT(opts.knownPosePriorRotationSigmaDegrees, 0.0)
-        << "Soft pose prior needs a positive rotation sigma";
+    EXPECT_GT(opts.knownPosePriorPositionSigmaScale, 0.0) << "Soft pose prior needs a positive adaptive sigma scale";
+    EXPECT_GT(opts.knownPosePriorRotationSigmaDegrees, 0.0) << "Soft pose prior needs a positive rotation sigma";
 }

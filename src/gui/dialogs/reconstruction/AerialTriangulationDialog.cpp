@@ -108,7 +108,9 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_keypointLimitSpin->setRange(0, 1000000);
     _ui->m_keypointLimitSpin->setValue(40000);
     _ui->m_tiepointLimitSpin->setRange(0, 1000000);
-    _ui->m_tiepointLimitSpin->setValue(4000);
+    _ui->m_tiepointLimitSpin->setValue(8000);
+    _ui->m_tiepointLimitSpin->setToolTip(
+        QStringLiteral("每幅影像进入多视重建的连接点上限；默认 8000，优先保留长轨迹并按像面网格均匀分布。"));
     _ui->m_excludeFixedTiePointsCheck->setChecked(true);
     _ui->m_guidedImageMatchingCheck->setChecked(false);
     _ui->m_siftRatioSpin->setValue(0.98);
@@ -149,7 +151,7 @@ void AerialTriangulationDialog::setupUi()
     {
         xjw::gui::dialogs::configureWorkflowCheckBox(check_box);
     }
-    xjw::gui::dialogs::configureWorkflowButtonBox(_ui->m_buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(_ui->m_buttonBox, tr("开始"));
     setReferencePreselectionAvailable(false, 0, 0);
     setAdvancedExpanded(false);
 
@@ -299,7 +301,7 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_saveAfterEachStepCheck->setChecked(
         settings.value(QStringLiteral("save_project_after_each_step")).toBool(false));
     _ui->m_keypointLimitSpin->setValue(settings.value(QStringLiteral("keypoint_limit")).toInt(40000));
-    _ui->m_tiepointLimitSpin->setValue(settings.value(QStringLiteral("tiepoint_limit")).toInt(4000));
+    _ui->m_tiepointLimitSpin->setValue(settings.value(QStringLiteral("tiepoint_limit")).toInt(8000));
     setComboByData(_ui->m_maskApplyCombo,
                    settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("keypoints")));
     _ui->m_excludeFixedTiePointsCheck->setChecked(

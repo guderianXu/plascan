@@ -10,7 +10,7 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 - OpenCV、TensorRT、GDAL、libtiff、libzip、OpenMP、GTest 等依赖。
 - CUDA 可选加速，主要用于深度学习特征、匹配、MVS 和 dense match。
 - Python 脚本用于模型导出、深度学习特征提取和辅助处理。
-- `3rdparty/plapoint` 和 `3rdparty/plamatrix` 两个 git submodule。
+- `3rdparty/plapoint`、`3rdparty/plamatrix`、Qt、OpenCV、GDAL、AprilTag 和 PoissonRecon 等固定 git submodule。
 
 先读现有实现、测试和文档，再改动。优先延续当前模块边界、命名方式和 UI 行为，避免无关重构。
 
@@ -94,26 +94,26 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 
 - 项目代码必须同时兼容 Windows/MSVC 和 Linux/GCC，但本地只要求完成当前原生平台的构建和测试门禁：Windows 使用 MSVC，Linux 使用 GCC，macOS 使用仓库现有 Apple Clang preset。Windows 不需要为了提交或推送额外启动 WSL/GCC；Linux/GCC 可由 CI 或专门环境补充。
 - 只能报告实际完成的平台验证。不能用单个平台结果声称 MSVC、GCC 或 Apple Clang 均已通过；修复明确的跨平台、编译器或链接问题时，应在相关平台分别验证，无法执行的平台要写明原因。
-- 优先使用 `CMakePresets.json` 和 `scripts/env/configure_with_env.py`，不要用依赖当前目录、默认生成器或 `nproc` 的临时命令替代标准入口。正式构建树位于 `build/<preset>/`。环境未初始化时按 `scripts/env/README.md` 配置 `.venv` 和 vcpkg，不要为单次构建创建另一套环境。
+- 优先使用 `CMakePresets.json` 和 `scripts/env/configure_with_env.py`，不要用依赖当前目录、默认生成器或 `nproc` 的临时命令替代标准入口。正式构建树默认位于 `build/<preset>/`；需要更换整套构建目录时使用统一脚本的 `--build-dir <path>`，不要手工拆散源码依赖和主工程路径。环境未初始化时按 `scripts/env/README.md` 配置 `.venv` 和 vcpkg，不要为单次构建创建另一套环境。
 
 当前原生平台的 CPU Release 配置、构建和测试命令如下：
 
 Linux：
 
 ```bash
-python3 scripts/env/configure_with_env.py --preset linux-vcpkg-release --build --test
+python3 scripts/env/configure_with_env.py --source-deps --build --test
 ```
 
 macOS Apple Silicon：
 
 ```bash
-python scripts/env/configure_with_env.py --preset macos-vcpkg-release --build --test
+python scripts/env/configure_with_env.py --source-deps --build --test
 ```
 
 Windows PowerShell：
 
 ```powershell
-python scripts\env\configure_with_env.py --preset windows-vcpkg-release --build --test
+python scripts\env\configure_with_env.py --source-deps --build --test
 ```
 
 CUDA、TensorRT、OpenCL 或打包任务使用 `CMakePresets.json` 中对应的专用 preset，不要在 CPU preset 上临时堆叠一组难以复现的 `-D` 参数。
@@ -122,15 +122,15 @@ CUDA、TensorRT、OpenCL 或打包任务使用 `CMakePresets.json` 中对应的�
 
 - 开发过程中先构建受影响 target，并运行最相关的测试以快速反馈。已有构建树可通过统一入口筛选测试，例如：
   ```bash
-  python scripts/env/run_tests.py --test-dir build/linux-vcpkg-release --output-on-failure -R 'SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm|Terrain|Gui'
+  python scripts/env/run_tests.py --test-dir build/linux-source-release --output-on-failure -R 'SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm|Terrain|Gui'
   ```
   Windows 或 macOS 将 `--test-dir` 替换为当前实际 preset 目录。也可直接运行已有测试二进制，但它只能作为定向反馈，不能替代要求的全量测试。
 - 不需要 commit 时，验证范围与改动风险匹配即可。用户要求 commit 时，在提交前完成受影响目标、相关测试和静态检查，并重新检查差异。
 - 用户明确要求 push，且改动涉及 C++、CUDA、CMake 或测试代码时，除定向测试外还必须在当前原生平台运行可执行的本地全量测试：
   ```bash
-  python scripts/env/run_tests.py --test-dir build/linux-vcpkg-release --output-on-failure
+  python scripts/env/run_tests.py --test-dir build/linux-source-release --output-on-failure
   ```
-  使用当前实际 preset 目录；脚本默认使用一半逻辑核。开发阶段的 `-R`、`--gtest_filter` 或单个测试程序不能作为 push 前的唯一测试依据。
+  使用当前实际 preset 目录；脚本默认使用全部逻辑线程。开发阶段的 `-R`、`--gtest_filter` 或单个测试程序不能作为 push 前的唯一测试依据。
 - 本地门禁存在失败、未解释跳过、测试发现错误或运行环境缺失时，不得 push。先修复代码或环境并重新验证；确因外部依赖无法完成时，停止推送并向用户说明具体阻塞，只有获得明确许可后才能例外处理。
 - push 后检查该 commit 对应的 GitHub Actions / required checks 并等待全部完成。CI 失败时读取日志，在原任务范围内修复后重新完成本地验证和 push；若修复需要扩大权限或范围，或因服务、额度、密钥等外部原因受阻，停止并明确报告。
 

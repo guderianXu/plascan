@@ -27,7 +27,11 @@ function(plascan_configure_dependency_paths)
             "PlaScan requires VCPKG_TARGET_TRIPLET to be set by the selected preset.")
     endif()
 
+    set(_plascan_dependency_provider "vcpkg(manifest,${VCPKG_TARGET_TRIPLET})")
+    if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+        string(APPEND _plascan_dependency_provider
+            "+source(Qt/OpenCV/GDAL/AprilTag:${PLASCAN_SOURCE_DEPENDENCY_PREFIX})")
+    endif()
     set(PLASCAN_DEPENDENCY_PROVIDER_SUMMARY
-        "vcpkg(manifest,${VCPKG_TARGET_TRIPLET})"
-        PARENT_SCOPE)
+        "${_plascan_dependency_provider}" PARENT_SCOPE)
 endfunction()

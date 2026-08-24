@@ -1,0 +1,191 @@
+{
+  "dataset_id": "s2p_pleiades_rpc_stereo_pair",
+  "title": "S2P Pléiades 8-bit TIFF stereo pair with embedded RPC00B cameras",
+  "source": {
+    "repository": "https://github.com/centreborelli/s2p",
+    "commit": "75ea354dc7de658bf696eabf11944e92c65412c5",
+    "path": "tests/data/input_pair",
+    "repository_license": "BSD-3-Clause",
+    "imagery_rights_note": "The upstream data directory has no separate statement granting redistribution rights for the underlying Pléiades imagery."
+  },
+  "sensor": {
+    "family": "Pléiades",
+    "platform_from_embedded_gml": "PHR1B",
+    "product_ids": [
+      "DS_PHR1B_201306290637144_FR1_PX_E055S22_0919_01724",
+      "DS_PHR1B_201306290637389_FR1_PX_E055S22_0919_01764"
+    ],
+    "approximate_region": {
+      "longitude_deg_east": 55.65,
+      "latitude_deg_north": -21.23
+    }
+  },
+  "raster": {
+    "driver": "GTiff",
+    "band_count": 1,
+    "data_type": "uint8",
+    "map_projection_crs": null,
+    "geometry": "raw sensor view; geolocation is defined by RPC rather than an affine map transform",
+    "images": {
+      "Images/img_01.tif": {
+        "width": 1024,
+        "height": 1024
+      },
+      "Images/img_02.tif": {
+        "width": 1031,
+        "height": 1102
+      }
+    }
+  },
+  "radiometric_conversion": {
+    "source_data_type": "uint16",
+    "output_data_type": "uint8",
+    "method": "shared linear 1%-99% clip",
+    "input_low": 112,
+    "input_high": 406,
+    "output_low": 0,
+    "output_high": 255,
+    "formula": "round(clamp((value - 112) / (406 - 112), 0, 1) * 255)",
+    "rpc_and_gml_preserved": true
+  },
+  "rpc": {
+    "storage": "embedded GDAL RPC metadata domain",
+    "model": "RPC00B",
+    "metadata_key_count_per_image": 16,
+    "normalization_parameter_count_per_image": 10,
+    "coefficient_groups_per_image": 4,
+    "coefficients_per_group": 20,
+    "height_reference": "WGS84 ellipsoidal height in metres",
+    "height_offset_m": 1295.0,
+    "height_scale_m": 1315.0,
+    "explicit_export": "Metadata/rpc_parameters.json"
+  },
+  "validation": {
+    "reader": "rasterio/GDAL",
+    "rpc_roundtrip_at_height_offset": "approximately 0.5 px due to GDAL pixel-centre convention",
+    "opencv_version": "5.0.0",
+    "feature": "SIFT",
+    "maximum_features_per_image": 10000,
+    "lowe_ratio": 0.75,
+    "fundamental_ransac_threshold_px": 1.5,
+    "ratio_matches": 2540,
+    "fundamental_inliers": 2423,
+    "inlier_rate_percent": 95.39
+  },
+  "products": {
+    "generator": "rpc_stereo_products_cli",
+    "coordinate_system": "EPSG:32740",
+    "grid_resolution_m": 2.0,
+    "width": 261,
+    "height": 270,
+    "bounds": {
+      "left": 359666.96875,
+      "bottom": 7651463.0,
+      "right": 360188.96875,
+      "top": 7652003.0
+    },
+    "accepted_stereo_points": 3452,
+    "median_reprojection_error_px": 0.25452104221281663,
+    "direct_observation_cells": 3169,
+    "direct_coverage_fraction": 0.0449694905633603,
+    "dem_valid_pixels": 70470,
+    "dem_elevation_m": {
+      "minimum": 2267.841064453125,
+      "median": 2324.18408203125,
+      "maximum": 2377.307373046875,
+      "vertical_reference": "WGS84 ellipsoidal height"
+    },
+    "dom_valid_pixels": 70214,
+    "dom_coverage_fraction": 0.9963672484745282,
+    "all_geotiff_grids_aligned": true,
+    "method_note": "Sparse SIFT tie points are intersected with both RPC00B cameras, robustly filtered, gridded, and hole-filled. Quality rasters mark only cells with direct stereo observations."
+  },
+  "files": [
+    {
+      "path": "Images/img_01.tif",
+      "upstream_git_blob_sha1": "cd68b1c851611ec5cf459d803daaf66f179d4778",
+      "upstream_uint16_sha256": "791d9bc7ffa12555bcc29d76879020a13d72506b6b6169bc25984e387571a51f",
+      "bytes": 837893,
+      "sha256": "44e3ac2ec2e4c0d2eba5b7b36f42407289856a2336aa586be11b1207a68c9359"
+    },
+    {
+      "path": "Images/img_02.tif",
+      "upstream_git_blob_sha1": "f8178fb67cb1e974fa0c4ab2e2b9c14e9b20542b",
+      "upstream_uint16_sha256": "31217ea96671618dad477c5f9d14c6762ee242e56fb3e7475c6cc0a8f61af62c",
+      "bytes": 890801,
+      "sha256": "7b593b064609465da5dd77eba88f896f69dff7181160423e436d3f2e94e77218"
+    },
+    {
+      "path": "Metadata/rpc_parameters.json",
+      "bytes": 6293,
+      "sha256": "d9acab0396ba49f4b86585fa3a8946aa9d1c2306d9981b2fb1f3e601d74375f5"
+    },
+    {
+      "path": "Metadata/upstream_s2p_config.json",
+      "upstream_git_blob_sha1": "ac0a8d6b7e2028c12b73a344c8d6cf48188ea1ec",
+      "bytes": 406,
+      "sha256": "a5f5de1f8894572b2302de801985542474208101ad9982f93057c823761a354d"
+    },
+    {
+      "path": "LICENSE.s2p.txt",
+      "upstream_git_blob_sha1": "c6194184524573aaad087234cf2c9903b7cae604",
+      "bytes": 1531,
+      "sha256": "1940bbecff514e38810689856a68b40a535810bb68e3f28a516c43336fdd93fd"
+    },
+    {
+      "path": "Products/dem.tif",
+      "bytes": 232527,
+      "sha256": "a62e47d16cd384ab09110de03b606fabbd9b7fb1138eb274913d80681bd67aaf"
+    },
+    {
+      "path": "Products/dem_confidence.tif",
+      "bytes": 24365,
+      "sha256": "0816cb46f1e7066785df9430918ed0c89d2f24a34006a657497b628c4beed492"
+    },
+    {
+      "path": "Products/dem_count.tif",
+      "bytes": 8556,
+      "sha256": "768552b0dbe96335d4839278a8d557674180c7d93af76edc06bb5173ebfa257b"
+    },
+    {
+      "path": "Products/dem_coverage.tif",
+      "bytes": 5189,
+      "sha256": "a449fae4bbb783e9c7d12852deba45bc0d36297332ec0ff657e6c6248aa33df1"
+    },
+    {
+      "path": "Products/dem_error.tif",
+      "bytes": 25670,
+      "sha256": "56df0bfc9ea688b2709ecb9e16657515caa79a890f0720eef78e9b46766e764c"
+    },
+    {
+      "path": "Products/dem_preview.png",
+      "bytes": 24796,
+      "sha256": "65985e1ddbc2c44e95ec1c61bdd7422d9439e705377adbef3bcef64e8711aa87"
+    },
+    {
+      "path": "Products/dom.tif",
+      "bytes": 133899,
+      "sha256": "00b04ddffd59482eb3dc31154b2b9a6629f9c6bd30ea5af1d68e83a515dfebc0"
+    },
+    {
+      "path": "Products/dom_preview.png",
+      "bytes": 180876,
+      "sha256": "161b3decd3677e5e32db05fba263052593cd9d2b8192d8fb931b36b5bd1dc92a"
+    },
+    {
+      "path": "Products/rpc_dom_report.json",
+      "bytes": 808,
+      "sha256": "2ad27a240215cd7399b88ad1d3e6d00396db170b8a441bfda4382b7ba34448bd"
+    },
+    {
+      "path": "Products/stereo_dem_report.json",
+      "bytes": 1503,
+      "sha256": "ce3da8d1eb433a23b0a4ea4533a988ee2ed342fa75e2ff2a215e8897eaa86bf3"
+    },
+    {
+      "path": "Products/stereo_points.ply",
+      "bytes": 2977170,
+      "sha256": "0e688b4b305fdb42587e02c65fd62bb58cc19fc9aca37e4a13df0430818a1adb"
+    }
+  ]
+}

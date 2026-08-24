@@ -17,6 +17,7 @@ namespace xjw::image_matching
     {
     public:
         explicit AutoSiftAlgorithm(ImageMatchingRuntimeConfig config);
+        ~AutoSiftAlgorithm() override;
 
         ImageMatchingAlgorithmDescriptor descriptor() const override;
         FeatureSet extract(const ImageFeatureInput& input) const override;

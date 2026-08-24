@@ -368,7 +368,11 @@ void ReferencePanelWidget::updateActionAvailability()
     _importCameraAction->setEnabled(hasProject && _cameraRepository);
     _importMarkerAction->setEnabled(hasProject && _markerController);
     _exportCameraAction->setEnabled(hasProject && hasCameraReferences);
-    _toggleCameraAction->setEnabled(!selectedCameraUuid().isEmpty());
+    const QModelIndex cameraIndex = _cameraTree ? _cameraTree->currentIndex() : QModelIndex();
+    const bool editableCameraReference = cameraIndex.isValid()
+        && cameraIndex.data(xjw::gui::reference::CameraReferenceTreeModel::NodeTypeRole).toInt()
+            == static_cast<int>(xjw::gui::reference::CameraReferenceTreeModel::NodeType::Camera);
+    _toggleCameraAction->setEnabled(editableCameraReference && !selectedCameraUuid().isEmpty());
     _editMarkerAction->setEnabled(!selectedMarkerId().isEmpty());
     _settingsAction->setEnabled(hasProject && _cameraRepository);
 }

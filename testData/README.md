@@ -2,6 +2,21 @@
 
 This directory contains small built-in fixtures and optional downloaded photogrammetry benchmark datasets.
 
+## Built-in aerial stereo pair
+
+`aerial_stereo_pair/` contains two consecutive 1600×1067 nadir aerial images, matching TSAI pinhole camera files,
+WGS84 GNSS/IMU records, and ready-to-use `image_camera.lis` / `images.lis` inputs. The pair has an approximately
+25.20 m acquisition baseline and strong verified feature overlap. See `aerial_stereo_pair/README.md` for coordinate
+frame details, validation results, source attribution, and redistribution notes.
+
+## Built-in TIFF RPC stereo pair
+
+`rpc_stereo_pair/` contains two 8-bit Pléiades TIFF satellite images with complete RPC00B parameters embedded in
+the GDAL `RPC` metadata domain. An explicit JSON export of all normalization values and 4×20 coefficients is included
+for inspection. Both images use the same documented 1%–99% linear stretch from the upstream 16-bit containers. The
+`Products/` subdirectory contains a PlaScan-generated 2 m georeferenced DEM, its quality rasters, and an RPC-orthorectified
+RGBA DOM. See `rpc_stereo_pair/README.md` for geometry, validation, source, and licensing details.
+
 ## Download benchmark datasets
 
 Use `download_photogrammetry_testdata.py` to download curated public benchmark data into

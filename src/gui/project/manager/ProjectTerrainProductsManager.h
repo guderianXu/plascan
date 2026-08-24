@@ -44,6 +44,10 @@ signals:
                                const QJsonObject &result);
 
 private:
+    void startRpcStereoDemAsync(
+        const xjw::gui::project::DemGenerationRequest &request);
+    void startRpcDomAsync(
+        const xjw::gui::project::OrthoGenerationRequest &request);
     void startSmallBodyGlobalAsync(
         const xjw::gui::project::DemGenerationRequest &request);
 

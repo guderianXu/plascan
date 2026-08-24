@@ -60,7 +60,7 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     }
     xjw::gui::dialogs::configureWorkflowInputWidget(_seamsMarginSpin);
     xjw::gui::dialogs::configureWorkflowInputWidget(_paddingSpin);
-    xjw::gui::dialogs::configureWorkflowButtonBox(form.m_buttonBox);
+    xjw::gui::dialogs::configureWorkflowButtonBox(form.m_buttonBox, tr("生成"));
 
     auto changed = [this]() { emitSettingsNow(); };
     connect(_texSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);

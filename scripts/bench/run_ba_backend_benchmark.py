@@ -176,7 +176,7 @@ def main() -> int:
         "--backends",
         default=(
             "legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,"
-            "ceres_cpu,ceres_cuda,native_cuda,auto"
+            "auto"
         ),
     )
     parser.add_argument("--repeat", default=3, type=int)

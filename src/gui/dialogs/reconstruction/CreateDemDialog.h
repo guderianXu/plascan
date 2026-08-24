@@ -3,14 +3,17 @@
 #include "ProjectTerrainRequests.h"
 
 #include <QDialog>
+#include <QStringList>
 
 class QLabel;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLineEdit;
+class QListWidget;
 class QPushButton;
 class QProgressBar;
+class QSpinBox;
 class QStackedWidget;
 
 // CreateDemDialog — 从点云生成局部 DEM，或从体固连三角网生成全球 DEM/DOM。
@@ -20,6 +23,7 @@ class CreateDemDialog : public QDialog
 
 public:
     explicit CreateDemDialog(QWidget *parent = nullptr);
+    void setAvailableImages(const QStringList &images);
     void reject() override;
 
     // 流水线进度更新（由外部调用）
@@ -32,6 +36,8 @@ signals:
 
 private slots:
     void onBrowseDenseCloud();
+    void selectAllStereoImages();
+    void clearStereoImages();
     void onBrowseSurface();
     void onRunClicked();
 
@@ -41,6 +47,9 @@ private:
     void refreshRunButton();
     void refreshModeUi();
     bool isSmallBodyGlobalMode() const;
+    bool isImageStereoMode() const;
+    QStringList selectedStereoImages() const;
+    void refreshStereoSelection();
 
     bool _running = false;
     bool _runningCancelable = false;
@@ -52,6 +61,14 @@ private:
 
     QLineEdit *_denseEdit = nullptr;
     QPushButton *_browseDenseBtn = nullptr;
+
+    QListWidget *_stereoImageList = nullptr;
+    QLabel *_stereoSelectionLabel = nullptr;
+    QPushButton *_selectAllImagesBtn = nullptr;
+    QPushButton *_clearImagesBtn = nullptr;
+    QDoubleSpinBox *_rpcResolutionSpin = nullptr;
+    QSpinBox *_rpcMaximumFeaturesSpin = nullptr;
+    QDoubleSpinBox *_rpcMaximumErrorSpin = nullptr;
 
     QLineEdit *_surfaceEdit = nullptr;
     QPushButton *_browseSurfaceBtn = nullptr;

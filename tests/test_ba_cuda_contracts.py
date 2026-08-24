@@ -14,43 +14,33 @@ class BaCudaContractsTest(unittest.TestCase):
     def read_text(self, relative_path: str) -> str:
         return read_text(relative_path)
 
-    def test_windows_cuda_build_keeps_ceres_as_opt_in_reference(self):
+    def test_build_configuration_has_no_ceres_backend(self):
         script = read_text("scripts/build_win/build_windows_cuda.ps1")
-
-        self.assertIn("EnableCeresCudaBa", script)
-        self.assertIn('[bool] $EnableCeresCudaBa = $false', script)
-        self.assertIn('"ceres-cuda;ceres-reference"', script)
-        self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=ON", script)
-        self.assertIn("PLASCAN_ENABLE_CERES_REFERENCE=OFF", script)
-        self.assertIn("manifestFeaturesValue", script)
-        self.assertIn("VCPKG_MANIFEST_FEATURES=$manifestFeaturesValue", script)
-
         manifest = json.loads(read_text("vcpkg.json"))
-        self.assertEqual([], manifest["default-features"])
-        reference_dependencies = manifest["features"]["ceres-reference"][
-            "dependencies"
-        ]
-        self.assertTrue(
-            any(
-                dependency.get("name") == "ceres"
-                and "eigensparse" in dependency.get("features", [])
-                and "lapack" not in dependency.get("features", [])
-                and "suitesparse" not in dependency.get("features", [])
-                for dependency in reference_dependencies
-            )
-        )
 
-    def test_aerial_triangulation_cuda_requests_auto_ba_with_cuda_thresholds(self):
+        self.assertNotIn("ceres", script.lower())
+        self.assertEqual([], manifest["default-features"])
+        self.assertNotIn("features", manifest)
+
+    def test_ba_cuda_thresholds_have_one_default_source(self):
+        options = read_text("src/core/bundle_adjust/BundleAdjustOptions.h")
+        cli = read_text("src/cli/reconstruction/cli_bundle_adjust.cpp")
         source = read_text(
             "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
         )
+        line_scan = read_text("src/core/lidar/PlanetaryLineScanBundleAdjust.h")
 
+        self.assertIn("kDefaultMinPlaMatrixGpuCameras = 24;", options)
+        self.assertIn("kDefaultMinPlaMatrixGpuObservations = 30000;", options)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuCameras", cli)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuObservations", cli)
         self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
-        self.assertIn("options->baOptions.nativeCudaMaxPointStepNorm = 1.0;", source)
-        self.assertIn("options->baOptions.minCeresCudaObservations = 300000;", source)
-        self.assertIn("options->baOptions.minCeresCpuObservations = 50000;", source)
+        self.assertIn("options->baOptions.backend = BABackend::PlaMatrixCpu;", source)
+        self.assertNotIn("minPlaMatrixGpuObservations = 300000", source)
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuCameras", line_scan)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuObservations", line_scan)
 
     def test_adaptive_camera_model_declares_full_model_then_filters_parameters(self):
         source = read_text(
@@ -84,35 +74,12 @@ class BaCudaContractsTest(unittest.TestCase):
 
         self.assertIn('toString(QStringLiteral("auto"))', project_manager)
         self.assertIn('opts.baOpt.backend = xjw::BABackend::Auto;', project_manager)
-        self.assertIn('opts.baOpt.minCeresCudaObservations', project_manager)
-        self.assertIn('opts.baOpt.minCeresCpuObservations', project_manager)
-        self.assertIn('opts.baOpt.maxCeresPointOnlyObservations', project_manager)
+        self.assertIn('opts.baOpt.minPlaMatrixGpuObservations', project_manager)
+        self.assertIn('opts.baOpt.maxInitialTrackRms', project_manager)
         self.assertIn('opts.baOpt.enableBackendQualityGate', project_manager)
 
-    def test_native_cuda_backend_is_exposed(self):
-        header = self.read_text("src/core/bundle_adjust/BundleAdjust.h")
-        self.assertIn("NativeCuda", header)
-        self.assertIn("nativeCudaMaxPointStepNorm", header)
-
-    def test_service_reports_native_cuda_metrics(self):
-        source = self.read_text("src/gui/project/services/BundleAdjustService.cpp")
-        self.assertIn("ba_native_cuda_initial_cost", source)
-        self.assertIn("ba_native_cuda_final_cost", source)
-        self.assertIn("ba_native_cuda_active_observations", source)
-        self.assertIn("ba_native_cuda_kernel_seconds", source)
-        self.assertIn("ba_native_cuda_upload_seconds", source)
-        self.assertIn("ba_native_cuda_staging_seconds", source)
-        self.assertIn("ba_native_cuda_release_seconds", source)
-
-    def test_benchmark_supports_native_cuda(self):
-        source = self.read_text("src/core/bundle_adjust/tools/ba_backend_benchmark.cpp")
-        self.assertIn("native_cuda", source)
-        self.assertIn("BABackend::NativeCuda", source)
-        self.assertIn("native_kernel_seconds", source)
-        self.assertIn("native_staging_seconds", source)
-
     def test_plamatrix_backend_is_exposed_with_comparison_metrics(self):
-        header = self.read_text("src/core/bundle_adjust/BundleAdjust.h")
+        header = self.read_text("src/core/bundle_adjust/BundleAdjustTypes.h")
         benchmark = self.read_text(
             "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp"
         )

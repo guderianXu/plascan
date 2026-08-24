@@ -6,8 +6,9 @@
 #include "io/PathIO.h"
 #include "result/OperationResult.h"
 
-#include <opencv2/imgproc.hpp>
+#include <opencv2/geometry/2d.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <QDir>
 #include <QFileInfo>

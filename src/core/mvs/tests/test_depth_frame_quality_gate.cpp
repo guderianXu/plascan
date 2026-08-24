@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 
@@ -52,25 +53,238 @@ xjw::mvs::DepthFrameQualityInput reliableCustomInput()
     return input;
 }
 
+void applyConsistencyPublicationSummary(const xjw::mvs::DepthConsistencyPublicationSummary& summary,
+                                        xjw::mvs::DepthFrameQualityInput& input)
+{
+    xjw::mvs::applyDepthConsistencyPublicationSummary(summary, &input);
+}
+
 } // namespace
 
-TEST(DepthFrameQualityGateTest,
-     AcceptsReliableOrbitalCoreAfterLargeHypothesisReduction)
+TEST(DepthFrameQualityGateTest, ConsistencyPublicationKeepsObservedAndPublishedRetentionSeparate)
 {
-    const auto decision = xjw::mvs::evaluateDepthFrame(
-        reliableOrbitalInput());
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 80, 1000, true, true);
 
-    EXPECT_EQ(decision.acceptance,
-              xjw::mvs::DepthFrameAcceptance::Accepted);
-    EXPECT_EQ(std::find(
-                  decision.reasons.begin(),
-                  decision.reasons.end(),
-                  std::string("destructive_fusion_postprocess_collapse")),
+    EXPECT_FLOAT_EQ(summary.observedRetentionRatio, 0.08f);
+    EXPECT_FLOAT_EQ(summary.publishedRetentionRatio, 1.0f);
+    EXPECT_TRUE(summary.originalDepthFallbackApplied);
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_EQ(summary.diagnosticReason, "original_depth_fallback_after_consistency_collapse");
+}
+
+TEST(DepthFrameQualityGateTest, ConsistencyRepairGrowthIsValidAndRetentionIsCapped)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 1025, 1025, false, true);
+
+    EXPECT_FLOAT_EQ(summary.observedRetentionRatio, 1.0f);
+    EXPECT_FLOAT_EQ(summary.publishedRetentionRatio, 1.0f);
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_TRUE(summary.diagnosticReason.empty());
+}
+
+TEST(DepthFrameQualityGateTest, RepairGrowthWithFallbackCannotBecomePrimary)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 1025, 1000, true, true);
+
+    EXPECT_FLOAT_EQ(summary.observedRetentionRatio, 1.0f);
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_EQ(summary.diagnosticReason, "original_depth_fallback_not_primary");
+}
+
+TEST(DepthFrameQualityGateTest, NonCollapsedFallbackIsValidationOnlyAtBest)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 400, 1000, true, true);
+
+    EXPECT_FLOAT_EQ(summary.observedRetentionRatio, 0.40f);
+    EXPECT_FLOAT_EQ(summary.publishedRetentionRatio, 1.0f);
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_EQ(summary.diagnosticReason, "original_depth_fallback_not_primary");
+}
+
+TEST(DepthFrameQualityGateTest, ConsistencyFallbackFailsClosedForEverySceneProfile)
+{
+    const std::array<xjw::mvs::MvsSceneProfile, 3> profiles = {xjw::mvs::MvsSceneProfile::AerialTerrain,
+                                                               xjw::mvs::MvsSceneProfile::Custom,
+                                                               xjw::mvs::MvsSceneProfile::OrbitalObject};
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 80, 1000, true, true);
+
+    for (const auto profile : profiles)
+    {
+        SCOPED_TRACE(static_cast<int>(profile));
+        auto input = profile == xjw::mvs::MvsSceneProfile::Custom ? reliableCustomInput() : reliableOrbitalInput();
+        input.sceneProfile = profile;
+        input.fusionPostprocessRetentionRatio = 1.0f;
+        applyConsistencyPublicationSummary(summary, input);
+
+        const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+        EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+        EXPECT_NE(std::find(decision.reasons.begin(),
+                            decision.reasons.end(),
+                            std::string("original_depth_fallback_after_consistency_collapse")),
+                  decision.reasons.end());
+    }
+}
+
+TEST(DepthFrameQualityGateTest, ConsistencyFallbackCannotEnterPrimaryForAnySceneProfile)
+{
+    const std::array<xjw::mvs::MvsSceneProfile, 3> profiles = {xjw::mvs::MvsSceneProfile::AerialTerrain,
+                                                               xjw::mvs::MvsSceneProfile::Custom,
+                                                               xjw::mvs::MvsSceneProfile::OrbitalObject};
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 500, 1000, true, true);
+
+    for (const auto profile : profiles)
+    {
+        SCOPED_TRACE(static_cast<int>(profile));
+        auto input = profile == xjw::mvs::MvsSceneProfile::Custom ? reliableCustomInput() : reliableOrbitalInput();
+        input.sceneProfile = profile;
+        input.multiViewConsistency = 0.95f;
+        input.fusionPostprocessRetentionRatio = 1.0f;
+        applyConsistencyPublicationSummary(summary, input);
+
+        const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+        EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+        EXPECT_NE(std::find(decision.reasons.begin(),
+                            decision.reasons.end(),
+                            std::string("original_depth_fallback_not_primary")),
+                  decision.reasons.end());
+    }
+}
+
+TEST(DepthFrameQualityGateTest, FallbackFlagAloneStillCannotPromoteRestoredCoverage)
+{
+    auto input = reliableOrbitalInput();
+    input.consistencyPublicationFallbackApplied = true;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(
+        std::find(decision.reasons.begin(), decision.reasons.end(), std::string("original_depth_fallback_not_primary")),
+        decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest, InvalidConsistencyPublicationCountsFailClosedWithDiagnostics)
+{
+    struct InvalidCountCase
+    {
+        int pre = 0;
+        int observed = 0;
+        int published = 0;
+        xjw::mvs::DepthFrameAcceptance expectedCeiling = xjw::mvs::DepthFrameAcceptance::Rejected;
+        const char* expectedReason = nullptr;
+    };
+    const std::array<InvalidCountCase, 5> cases = {{
+        {0, 0, 0, xjw::mvs::DepthFrameAcceptance::Rejected, "invalid_consistency_pre_valid_count"},
+        {-1, 0, 0, xjw::mvs::DepthFrameAcceptance::Rejected, "invalid_consistency_pre_valid_count"},
+        {100, -1, 100, xjw::mvs::DepthFrameAcceptance::Rejected, "invalid_consistency_observed_valid_count"},
+        {100, 80, -1, xjw::mvs::DepthFrameAcceptance::Rejected, "invalid_consistency_published_valid_count"},
+        {100,
+         80,
+         79,
+         xjw::mvs::DepthFrameAcceptance::ValidationOnly,
+         "consistency_publication_count_mismatch_without_fallback"},
+    }};
+
+    for (const InvalidCountCase& test_case : cases)
+    {
+        SCOPED_TRACE(test_case.expectedReason);
+        const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(
+            test_case.pre, test_case.observed, test_case.published, false, true);
+
+        EXPECT_EQ(summary.acceptanceCeiling, test_case.expectedCeiling);
+        EXPECT_EQ(summary.diagnosticReason, test_case.expectedReason);
+    }
+}
+
+TEST(DepthFrameQualityGateTest, IncompleteOriginalDepthFallbackIsRejected)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 80, 999, true, true);
+
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_EQ(summary.diagnosticReason, "consistency_fallback_did_not_restore_pre_count");
+    auto input = reliableOrbitalInput();
+    applyConsistencyPublicationSummary(summary, input);
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_NE(std::find(decision.reasons.begin(), decision.reasons.end(), summary.diagnosticReason),
               decision.reasons.end());
 }
 
-TEST(DepthFrameQualityGateTest,
-     StillRejectsOrbitalFrameWhenRetainedCoreActuallyCollapses)
+TEST(DepthFrameQualityGateTest, NormalConsistencyPublicationPreservesExistingAcceptedDecision)
+{
+    auto input = reliableOrbitalInput();
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 950, 950, false, true);
+    applyConsistencyPublicationSummary(summary, input);
+
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_TRUE(summary.diagnosticReason.empty());
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_EQ(decision.reasons, std::vector<std::string>({"quality_gate_passed"}));
+}
+
+TEST(DepthFrameQualityGateTest, UnavailableSingleViewConsistencyDoesNotBecomeZeroEvidence)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(-1, -1, -1, false, false);
+
+    EXPECT_FLOAT_EQ(summary.observedRetentionRatio, -1.0f);
+    EXPECT_FLOAT_EQ(summary.publishedRetentionRatio, -1.0f);
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_TRUE(summary.diagnosticReason.empty());
+
+    auto input = reliableOrbitalInput();
+    input.sourceViewCount = 0;
+    input.validCoverage = 1.0f;
+    input.meanConfidence = 0.05f;
+    input.multiViewConsistencyAvailable = true;
+    input.multiViewConsistency = 0.0f;
+    applyConsistencyPublicationSummary(summary, input);
+    EXPECT_FALSE(input.multiViewConsistencyAvailable);
+    EXPECT_FLOAT_EQ(input.multiViewConsistency, 0.0f);
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(std::find(decision.reasons.begin(), decision.reasons.end(), std::string("low_confidence_full_coverage")),
+              decision.reasons.end())
+        << "Unavailable single-view consistency must not become synthetic zero evidence";
+}
+
+TEST(DepthFrameQualityGateTest, ExpectedConsistencyPublicationCannotUseUnavailableSentinel)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(-1, -1, -1, false, true);
+
+    EXPECT_EQ(summary.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_EQ(summary.diagnosticReason, "invalid_consistency_pre_valid_count");
+
+    const auto invalid_fallback = xjw::mvs::summarizeDepthConsistencyPublication(-1, -1, -1, true, false);
+    EXPECT_EQ(invalid_fallback.acceptanceCeiling, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_EQ(invalid_fallback.diagnosticReason, "invalid_consistency_pre_valid_count");
+}
+
+TEST(DepthFrameQualityGateTest, ZeroObservedConsistencyIsRejectedByQualityGate)
+{
+    const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 0, 0, false, true);
+    auto input = reliableOrbitalInput();
+    applyConsistencyPublicationSummary(summary, input);
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(decision.reasons.begin(), decision.reasons.end(), std::string("depth_consistency_collapse")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest, AcceptsReliableOrbitalCoreAfterLargeHypothesisReduction)
+{
+    const auto decision = xjw::mvs::evaluateDepthFrame(reliableOrbitalInput());
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_EQ(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("destructive_fusion_postprocess_collapse")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest, StillRejectsOrbitalFrameWhenRetainedCoreActuallyCollapses)
 {
     auto input = reliableOrbitalInput();
     input.fusionPostprocessRetentionRatio = 0.23f;

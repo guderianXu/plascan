@@ -12,7 +12,6 @@ namespace {
 
 void configureDialog(QFileDialog &dialog)
 {
-    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
     dialog.setFilter(QDir::AllEntries
                      | QDir::Hidden
                      | QDir::AllDirs

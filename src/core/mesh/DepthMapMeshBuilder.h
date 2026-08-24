@@ -74,6 +74,7 @@ struct DepthMapVisualHullResult
     bool qualityRejected = false;
     int removedSatelliteComponentCount = 0;
     MeshConnectivityStats connectivity;
+    VisualHullExecutionInfo executionInfo;
     QString actualAlgorithm;
     QString fallbackReason;
     QString message;
@@ -97,6 +98,9 @@ struct DepthMapVisualHullOptions
     bool useContinuousSilhouetteField = false;
     int smoothingIterations = 6;
     float smoothingLambda = 0.18f;
+    VisualHullComputeBackend computeBackend = VisualHullComputeBackend::Auto;
+    int computeDeviceIndex = -1;
+    int gpuSlabDepth = 16;
 };
 
 class DepthMapMeshBuilder

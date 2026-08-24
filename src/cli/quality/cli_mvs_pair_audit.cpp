@@ -72,6 +72,7 @@ int main(int argc, char **argv)
 {
     QCoreApplication qt_app(argc, argv);
     CLI::App app{"PlaScan MVS 匹配对几何审计"};
+    cli::configureApp(app);
     std::string match_dir;
     std::string manifest_path;
     std::string output_path;

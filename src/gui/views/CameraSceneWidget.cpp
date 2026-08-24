@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // 文件: CameraSceneWidget.cpp
 // 功能: 可复用相机三维场景控件实现
 // 内容:
@@ -58,6 +58,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <plapoint/io/xyz_io.h>
@@ -153,11 +154,33 @@ struct TiePointMetadataLoadResult
 struct TiePointPrunePreviewResult
 {
     PointSelectionPreparation selection;
+    std::vector<std::uint32_t> candidateIndices;
     int candidateCount = 0;
     QString errorMessage;
 };
 
 constexpr std::size_t kMaximumRenderedPruneCandidates = 1'000'000;
+
+std::vector<std::uint32_t> evenlySampleSortedIndices(
+    const std::vector<std::uint32_t> &indices,
+    std::size_t maximumCount)
+{
+    if (indices.size() <= maximumCount)
+    {
+        return indices;
+    }
+
+    std::vector<std::uint32_t> sampled;
+    sampled.reserve(maximumCount);
+    const std::uint64_t last_source = indices.size() - 1;
+    const std::uint64_t last_sample = maximumCount - 1;
+    for (std::size_t index = 0; index < maximumCount; ++index)
+    {
+        sampled.push_back(indices[static_cast<std::size_t>(
+            static_cast<std::uint64_t>(index) * last_source / last_sample)]);
+    }
+    return sampled;
+}
 
 SceneLoadTaskResult prepareSceneLoad(
     std::shared_ptr<RenderCloud> cloud,
@@ -595,6 +618,7 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
         });
     }
     _activeCameraImagePoseIndex = -1;
+    _imagePipeline.uploadedGeometryKey.clear();
     _cacheDirty = true; // 相机位置变更，缓存失效
     if (!reusable_image_sequence)
     {
@@ -666,7 +690,7 @@ void CameraSceneWidget::setShowCameraThumbnails(bool show)
     if (_showCameraThumbnails != show)
     {
         _showCameraThumbnails = show;
-        if (_showCameraThumbnails)
+        if (_showCameraThumbnails && _showCameras)
         {
             _cameraResourceFailed = false;
             _cameraThumbnailLoadCompleted = 0;
@@ -712,6 +736,10 @@ void CameraSceneWidget::setShowCameraImage(bool show)
         else
         {
             _activeCameraImagePoseIndex = -1;
+            if (_cameraImageLocked)
+            {
+                setCameraImageLocked(false);
+            }
         }
         updateCursor();
         updateCameraOverlay();
@@ -729,12 +757,25 @@ void CameraSceneWidget::setCameraImageDisplayLayer(CameraImageDisplayLayer layer
 
 void CameraSceneWidget::setCameraImageLocked(bool locked)
 {
-    if (_cameraImageLocked == locked)
+    const bool can_lock = _showCameraImage
+        && displayedCameraImagePoseIndex() >= 0;
+    const bool accepted_locked = locked && can_lock;
+    if (_cameraImageLocked == accepted_locked)
     {
+        if (locked != accepted_locked)
+        {
+            emit cameraImageLockedChanged(false);
+        }
         return;
     }
 
-    _cameraImageLocked = locked;
+    _cameraImageLocked = accepted_locked;
+    _leftDragging = false;
+    _middleDragging = false;
+    _rightDragging = false;
+    _leftDragMode = LeftDragMode::None;
+    _dragAxis = HoverAxis::None;
+    _hoverAxis = HoverAxis::None;
     if (_cameraImageLocked)
     {
         refreshLockedCameraImage();
@@ -746,7 +787,9 @@ void CameraSceneWidget::setCameraImageLocked(bool locked)
         _lockedCameraImagePoseIndex = -1;
         updateActiveCameraForView();
     }
+    updateCursor();
     updateCameraOverlay();
+    emit cameraImageLockedChanged(_cameraImageLocked);
 }
 
 void CameraSceneWidget::setHighlightedCameraPath(const QString &imagePath)
@@ -810,12 +853,21 @@ void CameraSceneWidget::clearProjectScene()
     _cameraThumbnailLoadCompleted = 0;
     _activeCameraImagePoseIndex = -1;
     _lockedCameraImagePoseIndex = -1;
+    const bool camera_image_was_locked = _cameraImageLocked;
+    _cameraImageLocked = false;
     _highlightedCameraPath.clear();
+    _pointInteractionMode = PointInteractionMode::Navigation;
+    _manualPruneMode = false;
+    emit pointInteractionModeChanged(_pointInteractionMode);
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = false;
     _cacheDirty = true;
     _gpuDirty = true;
     _thumbnailPipeline.resourcesDirty = true;
+    if (camera_image_was_locked)
+    {
+        emit cameraImageLockedChanged(false);
+    }
     resetView();
 }
 
@@ -888,6 +940,9 @@ void CameraSceneWidget::clearPreparedGeometry()
     _prunePreviewPointBuffer.vertexCount = 0;
     _prunePreviewScalarBuffer.vertexData.clear();
     _prunePreviewScalarBuffer.vertexCount = 0;
+    _tiePointPrunePreviewIndices.clear();
+    _stagedTiePointPruneIndices.clear();
+    _tiePointPruneSourceScalarData.clear();
     _tiePointScalarData.clear();
     _cloudSpatialSummary = {};
 }
@@ -1530,6 +1585,115 @@ int CameraSceneWidget::tiePointPrunePreviewCandidateCount() const
     return _tiePointPrunePreviewCandidateCount;
 }
 
+int CameraSceneWidget::tiePointPruneRemainingPointCount() const
+{
+    const int point_count = tiePointQualityPointCount();
+    return point_count > 0
+        ? point_count - static_cast<int>(_stagedTiePointPruneIndices.size())
+        : 0;
+}
+
+bool CameraSceneWidget::stageTiePointPrunePreview(int *stagedDeletionCount,
+                                                  int *remainingPointCount,
+                                                  QString *errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (_tiePointPrunePreviewCandidateCount <= 0
+        || _tiePointPrunePreviewIndices.size()
+            != static_cast<std::size_t>(_tiePointPrunePreviewCandidateCount))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = tr("当前没有可暂删的候选连接点。");
+        }
+        return false;
+    }
+
+    std::vector<std::uint32_t> staged_indices;
+    staged_indices.reserve(_stagedTiePointPruneIndices.size()
+                           + _tiePointPrunePreviewIndices.size());
+    std::set_union(_stagedTiePointPruneIndices.cbegin(),
+                   _stagedTiePointPruneIndices.cend(),
+                   _tiePointPrunePreviewIndices.cbegin(),
+                   _tiePointPrunePreviewIndices.cend(),
+                   std::back_inserter(staged_indices));
+    if (staged_indices.size() >= _cloud.size())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = tr("不能暂删全部连接点，请调整阈值。");
+        }
+        return false;
+    }
+
+    std::vector<PointVertexIndex> retained_indices;
+    retained_indices.reserve(_cloud.size() - staged_indices.size());
+    std::size_t staged_position = 0;
+    for (std::uint32_t index = 0;
+         index < static_cast<std::uint32_t>(_cloud.size());
+         ++index)
+    {
+        if (staged_position < staged_indices.size()
+            && staged_indices[staged_position] == index)
+        {
+            ++staged_position;
+            continue;
+        }
+        retained_indices.push_back(index);
+    }
+
+    const qsizetype source_scalar_size = static_cast<qsizetype>(
+        _cloud.size() * sizeof(float));
+    if (_stagedTiePointPruneIndices.empty()
+        && _pointScalarBuffer.vertexData.size() == source_scalar_size)
+    {
+        _tiePointPruneSourceScalarData = _pointScalarBuffer.vertexData;
+    }
+    const QByteArray scalar_data = _tiePointPruneSourceScalarData.size()
+            == source_scalar_size
+        ? _tiePointPruneSourceScalarData
+        : QByteArray();
+    PointSelectionPreparation retained = prepareIndexedPointSelection(
+        _preparedPointVertexData,
+        9 * int(sizeof(float)),
+        scalar_data,
+        retained_indices);
+    if (!retained.isValid())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = tr("暂删后的连接点显示数据准备失败。");
+        }
+        return false;
+    }
+
+    clearTiePointPrunePreview();
+    _stagedTiePointPruneIndices = std::move(staged_indices);
+    _pointChunks.clear();
+    _pointBuffer.vertexData = std::move(retained.vertexData);
+    _pointBuffer.vertexCount = retained.pointCount;
+    _pointBuffer.strideBytes = 9 * int(sizeof(float));
+    _pointBuffer.dirty = true;
+    _pointScalarBuffer.vertexData = std::move(retained.scalarData);
+    _pointScalarBuffer.vertexCount = retained.pointCount;
+    _pointScalarBuffer.strideBytes = int(sizeof(float));
+    _pointScalarBuffer.dirty = true;
+    _pointCount = retained.pointCount;
+    if (stagedDeletionCount)
+    {
+        *stagedDeletionCount = static_cast<int>(_stagedTiePointPruneIndices.size());
+    }
+    if (remainingPointCount)
+    {
+        *remainingPointCount = retained.pointCount;
+    }
+    update();
+    return true;
+}
+
 bool CameraSceneWidget::requestTiePointPrunePreview(
     const TiePointPrunePreviewQuery &query,
     QString *errorMessage)
@@ -1582,9 +1746,17 @@ bool CameraSceneWidget::requestTiePointPrunePreview(
     }
     TiePointPrunePreviewRequest request;
     request.vertexData = _preparedPointVertexData;
-    request.scalarData = _pointScalarBuffer.vertexData;
+    const qsizetype source_scalar_size = static_cast<qsizetype>(
+        _cloud.size() * sizeof(float));
+    request.scalarData = _tiePointPruneSourceScalarData.size()
+            == source_scalar_size
+        ? _tiePointPruneSourceScalarData
+        : _pointScalarBuffer.vertexData.size() == source_scalar_size
+            ? _pointScalarBuffer.vertexData
+            : QByteArray();
     request.metadata = _tiePointQualityMetadata;
     request.query = query;
+    request.stagedIndices = _stagedTiePointPruneIndices;
     request.strideBytes = 9 * int(sizeof(float));
     request.generation = _tiePointPrunePreviewGeneration;
     request.loadGeneration = _loadGen;
@@ -1608,6 +1780,7 @@ void CameraSceneWidget::clearTiePointPrunePreview()
     _prunePreviewScalarBuffer.vertexData.clear();
     _prunePreviewScalarBuffer.vertexCount = 0;
     _prunePreviewScalarBuffer.dirty = true;
+    _tiePointPrunePreviewIndices.clear();
     _prunePreviewBuffersReleasePending = true;
     const bool had_candidates = _tiePointPrunePreviewCandidateCount != 0;
     _tiePointPrunePreviewCandidateCount = 0;
@@ -1616,6 +1789,27 @@ void CameraSceneWidget::clearTiePointPrunePreview()
         emit tiePointPrunePreviewChanged(0);
     }
     update();
+}
+
+void CameraSceneWidget::clearTiePointPruneSession()
+{
+    const bool had_staged_deletions = !_stagedTiePointPruneIndices.empty();
+    _stagedTiePointPruneIndices.clear();
+    clearTiePointPrunePreview();
+    if (had_staged_deletions)
+    {
+        if (_tiePointPruneSourceScalarData.size()
+            == static_cast<qsizetype>(_cloud.size() * sizeof(float)))
+        {
+            _pointScalarBuffer.vertexData = _tiePointPruneSourceScalarData;
+            _pointScalarBuffer.vertexCount = static_cast<int>(_cloud.size());
+            _pointScalarBuffer.strideBytes = int(sizeof(float));
+            _pointScalarBuffer.dirty = true;
+        }
+        _gpuDirty = true;
+        update();
+    }
+    _tiePointPruneSourceScalarData.clear();
 }
 
 void CameraSceneWidget::pumpTiePointPrunePreview()
@@ -1646,20 +1840,25 @@ void CameraSceneWidget::pumpTiePointPrunePreview()
                     request.query,
                     request.pointCount,
                     cancellation.get(),
-                    kMaximumRenderedPruneCandidates);
+                    static_cast<std::size_t>(request.pointCount),
+                    &request.stagedIndices);
             if (!candidates.succeeded())
             {
                 result.errorMessage = std::move(candidates.errorMessage);
                 return result;
             }
             result.candidateCount = static_cast<int>(candidates.candidateCount);
+            result.candidateIndices = std::move(candidates.indices);
+            const std::vector<std::uint32_t> rendered_indices =
+                evenlySampleSortedIndices(result.candidateIndices,
+                                          kMaximumRenderedPruneCandidates);
             result.selection = prepareIndexedPointSelection(
                 request.vertexData,
                 request.strideBytes,
                 request.scalarData,
-                candidates.indices,
+                rendered_indices,
                 cancellation.get());
-            if (!candidates.indices.empty() && !result.selection.isValid()
+            if (!rendered_indices.empty() && !result.selection.isValid()
                 && !cancellation->load(std::memory_order_relaxed))
             {
                 result.errorMessage = QStringLiteral(
@@ -1700,6 +1899,8 @@ void CameraSceneWidget::pumpTiePointPrunePreview()
             PointSelectionPreparation selection = std::move(
                 outcome.value->selection);
             const int candidate_count = outcome.value->candidateCount;
+            self->_tiePointPrunePreviewIndices = std::move(
+                outcome.value->candidateIndices);
             self->_prunePreviewPointBuffer.vertexData = std::move(
                 selection.vertexData);
             self->_prunePreviewPointBuffer.vertexCount = selection.pointCount;
@@ -1944,8 +2145,7 @@ CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const
 bool CameraSceneWidget::cameraImageRegistrationActive() const
 {
     const int pose_index = displayedCameraImagePoseIndex();
-    if (!_showCameraImage || !_meshHasFaces || _meshIsPointPreview
-        || pose_index < 0 || pose_index >= _poses.size())
+    if (!_showCameraImage || pose_index < 0 || pose_index >= _poses.size())
     {
         return false;
     }
@@ -1959,11 +2159,17 @@ bool CameraSceneWidget::cameraImageRegistrationActive() const
         && std::isfinite(pose.principalY);
 }
 
+bool CameraSceneWidget::cameraImageNavigationLocked() const
+{
+    return _showCameraImage
+        && _cameraImageLocked
+        && displayedCameraImagePoseIndex() >= 0;
+}
+
 QSize CameraSceneWidget::displayedCameraImageSize() const
 {
     const int pose_index = displayedCameraImagePoseIndex();
-    if (!_meshHasFaces || _meshIsPointPreview
-        || pose_index < 0 || pose_index >= _poses.size())
+    if (pose_index < 0 || pose_index >= _poses.size())
     {
         return {};
     }
@@ -2171,8 +2377,7 @@ void CameraSceneWidget::requestCameraPlaneImage(const QString &imagePath, Camera
     {
         return;
     }
-    if (mode == CameraImagePlaneMode::Thumbnail
-        && (!_showCameras || !_showCameraThumbnails))
+    if (mode == CameraImagePlaneMode::Thumbnail && !_showCameraThumbnails)
     {
         return;
     }
@@ -2212,7 +2417,7 @@ void CameraSceneWidget::pumpCameraPlaneImageLoads()
         _cameraImageLoadsQueued.remove(key);
         if (request.generation != _cameraImageLoadGeneration || key.isEmpty()
             || (request.mode == CameraImagePlaneMode::Thumbnail
-                && (!_showCameras || !_showCameraThumbnails))
+                && !_showCameraThumbnails)
             || _cameraImageCache.contains(key) || _cameraImageLoadsInFlight.contains(key)
             || _cameraImageLoadFailures.contains(key))
         {
@@ -2236,7 +2441,7 @@ void CameraSceneWidget::pumpCameraPlaneImageLoads()
 
             QString current_request_path;
             if (result.mode == CameraImagePlaneMode::Thumbnail
-                && _showCameras && _showCameraThumbnails)
+                && _showCameraThumbnails)
             {
                 const int pose_index = _poseIndexByNormalizedPath.value(
                     normalizedCameraPath(result.path), -1);
@@ -2276,8 +2481,7 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
     {
         return;
     }
-    if (result.mode == CameraImagePlaneMode::Thumbnail
-        && (!_showCameras || !_showCameraThumbnails))
+    if (result.mode == CameraImagePlaneMode::Thumbnail && !_showCameraThumbnails)
     {
         return;
     }
@@ -2483,6 +2687,7 @@ void CameraSceneWidget::updateActiveCameraForView()
     if (_activeCameraImagePoseIndex != selected_pose_index)
     {
         _activeCameraImagePoseIndex = selected_pose_index;
+        _imagePipeline.uploadedGeometryKey.clear();
     }
 }
 
@@ -2634,7 +2839,7 @@ CameraSceneWidget::HoverAxis CameraSceneWidget::pickHoverAxis(const QPoint &mous
 
 bool CameraSceneWidget::isInsideRotationGizmo(const QPoint &mousePos) const
 {
-    if (!_showGizmo)
+    if (!_showGizmo || cameraImageNavigationLocked())
     {
         return false;
     }
@@ -2729,6 +2934,11 @@ bool CameraSceneWidget::isNavigationDragging() const
     return _leftDragging || _middleDragging || _rightDragging;
 }
 
+bool CameraSceneWidget::isPointSelectionToolActive() const
+{
+    return _pointInteractionMode != PointInteractionMode::Navigation;
+}
+
 // 平移偏移量无限制（允许将模型拖出视口外）
 void CameraSceneWidget::clampSceneOffset()
 {
@@ -2743,7 +2953,15 @@ void CameraSceneWidget::clampSceneOffset()
 //   - 默认              → 开放手型光标
 void CameraSceneWidget::updateCursor()
 {
-    if (_manualPruneMode && _manualSelecting)
+    if (cameraImageNavigationLocked())
+    {
+        setCursor(isNavigationDragging()
+            ? Qt::ClosedHandCursor
+            : Qt::OpenHandCursor);
+        return;
+    }
+
+    if (isPointSelectionToolActive() && _manualSelecting)
     {
         setCursor(Qt::CrossCursor);
         return;
@@ -2786,7 +3004,8 @@ void CameraSceneWidget::updateCursor()
     } else if (axis == HoverAxis::Z) {
         setCursor(axisCursor(QColor(120, 180, 255), QStringLiteral("Z")));
     }
-    else if (_manualPruneMode && !isInsideRotationGizmo(mapFromGlobal(QCursor::pos())))
+    else if (isPointSelectionToolActive()
+             && !isInsideRotationGizmo(mapFromGlobal(QCursor::pos())))
     {
         setCursor(Qt::CrossCursor);
     }
@@ -2926,6 +3145,7 @@ void CameraSceneWidget::releaseTexturedMeshPipelineResources()
 
 void CameraSceneWidget::releaseImagePipelineResources()
 {
+    _imagePipeline.vertexBuffer.reset();
     _imagePipeline.pipeline.reset();
     _imagePipeline.bindings.reset();
     _imagePipeline.uniformBuffer.reset();
@@ -2933,6 +3153,7 @@ void CameraSceneWidget::releaseImagePipelineResources()
     _imagePipeline.sampler.reset();
     _imagePipeline.textureSize = QSize();
     _imagePipeline.uploadedImageKey.clear();
+    _imagePipeline.uploadedGeometryKey.clear();
     _imagePipeline.pipelineDirty = true;
 }
 
@@ -2990,6 +3211,7 @@ void CameraSceneWidget::rollbackResourceUpdateState()
 
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _imagePipeline.uploadedImageKey.clear();
+    _imagePipeline.uploadedGeometryKey.clear();
     _thumbnailPoseIndicesPendingCommit.clear();
     _thumbnailCacheKeysPendingCommit.clear();
     releaseCameraThumbnailPipelineResources();
@@ -3029,7 +3251,7 @@ void CameraSceneWidget::commitResourceUpdateState()
 void CameraSceneWidget::resizeEvent(QResizeEvent *event)
 {
     QRhiWidget::resizeEvent(event);
-    if (_manualPruneMode)
+    if (_manualSelecting || _manualSelectionRunning || _manualPreviewUsesScreenRect)
     {
         clearManualPointSelection();
     }
@@ -3951,10 +4173,10 @@ void CameraSceneWidget::drawPointCloud(QRhiCommandBuffer *cb,
             clipMatrix,
             QSize(qMax(1, width()), qMax(1, height())),
             uniforms.lightDirPointSize[3] / qMax(1.0f, float(devicePixelRatioF())),
-            _manualPruneMode
+            isPointSelectionToolActive()
                 ? std::numeric_limits<qint64>::max()
                 : 3'000'000);
-        if (_manualPruneMode)
+        if (isPointSelectionToolActive())
         {
             for (qsizetype index = 0; index < chunkPlan.drawCounts.size(); ++index)
             {
@@ -4019,9 +4241,10 @@ void CameraSceneWidget::drawPointCloud(QRhiCommandBuffer *cb,
         return;
     }
 
-    const bool use_selection_rect = _manualSelecting
+    const bool use_selection_rect = _manualSelectionShape == ScreenSelectionShape::Rectangle
+        && (_manualSelecting
         || _manualSelectionRunning
-        || (_manualPreviewValid && _manualPreviewUsesScreenRect);
+        || (_manualPreviewValid && _manualPreviewUsesScreenRect));
     if (!use_selection_rect
         || _manualSelectRect.isNull())
     {
@@ -4129,7 +4352,8 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         pose.imagePath,
         CameraImagePlaneMode::Image);
     requestCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Image);
-    const QImage image = cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Image);
+    const QImage image = cachedCameraPlaneImage(
+        pose.imagePath, CameraImagePlaneMode::Image);
     if (image.isNull())
     {
         if (_imagePipeline.uploadedImageKey != image_key)
@@ -4139,12 +4363,38 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         return true;
     }
 
+    const QSize image_size = displayedCameraImageSize();
+    const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
+        pose.rotation, pose.depthAxisFlipped);
+    const xjw::gui::camera_scene::CameraImagePlaneAxes image_axes =
+        xjw::gui::camera_scene::cameraImagePlaneAxes(
+            pose.rotation, pose.uAxisSign, pose.vAxisSign);
+    const QVector3D scene_center = sceneCenter();
+    const QVector<QVector3D> corners =
+        xjw::gui::camera_scene::calibratedImagePlaneCorners(
+            pose.center,
+            forward,
+            image_axes.right,
+            image_axes.up,
+            scene_center,
+            pose.focalX,
+            pose.focalY,
+            pose.principalX,
+            pose.principalY,
+            image_size.width(),
+            image_size.height());
+    if (corners.size() != 4)
+    {
+        releaseImagePipelineResources();
+        return true;
+    }
+
     if (!_imagePipeline.uniformBuffer)
     {
         _imagePipeline.uniformBuffer.reset(rhi()->newBuffer(
             QRhiBuffer::Dynamic,
             QRhiBuffer::UniformBuffer,
-            sizeof(ProjectedImageUniforms)));
+            sizeof(ImagePlaneUniforms)));
         if (!_imagePipeline.uniformBuffer->create())
         {
             releaseImagePipelineResources();
@@ -4153,7 +4403,62 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         }
     }
 
-    const bool recreate_texture = !_imagePipeline.texture || _imagePipeline.textureSize != image.size();
+    constexpr int image_vertex_count = 6;
+    constexpr int image_vertex_stride_floats = 5;
+    if (!_imagePipeline.vertexBuffer)
+    {
+        _imagePipeline.vertexBuffer.reset(rhi()->newBuffer(
+            QRhiBuffer::Dynamic,
+            QRhiBuffer::VertexBuffer,
+            image_vertex_count * image_vertex_stride_floats * int(sizeof(float))));
+        if (!_imagePipeline.vertexBuffer->create())
+        {
+            releaseImagePipelineResources();
+            _renderError = QStringLiteral("GPU 照片平面缓冲创建失败。");
+            return false;
+        }
+        _imagePipeline.uploadedGeometryKey.clear();
+    }
+
+    const QString geometry_key = QStringLiteral("%1|%2|%3|%4|%5")
+        .arg(image_key)
+        .arg(scene_center.x(), 0, 'g', 9)
+        .arg(scene_center.y(), 0, 'g', 9)
+        .arg(scene_center.z(), 0, 'g', 9)
+        .arg(pose_index);
+    if (_imagePipeline.uploadedGeometryKey != geometry_key)
+    {
+        const auto append_vertex = [image_vertex_stride_floats](
+            std::array<float, 30> *vertices,
+            int vertex_index,
+            const QVector3D &position,
+            float u,
+            float v)
+        {
+            const int offset = vertex_index * image_vertex_stride_floats;
+            (*vertices)[offset] = position.x();
+            (*vertices)[offset + 1] = position.y();
+            (*vertices)[offset + 2] = position.z();
+            (*vertices)[offset + 3] = u;
+            (*vertices)[offset + 4] = v;
+        };
+        std::array<float, 30> vertices{};
+        append_vertex(&vertices, 0, corners.at(0), 1.0f, 0.0f);
+        append_vertex(&vertices, 1, corners.at(1), 0.0f, 0.0f);
+        append_vertex(&vertices, 2, corners.at(2), 0.0f, 1.0f);
+        append_vertex(&vertices, 3, corners.at(0), 1.0f, 0.0f);
+        append_vertex(&vertices, 4, corners.at(2), 0.0f, 1.0f);
+        append_vertex(&vertices, 5, corners.at(3), 1.0f, 1.0f);
+        updates->updateDynamicBuffer(
+            _imagePipeline.vertexBuffer.data(),
+            0,
+            int(sizeof(vertices)),
+            vertices.data());
+        _imagePipeline.uploadedGeometryKey = geometry_key;
+    }
+
+    const bool recreate_texture = !_imagePipeline.texture
+        || _imagePipeline.textureSize != image.size();
     if (recreate_texture)
     {
         _imagePipeline.texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, image.size()));
@@ -4172,8 +4477,6 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     QImage texture_upload_image;
     if (texture_upload_pending)
     {
-        // 照片由网格片元按 SfM 相机参数反查，源 alpha 不参与覆盖范围；
-        // 最终透明度由合成 uniform 控制。
         texture_upload_image = image;
         if (rhi()->isYUpInNDC())
         {
@@ -4255,9 +4558,11 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
 
     QRhiVertexInputLayout input_layout;
     input_layout.setBindings({QRhiVertexInputBinding(
-        quint32(_meshBuffer.strideBytes))});
+        quint32(image_vertex_stride_floats * int(sizeof(float))))});
     input_layout.setAttributes({
         QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2,
+                                 3 * sizeof(float)),
     });
 
     _imagePipeline.pipeline.reset(rhi()->newGraphicsPipeline());
@@ -4270,9 +4575,8 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     _imagePipeline.pipeline->setShaderResourceBindings(_imagePipeline.bindings.data());
     _imagePipeline.pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     _imagePipeline.pipeline->setSampleCount(sampleCount());
-    _imagePipeline.pipeline->setDepthTest(true);
+    _imagePipeline.pipeline->setDepthTest(false);
     _imagePipeline.pipeline->setDepthWrite(false);
-    _imagePipeline.pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
     _imagePipeline.pipeline->setCullMode(QRhiGraphicsPipeline::None);
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
@@ -4786,7 +5090,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         const bool highlighted = isCameraHighlighted(pose);
         const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
             pose.rotation, pose.depthAxisFlipped);
-        if (!_showCameraLocalAxes && !forward.isNull())
+        if (_showCameras && !_showCameraLocalAxes && !forward.isNull())
         {
             append_segment(&segment_instances,
                            pose,
@@ -4827,17 +5131,17 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         {
             append_instance(&atlas_instances[atlas_page_index], pose, uv_rect);
         }
-        else if (highlighted)
+        else if (_showCameras && highlighted)
         {
             append_instance(&highlighted_instances, pose, uv_rect);
         }
-        else
+        else if (_showCameras)
         {
             append_instance(&solid_instances, pose, uv_rect);
         }
     }
 
-    if (_showCameraLocalAxes)
+    if (_showCameras && _showCameraLocalAxes)
     {
         for (const CameraPose &pose : _poses)
         {
@@ -4953,7 +5257,8 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
                                              const QMatrix4x4 &mvp,
                                              const QMatrix4x4 &model_view)
 {
-    if (!cb || !_showCameras || _cameraResourceFailed || !_thumbnailPipeline.pipeline
+    if (!cb || !_showCameras
+        || _cameraResourceFailed || !_thumbnailPipeline.pipeline
         || !_thumbnailPipeline.uniformBuffer || !_thumbnailPipeline.solidResource)
     {
         return;
@@ -5018,8 +5323,7 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb,
 {
     if (!cb || !cameraImageRegistrationActive() || _activeImageResourceFailed
         || !_imagePipeline.pipeline || !_imagePipeline.uniformBuffer
-        || !_meshBuffer.vertexBuffer || !_meshTriangleIndices.indexBuffer
-        || _meshTriangleIndices.indexCount <= 0)
+        || !_imagePipeline.vertexBuffer)
     {
         return;
     }
@@ -5037,43 +5341,17 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb,
         return;
     }
 
-    const QSize image_size = displayedCameraImageSize();
-    if (!image_size.isValid())
-    {
-        return;
-    }
-    const QMatrix4x4 source_view =
-        xjw::gui::camera_scene::calibratedCameraView(
-            pose.center, pose.rotation, pose.depthAxisFlipped);
-    ProjectedImageUniforms uniforms;
+    ImagePlaneUniforms uniforms;
     std::copy_n(mvp.constData(), 16, uniforms.mvp.begin());
-    std::copy_n(source_view.constData(), 16, uniforms.sourceView.begin());
-    uniforms.intrinsics = {
-        pose.focalX,
-        pose.focalY,
-        pose.principalX,
-        pose.principalY,
-    };
-    uniforms.imageGeometry = {
-        float(image_size.width()),
-        float(image_size.height()),
-        pose.uAxisSign < 0 ? -1.0f : 1.0f,
-        pose.vAxisSign < 0 ? -1.0f : 1.0f,
-    };
     uniforms.composition[0] = qBound(0.0f, opacity, 1.0f);
     _imagePipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(
         &uniforms, sizeof(uniforms));
     cb->setGraphicsPipeline(_imagePipeline.pipeline.data());
     cb->setShaderResources(_imagePipeline.bindings.data());
     const QRhiCommandBuffer::VertexInput vertex_input(
-        _meshBuffer.vertexBuffer.data(), 0);
-    cb->setVertexInput(0,
-                       1,
-                       &vertex_input,
-                       _meshTriangleIndices.indexBuffer.data(),
-                       0,
-                       QRhiCommandBuffer::IndexUInt32);
-    cb->drawIndexed(quint32(_meshTriangleIndices.indexCount));
+        _imagePipeline.vertexBuffer.data(), 0);
+    cb->setVertexInput(0, 1, &vertex_input);
+    cb->draw(6);
 }
 
 void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb,
@@ -5423,13 +5701,15 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
         }
     }
     std::copy_n(normal_matrix.constData(), 16, uniforms.normalMatrix.begin());
+    if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Background)
+    {
+        drawActiveCameraImage(cb, mvp, 1.0f);
+    }
     drawSceneGeometry(cb, uniforms, mvp);
-    drawActiveCameraImage(
-        cb,
-        mvp,
-        _cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground
-            ? 0.5f
-            : 1.0f);
+    if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground)
+    {
+        drawActiveCameraImage(cb, mvp, 1.0f);
+    }
     drawCameraThumbnails(cb, mvp, mv);
 
     cb->endPass();
@@ -5466,6 +5746,8 @@ void CameraSceneWidget::clearManualPointSelection()
     _manualSelectionRunning = false;
     _manualDeletePending = false;
     _manualSelectRect = QRect();
+    _manualSelectPolygon.clear();
+    _manualSelectionShape = ScreenSelectionShape::Rectangle;
     _manualPreviewIndices.clear();
     _manualPreviewValid = false;
     _manualPreviewUsesScreenRect = false;
@@ -5480,6 +5762,25 @@ void CameraSceneWidget::clearManualPointSelection()
 
 bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMessage)
 {
+    if (enabled)
+    {
+        return setPointInteractionMode(PointInteractionMode::RectangleSelection,
+                                       errorMessage);
+    }
+
+    _pointInteractionMode = PointInteractionMode::Navigation;
+    _manualPruneMode = false;
+    clearManualPointSelection();
+    _manualUndoStack.clear();
+    updateCursor();
+    update();
+    emit pointInteractionModeChanged(_pointInteractionMode);
+    return true;
+}
+
+bool CameraSceneWidget::setPointInteractionMode(PointInteractionMode mode,
+                                                QString *errorMessage)
+{
     if (_manualEditRunning)
     {
         if (errorMessage)
@@ -5488,7 +5789,7 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
         }
         return false;
     }
-    if (enabled)
+    if (mode != PointInteractionMode::Navigation)
     {
         if ((_cloud.size() == 0))
         {
@@ -5516,26 +5817,41 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
         }
     }
 
-    _manualPruneMode = enabled;
-    clearManualPointSelection();
-    if (!enabled)
+    if (_pointInteractionMode == mode)
     {
-        _manualUndoStack.clear();
+        return true;
+    }
+
+    if (_manualSelecting || _manualSelectionRunning)
+    {
+        clearManualPointSelection();
+    }
+    _pointInteractionMode = mode;
+    if (mode != PointInteractionMode::Navigation)
+    {
+        _manualPruneMode = true;
     }
     updateCursor();
     update();
+    emit pointInteractionModeChanged(_pointInteractionMode);
     return true;
 }
 
-void CameraSceneWidget::startManualPointSelection(const QRect &screenRect)
+void CameraSceneWidget::startManualPointSelection(const ScreenSelectionRegion &region)
 {
-    const QRect selection_rect = screenRect.normalized().intersected(rect());
+    ScreenSelectionRegion selection_region = region;
+    selection_region.bounds = region.bounds.normalized().intersected(QRectF(rect()));
+    const QRect selection_rect = selection_region.bounds.toAlignedRect();
     clearManualPointSelection();
     _manualSelectRect = selection_rect;
+    _manualSelectPolygon = selection_region.polygon;
+    _manualSelectionShape = selection_region.shape;
     const int generation = _manualSelectionGeneration;
     const int load_generation = _loadGen;
     if (!_manualPruneMode || _manualEditRunning
-        || selection_rect.width() < 3 || selection_rect.height() < 3)
+        || selection_region.bounds.width() < 3.0 || selection_region.bounds.height() < 3.0
+        || (selection_region.shape == ScreenSelectionShape::Polygon
+            && selection_region.polygon.size() < 3))
     {
         _manualSelectionRunning = false;
         _manualPreviewValid = true;
@@ -5587,7 +5903,7 @@ void CameraSceneWidget::startManualPointSelection(const QRect &screenRect)
     ManualSelectionRequest request;
     request.vertexData = std::move(vertex_data);
     request.scalarData = std::move(scalar_data);
-    request.screenRect = selection_rect;
+    request.region = std::move(selection_region);
     request.clipMatrix = clip_matrix;
     request.viewportSize = viewport_size;
     request.sceneOffset = scene_offset;
@@ -5615,6 +5931,7 @@ void CameraSceneWidget::pumpManualPointSelection()
     const int generation = request.generation;
     const int load_generation = request.loadGeneration;
     const int stride_bytes = request.strideBytes;
+    const ScreenSelectionShape selection_shape = request.region.shape;
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [request = std::move(request), cancellation]()
@@ -5622,14 +5939,14 @@ void CameraSceneWidget::pumpManualPointSelection()
             return preparePointSelection(request.vertexData,
                                          request.strideBytes,
                                          request.scalarData,
-                                         request.screenRect,
+                                         request.region,
                                          request.clipMatrix,
                                          request.viewportSize,
                                          request.sceneOffset,
                                          kMaximumCompactSelectionPoints,
                                          cancellation.get());
         },
-        [generation, load_generation, stride_bytes, cancellation](
+        [generation, load_generation, stride_bytes, selection_shape, cancellation](
             CameraSceneWidget *self,
             xjw::gui::tasks::TaskOutcome<PointSelectionPreparation> outcome)
         {
@@ -5653,7 +5970,8 @@ void CameraSceneWidget::pumpManualPointSelection()
                 const bool has_compact_highlight = selection.pointCount > 0;
                 self->_manualPreviewIndices = std::move(selection.indices);
                 self->_manualPreviewUsesScreenRect =
-                    has_selected_points && !has_compact_highlight;
+                    selection_shape == ScreenSelectionShape::Rectangle
+                    && has_selected_points && !has_compact_highlight;
                 self->_manualHighlightPointBuffer.vertexData =
                     std::move(selection.vertexData);
                 self->_manualHighlightPointBuffer.vertexCount = selection.pointCount;
@@ -5968,6 +6286,31 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
     setFocus();
     _lastMousePos = event->pos();
 
+    if (cameraImageNavigationLocked())
+    {
+        if (event->button() == Qt::LeftButton)
+        {
+            _leftDragging = true;
+            _leftDragMode = LeftDragMode::Pan;
+        }
+        else if (event->button() == Qt::RightButton)
+        {
+            _rightDragging = true;
+        }
+        else if (event->button() == Qt::MiddleButton)
+        {
+            _middleDragging = true;
+        }
+        else
+        {
+            QRhiWidget::mousePressEvent(event);
+            return;
+        }
+        updateCursor();
+        event->accept();
+        return;
+    }
+
     if (_manualPruneMode && event->button() == Qt::ForwardButton)
     {
         if (_manualSelectionRunning)
@@ -5991,7 +6334,7 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 
     // 与 Metashape 一致，框选只属于显式选择工具。中央 Gizmo 和 Ctrl 修饰的
     // 左键仍保留导航能力，避免进入编辑模式后无法调整观察角度。
-    if (_manualPruneMode
+    if (isPointSelectionToolActive()
         && event->button() == Qt::LeftButton
         && !control_pressed
         && pressed_axis == HoverAxis::None
@@ -6006,18 +6349,24 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         _manualSelecting = true;
         _manualSelectStart = event->pos();
         _manualSelectRect = QRect(_manualSelectStart, _manualSelectStart);
+        _manualSelectPolygon.clear();
+        if (_pointInteractionMode == PointInteractionMode::CircleSelection)
+        {
+            _manualSelectionShape = ScreenSelectionShape::Ellipse;
+        }
+        else if (_pointInteractionMode == PointInteractionMode::FreehandSelection)
+        {
+            _manualSelectionShape = ScreenSelectionShape::Polygon;
+            _manualSelectPolygon << event->position();
+        }
+        else
+        {
+            _manualSelectionShape = ScreenSelectionShape::Rectangle;
+        }
         updateCursor();
         event->accept();
         update();
         return;
-    }
-
-    if (_manualPruneMode
-        && (event->button() == Qt::LeftButton
-            || event->button() == Qt::MiddleButton
-            || event->button() == Qt::RightButton))
-    {
-        clearManualPointSelection();
     }
 
     if (event->button() == Qt::LeftButton)
@@ -6072,9 +6421,43 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::LeftButton))
+    if (cameraImageNavigationLocked())
     {
-        _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
+        const QPoint delta = event->pos() - _lastMousePos;
+        const bool panning = (_leftDragging && (event->buttons() & Qt::LeftButton))
+            || (_rightDragging && (event->buttons() & Qt::RightButton))
+            || (_middleDragging && (event->buttons() & Qt::MiddleButton));
+        if (panning)
+        {
+            _sceneOffsetPx += QPointF(delta.x(), delta.y());
+            clampSceneOffset();
+            _lastMousePos = event->pos();
+            event->accept();
+            update();
+            return;
+        }
+        _lastMousePos = event->pos();
+        QRhiWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    if (isPointSelectionToolActive()
+        && _manualSelecting
+        && (event->buttons() & Qt::LeftButton))
+    {
+        if (_manualSelectionShape == ScreenSelectionShape::Polygon)
+        {
+            if (_manualSelectPolygon.isEmpty()
+                || QLineF(_manualSelectPolygon.constLast(), event->position()).length() >= 2.0)
+            {
+                _manualSelectPolygon << event->position();
+            }
+            _manualSelectRect = _manualSelectPolygon.boundingRect().toAlignedRect();
+        }
+        else
+        {
+            _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
+        }
         _manualPreviewIndices.clear();
         _manualPreviewValid = false;
         event->accept();
@@ -6155,6 +6538,10 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     }
     if (navigation_handled)
     {
+        if (_manualPreviewUsesScreenRect)
+        {
+            clearManualPointSelection();
+        }
         update();
         _lastMousePos = event->pos();
         event->accept();
@@ -6179,11 +6566,17 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (_manualPruneMode && _manualSelecting && event->button() == Qt::LeftButton)
+    if (isPointSelectionToolActive()
+        && _manualSelecting
+        && event->button() == Qt::LeftButton)
     {
         _manualSelecting = false;
         _manualSelectRect = _manualSelectRect.normalized();
-        startManualPointSelection(_manualSelectRect);
+        ScreenSelectionRegion region;
+        region.shape = _manualSelectionShape;
+        region.bounds = QRectF(_manualSelectRect);
+        region.polygon = _manualSelectPolygon;
+        startManualPointSelection(region);
         updateCursor();
         update();
         event->accept();
@@ -6239,7 +6632,7 @@ void CameraSceneWidget::zoomOut()
 
 void CameraSceneWidget::resetView()
 {
-    if (_manualPruneMode)
+    if (_manualSelecting || _manualSelectionRunning || _manualPreviewUsesScreenRect)
     {
         clearManualPointSelection();
     }
@@ -6269,7 +6662,7 @@ void CameraSceneWidget::applyZoomFactor(double factor)
     const double next_zoom_scale =
         xjw::gui::camera_scene::boundedSceneZoomScale(_zoomScale, factor);
 
-    if (_manualPruneMode)
+    if (_manualSelecting || _manualSelectionRunning || _manualPreviewUsesScreenRect)
     {
         clearManualPointSelection();
     }
@@ -6280,6 +6673,27 @@ void CameraSceneWidget::applyZoomFactor(double factor)
 
 void CameraSceneWidget::keyPressEvent(QKeyEvent *event)
 {
+    if (_manualPruneMode && event->key() == Qt::Key_Delete)
+    {
+        if (_manualSelectionRunning)
+        {
+            _manualDeletePending = true;
+        }
+        else
+        {
+            startManualPruneApply();
+        }
+        event->accept();
+        update();
+        return;
+    }
+    if (_manualPruneMode && event->key() == Qt::Key_Escape)
+    {
+        clearManualPointSelection();
+        event->accept();
+        update();
+        return;
+    }
     if (_manualPruneMode && event->matches(QKeySequence::Undo))
     {
         QString errorMessage;

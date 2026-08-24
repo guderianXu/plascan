@@ -5,7 +5,7 @@
  * @brief 匹配器原始输出；仅在算法执行和几何验证之间短暂存在。
  */
 
-#include <opencv2/features2d.hpp>
+#include <opencv2/core/types.hpp>
 
 #include <string>
 #include <vector>

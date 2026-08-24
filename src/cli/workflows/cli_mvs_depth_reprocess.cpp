@@ -251,6 +251,7 @@ int main(int argc, char **argv)
 {
     QCoreApplication qtApp(argc, argv);
     CLI::App app{"PlaScan 现有 MVS 工作区深度重放工具"};
+    cli::configureApp(app);
 
     std::string inputManifest;
     std::string pairAuditReport;
