@@ -64,6 +64,7 @@ plascan_verify_source_checkout(
 set(_plascan_external_cmake_args
   "-DCMAKE_BUILD_TYPE:STRING=Release"
   "-DCMAKE_INSTALL_PREFIX:PATH=${PLASCAN_SOURCE_DEPENDENCY_PREFIX}"
+  "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH:BOOL=ON"
   "-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON")
 foreach(_plascan_forwarded_variable IN ITEMS
     CMAKE_TOOLCHAIN_FILE
@@ -94,11 +95,16 @@ set(_plascan_qt_configure_args
   -nomake examples
   -nomake tests
   -submodules qtbase,qtshadertools
+  -qt-libpng
   -cmake-generator Ninja)
 if(WIN32)
   list(APPEND _plascan_qt_configure_args -schannel)
 endif()
-list(APPEND _plascan_qt_configure_args -- ${_plascan_external_cmake_args})
+list(APPEND _plascan_qt_configure_args
+  --
+  "-UFEATURE_system_png"
+  "-UQT_FEATURE_system_png"
+  ${_plascan_external_cmake_args})
 
 ExternalProject_Add(plascan_qt_source
   SOURCE_DIR "${_plascan_qt_source}"
@@ -130,6 +136,7 @@ set(_plascan_opencv_cmake_args
   "-DBUILD_opencv_python2:BOOL=OFF"
   "-DBUILD_opencv_python3:BOOL=OFF"
   "-DBUILD_opencv_world:BOOL=OFF"
+  "-DWITH_AVIF:BOOL=OFF"
   "-DWITH_QT:BOOL=OFF"
   "-DWITH_CUDA:BOOL=${PLASCAN_SOURCE_OPENCV_WITH_CUDA}"
   "-DWITH_CUDNN:BOOL=${PLASCAN_SOURCE_OPENCV_WITH_CUDNN}"
@@ -158,6 +165,8 @@ ExternalProject_Add(plascan_apriltag_source
   CMAKE_GENERATOR Ninja
   CMAKE_ARGS
     ${_plascan_external_cmake_args}
+    "-UGDAL_ENABLE_DRIVER_*"
+    "-UOGR_ENABLE_DRIVER_*"
     "-DBUILD_SHARED_LIBS:BOOL=ON"
     "-DBUILD_EXAMPLES:BOOL=OFF"
     "-DBUILD_PYTHON_WRAPPER:BOOL=OFF"
@@ -179,21 +188,25 @@ ExternalProject_Add(plascan_gdal_source
     "-DBUILD_APPS:BOOL=OFF"
     "-DBUILD_PYTHON_BINDINGS:BOOL=OFF"
     "-DBUILD_TESTING:BOOL=OFF"
-    "-DGDAL_BUILD_OPTIONAL_DRIVERS:BOOL=ON"
-    "-DOGR_BUILD_OPTIONAL_DRIVERS:BOOL=ON"
+    "-DGDAL_BUILD_OPTIONAL_DRIVERS:BOOL=OFF"
+    "-DOGR_BUILD_OPTIONAL_DRIVERS:BOOL=OFF"
     "-DGDAL_ENABLE_PLUGINS:BOOL=OFF"
     "-DGDAL_ENABLE_PLUGINS_NO_DEPS:BOOL=OFF"
     "-DGDAL_USE_INTERNAL_LIBS:STRING=OFF"
     "-DGDAL_USE_GEOTIFF:BOOL=ON"
+    "-DGDAL_USE_HDF5:BOOL=OFF"
     "-DGDAL_USE_JPEG:BOOL=ON"
     "-DGDAL_USE_JSONC:BOOL=ON"
+    "-DGDAL_USE_NETCDF:BOOL=OFF"
     "-DGDAL_USE_OPENJPEG:BOOL=ON"
     "-DGDAL_USE_PNG:BOOL=ON"
     "-DGDAL_USE_TIFF:BOOL=ON"
     "-DGDAL_USE_ZLIB:BOOL=ON"
     "-DGDAL_USE_ZSTD:BOOL=ON"
     "-DGDAL_ENABLE_DRIVER_JP2OPENJPEG:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_HDF5:BOOL=OFF"
     "-DGDAL_ENABLE_DRIVER_MBTILES:BOOL=OFF"
+    "-DGDAL_ENABLE_DRIVER_NETCDF:BOOL=OFF"
     "-DGDAL_ENABLE_DRIVER_PDS:BOOL=ON"
     "-DOGR_ENABLE_DRIVER_GPKG:BOOL=OFF"
   BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel

@@ -210,10 +210,24 @@ class RepoHygieneTest(unittest.TestCase):
             for dependency in source_manifest["dependencies"]
         }
         self.assertTrue(
-            {"json-c", "libgeotiff", "proj", "tiff", "zlib", "libzip"}.issubset(
+            {
+                "json-c",
+                "libgeotiff",
+                "proj",
+                "sqlite3",
+                "tiff",
+                "zlib",
+                "libzip",
+            }.issubset(
                 source_dependency_names
             )
         )
+        sqlite_dependency = next(
+            dependency
+            for dependency in source_manifest["dependencies"]
+            if isinstance(dependency, dict) and dependency["name"] == "sqlite3"
+        )
+        self.assertIn("rtree", sqlite_dependency.get("features", []))
         self.assertTrue(
             {"qtbase", "opencv", "gdal", "apriltag"}.isdisjoint(source_dependency_names)
         )
@@ -233,15 +247,31 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("ExternalProject_Add(plascan_opencv_source", superbuild)
         self.assertIn("ExternalProject_Add(plascan_apriltag_source", superbuild)
         self.assertIn("ExternalProject_Add(plascan_gdal_source", superbuild)
+        self.assertIn('"-DCMAKE_INSTALL_RPATH_USE_LINK_PATH:BOOL=ON"', superbuild)
+        self.assertIn('"-UGDAL_ENABLE_DRIVER_*"', superbuild)
+        self.assertIn('"-UOGR_ENABLE_DRIVER_*"', superbuild)
+        self.assertIn('"-DGDAL_BUILD_OPTIONAL_DRIVERS:BOOL=OFF"', superbuild)
+        self.assertIn('"-DOGR_BUILD_OPTIONAL_DRIVERS:BOOL=OFF"', superbuild)
+        self.assertIn('"-DGDAL_USE_HDF5:BOOL=OFF"', superbuild)
+        self.assertIn('"-DGDAL_USE_NETCDF:BOOL=OFF"', superbuild)
+        self.assertIn('"-DGDAL_ENABLE_DRIVER_HDF5:BOOL=OFF"', superbuild)
+        self.assertIn('"-DGDAL_ENABLE_DRIVER_NETCDF:BOOL=OFF"', superbuild)
+        self.assertIn('"-DGDAL_ENABLE_DRIVER_JP2OPENJPEG:BOOL=ON"', superbuild)
+        self.assertIn('"-DGDAL_ENABLE_DRIVER_PDS:BOOL=ON"', superbuild)
         self.assertIn('"-DOGR_ENABLE_DRIVER_GPKG:BOOL=OFF"', superbuild)
         self.assertIn("-submodules qtbase,qtshadertools", superbuild)
+        self.assertIn("-qt-libpng", superbuild)
+        self.assertIn('"-UFEATURE_system_png"', superbuild)
+        self.assertIn('"-UQT_FEATURE_system_png"', superbuild)
         self.assertIn('"-UOPENCV_EXTRA_MODULES_PATH"', superbuild)
         self.assertIn('"-UBUILD_opencv_x*"', superbuild)
+        self.assertIn('"-DWITH_AVIF:BOOL=OFF"', superbuild)
 
         mesh_cmake = (ROOT / "src" / "core" / "mesh" / "CMakeLists.txt").read_text(
             encoding="utf-8"
         )
         self.assertIn('"${CMAKE_SOURCE_DIR}/3rdparty/PoissonRecon"', mesh_cmake)
+        self.assertIn("CUDA_RESOLVE_DEVICE_SYMBOLS ON", mesh_cmake)
         self.assertNotIn("FetchContent_Declare(plascan_poisson_recon", mesh_cmake)
 
         onnxruntime = (ROOT / "cmake" / "PlascanOnnxRuntime.cmake").read_text(

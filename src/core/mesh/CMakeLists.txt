@@ -121,6 +121,7 @@ if(MESH_HAS_CUDA)
     set_target_properties(meshing PROPERTIES
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
         CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
     target_compile_definitions(meshing PRIVATE MESHING_ENABLE_CUDA=1)
     target_compile_options(meshing PRIVATE

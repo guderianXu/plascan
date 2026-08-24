@@ -1415,7 +1415,10 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 - **源码依赖**: `cmake/PlascanSourceDependencies.cmake` 固定 Qt 6.11.2、OpenCV 5.0.0、
   GDAL 3.12.4 和 AprilTag 3.4.5，只初始化 Qt 的 `qtbase` 与 `qtshadertools`，并安装到 source-deps preset
   的共享前缀；PoissonRecon 从固定 submodule 直接提供头文件；`cmake/source-deps/vcpkg.json` 仅提供
-  PROJ、libgeotiff、libtiff、zlib 和图像编解码等底层依赖
+  PROJ、带 RTree 的 SQLite、libgeotiff、libtiff、zlib 和图像编解码等底层依赖。GDAL 的 HDF5 与
+  NetCDF 等可选驱动默认关闭，仅显式启用 PDS 和 JP2OpenJPEG；OpenCV 的 AVIF 自动探测也关闭，
+  Qt 则使用内置 libpng，避免它先加载同名系统库而破坏 OpenCV 的 vcpkg libpng ABI。安装后的其它
+  源码依赖保留其 vcpkg 链接目录 RUNPATH，确保开发构建和测试加载同一 installed tree 的动态库
 - **OpenCV 边界**: C++ 与 Python 运行时均要求 OpenCV 5；C++ 直接使用拆分后的 `features`、`geometry`
   和 `stereo` 模块，不保留 OpenCV 4 头文件、模块名或调用签名兼容层
 - **ONNX Runtime**: 固定 1.29.0 官方预编译包并校验 SHA-256，下载归档跨 preset 缓存在

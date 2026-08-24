@@ -136,7 +136,11 @@ their vcpkg installed tree are kept below `<build-dir>/source-deps/`.
 
 The host-specific source presets use `build/<platform>-source-deps-release/install` as their shared prefix and a
 dedicated vcpkg manifest that excludes Qt, OpenCV, GDAL, and AprilTag. PlaScan configuration verifies exact versions and that
-the loaded package configs came from this prefix. ONNX Runtime 1.29.0 release archives are SHA-256 verified and reused
+the loaded package configs came from this prefix. The manifest enables SQLite RTree for GDAL/Spatialite, while the source
+GDAL build disables optional drivers by default and enables only PDS and JP2OpenJPEG; OpenCV disables AVIF auto-detection.
+Qt uses its bundled libpng so it cannot preload a host libpng with the same soname before OpenCV. Together these settings
+avoid mixing host or Conda libraries with vcpkg dependencies. ONNX Runtime
+1.29.0 release archives are SHA-256 verified and reused
 from `build/env/downloads/onnxruntime/1.29.0/`.
 
 CUDA and TensorRT are preferred by default on supported Windows and Linux hosts. Missing CUDA falls back to CPU; a

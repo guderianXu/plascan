@@ -47,8 +47,12 @@ python scripts/env/configure_with_env.py --source-deps --build --test
 ```
 
 该入口先在 `build/<platform>-source-deps-release/` 编译并安装 Qt 6.11.2、OpenCV 5.0.0、
-GDAL 3.12.4 和 AprilTag 3.4.5；PoissonRecon 直接从固定 submodule 提供源码。PROJ、libgeotiff、libtiff、
-zlib 等底层依赖仍由同一 vcpkg installed tree 提供，随后在 `build/<platform>-source-release/` 配置、编译和测试 PlaScan。
+GDAL 3.12.4 和 AprilTag 3.4.5；PoissonRecon 直接从固定 submodule 提供源码。PROJ、带 RTree 的 SQLite、
+libgeotiff、libtiff、zlib 等底层依赖仍由同一 vcpkg installed tree 提供，随后在
+`build/<platform>-source-release/` 配置、编译和测试 PlaScan。GDAL 的 HDF5 与 NetCDF 可选驱动固定关闭，
+其它可选驱动默认关闭并只显式启用 PDS 与 JP2OpenJPEG；OpenCV 的 AVIF 自动探测也固定关闭，避免
+宿主机或 Conda 库与 vcpkg 依赖混用。Qt 使用其内置 libpng，避免与 OpenCV 使用的 vcpkg libpng
+产生同名动态库冲突。
 CMake 会校验所有源码 checkout 的固定 commit、安装包版本及加载路径，避免静默回退到 vcpkg。
 
 Windows 和 Linux 构建默认优先启用 CUDA 与 TensorRT。CUDA 编译器不可用时自动回退到 CPU；CUDA
