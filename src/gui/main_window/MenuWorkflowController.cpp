@@ -1557,7 +1557,11 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 return;
             }
 
-            // 只有通过 MVS 入口质量门控的正式 SfM 结果才写回工程，避免失败候选污染相机状态。
+            const bool rpcAerialTriangulation =
+                resultRecordExtra.value(QStringLiteral("camera_model")).toString()
+                    .compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
+
+            // 只有正式空三结果才写回工程，避免失败候选污染相机状态。
             if (resetCurrentAlignment)
             {
                 int updated = 0;
@@ -1602,7 +1606,9 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             {
                 QJsonObject report;
                 report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
-                report[QStringLiteral("mode")] = QStringLiteral("sfm");
+                report[QStringLiteral("mode")] = rpcAerialTriangulation
+                    ? QStringLiteral("rpc")
+                    : QStringLiteral("sfm");
                 report[QStringLiteral("source")] = QStringLiteral("workflow_aerial_triangulation");
                 report[QStringLiteral("timestamp")] =
                     QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
@@ -1651,7 +1657,9 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             emit pmGuard->atProgressFinished(true);
             QMessageBox::information(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
-                                     QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
+                                     (rpcAerialTriangulation
+                                          ? QStringLiteral("RPC 空三稀疏云已生成。\n注册影像: %1\n地面点: %2\n路径: %3")
+                                          : QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3"))
                                          .arg(registeredImageCount)
                                          .arg(result.numPoints3D)
                                          .arg(result.sparseCloudPath));

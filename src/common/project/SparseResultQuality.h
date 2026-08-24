@@ -38,7 +38,9 @@ QString sparseResultKind(const QJsonObject &record);
 QString sparseResultKindDisplayName(const QString &resultKind);
 bool isPairwisePreviewSparseResult(const QJsonObject &record);
 bool isProductionSparseResult(const QJsonObject &record);
+bool isStandardMvsCompatibleSparseResult(const QJsonObject &record);
 QString sparseResultBlockingReason(const QJsonObject &record);
+QString standardMvsBlockingReason(const QJsonObject &record);
 QString sparseResultWarningText(const QJsonObject &record);
 
 } // namespace xjw::common::project
@@ -48,6 +50,7 @@ namespace xjw::gui::project
 using xjw::common::project::buildSparseQualityMetadata;
 using xjw::common::project::isPairwisePreviewSparseResult;
 using xjw::common::project::isProductionSparseResult;
+using xjw::common::project::isStandardMvsCompatibleSparseResult;
 using xjw::common::project::kSparseResultKindPairwisePreview;
 using xjw::common::project::kSparseResultKindSfmSparseReconstruction;
 using xjw::common::project::kSparseResultKindSparsePostprocess;
@@ -57,4 +60,5 @@ using xjw::common::project::sparseResultBlockingReason;
 using xjw::common::project::sparseResultKind;
 using xjw::common::project::sparseResultKindDisplayName;
 using xjw::common::project::sparseResultWarningText;
+using xjw::common::project::standardMvsBlockingReason;
 } // namespace xjw::gui::project

@@ -439,9 +439,9 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
 
     const QJsonObject at_record = at_results.at(at_index).toObject();
-    if (!xjw::gui::project::isProductionSparseResult(at_record))
+    if (!xjw::gui::project::isStandardMvsCompatibleSparseResult(at_record))
     {
-        failTask(xjw::gui::project::sparseResultBlockingReason(at_record),
+        failTask(xjw::gui::project::standardMvsBlockingReason(at_record),
                  dialog_title);
         return false;
     }

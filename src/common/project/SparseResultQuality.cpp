@@ -125,6 +125,14 @@ bool qualityGateBlocksMvs(const QJsonObject &record)
         && !gate.value(QStringLiteral("acceptable_for_mvs")).toBool(true);
 }
 
+bool hasAbsoluteRpcGeometry(const QJsonObject &record)
+{
+    const QJsonObject quality = qualityObjectFromRecord(record);
+    return quality.value(QStringLiteral("camera_model")).toString()
+                   .compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0 &&
+           quality.value(QStringLiteral("absolute_sensor_model")).toBool(false);
+}
+
 QString qualityGateWarningText(const QString &warning)
 {
     if (warning == QLatin1String("high_reprojection_error"))
@@ -348,6 +356,7 @@ bool isPairwisePreviewSparseResult(const QJsonObject &record)
 bool isProductionSparseResult(const QJsonObject &record)
 {
     const QJsonObject quality = qualityObjectFromRecord(record);
+    const bool absoluteRpcGeometry = hasAbsoluteRpcGeometry(record);
     const QString kind = sparseResultKind(record);
     const QString sourceKind = quality.value(QStringLiteral("source_result_kind")).toString();
     const bool formalKind = kind == kSparseResultKindSfmSparseReconstruction
@@ -365,7 +374,7 @@ bool isProductionSparseResult(const QJsonObject &record)
     {
         return false;
     }
-    if (qualityGateBlocksMvs(record))
+    if (!absoluteRpcGeometry && qualityGateBlocksMvs(record))
     {
         return false;
     }
@@ -377,7 +386,10 @@ bool isProductionSparseResult(const QJsonObject &record)
     {
         return false;
     }
-    if (quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0) >= kProductionMaxTwoViewRatio)
+    // 固定 RPC00B 本身提供绝对地理几何，两景前方交会不依赖未知针孔位姿的
+    // 多视自标定。两视占比门槛只用于自由网络针孔 SfM，不能误拒绝 RPC 立体空三。
+    if (!absoluteRpcGeometry &&
+        quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0) >= kProductionMaxTwoViewRatio)
     {
         return false;
     }
@@ -387,6 +399,7 @@ bool isProductionSparseResult(const QJsonObject &record)
 QString sparseResultBlockingReason(const QJsonObject &record)
 {
     const QJsonObject quality = qualityObjectFromRecord(record);
+    const bool absoluteRpcGeometry = hasAbsoluteRpcGeometry(record);
     const QString kind = sparseResultKind(record);
     if (kind == kSparseResultKindPairwisePreview)
     {
@@ -400,7 +413,7 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     {
         return QStringLiteral("当前稀疏点云注册影像少于 2 张，不能作为正式航测稀疏点云。");
     }
-    if (qualityGateBlocksMvs(record))
+    if (!absoluteRpcGeometry && qualityGateBlocksMvs(record))
     {
         return qualityGateBlockingReason(record);
     }
@@ -419,7 +432,7 @@ QString sparseResultBlockingReason(const QJsonObject &record)
             .arg(kProductionMinRegisteredImageRatio * 100.0, 0, 'f', 0);
     }
     const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0);
-    if (twoViewRatio >= kProductionMaxTwoViewRatio)
+    if (!absoluteRpcGeometry && twoViewRatio >= kProductionMaxTwoViewRatio)
     {
         return QStringLiteral("当前稀疏点云两视 track 占比过高（%1%，生产阈值 %2%），多视约束不足。"
                               "请检查相机位姿/匹配结果，建议使用调整后的相机或重新运行正式 SfM/BA。")
@@ -433,11 +446,36 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     return QString();
 }
 
+bool isStandardMvsCompatibleSparseResult(const QJsonObject &record)
+{
+    return isProductionSparseResult(record) && !hasAbsoluteRpcGeometry(record) &&
+           !qualityGateBlocksMvs(record);
+}
+
+QString standardMvsBlockingReason(const QJsonObject &record)
+{
+    if (!isProductionSparseResult(record))
+    {
+        return sparseResultBlockingReason(record);
+    }
+    if (hasAbsoluteRpcGeometry(record))
+    {
+        return QStringLiteral(
+            "当前结果是固定 RPC 传感器模型的空三稀疏云，不能送入仅支持针孔相机的普通 MVS。"
+            "请使用“创建 DEM”中的 RPC 立体流程；如需 RPC 密集点云，需要先实现对应的 RPC MVS。");
+    }
+    if (qualityGateBlocksMvs(record))
+    {
+        return qualityGateBlockingReason(record);
+    }
+    return QString();
+}
+
 QString sparseResultWarningText(const QJsonObject &record)
 {
     const QJsonObject quality = qualityObjectFromRecord(record);
     const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(0.0);
-    if (twoViewRatio >= kWarningTwoViewRatio)
+    if (!hasAbsoluteRpcGeometry(record) && twoViewRatio >= kWarningTwoViewRatio)
     {
         return QStringLiteral("两视 track 占比过高：%1%，结果可能不稳定。")
             .arg(twoViewRatio * 100.0, 0, 'f', 1);

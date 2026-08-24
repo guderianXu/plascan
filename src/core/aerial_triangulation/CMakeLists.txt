@@ -19,6 +19,8 @@ add_library(aerial_triangulation STATIC
     reconstruction/CameraIntrinsicPriorSanitizer.h
     reconstruction/SfmAttemptRunner.cpp
     reconstruction/SfmAttemptRunner.h
+    reconstruction/RpcAerialTriangulationRunner.cpp
+    reconstruction/RpcAerialTriangulationRunner.h
     reporting/AerialTriangulationResultWriter.cpp
     reporting/AerialTriangulationResultWriter.h
     reporting/QualityReportWriter.cpp

@@ -17,6 +17,7 @@
 #include "reporting/AerialTriangulationResultWriter.h"
 #include "reporting/QualityReportWriter.h"
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
+#include "reconstruction/RpcAerialTriangulationRunner.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "search/AdaptiveFocalSearch.h"
 #include "search/SfmSearchPolicy.h"
@@ -703,6 +704,29 @@ namespace xjw::aerial_triangulation
     {
         QElapsedTimer timer;
         timer.start();
+
+        // RPC00B 是随像点变化的区域传感器模型，不能进入固定光心针孔 SfM。
+        // 生产 runner 在焦距先验和针孔候选搜索之前完成模型分流；测试注入 runner
+        // 保持原有可控边界，不读取测试影像的外部元数据。
+        if (_usesProductionAttemptRunner)
+        {
+            const RpcCameraInput rpcInput = RpcAerialTriangulationRunner::inspectInput(input);
+            if (rpcInput.status == RpcCameraInputStatus::Mixed)
+            {
+                AerialTriangulationReconstructionResult failed;
+                failed.errorMessage = rpcInput.errorMessage;
+                failed.summary = failed.errorMessage;
+                failed.durationSeconds = timer.elapsed() / 1000.0;
+                return failed;
+            }
+            if (rpcInput.status == RpcCameraInputStatus::Complete)
+            {
+                AerialTriangulationReconstructionResult rpcResult =
+                    RpcAerialTriangulationRunner().run(input, rpcInput.cameras);
+                rpcResult.durationSeconds = timer.elapsed() / 1000.0;
+                return rpcResult;
+            }
+        }
 
         const auto originalProgress = input.progressFn;
         const bool hasCompleteExternalCameras = hasCompleteExternalCameraFiles(input);

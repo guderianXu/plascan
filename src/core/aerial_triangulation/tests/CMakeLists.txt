@@ -26,5 +26,11 @@ add_aerial_triangulation_test(test_aerial_triangulation_pipeline
                               test_aerial_triangulation_pipeline.cpp)
 add_aerial_triangulation_test(test_aerial_triangulation_result_writer
                               test_aerial_triangulation_result_writer.cpp)
+add_aerial_triangulation_test(test_rpc_aerial_triangulation_runner
+                              test_rpc_aerial_triangulation_runner.cpp)
+
+target_compile_definitions(test_rpc_aerial_triangulation_runner PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+)
 
 target_link_libraries(test_sfm_attempt_runner PRIVATE control_points)

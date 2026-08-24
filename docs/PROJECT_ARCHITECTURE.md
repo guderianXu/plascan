@@ -491,7 +491,7 @@ core/
 │   ├── model/                  # GUI/CLI 共用 Options、ResolvedConfig、Result DTO
 │   ├── workflow/               # 唯一入口与正式 Pipeline
 │   ├── preparation/            # MatchPhotosTask 适配、缓存编目和前置检查
-│   ├── reconstruction/         # 单次 SfM、标记点先验、相机内参清洗、候选对与图诊断
+│   ├── reconstruction/         # 单次针孔 SfM、RPC 空三、标记点先验、相机内参清洗、候选对与图诊断
 │   ├── search/                 # 无相机焦距候选排序和资源策略
 │   ├── reporting/              # 稀疏点云、质量元数据和结果记录
 │   └── CMakeLists.txt          # 独立 aerial_triangulation target
@@ -505,6 +505,15 @@ SfM 位姿和稀疏重建状态；默认仍复用影像身份、算法版本、�
 变体及连接点。只有用户取消“重用现有匹配”或缓存缺失/不兼容时，workflow 才调用
 `MatchPhotosTask` 按工作流设置执行 SIFT + LightGlue 或 LoMa-R，并整理多视连接点。GUI 与
 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取旧成对缓存。
+
+正式 Pipeline 在焦距搜索前检查本次全部相机模型。全 RPC00B 批次由
+`RpcAerialTriangulationRunner` 保持厂商 RPC 固定，恢复多视连接点轨迹并使用非线性 RPC 前方交会
+优化地面点；结果以局部 WGS84 ENU 米制 PLY 写出，同时在 sidecar 保存 ENU 原点、逐点经纬高和
+逐相机残差。没有 GCP 时不会伪造 RPC 偏差改正，诊断明确标记为 fixed-sensor point-only adjustment。
+RPC 与针孔混合或部分 RPC 缺失的批次直接拒绝，禁止再按影像尺寸生成虚构针孔内参。固定 RPC 提供
+绝对传感器几何，因此合法的两景 RPC 空三不适用自由网络针孔 SfM 的两视轨迹占比门槛。
+RPC 稀疏结果可登记为正式空三成果，但会标记为不兼容普通针孔 MVS；GUI 的“创建点云/仅生成深度图”
+入口会给出明确阻断提示，密集产品应进入 RPC 立体 DEM/DOM 工作流。
 
 “已有 SfM 查漏”把当前相机位姿和 `sfm_sparse_points.json` 作为上一轮解算证据：先按稀疏点观测建立
 共视关系，再将稀疏场景的鲁棒包围体采样投影到相机视锥，补回共视点不足但几何上仍有重叠的影像对。

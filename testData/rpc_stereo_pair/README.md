@@ -37,8 +37,9 @@ metadata domain，可用于 PlaScan 的 RPC 读取、投影、反投影、像对
 转换参数也写入每个 TIFF 的 `PLASCAN_*` 默认 metadata；RPC 和嵌入的 GML 内容保持不变。
 
 PlaScan 可通过 `loadRpcCameraFromRaster()` 直接读取 TIFF 内嵌 RPC，不需要额外的 RPB/XML 旁车文件。
-当前针孔 SfM、针孔 BA、固定光心极线校正和针孔 MVS 不应把这组 RPC 静默降级成针孔相机；RPC 稀疏
-几何应使用 `RpcCameraModel` 和 `intersectRpcObservations()`。
+空中三角测量会把全 RPC00B 批次分流到固定传感器模型的 RPC 地面点空三；针孔 BA、固定光心极线
+校正和针孔 MVS 不得把这组 RPC 静默降级成针孔相机。RPC 稀疏几何使用 `RpcCameraModel` 和
+`intersectRpcObservations()`，没有 GCP 时只优化地面点并保留厂商 RPC。
 
 使用 GDAL 检查：
 

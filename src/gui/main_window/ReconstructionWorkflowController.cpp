@@ -298,7 +298,14 @@ PointCloudProjectState pointCloudProjectState(const QJsonObject &metadata)
         xjw::core::project::findLatestProductionAtResultIndex(metadata);
     if (production_index >= 0 && production_index < sparse_results.size())
     {
-        state.hasProductionSparseResult = true;
+        const QJsonObject production_result = sparse_results.at(production_index).toObject();
+        state.hasProductionSparseResult =
+            xjw::gui::project::isStandardMvsCompatibleSparseResult(production_result);
+        if (!state.hasProductionSparseResult)
+        {
+            state.blockingReason =
+                xjw::gui::project::standardMvsBlockingReason(production_result);
+        }
     }
     else if (!sparse_results.isEmpty())
     {
