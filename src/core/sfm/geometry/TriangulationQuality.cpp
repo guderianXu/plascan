@@ -4,11 +4,131 @@
 #include "Intersection.h"
 #include "geometry/ProjectionGeometry.h"
 
+#include <opencv2/core.hpp>
+
 #include <algorithm>
 #include <cmath>
 
 namespace xjw
 {
+
+namespace
+{
+
+constexpr double kMaximumReconstructionUncertainty = 1.0e6;
+
+bool pointProjectionJacobian(const FramePinholeCamera &camera,
+                             const std::array<double, 3> &worldPoint,
+                             cv::Matx<double, 2, 3> *jacobian)
+{
+    if (!jacobian)
+    {
+        return false;
+    }
+
+    const std::array<double, 3> center = camera.cameraCenter();
+    const double range = std::hypot(worldPoint[0] - center[0],
+                                    worldPoint[1] - center[1],
+                                    worldPoint[2] - center[2]);
+    if (!std::isfinite(range) || range <= 1e-9)
+    {
+        return false;
+    }
+
+    const double step = std::max(1e-7, range * 1e-6);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        std::array<double, 3> plus = worldPoint;
+        std::array<double, 3> minus = worldPoint;
+        plus[static_cast<std::size_t>(axis)] += step;
+        minus[static_cast<std::size_t>(axis)] -= step;
+        double projectedPlus[2]{};
+        double projectedMinus[2]{};
+        if (!camera.projectWorldPoint(plus.data(), projectedPlus)
+            || !camera.projectWorldPoint(minus.data(), projectedMinus))
+        {
+            return false;
+        }
+        for (int pixelAxis = 0; pixelAxis < 2; ++pixelAxis)
+        {
+            const double derivative =
+                (projectedPlus[pixelAxis] - projectedMinus[pixelAxis]) / (2.0 * step);
+            if (!std::isfinite(derivative))
+            {
+                return false;
+            }
+            (*jacobian)(pixelAxis, axis) = derivative;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+double reconstructionUncertainty(
+    const std::vector<TiePointQualityObservation> &observations,
+    const std::array<double, 3> &worldPoint)
+{
+    cv::Matx33d information = cv::Matx33d::zeros();
+    int validObservationCount = 0;
+    for (const TiePointQualityObservation &observation : observations)
+    {
+        if (!observation.camera)
+        {
+            continue;
+        }
+        cv::Matx<double, 2, 3> jacobian;
+        if (!pointProjectionJacobian(*observation.camera, worldPoint, &jacobian))
+        {
+            continue;
+        }
+        const double scale = std::isfinite(observation.measurementScale)
+                && observation.measurementScale > 0.0
+            ? observation.measurementScale
+            : 1.0;
+        information += (jacobian.t() * jacobian) / (scale * scale);
+        ++validObservationCount;
+    }
+    if (validObservationCount < 2)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    cv::Mat eigenvalues;
+    if (!cv::eigen(cv::Mat(information), eigenvalues) || eigenvalues.total() != 3)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double largest = eigenvalues.at<double>(0);
+    const double smallest = eigenvalues.at<double>(2);
+    if (!std::isfinite(largest) || !std::isfinite(smallest) || largest <= 0.0)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double stableSmallest = std::max(smallest, largest / (kMaximumReconstructionUncertainty
+                                                                 * kMaximumReconstructionUncertainty));
+    return std::sqrt(largest / stableSmallest);
+}
+
+double projectionAccuracy(
+    const std::vector<TiePointQualityObservation> &observations)
+{
+    if (observations.empty())
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double sum = 0.0;
+    for (const TiePointQualityObservation &observation : observations)
+    {
+        if (!std::isfinite(observation.measurementScale)
+            || observation.measurementScale <= 0.0)
+        {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        sum += observation.measurementScale;
+    }
+    return sum / static_cast<double>(observations.size());
+}
 
 double minimumTriangulationAngleDeg(const std::vector<FramePinholeCamera> &cameras,
                                     const BATrack &track,

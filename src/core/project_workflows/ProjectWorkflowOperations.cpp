@@ -14,7 +14,9 @@
 #include <QJsonDocument>
 
 #include <cstdint>
+#include <cmath>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace xjw::core::project
@@ -177,6 +179,11 @@ std::vector<xjw::SparsePointCloudPoint> sparsePointsFromJson(const QJsonArray &p
         point.rmsReprojPx = pointObj.value(QStringLiteral("rms_reproj_px")).toDouble(
             pointObj.value(QStringLiteral("rms_after")).toDouble());
         point.minTriAngleDeg = pointObj.value(QStringLiteral("min_tri_angle_deg")).toDouble();
+        point.reconstructionUncertainty = pointObj
+            .value(QStringLiteral("reconstruction_uncertainty"))
+            .toDouble(std::numeric_limits<double>::quiet_NaN());
+        point.projectionAccuracy = pointObj.value(QStringLiteral("projection_accuracy"))
+            .toDouble(std::numeric_limits<double>::quiet_NaN());
         point.trackLen = pointObj.value(QStringLiteral("track_len")).toInt(0);
         point.sourceIndex = static_cast<std::size_t>(source_index);
         if (!applyColorArray(pointObj.value(QStringLiteral("color_rgb")).toArray(), &point))
@@ -267,6 +274,8 @@ bool loadSparsePointsFromPly(const QString &path,
             point.z = matrix.getValue(row, 2);
             point.rmsReprojPx = 0.0;
             point.minTriAngleDeg = 0.0;
+            point.reconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
+            point.projectionAccuracy = std::numeric_limits<double>::quiet_NaN();
             point.trackLen = 0;
             point.sourceIndex = i;
             if (hasColors)
@@ -348,6 +357,15 @@ QJsonObject sparsePointToJson(const xjw::SparsePointCloudPoint &point)
     object[QStringLiteral("point_xyz")] = xyz;
     object[QStringLiteral("rms_reproj_px")] = point.rmsReprojPx;
     object[QStringLiteral("min_tri_angle_deg")] = point.minTriAngleDeg;
+    if (std::isfinite(point.reconstructionUncertainty))
+    {
+        object[QStringLiteral("reconstruction_uncertainty")] =
+            point.reconstructionUncertainty;
+    }
+    if (std::isfinite(point.projectionAccuracy))
+    {
+        object[QStringLiteral("projection_accuracy")] = point.projectionAccuracy;
+    }
     object[QStringLiteral("track_len")] = point.trackLen;
     if (point.hasColor)
     {
@@ -796,6 +814,16 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     options.filterByTriAngle = qualityMetricsAvailable &&
                                settings.value(QStringLiteral("filterByTriAngle")).toBool();
     options.minTriAngleDeg = settings.value(QStringLiteral("minTriAngleDeg")).toDouble(2.0);
+    options.filterByReconstructionUncertainty = qualityMetricsAvailable
+        && settings.value(QStringLiteral("filterByReconstructionUncertainty")).toBool();
+    options.maxReconstructionUncertainty = settings
+        .value(QStringLiteral("maxReconstructionUncertainty"))
+        .toDouble(10.0);
+    options.filterByProjectionAccuracy = qualityMetricsAvailable
+        && settings.value(QStringLiteral("filterByProjectionAccuracy")).toBool();
+    options.maxProjectionAccuracy = settings
+        .value(QStringLiteral("maxProjectionAccuracy"))
+        .toDouble(2.0);
     options.filterByStatistical = settings.value(QStringLiteral("filterByStatistical")).toBool();
     options.statK = settings.value(QStringLiteral("statK")).toInt(16);
     options.statStdDevMul = settings.value(QStringLiteral("statStdDevMul")).toDouble(2.5);
@@ -814,6 +842,10 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     summary[QStringLiteral("removed_by_reproj")] = stats.removedByReprojError;
     summary[QStringLiteral("removed_by_track_len")] = stats.removedByTrackLen;
     summary[QStringLiteral("removed_by_tri_angle")] = stats.removedByTriAngle;
+    summary[QStringLiteral("removed_by_reconstruction_uncertainty")] =
+        stats.removedByReconstructionUncertainty;
+    summary[QStringLiteral("removed_by_projection_accuracy")] =
+        stats.removedByProjectionAccuracy;
     summary[QStringLiteral("removed_by_statistical")] = stats.removedByStatistical;
     summary[QStringLiteral("removed_by_density")] = stats.removedByDensity;
     summary[QStringLiteral("output_points")] = static_cast<int>(points.size());

@@ -8,6 +8,7 @@
 
 #include "reporting/QualityReportWriter.h"
 
+#include "geometry/TriangulationQuality.h"
 #include "project/SfmQualityJsonSerializer.h"
 #include "project/SparseResultQuality.h"
 #include "quality/SfmQualityMetrics.h"
@@ -145,9 +146,11 @@ CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruct
         qualityPoint.reprojectionErrorPx = point.error;
         qualityPoint.triangulationAngleDeg = triangulationAngle;
         std::optional<QJsonArray> observations;
+        std::vector<TiePointQualityObservation> qualityObservations;
         if (serializeDetails)
         {
             observations.emplace();
+            qualityObservations.reserve(point.track.elements.size());
         }
 
         for (const TrackElement &element : point.track.elements)
@@ -177,6 +180,10 @@ CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruct
                 {QStringLiteral("feature_idx"), static_cast<int>(element.featureIdx)},
                 {QStringLiteral("xy"), QJsonArray{keypoint.x, keypoint.y}},
             };
+            if (std::isfinite(keypoint.scale) && keypoint.scale > 0.0f)
+            {
+                observation.insert(QStringLiteral("scale"), keypoint.scale);
+            }
             collected.cameraErrors[element.imageId].first += point.error;
             ++collected.cameraErrors[element.imageId].second;
 
@@ -184,6 +191,7 @@ CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruct
             {
                 double projected[2]{};
                 const FramePinholeCamera &camera = reconstruction.camera(element.imageId);
+                qualityObservations.push_back({&camera, keypoint.scale});
                 const bool projectedOk = camera.projectWorldPoint(point.xyz.data(), projected) ||
                     camera.projectWorldPointSigned(point.xyz.data(), projected);
                 if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))
@@ -203,14 +211,27 @@ CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruct
 
         if (serializeDetails)
         {
-            collected.serializedPoints->append(QJsonObject{
+            QJsonObject serializedPoint{
                 {QStringLiteral("track_len"), static_cast<int>(point.track.length())},
                 {QStringLiteral("rms_reproj_px"), point.error},
                 {QStringLiteral("triangulation_angle_deg"), triangulationAngle},
                 {QStringLiteral("min_tri_angle_deg"), triangulationAngle},
                 {QStringLiteral("point_xyz"), QJsonArray{point.xyz[0], point.xyz[1], point.xyz[2]}},
                 {QStringLiteral("observations"), *observations},
-            });
+            };
+            const double uncertainty = reconstructionUncertainty(qualityObservations, point.xyz);
+            const double accuracy = projectionAccuracy(qualityObservations);
+            if (qualityObservations.size() == point.track.elements.size()
+                && std::isfinite(uncertainty))
+            {
+                serializedPoint.insert(QStringLiteral("reconstruction_uncertainty"), uncertainty);
+            }
+            if (qualityObservations.size() == point.track.elements.size()
+                && std::isfinite(accuracy))
+            {
+                serializedPoint.insert(QStringLiteral("projection_accuracy"), accuracy);
+            }
+            collected.serializedPoints->append(serializedPoint);
         }
         collected.qualityPoints.push_back(std::move(qualityPoint));
     }

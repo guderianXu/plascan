@@ -40,7 +40,9 @@ struct ImageCountMetadata
 enum class QualityCriterion
 {
     ReprojectionError,
+    ReconstructionUncertainty,
     ImageCount,
+    ProjectionAccuracy,
     MinimumTriangulationAngle
 };
 
@@ -55,10 +57,14 @@ struct PrunePreviewQuery
 struct QualityMetadata
 {
     QVector<double> reprojectionErrors;
+    QVector<double> reconstructionUncertainties;
     QVector<int> imageCounts;
+    QVector<double> projectionAccuracies;
     QVector<double> minimumTriangulationAngles;
     ScalarRange reprojectionErrorRange;
+    ScalarRange reconstructionUncertaintyRange;
     ScalarRange imageCountRange;
+    ScalarRange projectionAccuracyRange;
     ScalarRange minimumTriangulationAngleRange;
     qsizetype sourcePointCount = 0;
     QString errorMessage;

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -124,6 +125,7 @@ TEST(SfmAttemptRunnerTest, ReadsPersistedTiePointTracksIntoCompactObservationGra
     EXPECT_EQ(graph.imagePaths.size(), 2);
     EXPECT_EQ(graph.keypointsByImage.value(0).size(), 2u);
     EXPECT_EQ(graph.keypointsByImage.value(1).size(), 2u);
+    EXPECT_TRUE(std::isnan(graph.keypointsByImage.value(0).front().scale));
     ASSERT_EQ(graph.matchPairs.size(), 1u);
     EXPECT_EQ(graph.matchPairs.front().matches.size(), 2u);
     EXPECT_EQ(graph.trackCount, 2);
@@ -147,6 +149,7 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
             {QStringLiteral("image_id"), imageId},
             {QStringLiteral("feature_idx"), featureIndex},
             {QStringLiteral("xy"), QJsonArray{x, 20.0}},
+            {QStringLiteral("scale"), 2.5},
         };
     };
     writeJson(tiePointPath,
@@ -180,6 +183,8 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
     EXPECT_EQ(graph.trackCount, 1);
     EXPECT_EQ(graph.directEdgeCount, 2u);
     EXPECT_EQ(graph.synthesizedClosureEdgeCount, 0u);
+    ASSERT_FALSE(graph.keypointsByImage.value(0).empty());
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 2.5f);
     ASSERT_EQ(graph.matchPairs.size(), 2u);
     EXPECT_EQ(graph.matchPairs[0].matches.size(), 1u);
     EXPECT_EQ(graph.matchPairs[1].matches.size(), 1u);

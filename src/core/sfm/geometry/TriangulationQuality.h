@@ -25,6 +25,26 @@ struct PairIntersectionCandidate
     bool valid = false; ///< 至少一个方向假设产生有限点和有限重投影误差。
 };
 
+struct TiePointQualityObservation
+{
+    const FramePinholeCamera *camera = nullptr;
+    double measurementScale = 1.0;
+};
+
+/**
+ * @brief 计算固定相机条件下的三维点重建不确定度。
+ *
+ * 返回点协方差椭球最大/最小半轴之比，即点法矩阵条件数的平方根。
+ * 相机内外参不确定度不传播到该指标；退化几何返回有限上限值，输入不足返回 NaN。
+ */
+double reconstructionUncertainty(
+    const std::vector<TiePointQualityObservation> &observations,
+    const std::array<double, 3> &worldPoint);
+
+/// 返回全部观测特征尺度的算术平均；任一尺度缺失或非法时返回 NaN。
+double projectionAccuracy(
+    const std::vector<TiePointQualityObservation> &observations);
+
 /**
  * @brief 返回轨迹所有有效相机对中的最小三角化角。
  *

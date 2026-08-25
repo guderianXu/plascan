@@ -845,6 +845,18 @@ TEST(CameraSceneRenderContractTest, CleanTiePointsWiresPreviewDeleteAndReload)
     EXPECT_TRUE(mainWindow.contains(QStringLiteral(
         "settings[QStringLiteral(\"filterByDensity\")] = false")));
     EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "settings[QStringLiteral(\"filterByReconstructionUncertainty\")] = true")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "settings[QStringLiteral(\"filterByProjectionAccuracy\")] = true")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "dlg.hasStagedDeletion(DialogCriterion::ReconstructionUncertainty)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "dlg.hasStagedDeletion(DialogCriterion::ProjectionAccuracy)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "connect(&dlg, &QDialog::finished, &dialogLoop, &QEventLoop::quit)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("dlg.show()")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("dialogLoop.exec()")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
         "&ProjectManager::tiePointResultReady")));
     EXPECT_TRUE(mainWindow.contains(QStringLiteral(
         "showTiePointCloudFile(sparseCloudPath, sidecarPath)")));

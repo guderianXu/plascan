@@ -399,8 +399,11 @@ TEST(WorkflowParameterDialogStyleTest, TiePointAndAerialDialogsReuseStableContro
     EXPECT_EQ(create_dialog.findChild<QLabel*>(QStringLiteral("m_preselectionStatusLabel")), nullptr);
 
     EXPECT_EQ(clean_dialog.windowTitle(), QStringLiteral("清理连接点"));
+    EXPECT_EQ(clean_dialog.windowModality(), Qt::NonModal);
+    EXPECT_EQ(clean_dialog.windowFlags() & Qt::WindowType_Mask, Qt::Tool);
     EXPECT_NE(clean_dialog.findChild<QSlider*>(QStringLiteral("cleanTiePointsLevelSlider")), nullptr);
     EXPECT_NE(clean_dialog.findChild<QDoubleSpinBox*>(QStringLiteral("cleanTiePointsLevelSpin")), nullptr);
+    EXPECT_NE(clean_dialog.findChild<QLabel*>(QStringLiteral("cleanTiePointsPreviewHintLabel")), nullptr);
 
     aerial_dialog.setImageCount(6);
     auto* status = aerial_dialog.findChild<QLabel*>(QStringLiteral("m_statusLabel"));
@@ -442,7 +445,7 @@ TEST(CleanTiePointsDialogTest, SliderSpinBoxAndCandidateCountDriveLivePreview)
     EXPECT_EQ(level_spin->decimals(), 2);
     EXPECT_DOUBLE_EQ(level_spin->minimum(), 0.0);
     EXPECT_DOUBLE_EQ(level_spin->maximum(), 4.0);
-    EXPECT_EQ(level_slider->value(), 300);
+    EXPECT_EQ(level_slider->value(), 700);
     EXPECT_EQ(preview_spy.count(), 1);
     EXPECT_FALSE(delete_button->isEnabled());
     EXPECT_FALSE(button_box->button(QDialogButtonBox::Ok)->isEnabled());
@@ -468,8 +471,8 @@ TEST(CleanTiePointsDialogTest, SliderSpinBoxAndCandidateCountDriveLivePreview)
     EXPECT_TRUE(candidate_label->text().contains(QStringLiteral("已暂删：12")));
 
     level_slider->setValue(750);
-    EXPECT_DOUBLE_EQ(level_spin->value(), 3.0);
-    EXPECT_DOUBLE_EQ(dialog.level(), 3.0);
+    EXPECT_DOUBLE_EQ(level_spin->value(), 1.0);
+    EXPECT_DOUBLE_EQ(dialog.level(), 1.0);
     EXPECT_EQ(preview_spy.count(), 2);
     EXPECT_EQ(dialog.candidateCount(), -1);
     EXPECT_FALSE(delete_button->isEnabled());
@@ -489,7 +492,63 @@ TEST(CleanTiePointsDialogTest, SliderSpinBoxAndCandidateCountDriveLivePreview)
     EXPECT_EQ(cleared_spy.count(), 1);
 }
 
-TEST(CleanTiePointsDialogTest, ExposesSupportedCriteriaAndRejectsUnavailableCriteria)
+TEST(CleanTiePointsDialogTest, SliderRightAlwaysUsesMoreAggressiveThreshold)
+{
+    CleanTiePointsDialog dialog;
+    auto *level_slider = dialog.findChild<QSlider*>(
+        QStringLiteral("cleanTiePointsLevelSlider"));
+    auto *level_spin = dialog.findChild<QDoubleSpinBox*>(
+        QStringLiteral("cleanTiePointsLevelSpin"));
+    auto *left_label = dialog.findChild<QLabel*>(
+        QStringLiteral("cleanTiePointsMinimumLabel"));
+    auto *right_label = dialog.findChild<QLabel*>(
+        QStringLiteral("cleanTiePointsMaximumLabel"));
+    ASSERT_NE(level_slider, nullptr);
+    ASSERT_NE(level_spin, nullptr);
+    ASSERT_NE(left_label, nullptr);
+    ASSERT_NE(right_label, nullptr);
+
+    CleanTiePointsDialog::CriterionConfiguration configuration;
+    configuration.minimum = 0.0;
+    configuration.maximum = 10.0;
+    configuration.defaultLevel = 5.0;
+    configuration.singleStep = 0.1;
+    configuration.decimals = 1;
+
+    for (const CleanTiePointsDialog::Criterion criterion : {
+             CleanTiePointsDialog::Criterion::ReprojectionError,
+             CleanTiePointsDialog::Criterion::ReconstructionUncertainty,
+             CleanTiePointsDialog::Criterion::ImageCount,
+             CleanTiePointsDialog::Criterion::ProjectionAccuracy,
+             CleanTiePointsDialog::Criterion::MinimumTriangulationAngle})
+    {
+        dialog.setCriterionConfiguration(criterion, configuration);
+        dialog.setCriterion(criterion);
+        level_slider->setValue(100);
+        const double left_level = level_spin->value();
+        level_slider->setValue(900);
+        const double right_level = level_spin->value();
+
+        const bool rejects_above =
+            criterion == CleanTiePointsDialog::Criterion::ReprojectionError
+            || criterion == CleanTiePointsDialog::Criterion::ReconstructionUncertainty
+            || criterion == CleanTiePointsDialog::Criterion::ProjectionAccuracy;
+        if (rejects_above)
+        {
+            EXPECT_GT(left_level, right_level);
+            EXPECT_EQ(left_label->text(), QStringLiteral("10.0"));
+            EXPECT_EQ(right_label->text(), QStringLiteral("0.0"));
+        }
+        else
+        {
+            EXPECT_LT(left_level, right_level);
+            EXPECT_EQ(left_label->text(), QStringLiteral("0.0"));
+            EXPECT_EQ(right_label->text(), QStringLiteral("10.0"));
+        }
+    }
+}
+
+TEST(CleanTiePointsDialogTest, ExposesAllCriteriaAndRejectsMissingMetadata)
 {
     CleanTiePointsDialog dialog;
     auto* criterion_combo = dialog.findChild<QComboBox*>(QStringLiteral("cleanTiePointsCriterionCombo"));
@@ -501,9 +560,12 @@ TEST(CleanTiePointsDialogTest, ExposesSupportedCriteriaAndRejectsUnavailableCrit
     auto* model = qobject_cast<QStandardItemModel*>(criterion_combo->model());
     ASSERT_NE(model, nullptr);
 
-    for (const CleanTiePointsDialog::Criterion criterion : {CleanTiePointsDialog::Criterion::ReprojectionError,
-                                                            CleanTiePointsDialog::Criterion::ImageCount,
-                                                            CleanTiePointsDialog::Criterion::MinimumTriangulationAngle})
+    for (const CleanTiePointsDialog::Criterion criterion : {
+             CleanTiePointsDialog::Criterion::ReprojectionError,
+             CleanTiePointsDialog::Criterion::ReconstructionUncertainty,
+             CleanTiePointsDialog::Criterion::ImageCount,
+             CleanTiePointsDialog::Criterion::ProjectionAccuracy,
+             CleanTiePointsDialog::Criterion::MinimumTriangulationAngle})
     {
         EXPECT_TRUE(dialog.criterionConfiguration(criterion).available);
         const int index = criterion_combo->findData(static_cast<int>(criterion));
@@ -511,29 +573,51 @@ TEST(CleanTiePointsDialogTest, ExposesSupportedCriteriaAndRejectsUnavailableCrit
         EXPECT_TRUE(model->item(index)->isEnabled());
     }
 
-    for (const CleanTiePointsDialog::Criterion criterion : {CleanTiePointsDialog::Criterion::ReconstructionUncertainty,
-                                                            CleanTiePointsDialog::Criterion::ProjectionAccuracy})
-    {
-        const auto configuration = dialog.criterionConfiguration(criterion);
-        EXPECT_FALSE(configuration.available);
-        EXPECT_FALSE(configuration.unavailableReason.isEmpty());
-        const int index = criterion_combo->findData(static_cast<int>(criterion));
-        ASSERT_GE(index, 0);
-        EXPECT_FALSE(model->item(index)->isEnabled());
-        EXPECT_FALSE(criterion_combo->itemData(index, Qt::ToolTipRole).toString().isEmpty());
-    }
-    EXPECT_TRUE(availability_label->text().contains(QStringLiteral("重建不确定度")));
+    CleanTiePointsDialog::CriterionConfiguration unavailable =
+        dialog.criterionConfiguration(CleanTiePointsDialog::Criterion::ProjectionAccuracy);
+    unavailable.available = false;
+    unavailable.unavailableReason = QStringLiteral("当前成果缺少 projection_accuracy 字段");
+    dialog.setCriterionConfiguration(
+        CleanTiePointsDialog::Criterion::ProjectionAccuracy, unavailable);
+    const int unavailable_index = criterion_combo->findData(
+        static_cast<int>(CleanTiePointsDialog::Criterion::ProjectionAccuracy));
+    ASSERT_GE(unavailable_index, 0);
+    EXPECT_FALSE(model->item(unavailable_index)->isEnabled());
     EXPECT_TRUE(availability_label->text().contains(QStringLiteral("投影精度")));
 
     dialog.setCriterion(CleanTiePointsDialog::Criterion::ReprojectionError);
-    dialog.setCriterion(CleanTiePointsDialog::Criterion::ReconstructionUncertainty);
+    dialog.setCriterion(CleanTiePointsDialog::Criterion::ProjectionAccuracy);
     EXPECT_EQ(dialog.criterion(), CleanTiePointsDialog::Criterion::ReprojectionError);
 
-    const int unavailable_index =
-        criterion_combo->findData(static_cast<int>(CleanTiePointsDialog::Criterion::ProjectionAccuracy));
     criterion_combo->setCurrentIndex(unavailable_index);
     EXPECT_EQ(dialog.criterion(), CleanTiePointsDialog::Criterion::None);
     EXPECT_FALSE(button_box->button(QDialogButtonBox::Ok)->isEnabled());
+}
+
+TEST(CleanTiePointsDialogTest, MergesRepeatedThresholdsByRejectionDirection)
+{
+    CleanTiePointsDialog dialog;
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ReconstructionUncertainty, 10.0, 2, 98);
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ReconstructionUncertainty, 15.0, 3, 97);
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ProjectionAccuracy, 2.0, 4, 96);
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ProjectionAccuracy, 3.0, 5, 95);
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ImageCount, 3.0, 6, 94);
+    dialog.confirmStagedDeletion(
+        CleanTiePointsDialog::Criterion::ImageCount, 2.0, 7, 93);
+
+    EXPECT_DOUBLE_EQ(dialog.stagedLevel(
+                         CleanTiePointsDialog::Criterion::ReconstructionUncertainty),
+                     10.0);
+    EXPECT_DOUBLE_EQ(dialog.stagedLevel(
+                         CleanTiePointsDialog::Criterion::ProjectionAccuracy),
+                     2.0);
+    EXPECT_DOUBLE_EQ(dialog.stagedLevel(CleanTiePointsDialog::Criterion::ImageCount),
+                     3.0);
 }
 
 TEST(WorkflowParameterDialogStyleTest, StylesheetRulesAreScopedToWorkflowDialogs)

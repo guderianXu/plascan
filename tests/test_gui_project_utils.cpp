@@ -5729,6 +5729,72 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesPointJsonAndRefreshesQ
     EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(result.extraRecord));
 }
 
+TEST(SparsePointWorkflowUtilsTest, OutlierRemovalAppliesNewQualityCriteriaTogether)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("sparse_cloud_points.json"));
+    const QJsonArray sourcePoints{
+        QJsonObject{{QStringLiteral("point_xyz"), QJsonArray{0.0, 0.0, 0.0}},
+                    {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("rms_reproj_px"), 0.2},
+                    {QStringLiteral("min_tri_angle_deg"), 4.0},
+                    {QStringLiteral("reconstruction_uncertainty"), 15.0},
+                    {QStringLiteral("projection_accuracy"), 1.0}},
+        QJsonObject{{QStringLiteral("point_xyz"), QJsonArray{1.0, 0.0, 0.0}},
+                    {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("rms_reproj_px"), 0.2},
+                    {QStringLiteral("min_tri_angle_deg"), 4.0},
+                    {QStringLiteral("reconstruction_uncertainty"), 5.0},
+                    {QStringLiteral("projection_accuracy"), 3.0}},
+        QJsonObject{{QStringLiteral("point_xyz"), QJsonArray{2.0, 0.0, 0.0}},
+                    {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("rms_reproj_px"), 0.2},
+                    {QStringLiteral("min_tri_angle_deg"), 4.0},
+                    {QStringLiteral("reconstruction_uncertainty"), 5.0},
+                    {QStringLiteral("projection_accuracy"), 1.0}}
+    };
+    QString writeError;
+    ASSERT_TRUE(xjw::core::project::writeJsonObjectFile(
+        sidecarPath,
+        QJsonObject{{QStringLiteral("points"), sourcePoints},
+                    {QStringLiteral("quality_metrics_available"), true}},
+        &writeError)) << writeError.toStdString();
+
+    xjw::core::project::SparsePointContext context;
+    context.sidecarPath = sidecarPath;
+    const QJsonObject settings{
+        {QStringLiteral("sourceKind"), QStringLiteral("project_result")},
+        {QStringLiteral("filterByReprojError"), false},
+        {QStringLiteral("filterByTrackLen"), false},
+        {QStringLiteral("filterByTriAngle"), false},
+        {QStringLiteral("filterByReconstructionUncertainty"), true},
+        {QStringLiteral("maxReconstructionUncertainty"), 10.0},
+        {QStringLiteral("filterByProjectionAccuracy"), true},
+        {QStringLiteral("maxProjectionAccuracy"), 2.0},
+        {QStringLiteral("filterByStatistical"), false},
+        {QStringLiteral("filterByDensity"), false}
+    };
+    xjw::core::project::SparsePointOperationResult result;
+    QString errorMessage;
+    ASSERT_TRUE(xjw::core::project::runSparsePointOutlierRemoval(
+        context,
+        settings,
+        QDir(tempDir.path()).filePath(QStringLiteral("out_quality")),
+        &result,
+        &errorMessage)) << errorMessage.toStdString();
+
+    EXPECT_EQ(result.inputCount, 3);
+    EXPECT_EQ(result.outputCount, 1);
+    QFile outputFile(result.sidecarPath);
+    ASSERT_TRUE(outputFile.open(QIODevice::ReadOnly));
+    const QJsonArray outputPoints = QJsonDocument::fromJson(outputFile.readAll())
+        .object().value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(outputPoints.size(), 1);
+    EXPECT_EQ(outputPoints.first().toObject(), sourcePoints.at(2).toObject());
+}
+
 TEST(MainMenuTest, FileImportMenuExposesReferenceAndCameraActions)
 {
     QMainWindow window;

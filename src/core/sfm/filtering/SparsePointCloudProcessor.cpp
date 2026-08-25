@@ -91,6 +91,39 @@ int filterByMinTriAngle(std::vector<SparsePointCloudPoint> *points,
     return before - static_cast<int>(points->size());
 }
 
+int filterByMaxReconstructionUncertainty(
+    std::vector<SparsePointCloudPoint> *points,
+    double maximum)
+{
+    if (!points || maximum < 0.0)
+    {
+        return 0;
+    }
+    const int before = static_cast<int>(points->size());
+    points->erase(std::remove_if(points->begin(), points->end(), [maximum](const SparsePointCloudPoint &point)
+    {
+        return std::isfinite(point.reconstructionUncertainty)
+            && point.reconstructionUncertainty > maximum;
+    }), points->end());
+    return before - static_cast<int>(points->size());
+}
+
+int filterByMaxProjectionAccuracy(std::vector<SparsePointCloudPoint> *points,
+                                  double maximum)
+{
+    if (!points || maximum < 0.0)
+    {
+        return 0;
+    }
+    const int before = static_cast<int>(points->size());
+    points->erase(std::remove_if(points->begin(), points->end(), [maximum](const SparsePointCloudPoint &point)
+    {
+        return std::isfinite(point.projectionAccuracy)
+            && point.projectionAccuracy > maximum;
+    }), points->end());
+    return before - static_cast<int>(points->size());
+}
+
 std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoint> &points,
                                           int index,
                                           const NeighborList &neighbors)
@@ -344,6 +377,21 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
     if (options.filterByTriAngle)
     {
         stats.removedByTriAngle = safeFilter([&]{ return filterByMinTriAngle(points, options.minTriAngleDeg); });
+    }
+    if (options.filterByReconstructionUncertainty)
+    {
+        stats.removedByReconstructionUncertainty = safeFilter([&]
+        {
+            return filterByMaxReconstructionUncertainty(
+                points, options.maxReconstructionUncertainty);
+        });
+    }
+    if (options.filterByProjectionAccuracy)
+    {
+        stats.removedByProjectionAccuracy = safeFilter([&]
+        {
+            return filterByMaxProjectionAccuracy(points, options.maxProjectionAccuracy);
+        });
     }
 
     const bool needsSpatialFilter = options.filterByStatistical || options.filterByNormalConsistency ||

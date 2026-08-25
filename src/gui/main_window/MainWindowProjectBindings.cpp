@@ -28,7 +28,9 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEventLoop>
 #include <QMimeData>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QScopedValueRollback>
@@ -684,15 +686,19 @@ void MainWindow::setupProjectManager()
                     case DialogCriterion::ReprojectionError:
                         *qualityCriterion = QualityCriterion::ReprojectionError;
                         return true;
+                    case DialogCriterion::ReconstructionUncertainty:
+                        *qualityCriterion = QualityCriterion::ReconstructionUncertainty;
+                        return true;
                     case DialogCriterion::ImageCount:
                         *qualityCriterion = QualityCriterion::ImageCount;
+                        return true;
+                    case DialogCriterion::ProjectionAccuracy:
+                        *qualityCriterion = QualityCriterion::ProjectionAccuracy;
                         return true;
                     case DialogCriterion::MinimumTriangulationAngle:
                         *qualityCriterion = QualityCriterion::MinimumTriangulationAngle;
                         return true;
                     case DialogCriterion::None:
-                    case DialogCriterion::ReconstructionUncertainty:
-                    case DialogCriterion::ProjectionAccuracy:
                         return false;
                     }
                     return false;
@@ -750,11 +756,21 @@ void MainWindow::setupProjectManager()
                               1.0,
                               0.01,
                               3);
+                    configure(DialogCriterion::ReconstructionUncertainty,
+                              QualityCriterion::ReconstructionUncertainty,
+                              10.0,
+                              0.1,
+                              2);
                     configure(DialogCriterion::ImageCount,
                               QualityCriterion::ImageCount,
                               3.0,
                               1.0,
                               0);
+                    configure(DialogCriterion::ProjectionAccuracy,
+                              QualityCriterion::ProjectionAccuracy,
+                              2.0,
+                              0.1,
+                              2);
                     configure(DialogCriterion::MinimumTriangulationAngle,
                               QualityCriterion::MinimumTriangulationAngle,
                               2.0,
@@ -847,9 +863,19 @@ void MainWindow::setupProjectManager()
                                     dlg.setCriterion(DialogCriterion::ReprojectionError);
                                 }
                                 else if (dlg.criterionConfiguration(
+                                             DialogCriterion::ReconstructionUncertainty).available)
+                                {
+                                    dlg.setCriterion(DialogCriterion::ReconstructionUncertainty);
+                                }
+                                else if (dlg.criterionConfiguration(
                                              DialogCriterion::ImageCount).available)
                                 {
                                     dlg.setCriterion(DialogCriterion::ImageCount);
+                                }
+                                else if (dlg.criterionConfiguration(
+                                             DialogCriterion::ProjectionAccuracy).available)
+                                {
+                                    dlg.setCriterion(DialogCriterion::ProjectionAccuracy);
                                 }
                                 else if (dlg.criterionConfiguration(
                                              DialogCriterion::MinimumTriangulationAngle).available)
@@ -869,9 +895,19 @@ void MainWindow::setupProjectManager()
                         dlg.setCriterion(DialogCriterion::ReprojectionError);
                     }
                     else if (dlg.criterionConfiguration(
+                                 DialogCriterion::ReconstructionUncertainty).available)
+                    {
+                        dlg.setCriterion(DialogCriterion::ReconstructionUncertainty);
+                    }
+                    else if (dlg.criterionConfiguration(
                                  DialogCriterion::ImageCount).available)
                     {
                         dlg.setCriterion(DialogCriterion::ImageCount);
+                    }
+                    else if (dlg.criterionConfiguration(
+                                 DialogCriterion::ProjectionAccuracy).available)
+                    {
+                        dlg.setCriterion(DialogCriterion::ProjectionAccuracy);
                     }
                     else if (dlg.criterionConfiguration(
                                  DialogCriterion::MinimumTriangulationAngle).available)
@@ -880,9 +916,33 @@ void MainWindow::setupProjectManager()
                     }
                 }
 
-                if (dlg.exec() != QDialog::Accepted)
+                QPointer<QAction> cleanAction = _mainMenu->cleanTiePointsAction();
+                if (cleanAction)
+                {
+                    cleanAction->setEnabled(false);
+                }
+                QEventLoop dialogLoop;
+                connect(&dlg, &QDialog::finished, &dialogLoop, &QEventLoop::quit);
+                dlg.show();
+                dialogLoop.exec();
+                if (cleanAction)
+                {
+                    cleanAction->setEnabled(true);
+                }
+
+                if (dlg.result() != QDialog::Accepted)
                 {
                     modelView->clearTiePointPruneSession();
+                    return;
+                }
+
+                if (!_projectManager || _projectManager->currentProjectPath() != projectPath)
+                {
+                    modelView->clearTiePointPruneSession();
+                    QMessageBox::warning(
+                        this,
+                        tr("清理连接点"),
+                        tr("预览期间项目已经切换，已取消本次清理。"));
                     return;
                 }
 
@@ -913,32 +973,41 @@ void MainWindow::setupProjectManager()
                 settings[QStringLiteral("filterByReprojError")] = false;
                 settings[QStringLiteral("filterByTrackLen")] = false;
                 settings[QStringLiteral("filterByTriAngle")] = false;
+                settings[QStringLiteral("filterByReconstructionUncertainty")] = false;
+                settings[QStringLiteral("filterByProjectionAccuracy")] = false;
                 settings[QStringLiteral("filterByStatistical")] = false;
                 settings[QStringLiteral("filterByDensity")] = false;
 
-                switch (dlg.criterion())
+                if (dlg.hasStagedDeletion(DialogCriterion::ReprojectionError))
                 {
-                case DialogCriterion::ReprojectionError:
                     settings[QStringLiteral("filterByReprojError")] = true;
-                    settings[QStringLiteral("maxReprojError")] = dlg.level();
-                    break;
-                case DialogCriterion::ImageCount:
+                    settings[QStringLiteral("maxReprojError")] =
+                        dlg.stagedLevel(DialogCriterion::ReprojectionError);
+                }
+                if (dlg.hasStagedDeletion(DialogCriterion::ReconstructionUncertainty))
+                {
+                    settings[QStringLiteral("filterByReconstructionUncertainty")] = true;
+                    settings[QStringLiteral("maxReconstructionUncertainty")] =
+                        dlg.stagedLevel(DialogCriterion::ReconstructionUncertainty);
+                }
+                if (dlg.hasStagedDeletion(DialogCriterion::ImageCount))
+                {
                     settings[QStringLiteral("filterByTrackLen")] = true;
                     settings[QStringLiteral("minTrackLen")] =
-                        static_cast<int>(std::lround(dlg.level()));
-                    break;
-                case DialogCriterion::MinimumTriangulationAngle:
+                        static_cast<int>(std::lround(
+                            dlg.stagedLevel(DialogCriterion::ImageCount)));
+                }
+                if (dlg.hasStagedDeletion(DialogCriterion::ProjectionAccuracy))
+                {
+                    settings[QStringLiteral("filterByProjectionAccuracy")] = true;
+                    settings[QStringLiteral("maxProjectionAccuracy")] =
+                        dlg.stagedLevel(DialogCriterion::ProjectionAccuracy);
+                }
+                if (dlg.hasStagedDeletion(DialogCriterion::MinimumTriangulationAngle))
+                {
                     settings[QStringLiteral("filterByTriAngle")] = true;
-                    settings[QStringLiteral("minTriAngleDeg")] = dlg.level();
-                    break;
-                case DialogCriterion::None:
-                case DialogCriterion::ReconstructionUncertainty:
-                case DialogCriterion::ProjectionAccuracy:
-                    modelView->clearTiePointPrunePreview();
-                    QMessageBox::warning(this,
-                                         tr("清理连接点"),
-                                         tr("所选标准尚无可执行的剔除算法。"));
-                    return;
+                    settings[QStringLiteral("minTriAngleDeg")] =
+                        dlg.stagedLevel(DialogCriterion::MinimumTriangulationAngle);
                 }
 
                 modelView->clearTiePointPrunePreview();

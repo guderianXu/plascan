@@ -679,7 +679,7 @@ gui/
 │   │   ├── MapProjectDialogLayout.cpp     # 产品模式、双栏参数、输出和进度分组布局
 │   │   ├── MapProjectDialogSettings.cpp   # 稳定 token、设置往返、输入校验与控件联动
 │   │   └── MapProjectDialogEstimate.cpp   # DEM 元数据读取、真实像元/范围和内存估算
-│   ├── tie_points/             # 连接点创建/清理/查看与重叠分析；清理对话框将阈值滑块连到后台候选预览
+│   ├── tie_points/             # 连接点创建/清理/查看与重叠分析；清理支持重投影误差、重建不确定度、图像计数、投影精度和交会角的后台候选预览
 │   ├── shared/                 # 对话框共享样式与布局辅助
 │   └── README.md               # 分类规则与新增对话框约束
 │

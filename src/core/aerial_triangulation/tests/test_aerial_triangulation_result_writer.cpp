@@ -31,12 +31,13 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     xjw::ImageData imageAData;
     imageAData.id = 0;
     imageAData.imagePath = imageAPath.toStdString();
-    imageAData.keypoints = {{32.0f, 24.0f}};
+    imageAData.keypoints = {{32.0f, 24.0f, 2.0f}};
     imageAData.point3DIds = {xjw::kInvalidPoint3DId};
     reconstruction->addImage(imageAData);
     xjw::ImageData imageBData = imageAData;
     imageBData.id = 1;
     imageBData.imagePath = imageBPath.toStdString();
+    imageBData.keypoints = {{32.0f, 24.0f, 4.0f}};
     reconstruction->addImage(imageBData);
 
     xjw::FramePinholeCamera cameraA;
@@ -91,6 +92,10 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     ASSERT_TRUE(sidecar.open(QIODevice::ReadOnly));
     const QJsonObject sidecarObject = QJsonDocument::fromJson(sidecar.readAll()).object();
     EXPECT_EQ(sidecarObject.value(QStringLiteral("points")).toArray().size(), 1);
+    const QJsonObject sidecarPoint =
+        sidecarObject.value(QStringLiteral("points")).toArray().first().toObject();
+    EXPECT_TRUE(sidecarPoint.value(QStringLiteral("reconstruction_uncertainty")).toDouble() >= 1.0);
+    EXPECT_DOUBLE_EQ(sidecarPoint.value(QStringLiteral("projection_accuracy")).toDouble(), 3.0);
     EXPECT_EQ(execution.result.qualityMetadata.value(QStringLiteral("result_kind")).toString(),
               QStringLiteral("sfm_sparse_reconstruction"));
     EXPECT_EQ(execution.result.perCameraResiduals.size(), 2);

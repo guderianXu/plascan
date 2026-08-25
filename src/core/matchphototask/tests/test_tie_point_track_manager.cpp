@@ -109,7 +109,13 @@ TEST(TiePointTrackManagerTest, BuildsFinalMultiviewTracksFromInMemoryPairData)
     EXPECT_EQ(summary.value(QStringLiteral("rejected_inconsistent_bridge_edges")).toInt(), 0);
     EXPECT_EQ(summary.value(QStringLiteral("accepted_supported_bridge_edges")).toInt(), 0);
     const QJsonObject storedTrack = stored.value(QStringLiteral("tracks")).toArray().first().toObject();
-    EXPECT_EQ(storedTrack.value(QStringLiteral("observations")).toArray().size(), 3);
+    const QJsonArray storedObservations =
+        storedTrack.value(QStringLiteral("observations")).toArray();
+    EXPECT_EQ(storedObservations.size(), 3);
+    for (const QJsonValue &value : storedObservations)
+    {
+        EXPECT_DOUBLE_EQ(value.toObject().value(QStringLiteral("scale")).toDouble(), 1.0);
+    }
     const QJsonArray directEdges = storedTrack.value(QStringLiteral("direct_edges")).toArray();
     ASSERT_EQ(directEdges.size(), 2);
     EXPECT_EQ(directEdges.at(0).toArray(), QJsonArray({0, 1}));

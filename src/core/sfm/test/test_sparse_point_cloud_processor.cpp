@@ -194,3 +194,39 @@ TEST(SparsePointCloudProcessorTest, ZeroReprojectionThresholdIsAppliedWithoutCle
     EXPECT_EQ(stats.removedByReprojError, 0);
     EXPECT_EQ(points.size(), 2u);
 }
+
+TEST(SparsePointCloudProcessorTest, FiltersUncertaintyAndProjectionAccuracyAboveThreshold)
+{
+    std::vector<SparsePointCloudPoint> points = {
+        makePoint(0.0, 0.0, 0.0, 0.2, 3.0, 4),
+        makePoint(1.0, 0.0, 0.0, 0.2, 3.0, 4),
+        makePoint(2.0, 0.0, 0.0, 0.2, 3.0, 4),
+        makePoint(3.0, 0.0, 0.0, 0.2, 3.0, 4)
+    };
+    points[0].reconstructionUncertainty = 5.0;
+    points[0].projectionAccuracy = 1.0;
+    points[1].reconstructionUncertainty = 15.0;
+    points[1].projectionAccuracy = 1.0;
+    points[2].reconstructionUncertainty = 6.0;
+    points[2].projectionAccuracy = 3.0;
+
+    SparsePointCloudFilterOptions options;
+    options.filterByReprojError = false;
+    options.filterByTrackLen = false;
+    options.filterByTriAngle = false;
+    options.filterByReconstructionUncertainty = true;
+    options.maxReconstructionUncertainty = 10.0;
+    options.filterByProjectionAccuracy = true;
+    options.maxProjectionAccuracy = 2.0;
+    options.filterByStatistical = false;
+    options.filterByDensity = false;
+
+    const SparsePointCloudFilterStats stats =
+        SparsePointCloudProcessor::filter(&points, options);
+
+    EXPECT_EQ(stats.removedByReconstructionUncertainty, 1);
+    EXPECT_EQ(stats.removedByProjectionAccuracy, 1);
+    ASSERT_EQ(points.size(), 2u);
+    EXPECT_DOUBLE_EQ(points[0].x, 0.0);
+    EXPECT_DOUBLE_EQ(points[1].x, 3.0);
+}

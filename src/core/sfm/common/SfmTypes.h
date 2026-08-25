@@ -82,6 +82,7 @@ struct ImagePairHash {
 struct FeatureKeypoint {
     float x = 0.0f;  ///< u 坐标（列）
     float y = 0.0f;  ///< v 坐标（行）
+    float scale = 1.0f; ///< 检测特征尺度；用于逐点投影精度和观测权重诊断。
 };
 
 /**

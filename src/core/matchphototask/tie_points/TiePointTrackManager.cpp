@@ -180,7 +180,8 @@ namespace xjw
                 {
                     const FeatureKeypoint& keypoint = keypointsIt->second[static_cast<std::size_t>(element.featureIdx)];
                     object += QByteArrayLiteral(",\"xy\":[") + jsonNumber(keypoint.x) + QByteArrayLiteral(",") +
-                              jsonNumber(keypoint.y) + QByteArrayLiteral("]");
+                              jsonNumber(keypoint.y) + QByteArrayLiteral("]") + QByteArrayLiteral(",\"scale\":") +
+                              jsonNumber(keypoint.scale);
                 }
 
                 object += QByteArrayLiteral("}");
@@ -493,7 +494,7 @@ namespace xjw
                     return;
                 }
                 (*sparseKeypoints)[imageId][static_cast<FeatureIdx>(observation.featureId)] =
-                    FeatureKeypoint{observation.x, observation.y};
+                    FeatureKeypoint{observation.x, observation.y, observation.scale};
             }
 
             std::vector<FeatureKeypoint> denseKeypointVector(const std::map<FeatureIdx, FeatureKeypoint>& sparse)

@@ -49,6 +49,13 @@ bool finiteNonNegativeNumber(const QJsonObject &object,
     return true;
 }
 
+bool finitePositiveNumber(const QJsonObject &object,
+                          const QString &key,
+                          double *value)
+{
+    return finiteNonNegativeNumber(object, key, value) && *value > 0.0;
+}
+
 bool nonNegativeInteger(const QJsonObject &object,
                         const QString &key,
                         int *value)
@@ -118,7 +125,9 @@ bool QualityMetadata::isValidFor(qsizetype pointCount) const
 {
     return pointCount > 0 && sourcePointCount == pointCount
         && (hasCriterion(QualityCriterion::ReprojectionError, pointCount)
+            || hasCriterion(QualityCriterion::ReconstructionUncertainty, pointCount)
             || hasCriterion(QualityCriterion::ImageCount, pointCount)
+            || hasCriterion(QualityCriterion::ProjectionAccuracy, pointCount)
             || hasCriterion(QualityCriterion::MinimumTriangulationAngle,
                             pointCount));
 }
@@ -139,8 +148,12 @@ bool QualityMetadata::hasCriterion(QualityCriterion criterion,
     {
     case QualityCriterion::ReprojectionError:
         return reprojectionErrors.size() == expected;
+    case QualityCriterion::ReconstructionUncertainty:
+        return reconstructionUncertainties.size() == expected;
     case QualityCriterion::ImageCount:
         return imageCounts.size() == expected;
+    case QualityCriterion::ProjectionAccuracy:
+        return projectionAccuracies.size() == expected;
     case QualityCriterion::MinimumTriangulationAngle:
         return minimumTriangulationAngles.size() == expected;
     }
@@ -153,8 +166,12 @@ ScalarRange QualityMetadata::range(QualityCriterion criterion) const
     {
     case QualityCriterion::ReprojectionError:
         return reprojectionErrorRange;
+    case QualityCriterion::ReconstructionUncertainty:
+        return reconstructionUncertaintyRange;
     case QualityCriterion::ImageCount:
         return imageCountRange;
+    case QualityCriterion::ProjectionAccuracy:
+        return projectionAccuracyRange;
     case QualityCriterion::MinimumTriangulationAngle:
         return minimumTriangulationAngleRange;
     }
@@ -267,10 +284,14 @@ QualityMetadata loadQualityMetadata(
 
     result.sourcePointCount = points.size();
     result.reprojectionErrors.reserve(points.size());
+    result.reconstructionUncertainties.reserve(points.size());
     result.imageCounts.reserve(points.size());
+    result.projectionAccuracies.reserve(points.size());
     result.minimumTriangulationAngles.reserve(points.size());
     bool has_reprojection_errors = true;
+    bool has_reconstruction_uncertainties = true;
     bool has_image_counts = true;
+    bool has_projection_accuracies = true;
     bool has_minimum_angles = true;
     bool has_positive_minimum_angle = false;
     for (qsizetype index = 0; index < points.size(); ++index)
@@ -287,7 +308,9 @@ QualityMetadata loadQualityMetadata(
         if (!point_value.isObject())
         {
             has_reprojection_errors = false;
+            has_reconstruction_uncertainties = false;
             has_image_counts = false;
+            has_projection_accuracies = false;
             has_minimum_angles = false;
         }
 
@@ -299,12 +322,30 @@ QualityMetadata loadQualityMetadata(
         }
         result.reprojectionErrors.push_back(reprojection_error);
 
+        double reconstruction_uncertainty = 0.0;
+        if (!finitePositiveNumber(point,
+                                  QStringLiteral("reconstruction_uncertainty"),
+                                  &reconstruction_uncertainty))
+        {
+            has_reconstruction_uncertainties = false;
+        }
+        result.reconstructionUncertainties.push_back(reconstruction_uncertainty);
+
         int image_count = 0;
         if (!nonNegativeInteger(point, QStringLiteral("track_len"), &image_count))
         {
             has_image_counts = false;
         }
         result.imageCounts.push_back(image_count);
+
+        double projection_accuracy = 0.0;
+        if (!finitePositiveNumber(point,
+                                  QStringLiteral("projection_accuracy"),
+                                  &projection_accuracy))
+        {
+            has_projection_accuracies = false;
+        }
+        result.projectionAccuracies.push_back(projection_accuracy);
 
         double minimum_angle = 0.0;
         if (!finiteNonNegativeNumber(
@@ -322,23 +363,37 @@ QualityMetadata loadQualityMetadata(
     {
         result.reprojectionErrors.clear();
     }
+    if (!has_reconstruction_uncertainties)
+    {
+        result.reconstructionUncertainties.clear();
+    }
     if (!has_image_counts)
     {
         result.imageCounts.clear();
+    }
+    if (!has_projection_accuracies)
+    {
+        result.projectionAccuracies.clear();
     }
     if (!has_minimum_angles || !has_positive_minimum_angle)
     {
         result.minimumTriangulationAngles.clear();
     }
     result.reprojectionErrorRange = rangeForValues(result.reprojectionErrors);
+    result.reconstructionUncertaintyRange = rangeForValues(
+        result.reconstructionUncertainties);
     result.imageCountRange = rangeForValues(result.imageCounts);
+    result.projectionAccuracyRange = rangeForValues(result.projectionAccuracies);
     result.minimumTriangulationAngleRange = rangeForValues(
         result.minimumTriangulationAngles);
-    if (result.reprojectionErrors.isEmpty() && result.imageCounts.isEmpty()
+    if (result.reprojectionErrors.isEmpty()
+        && result.reconstructionUncertainties.isEmpty()
+        && result.imageCounts.isEmpty()
+        && result.projectionAccuracies.isEmpty()
         && result.minimumTriangulationAngles.isEmpty())
     {
         result.errorMessage = QStringLiteral(
-            "连接点质量元数据缺少有效的 rms_reproj_px、track_len 和 min_tri_angle_deg 字段");
+            "连接点质量元数据中没有可用的逐点清理指标");
     }
     return result;
 }
@@ -395,8 +450,12 @@ PruneCandidateQueryResult queryPruneCandidates(
         {
         case QualityCriterion::ReprojectionError:
             return metadata.reprojectionErrors.at(index) > query.threshold;
+        case QualityCriterion::ReconstructionUncertainty:
+            return metadata.reconstructionUncertainties.at(index) > query.threshold;
         case QualityCriterion::ImageCount:
             return double(metadata.imageCounts.at(index)) < query.threshold;
+        case QualityCriterion::ProjectionAccuracy:
+            return metadata.projectionAccuracies.at(index) > query.threshold;
         case QualityCriterion::MinimumTriangulationAngle:
             return metadata.minimumTriangulationAngles.at(index) < query.threshold;
         }

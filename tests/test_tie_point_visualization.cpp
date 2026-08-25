@@ -118,13 +118,19 @@ TEST(TiePointVisualizationTest, LoadsAllQualityFieldsInOriginalPointOrder)
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     const QJsonArray points{
         QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                    {QStringLiteral("reconstruction_uncertainty"), 5.0},
                     {QStringLiteral("track_len"), 8},
+                    {QStringLiteral("projection_accuracy"), 1.0},
                     {QStringLiteral("min_tri_angle_deg"), 6.0}},
         QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+                    {QStringLiteral("reconstruction_uncertainty"), 15.0},
                     {QStringLiteral("track_len"), 2},
+                    {QStringLiteral("projection_accuracy"), 3.0},
                     {QStringLiteral("min_tri_angle_deg"), 1.5}},
         QJsonObject{{QStringLiteral("rms_reproj_px"), 1.2},
+                    {QStringLiteral("reconstruction_uncertainty"), 7.0},
                     {QStringLiteral("track_len"), 4},
+                    {QStringLiteral("projection_accuracy"), 1.5},
                     {QStringLiteral("min_tri_angle_deg"), 3.0}}};
     file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
                    .toJson(QJsonDocument::Compact));
@@ -135,13 +141,19 @@ TEST(TiePointVisualizationTest, LoadsAllQualityFieldsInOriginalPointOrder)
     ASSERT_TRUE(metadata.errorMessage.isEmpty());
     ASSERT_TRUE(metadata.isValidFor(3));
     EXPECT_EQ(metadata.reprojectionErrors, QVector<double>({0.4, 2.5, 1.2}));
+    EXPECT_EQ(metadata.reconstructionUncertainties,
+              QVector<double>({5.0, 15.0, 7.0}));
     EXPECT_EQ(metadata.imageCounts, QVector<int>({8, 2, 4}));
+    EXPECT_EQ(metadata.projectionAccuracies,
+              QVector<double>({1.0, 3.0, 1.5}));
     EXPECT_EQ(metadata.minimumTriangulationAngles,
               QVector<double>({6.0, 1.5, 3.0}));
     EXPECT_DOUBLE_EQ(metadata.reprojectionErrorRange.minimum, 0.4);
     EXPECT_DOUBLE_EQ(metadata.reprojectionErrorRange.maximum, 2.5);
     EXPECT_DOUBLE_EQ(metadata.imageCountRange.minimum, 2.0);
     EXPECT_DOUBLE_EQ(metadata.imageCountRange.maximum, 8.0);
+    EXPECT_DOUBLE_EQ(metadata.reconstructionUncertaintyRange.maximum, 15.0);
+    EXPECT_DOUBLE_EQ(metadata.projectionAccuracyRange.maximum, 3.0);
 }
 
 TEST(TiePointVisualizationTest, KeepsAvailableCriteriaWhenOneFieldIsMissing)
@@ -231,13 +243,19 @@ TEST(TiePointVisualizationTest, QueriesPruneCandidatesWithCriterionDirection)
     QualityMetadata metadata;
     metadata.sourcePointCount = 4;
     metadata.reprojectionErrors = {0.4, 2.5, 1.2, 3.0};
+    metadata.reconstructionUncertainties = {5.0, 15.0, 7.0, 20.0};
     metadata.imageCounts = {8, 2, 4, 1};
+    metadata.projectionAccuracies = {1.0, 3.0, 1.5, 4.0};
     metadata.minimumTriangulationAngles = {6.0, 1.5, 3.0, 0.5};
 
     const auto reprojection = queryPruneCandidates(
         metadata, {QualityCriterion::ReprojectionError, 1.5}, 4);
     const auto image_count = queryPruneCandidates(
         metadata, {QualityCriterion::ImageCount, 3.0}, 4);
+    const auto uncertainty = queryPruneCandidates(
+        metadata, {QualityCriterion::ReconstructionUncertainty, 10.0}, 4);
+    const auto projection_accuracy = queryPruneCandidates(
+        metadata, {QualityCriterion::ProjectionAccuracy, 2.0}, 4);
     const auto angle = queryPruneCandidates(
         metadata, {QualityCriterion::MinimumTriangulationAngle, 2.0}, 4);
 
@@ -247,6 +265,10 @@ TEST(TiePointVisualizationTest, QueriesPruneCandidatesWithCriterionDirection)
     ASSERT_TRUE(image_count.succeeded());
     EXPECT_EQ(image_count.candidateCount, 2);
     EXPECT_EQ(image_count.indices, (std::vector<std::uint32_t>{1U, 3U}));
+    ASSERT_TRUE(uncertainty.succeeded());
+    EXPECT_EQ(uncertainty.indices, (std::vector<std::uint32_t>{1U, 3U}));
+    ASSERT_TRUE(projection_accuracy.succeeded());
+    EXPECT_EQ(projection_accuracy.indices, (std::vector<std::uint32_t>{1U, 3U}));
     ASSERT_TRUE(angle.succeeded());
     EXPECT_EQ(angle.candidateCount, 2);
     EXPECT_EQ(angle.indices, (std::vector<std::uint32_t>{1U, 3U}));

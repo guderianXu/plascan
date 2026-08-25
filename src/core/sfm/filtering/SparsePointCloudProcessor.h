@@ -20,6 +20,8 @@ struct SparsePointCloudPoint
     double z = 0.0;
     double rmsReprojPx = 0.0;
     double minTriAngleDeg = 0.0;
+    double reconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
+    double projectionAccuracy = std::numeric_limits<double>::quiet_NaN();
     int trackLen = 0;
     bool hasColor = false;
     std::uint8_t red = 255;
@@ -39,6 +41,12 @@ struct SparsePointCloudFilterOptions
 
     bool filterByTriAngle = true;
     double minTriAngleDeg = 2.0;
+
+    bool filterByReconstructionUncertainty = false;
+    double maxReconstructionUncertainty = 10.0;
+
+    bool filterByProjectionAccuracy = false;
+    double maxProjectionAccuracy = 2.0;
 
     bool filterByStatistical = true;
     int statK = 16;
@@ -65,6 +73,8 @@ struct SparsePointCloudFilterStats
     int removedByReprojError = 0;
     int removedByTrackLen = 0;
     int removedByTriAngle = 0;
+    int removedByReconstructionUncertainty = 0;
+    int removedByProjectionAccuracy = 0;
     int removedByStatistical = 0;
     int removedByNormalConsistency = 0;
     int removedByDensity = 0;

@@ -25,12 +25,22 @@ namespace
 
 constexpr int kSliderSteps = 1000;
 
+bool rejectsAboveThreshold(CleanTiePointsDialog::Criterion criterion)
+{
+    return criterion == CleanTiePointsDialog::Criterion::ReprojectionError
+        || criterion == CleanTiePointsDialog::Criterion::ReconstructionUncertainty
+        || criterion == CleanTiePointsDialog::Criterion::ProjectionAccuracy;
+}
+
 } // namespace
 
 CleanTiePointsDialog::CleanTiePointsDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("清理连接点"));
+    setWindowFlag(Qt::Tool, true);
+    setWindowModality(Qt::NonModal);
+    setModal(false);
     xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     initializeCriterionConfigurations();
     buildUi();
@@ -199,7 +209,7 @@ void CleanTiePointsDialog::confirmStagedDeletion(Criterion criterion,
     if (_stagedLevels.contains(key))
     {
         const double previous_level = _stagedLevels.value(key);
-        level = criterion == Criterion::ReprojectionError
+        level = rejectsAboveThreshold(criterion)
             ? std::min(previous_level, level)
             : std::max(previous_level, level);
     }
@@ -228,25 +238,25 @@ void CleanTiePointsDialog::initializeCriterionConfigurations()
                                         true, 0.0, 10.0, 1.0, 0.01, 3, QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::ReconstructionUncertainty),
                                     CriterionConfiguration{
-                                        false,
+                                        true,
                                         0.0,
                                         100.0,
                                         10.0,
                                         0.1,
                                         2,
-                                        tr("当前连接点结果尚未生成重建不确定度指标。")});
+                                        QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::ImageCount),
                                     CriterionConfiguration{
                                         true, 2.0, 100.0, 3.0, 1.0, 0, QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::ProjectionAccuracy),
                                     CriterionConfiguration{
-                                        false,
+                                        true,
                                         0.0,
                                         100.0,
-                                        1.0,
+                                        2.0,
                                         0.1,
                                         2,
-                                        tr("当前连接点结果尚未生成投影精度指标。")});
+                                        QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::MinimumTriangulationAngle),
                                     CriterionConfiguration{
                                         true, 0.0, 180.0, 2.0, 0.1, 2, QString()});
@@ -297,6 +307,7 @@ void CleanTiePointsDialog::buildUi()
     _levelSlider->setRange(0, kSliderSteps);
     _levelSlider->setPageStep(50);
     _levelSlider->setTracking(true);
+    _levelSlider->setToolTip(tr("向右拖动会增加候选剔除点数。"));
     _maximumLabel = new QLabel(levelWidget);
     _maximumLabel->setObjectName(QStringLiteral("cleanTiePointsMaximumLabel"));
     _maximumLabel->setMinimumWidth(42);
@@ -316,6 +327,13 @@ void CleanTiePointsDialog::buildUi()
     _candidateCountLabel->setObjectName(QStringLiteral("cleanTiePointsCandidateCountLabel"));
     _candidateCountLabel->setWordWrap(true);
     formLayout->addRow(QString(), _candidateCountLabel);
+
+    auto *previewHint = new QLabel(
+        tr("向右拖动会增加候选点；可移动本窗口并在主视图中旋转、缩放点云。"),
+        generalGroup);
+    previewHint->setObjectName(QStringLiteral("cleanTiePointsPreviewHintLabel"));
+    previewHint->setWordWrap(true);
+    formLayout->addRow(QString(), previewHint);
     mainLayout->addWidget(generalGroup);
 
     auto *buttonBox = new QDialogButtonBox(
@@ -485,12 +503,18 @@ void CleanTiePointsDialog::applyCurrentCriterionConfiguration(bool useDefaultLev
 
     if (_minimumLabel)
     {
-        _minimumLabel->setText(available ? formattedLevel(configuration.minimum) : QString());
+        const double leftValue = rejectsAboveThreshold(selected)
+            ? configuration.maximum
+            : configuration.minimum;
+        _minimumLabel->setText(available ? formattedLevel(leftValue) : QString());
         _minimumLabel->setEnabled(available);
     }
     if (_maximumLabel)
     {
-        _maximumLabel->setText(available ? formattedLevel(configuration.maximum) : QString());
+        const double rightValue = rejectsAboveThreshold(selected)
+            ? configuration.minimum
+            : configuration.maximum;
+        _maximumLabel->setText(available ? formattedLevel(rightValue) : QString());
         _maximumLabel->setEnabled(available);
     }
     if (_okButton)
@@ -621,18 +645,26 @@ int CleanTiePointsDialog::sliderPositionForValue(double value) const
     {
         return 0;
     }
-    const double normalized = std::clamp((value - configuration.minimum) / span,
-                                         0.0,
-                                         1.0);
+    double normalized = std::clamp((value - configuration.minimum) / span,
+                                   0.0,
+                                   1.0);
+    if (rejectsAboveThreshold(criterion()))
+    {
+        normalized = 1.0 - normalized;
+    }
     return static_cast<int>(std::lround(normalized * kSliderSteps));
 }
 
 double CleanTiePointsDialog::valueForSliderPosition(int position) const
 {
     const CriterionConfiguration configuration = criterionConfiguration(criterion());
-    const double normalized = std::clamp(static_cast<double>(position) / kSliderSteps,
-                                         0.0,
-                                         1.0);
+    double normalized = std::clamp(static_cast<double>(position) / kSliderSteps,
+                                   0.0,
+                                   1.0);
+    if (rejectsAboveThreshold(criterion()))
+    {
+        normalized = 1.0 - normalized;
+    }
     return configuration.minimum
         + normalized * (configuration.maximum - configuration.minimum);
 }

@@ -836,6 +836,10 @@ namespace xjw::aerial_triangulation
 
                 const double x = xy.at(0).toDouble(std::numeric_limits<double>::quiet_NaN());
                 const double y = xy.at(1).toDouble(std::numeric_limits<double>::quiet_NaN());
+                const double scale = observationObject.contains(QStringLiteral("scale"))
+                    ? observationObject.value(QStringLiteral("scale")).toDouble(
+                          std::numeric_limits<double>::quiet_NaN())
+                    : std::numeric_limits<double>::quiet_NaN();
                 if (!std::isfinite(x) || !std::isfinite(y))
                 {
                     continue;
@@ -849,7 +853,8 @@ namespace xjw::aerial_triangulation
                 {
                     compactIndex = static_cast<FeatureIdx>(graph->keypointsByImage[imageId].size());
                     indexMap.insert(originalKey, compactIndex);
-                    graph->keypointsByImage[imageId].push_back({static_cast<float>(x), static_cast<float>(y)});
+                    graph->keypointsByImage[imageId].push_back(
+                        {static_cast<float>(x), static_cast<float>(y), static_cast<float>(scale)});
                 }
                 const ParsedObservation parsed{imageId, compactIndex};
                 persistedObservations[static_cast<std::size_t>(persistedIndex)] = parsed;
