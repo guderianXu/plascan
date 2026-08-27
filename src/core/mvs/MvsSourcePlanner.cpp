@@ -1147,6 +1147,26 @@ std::vector<int> planMvsRepairSourceViews(
     return sources;
 }
 
+int recommendedMvsCrossViewSourceCount(
+    MvsSceneProfile sceneProfile,
+    int configuredSourceCount,
+    int viewCount)
+{
+    if (viewCount <= 1)
+    {
+        return 0;
+    }
+
+    constexpr int maximum_cross_view_sources = 16;
+    const int maximum_available = std::min(
+        maximum_cross_view_sources, viewCount - 1);
+    const int configured_count = std::clamp(
+        configuredSourceCount, 1, maximum_available);
+    return sceneProfile == MvsSceneProfile::OrbitalObject
+        ? maximum_available
+        : configured_count;
+}
+
 std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<MvsSourcePairQuality> &qualities,
     const std::vector<std::string> &imagePaths)

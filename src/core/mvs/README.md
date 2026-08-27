@@ -16,6 +16,18 @@ large projects can be resumed and diagnosed.
 These services do not depend on CLI option objects and can be reused by GUI or batch workflows. Their tests
 live under `src/core/mvs/tests/`.
 
+For orbital captures, PatchMatch keeps its smaller scene-adaptive source set,
+while cross-camera depth consensus reuses up to 16 already-computed neighboring
+depth maps. Each source is projected into the reference camera with an
+independent z-buffer; the dominant layer requires at least two distinct sources
+within a 1% relative-depth interval. Missing pair-audit metadata therefore does
+not discard an otherwise completed neighboring depth map from this geometry-only
+verification stage.
+
+Revision 52 introduces this 16-source, 1% cross-camera consensus contract.
+PatchMatch source counts are unchanged, but earlier depth batches are
+regenerated because consistency filtering and repaired coverage can change.
+
 ## Runtime State
 
 - `MvsWorkspaceManifest` is the disk record for depth estimation. Each frame stores the reference image,

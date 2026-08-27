@@ -32,7 +32,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 47;
+inline constexpr int kMvsDepthAlgorithmRevision = 52;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair

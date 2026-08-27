@@ -2068,8 +2068,8 @@ CrossViewHoleRepairOptions orbitalCrossViewHoleRepairOptions(
     const DepthGenConfig &config)
 {
     CrossViewHoleRepairOptions options;
-    options.minimumDistinctSourceCount = 3;
-    options.maximumRelativeDepthSpread = 0.015f;
+    options.minimumDistinctSourceCount = 2;
+    options.maximumRelativeDepthSpread = 0.010f;
     options.maximumProjectionDistancePixels = 0.8f;
     options.maximumLocalRelativeDepthDifference = 0.035f;
     options.repairedConfidence = 0.70f;
@@ -7298,12 +7298,16 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         return;
     }
 
+    const int cross_view_source_count = recommendedMvsCrossViewSourceCount(
+        _effectiveSceneProfile,
+        _config.crossViewHoleRepairSourceCount,
+        NV);
     const std::vector<DepthConsistencyFrameSourcePlan> source_plans =
         freezeDepthConsistencySourcePlans(
             _depthFrames,
             NV,
             _effectiveSceneProfile,
-            _config.crossViewHoleRepairSourceCount);
+            cross_view_source_count);
 
     // ── 先保存所有帧的原始深度图拷贝，避免顺序处理的级联清除问题 ──────
     const bool capture_adaptive_reliability =
@@ -8791,8 +8795,16 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
     };
 
     const int row_workers = resolvedTotalCpuThreadBudget(_config);
-    const std::vector<DepthConsistencyFrameSourcePlan> source_plans = freezeDepthConsistencySourcePlans(
-        _depthFrames, view_count, _effectiveSceneProfile, _config.crossViewHoleRepairSourceCount);
+    const int cross_view_source_count = recommendedMvsCrossViewSourceCount(
+        _effectiveSceneProfile,
+        _config.crossViewHoleRepairSourceCount,
+        view_count);
+    const std::vector<DepthConsistencyFrameSourcePlan> source_plans =
+        freezeDepthConsistencySourcePlans(
+            _depthFrames,
+            view_count,
+            _effectiveSceneProfile,
+            cross_view_source_count);
     int completed_frames = 0;
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)

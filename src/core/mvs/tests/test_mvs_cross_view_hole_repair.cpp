@@ -292,6 +292,23 @@ TEST(DepthCrossViewHoleRepairTest, RepairsHoleConfirmedByTwoDistinctSources)
     EXPECT_NEAR(inverse_squared_sum.at<float>(32, 32), 0.25f, 1.0e-4f);
 }
 
+TEST(DepthCrossViewHoleRepairTest, DefaultConsensusRejectsDepthsOutsideOnePercent)
+{
+    cv::Mat reference(24, 24, CV_32FC1, cv::Scalar(0.0f));
+    const cv::Mat support(24, 24, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(24, 24, CV_32FC1, cv::Scalar(2.0f)),
+        cv::Mat(24, 24, CV_32FC1, cv::Scalar(2.03f))};
+
+    const xjw::mvs::CrossViewHoleRepairStats stats =
+        xjw::mvs::repairDepthHolesFromProjectedSources(
+            reference, support, projected);
+
+    EXPECT_EQ(stats.repairedPixelCount, 0U);
+    EXPECT_EQ(stats.rejectedDepthSpreadCount, reference.total());
+    EXPECT_EQ(cv::countNonZero(reference > 0.0f), 0);
+}
+
 TEST(DepthCrossViewHoleRepairTest, RejectsDisagreeingDepthModes)
 {
     cv::Mat reference(32, 32, CV_32FC1, cv::Scalar(0.0f));

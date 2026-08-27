@@ -20,6 +20,7 @@ using xjw::mvs::MvsSourceVerificationStatus;
 using xjw::mvs::planMvsSourceViews;
 using xjw::mvs::planMvsSourceViewsVerifiedFirst;
 using xjw::mvs::planMvsRepairSourceViews;
+using xjw::mvs::recommendedMvsCrossViewSourceCount;
 using xjw::mvs::filterMvsSourcePairQualitiesForImages;
 
 namespace
@@ -117,6 +118,19 @@ TEST(MvsSourcePlanner, RepairSourcesBackfillShortfallFromAlternatingSequenceNeig
         {2, 2, 3}, sourceEligibility, 4, 4);
 
     EXPECT_EQ(sources, (std::vector<int>{2, 5, 1, 7}));
+}
+
+TEST(MvsSourcePlanner, OrbitalCrossViewConsensusUsesFullSixteenSourceBudget)
+{
+    EXPECT_EQ(recommendedMvsCrossViewSourceCount(
+                  xjw::mvs::MvsSceneProfile::OrbitalObject, 8, 24),
+              16);
+    EXPECT_EQ(recommendedMvsCrossViewSourceCount(
+                  xjw::mvs::MvsSceneProfile::OrbitalObject, 8, 10),
+              9);
+    EXPECT_EQ(recommendedMvsCrossViewSourceCount(
+                  xjw::mvs::MvsSceneProfile::Custom, 8, 24),
+              8);
 }
 
 TEST(MvsSourcePlanner, FiltersRemovedImageReferencesBeforeEnablingVerifiedPairGate)

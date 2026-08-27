@@ -188,6 +188,14 @@ std::vector<int> planMvsRepairSourceViews(
     int refIndex,
     int requestedSourceCount);
 
+/// Resolves the cross-camera consensus budget independently from PatchMatch's
+/// smaller photometric source set. Orbital scenes use the full 16-bit source
+/// evidence mask when enough registered views are available.
+int recommendedMvsCrossViewSourceCount(
+    MvsSceneProfile sceneProfile,
+    int configuredSourceCount,
+    int viewCount);
+
 std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<MvsSourcePairQuality> &qualities,
     const std::vector<std::string> &imagePaths);

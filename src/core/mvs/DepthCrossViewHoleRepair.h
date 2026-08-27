@@ -19,7 +19,7 @@ namespace xjw::mvs
 struct CrossViewHoleRepairOptions
 {
     int minimumDistinctSourceCount = 2;
-    float maximumRelativeDepthSpread = 0.025f;
+    float maximumRelativeDepthSpread = 0.010f;
     float maximumProjectionDistancePixels = 1.0f;
     int localDepthRadius = 2;
     float maximumLocalRelativeDepthDifference = 0.05f;
@@ -58,7 +58,7 @@ struct DominantDepthLayerSelectionOptions
 {
     int minimumDistinctSourceCount = 2;
     int minimumReplacementSourceCount = 3;
-    float maximumRelativeDepthSpread = 0.018f;
+    float maximumRelativeDepthSpread = 0.010f;
     float maximumNativeAgreementRelativeDifference = 0.025f;
     float nativeConsensusBlendWeight = 0.35f;
     float maximumNativeRelativeCorrection = 0.010f;
