@@ -76,6 +76,7 @@ struct PatchMatchConfig
     bool  enablePerPixelSourceSelection = true; ///< 每个像素保存并传播独立的光度来源 bitset
     float sourceSelectionNeighborBonus = 0.04f; ///< 邻域已选来源的有界排序先验，不直接增加 NCC
     bool  enableAsymmetricPropagation = true; ///< checkerboard/CPU 使用近邻、远邻和局部表面法线候选
+    bool  enableFinalPropagationPass = true; ///< 随机细化结束后执行一次无扰动传播收敛
     bool  enableGeometricGuidancePass = true; ///< 首轮冻结后允许 source-depth 引导的第二轮 PatchMatch
     int   geometricGuidanceIterations = 2; ///< 第二轮的窄范围传播迭代数
     float geometricGuidanceWeight = 0.20f; ///< 往返重投影项在候选目标中的权重
@@ -90,6 +91,8 @@ struct PatchMatchConfig
     int   bilateralD         = 9;
     float bilateralSigmaColor= 50.f;     ///< 历史字段名；当前解释为对数深度千分比 sigma（50=5%）
     float bilateralSigmaSpace= 5.f;
+    bool  enableReferenceGuidedFilter = false; ///< 实验：使用参考影像抑制跨强可见边缘的深度平滑
+    float bilateralSigmaGuidance = 0.25f; ///< 保守的归一化强度 sigma，仅强影像边缘显著抑制平滑
 
     // 几何一致性检查（PatchMatch 第二趟）
     bool  geomConsistency      = true;   ///< 是否启用几何一致性检查
@@ -310,14 +313,14 @@ struct DepthGenConfig
     bool enableTargetedGapRecovery = true; ///< 环拍缺口用两个最优来源执行受先验约束的定向 PatchMatch
     int targetedGapRecoverySourceCount = 6;
     int targetedGapRecoveryHypothesisCount = 2;
-    float targetedGapRecoveryConfidence = 0.28f;
-    float targetedGapRecoveryPriorRelativeDifference = 0.18f;
-    float targetedGapRecoveryConsensusInverseDepthSpread = 0.025f;
-    float targetedGapRecoveryConsensusPriorRelativeDifference = 0.35f;
+    float targetedGapRecoveryConfidence = 0.50f;
+    float targetedGapRecoveryPriorRelativeDifference = 0.12f;
+    float targetedGapRecoveryConsensusInverseDepthSpread = 0.015f;
+    float targetedGapRecoveryConsensusPriorRelativeDifference = 0.20f;
     bool enableTargetedGapSurfacePrior = false;
     float targetedGapSurfacePriorMaximumAnchorSpread = 0.12f;
     float targetedGapSurfacePriorMaximumFitResidual = 0.025f;
-    int targetedGapRecoveryMaximumPriorDistancePixels = 128;
+    int targetedGapRecoveryMaximumPriorDistancePixels = 64;
     bool enablePostConsistencyResidualReestimation = true;
     int postConsistencyResidualSourceCount = 8;
     float postConsistencyResidualConfidence = 0.30f;

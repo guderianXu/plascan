@@ -349,46 +349,229 @@ __kernel void make_descriptor(__global const float* image,
     }
 }
 
-__kernel void nearest_match(__global const float* query,
-                            __global const float* train,
-                            __global NearestMatch* output,
-                            const uint query_count,
-                            const uint train_count)
+)OPENCL"
+                                                     R"OPENCL(
+inline void insert_nearest_candidate(const float similarity,
+                                     const int index,
+                                     __private float* best,
+                                     __private int* best_index,
+                                     __private float* second,
+                                     __private int* second_index)
 {
-    const uint query_index = get_global_id(0);
-    if (query_index >= query_count)
+    if (index < 0)
     {
         return;
     }
+    if (*best_index < 0 || similarity > *best || (similarity == *best && index < *best_index))
+    {
+        if (index != *best_index)
+        {
+            *second = *best;
+            *second_index = *best_index;
+        }
+        *best = similarity;
+        *best_index = index;
+    }
+    else if (index != *best_index &&
+             (*second_index < 0 || similarity > *second ||
+              (similarity == *second && index < *second_index)))
+    {
+        *second = similarity;
+        *second_index = index;
+    }
+}
+
+typedef struct
+{
+    int best_index;
+    int second_index;
+    float best;
+    float second;
+} PartialNearestMatch;
+
+__kernel void nearest_match_tiles(__global const float* query,
+                                  __global const float* train,
+                                  __global PartialNearestMatch* partial_output,
+                                  const uint query_count,
+                                  const uint train_count,
+                                  const uint query_offset,
+                                  const uint query_batch_count,
+                                  const uint train_tile_count)
+{
+    const uint query_lane = get_local_id(0);
+    const uint train_lane = get_local_id(1);
+    const uint local_index = query_lane * 16u + train_lane;
+    const uint query_local_index = get_group_id(0) * 16u + query_lane;
+    const uint query_index = query_offset + query_local_index;
+    const uint train_tile_index = get_group_id(1);
+    const uint train_tile_begin = train_tile_index * 1024u;
+    const uint train_tile_end = min(train_tile_begin + 1024u, train_count);
+    __local float query_tile[16u * 128u];
+    __local float train_tile[16u * 128u];
+    __local float group_best[16u * 16u];
+    __local float group_second[16u * 16u];
+    __local int group_best_index[16u * 16u];
+    __local int group_second_index[16u * 16u];
+
+    for (uint index = local_index; index < 16u * 128u; index += 256u)
+    {
+        const uint row = index / 128u;
+        const uint dimension = index % 128u;
+        const uint source_query = query_offset + get_group_id(0) * 16u + row;
+        query_tile[index] = source_query < query_count ? query[source_query * 128u + dimension] : 0.0f;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
     float best = -INFINITY;
     float second = -INFINITY;
     int best_index = -1;
-    for (uint train_index = 0u; train_index < train_count; ++train_index)
+    int second_index = -1;
+    for (uint train_block = train_tile_begin; train_block < train_tile_end; train_block += 16u)
     {
-        float similarity = 0.0f;
-        for (uint dimension = 0u; dimension < 128u; ++dimension)
+        for (uint index = local_index; index < 16u * 128u; index += 256u)
         {
-            similarity += query[query_index * 128u + dimension] * train[train_index * 128u + dimension];
+            const uint row = index / 128u;
+            const uint dimension = index % 128u;
+            const uint source_train = train_block + row;
+            train_tile[index] = source_train < train_tile_end ? train[source_train * 128u + dimension] : 0.0f;
         }
-        if (similarity > best)
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        const uint train_index = train_block + train_lane;
+        if (query_local_index < query_batch_count && query_index < query_count && train_index < train_tile_end)
         {
-            second = best;
-            best = similarity;
-            best_index = (int)train_index;
+            float similarity = 0.0f;
+            for (uint vector_index = 0u; vector_index < 32u; ++vector_index)
+            {
+                const float4 query_values = vload4(vector_index, query_tile + query_lane * 128u);
+                const float4 train_values = vload4(vector_index, train_tile + train_lane * 128u);
+                similarity += dot(query_values, train_values);
+            }
+            insert_nearest_candidate(
+                similarity, (int)train_index, &best, &best_index, &second, &second_index);
         }
-        else if (similarity > second)
-        {
-            second = similarity;
-        }
+        barrier(CLK_LOCAL_MEM_FENCE);
     }
-    const float best_distance = sqrt(fmax(0.0f, 2.0f - 2.0f * best));
-    const float second_distance = sqrt(fmax(1.0e-12f, 2.0f - 2.0f * second));
-    NearestMatch match;
-    match.index = best_index;
-    match.similarity = clamp(best, 0.0f, 1.0f);
-    match.ambiguity = clamp(best_distance / second_distance, 0.0f, 1.0f);
-    match.padding = 0.0f;
-    output[query_index] = match;
+
+    group_best[local_index] = best;
+    group_second[local_index] = second;
+    group_best_index[local_index] = best_index;
+    group_second_index[local_index] = second_index;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (uint stride = 8u; stride > 0u; stride /= 2u)
+    {
+        if (train_lane < stride)
+        {
+            const uint other_index = local_index + stride;
+            best = group_best[local_index];
+            second = group_second[local_index];
+            best_index = group_best_index[local_index];
+            second_index = group_second_index[local_index];
+            insert_nearest_candidate(group_best[other_index],
+                                     group_best_index[other_index],
+                                     &best,
+                                     &best_index,
+                                     &second,
+                                     &second_index);
+            insert_nearest_candidate(group_second[other_index],
+                                     group_second_index[other_index],
+                                     &best,
+                                     &best_index,
+                                     &second,
+                                     &second_index);
+            group_best[local_index] = best;
+            group_second[local_index] = second;
+            group_best_index[local_index] = best_index;
+            group_second_index[local_index] = second_index;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (train_lane == 0u && query_local_index < query_batch_count && query_index < query_count)
+    {
+        PartialNearestMatch partial;
+        partial.best_index = group_best_index[local_index];
+        partial.second_index = group_second_index[local_index];
+        partial.best = group_best[local_index];
+        partial.second = group_second[local_index];
+        partial_output[query_local_index * train_tile_count + train_tile_index] = partial;
+    }
+}
+
+__kernel void nearest_match_reduce(__global const PartialNearestMatch* partial_input,
+                                   __global NearestMatch* output,
+                                   const uint query_count,
+                                   const uint train_tile_count,
+                                   const uint query_offset)
+{
+    const uint lane = get_local_id(0);
+    const uint query_local_index = get_group_id(0);
+    const uint query_index = query_offset + query_local_index;
+    __local float group_best[64];
+    __local float group_second[64];
+    __local int group_best_index[64];
+    __local int group_second_index[64];
+
+    float best = -INFINITY;
+    float second = -INFINITY;
+    int best_index = -1;
+    int second_index = -1;
+    for (uint tile_index = lane; tile_index < train_tile_count; tile_index += 64u)
+    {
+        const PartialNearestMatch partial =
+            partial_input[query_local_index * train_tile_count + tile_index];
+        insert_nearest_candidate(
+            partial.best, partial.best_index, &best, &best_index, &second, &second_index);
+        insert_nearest_candidate(
+            partial.second, partial.second_index, &best, &best_index, &second, &second_index);
+    }
+
+    group_best[lane] = best;
+    group_second[lane] = second;
+    group_best_index[lane] = best_index;
+    group_second_index[lane] = second_index;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (uint stride = 32u; stride > 0u; stride /= 2u)
+    {
+        if (lane < stride)
+        {
+            best = group_best[lane];
+            second = group_second[lane];
+            best_index = group_best_index[lane];
+            second_index = group_second_index[lane];
+            insert_nearest_candidate(group_best[lane + stride],
+                                     group_best_index[lane + stride],
+                                     &best,
+                                     &best_index,
+                                     &second,
+                                     &second_index);
+            insert_nearest_candidate(group_second[lane + stride],
+                                     group_second_index[lane + stride],
+                                     &best,
+                                     &best_index,
+                                     &second,
+                                     &second_index);
+            group_best[lane] = best;
+            group_second[lane] = second;
+            group_best_index[lane] = best_index;
+            group_second_index[lane] = second_index;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (lane == 0u && query_index < query_count)
+    {
+        const float best_distance = sqrt(fmax(0.0f, 2.0f - 2.0f * group_best[0]));
+        const float second_distance = sqrt(fmax(1.0e-12f, 2.0f - 2.0f * group_second[0]));
+        NearestMatch match;
+        match.index = group_best_index[0];
+        match.similarity = clamp(group_best[0], 0.0f, 1.0f);
+        match.ambiguity = clamp(best_distance / second_distance, 0.0f, 1.0f);
+        match.padding = 0.0f;
+        output[query_index] = match;
+    }
 }
 )OPENCL";
 

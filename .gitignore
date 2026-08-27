@@ -27,6 +27,9 @@ build*
 !scripts/build_win/**
 docker/debs/
 .worktrees/
+# Local reverse-engineering case packages may contain proprietary decompiler
+# output. Keep the publishable findings under docs/ and never push raw evidence.
+/work/
 logs/
 .superpowers/
 3rdparty/opencv_contrib/

@@ -16,6 +16,7 @@ void registerSiftLightGlueAlgorithm();
 void registerLoMaRAlgorithm();
 #endif
 void registerAutoSiftAlgorithm();
+void registerOrbBinaryAlgorithm();
 
 namespace
 {
@@ -96,6 +97,7 @@ void ensureBuiltInAlgorithms()
         registerUnavailableTensorRtAlgorithms();
 #endif
         registerAutoSiftAlgorithm();
+        registerOrbBinaryAlgorithm();
     });
 }
 

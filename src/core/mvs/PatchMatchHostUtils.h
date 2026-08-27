@@ -23,9 +23,12 @@ std::array<float, 16> buildPatchMatchSourceCameraData(
 /// Applies the shared host-side PatchMatch depth filters.
 /// Invalid pixels never participate in a neighbourhood and remain invalid.
 /// Bilateral range weights use log-depth differences, making the result
-/// invariant to a uniform change of world units.
+/// invariant to a uniform change of world units. When referenceGuide is a
+/// compatible gray/BGR/BGRA image, its normalized intensity can also gate the
+/// filter so visible image edges are not smoothed across.
 void postprocessPatchMatchDepth(cv::Mat &depth,
-                                const PatchMatchConfig &config);
+                                const PatchMatchConfig &config,
+                                const cv::Mat &referenceGuide = cv::Mat());
 
 } // namespace mvs
 } // namespace xjw

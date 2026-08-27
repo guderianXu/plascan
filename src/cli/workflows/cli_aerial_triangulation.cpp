@@ -324,8 +324,10 @@ int main(int argc, char* argv[])
     app.add_option("--quality", qualityArg, "精度: lowest, low, medium, high, highest");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
-    app.add_option("--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
+    app.add_option("--algorithm-id",
+                   algorithmIdArg,
+                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg, "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg, "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");

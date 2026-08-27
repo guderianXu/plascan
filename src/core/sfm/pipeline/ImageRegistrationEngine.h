@@ -23,7 +23,10 @@ class ImageRegistrationEngine
      * @brief 从已完成初始对的 owner 状态继续注册剩余影像。
      * @param totalImages 用于进度和覆盖率统计，不改变 owner 的影像集合。
      */
-    IncrementalSfmResult run(int totalImages, SfmProgressCallback progressCb);
+    IncrementalSfmResult run(int totalImages,
+                             SfmProgressCallback progressCb,
+                             int registrationLimit = 0,
+                             bool runFinalRefinement = true);
 
     /**
      * @brief 查找近垂直、高光轴集中度相机块中的小规模姿态离群项。

@@ -1,0 +1,14 @@
+flowchart LR
+    images["输入影像、掩膜和参考元数据"] --> scale["精度/downscale 与影像金字塔"]
+    scale --> detect["Gaussian/DoG/LoG 关键点检测"]
+    detect --> describe["方向估计与 MLDB 类描述子"]
+    describe --> preselect["Generic / Reference 像对预选"]
+    preselect --> search["KD/RKDTree ANN 或 GPU 二进制比较"]
+    search --> verify["匹配过滤与几何引导补匹配"]
+    verify --> tracks["KeypointMatches / TiePointsCache"]
+    tracks --> seed["evaluateInitialPair 双相机种子"]
+    seed --> register["循环 resection 注册新相机"]
+    register --> triangulate["双视/三视三角化与 RANSAC 重三角化"]
+    triangulate --> ba["Bundle adjustment 与 adaptive fitting"]
+    ba --> register
+    ba --> result["相机 EO/IO 与 tie-point cloud"]

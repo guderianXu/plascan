@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -80,6 +81,43 @@ struct MatchPhotosImageMatchRecord
     QJsonObject settings;
 };
 
+/**
+ * @brief 从候选像对到多视轨迹的统一漏斗诊断。
+ *
+ * 绝对数用于定位损失阶段，比率用于跨项目对比；所有比率均为 [0, 1]，
+ * guidedGainRatio 除外，它表示新增内点相对 guided 前内点数的增幅。
+ */
+struct MatchPhotosFunnelDiagnostics
+{
+    int allPairCount = 0;
+    int selectedPairCount = 0;
+    int matchedPairCount = 0;
+    std::int64_t rawMatchCount = 0;
+    int geometryPassedPairCount = 0;
+    std::int64_t geometryInlierCount = 0;
+    std::int64_t guidedAddedInlierCount = 0;
+    int finalPassedPairCount = 0;
+    std::int64_t finalGeometryInlierCount = 0;
+    int trackCount = 0;
+    double pairSelectionRatio = 0.0;
+    double matchingYieldRatio = 0.0;
+    double geometryPairRetentionRatio = 0.0;
+    double geometryInlierRatio = 0.0;
+    double guidedGainRatio = 0.0;
+
+    QJsonObject toJson() const;
+};
+
+MatchPhotosFunnelDiagnostics summarizeMatchPhotosFunnel(
+    const PairSelectionResult &pairSelection,
+    const std::vector<MatchPhotosMatchRecord> &finalMatches,
+    int matchedPairCount,
+    std::int64_t rawMatchCount,
+    int geometryPassedPairCount,
+    std::int64_t geometryInlierCount,
+    std::int64_t guidedAddedInlierCount,
+    int trackCount);
+
 struct MatchPhotosResult
 {
     bool success = false;
@@ -93,6 +131,7 @@ struct MatchPhotosResult
     int trackCount = 0;
     int acceptedTrackComponents = 0;
     int rejectedTrackConflictComponents = 0;
+    MatchPhotosFunnelDiagnostics matchingFunnel;
     QJsonObject trackSummary;
     QString tiePointPath;
 };

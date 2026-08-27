@@ -2092,6 +2092,13 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.bilateralSigmaSpace += 1.0f; });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.enableReferenceGuidedFilter =
+            !changed.patchMatch.enableReferenceGuidedFilter;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.bilateralSigmaGuidance += 0.01f;
+    });
     expect_hash_change([](xjw::mvs::DepthGenConfig& changed)
                        { changed.patchMatch.minimumMaskedPatchSupportRatio += 0.05f;
     });
@@ -2108,6 +2115,10 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.enableAsymmetricPropagation =
             !changed.patchMatch.enableAsymmetricPropagation;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.enableFinalPropagationPass =
+            !changed.patchMatch.enableFinalPropagationPass;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.patchMatch.enableGeometricGuidancePass =

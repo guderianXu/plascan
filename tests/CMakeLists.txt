@@ -13,6 +13,7 @@ if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
 endif()
 find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_TEST_QT_COMPONENTS})
 find_package(Python3 COMPONENTS Interpreter)
+include(PlascanTestRuntime)
 
 # vcpkg builds Qt statically on macOS. Static platform plugins cannot be found
 # through QT_QPA_PLATFORM_PLUGIN_PATH, so tests that request the offscreen
@@ -749,8 +750,24 @@ if(WIN32)
     plascan_deploy_onnxruntime(test_gui_project_utils)
 endif()
 plascan_import_qt_offscreen_plugin(test_gui_project_utils)
+set(PLASCAN_QT_PLUGIN_PATH
+    "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}")
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
-    "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/platforms")
+    "${PLASCAN_QT_PLUGIN_PATH}/platforms")
+set(PLASCAN_GUI_TEST_QT_ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen"
+    "QT_PLUGIN_PATH=${PLASCAN_QT_PLUGIN_PATH}"
+    "QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+set(PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS)
+if(WIN32)
+    plascan_get_windows_test_runtime_path(PLASCAN_GUI_TEST_RUNTIME_PATH)
+    list(PREPEND PLASCAN_GUI_TEST_RUNTIME_PATH "${CMAKE_BINARY_DIR}/bin")
+    list(REMOVE_DUPLICATES PLASCAN_GUI_TEST_RUNTIME_PATH)
+    foreach(runtime_dir IN LISTS PLASCAN_GUI_TEST_RUNTIME_PATH)
+        list(APPEND PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS
+            "PATH=path_list_prepend:${runtime_dir}")
+    endforeach()
+endif()
 gtest_discover_tests(test_gui_project_utils
     # This target links most GUI and photogrammetry modules. Its first launch
     # can exceed one minute on a cold Windows runner while binaries are scanned.
@@ -758,7 +775,9 @@ gtest_discover_tests(test_gui_project_utils
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT
-            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+            "${PLASCAN_GUI_TEST_QT_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "${PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS}")
 
 add_executable(test_map_project_dialog
     test_map_project_dialog.cpp
@@ -1076,6 +1095,18 @@ target_include_directories(test_texture_seam_leveling PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mesh
 )
 gtest_discover_tests(test_texture_seam_leveling)
+
+add_executable(test_texture_natural_blender
+    test_texture_natural_blender.cpp
+)
+target_link_libraries(test_texture_natural_blender PRIVATE
+    meshing
+    GTest::gtest_main
+)
+target_include_directories(test_texture_natural_blender PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_texture_natural_blender)
 
 add_executable(test_screened_poisson_surface_builder
     test_screened_poisson_surface_builder.cpp

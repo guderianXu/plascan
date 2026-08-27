@@ -92,7 +92,9 @@ struct IncrementalSfmOptions
     int maxInitPairCandidates = 10;
     /// 小型无相机数据集是否完整评估多个初始像对模型，避免第一个可初始化 seed 困在局部子图。
     bool evaluateMultipleInitialPairModels = true;
-    /// 多初始模型评估只在图像数不超过该阈值时启用，避免大工程重复跑完整 SfM。
+    /// 每个初始像对试算最多注册的影像数；>0 时使用有限前瞻，0 表示完整试算。
+    int initialPairLookaheadMaxImages = 8;
+    /// 仅在关闭有限前瞻时生效：完整多初始模型评估的最大图像数。
     int multiInitialPairMaxImages = 32;
 
     // --- 注册选项 ---
@@ -227,6 +229,11 @@ struct IncrementalSfmResult
     std::string summary;          ///< 可读结果摘要
     ImageId selectedInitialImageId1 = kInvalidImageId; ///< 最终采用的初始像对第一幅影像
     ImageId selectedInitialImageId2 = kInvalidImageId; ///< 最终采用的初始像对第二幅影像
+    int initialPairCandidatesEvaluated = 0; ///< 成功初始化并进入前瞻试算的候选数。
+    int initialPairLookaheadTargetImages = 0; ///< 初始像对有限前瞻的目标注册数；0 表示未启用。
+    int selectedInitialPairLookaheadRegisteredImages = 0; ///< 胜出候选在前瞻阶段的注册数。
+    int selectedInitialPairLookaheadPoints = 0; ///< 胜出候选在前瞻阶段的三维点数。
+    double selectedInitialPairLookaheadRms = 0.0; ///< 胜出候选在前瞻阶段的平均重投影误差。
     int hierarchicalBAPlannedBlocks = 0; ///< 最近一次分层 BA 规划块数。
     int hierarchicalBAAppliedBlocks = 0; ///< 最近一次通过质量门控并写回的块数。
     int hierarchicalBAUpdatedCameras = 0; ///< 最近一次块级写回的核心相机数。
@@ -584,7 +591,9 @@ class IncrementalSfm
      * @brief 初始像对已经注册后，执行后续增量注册、BA 和结果组装。
      */
     IncrementalSfmResult runRegistrationFromCurrentInitialization(int totalImages,
-                                                                  SfmProgressCallback progressCb);
+                                                                  SfmProgressCallback progressCb,
+                                                                  int registrationLimit = 0,
+                                                                  bool runFinalRefinement = true);
 
     /**
      * @brief 清理一次初始像对试跑产生的运行态，并恢复到同一份输入影像/匹配。

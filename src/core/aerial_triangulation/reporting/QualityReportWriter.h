@@ -8,11 +8,14 @@
  * 禁止复用候选试算中的过期误差。
  */
 
+#include "common/SfmTypes.h"
 #include "model/AerialTriangulationOptions.h"
 #include "model/AerialTriangulationResult.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
+
+#include <vector>
 
 namespace xjw
 {
@@ -26,6 +29,7 @@ namespace xjw::aerial_triangulation
 struct SparseQualityReport
 {
     QJsonArray points; ///< 每点坐标、轨迹长度、误差和交会角。
+    std::vector<xjw::Point3DId> publishedPointIds; ///< 与 points 顺序一致的正式发布点 ID。
     QJsonArray perCameraResiduals; ///< 每相机观测数与残差分布。
     QJsonObject qualityMetadata; ///< 工程/MVS 消费的稳定质量字段。
     QJsonObject diagnostics; ///< 更详细的开发和候选分析信息。

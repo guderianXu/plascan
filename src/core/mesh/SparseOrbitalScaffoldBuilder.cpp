@@ -600,19 +600,64 @@ SparseOrbitalScaffoldResult SparseOrbitalScaffoldBuilder::build(
         return result;
     }
     result.statistics.sidecarPointCount = quality_data.points.size();
-    if (quality_data.points.size() != cloud->size())
+
+    std::vector<const SparseSfmPointQuality *> aligned_quality;
+    aligned_quality.reserve(cloud->size());
+    if (quality_data.points.size() == cloud->size())
+    {
+        for (const auto &quality : quality_data.points)
+        {
+            aligned_quality.push_back(&quality);
+        }
+    }
+    else if (quality_data.points.size() > cloud->size())
+    {
+        // A manual point-cloud prune preserves surviving PLY vertex order but
+        // may leave the immutable SfM quality sidecar untouched. Re-associate
+        // only when every PLY vertex is a coordinate-verified ordered subset;
+        // never truncate or guess quality records by index.
+        std::size_t sidecar_index = 0;
+        for (std::size_t ply_index = 0; ply_index < cloud->size(); ++ply_index)
+        {
+            const auto ply_point = (*cloud)[ply_index];
+            const std::array<float, 3> ply_value{
+                ply_point.x(), ply_point.y(), ply_point.z()};
+            while (sidecar_index < quality_data.points.size() &&
+                   (!quality_data.points[sidecar_index].hasPoint ||
+                    !coordinatesAgree(
+                        ply_value, quality_data.points[sidecar_index].point)))
+            {
+                ++sidecar_index;
+            }
+            if (sidecar_index >= quality_data.points.size())
+            {
+                result.error =
+                    "SfM PLY 不是点质量 sidecar 的可验证有序子集，无法安全关联质量记录，PLY 索引="
+                    + std::to_string(ply_index);
+                return result;
+            }
+            aligned_quality.push_back(&quality_data.points[sidecar_index]);
+            ++sidecar_index;
+        }
+        result.statistics.sidecarSubsetAlignmentUsed = true;
+    }
+    else
     {
         result.error = "SfM PLY 与点质量 sidecar 点数不一致: ply="
             + std::to_string(cloud->size()) + ", sidecar="
-            + std::to_string(quality_data.points.size());
+            + std::to_string(quality_data.points.size())
+            + "；sidecar 少于 PLY，无法安全恢复质量记录";
         return result;
     }
+    result.statistics.sidecarMatchedPointCount = aligned_quality.size();
+    result.statistics.sidecarUnmatchedPointCount =
+        quality_data.points.size() - aligned_quality.size();
 
     std::vector<std::array<float, 3>> finite_points;
     finite_points.reserve(cloud->size());
     for (std::size_t index = 0; index < cloud->size(); ++index)
     {
-        const auto &quality = quality_data.points[index];
+        const auto &quality = *aligned_quality[index];
         const auto ply_point = (*cloud)[index];
         const std::array<float, 3> ply_value{
             ply_point.x(), ply_point.y(), ply_point.z()};

@@ -368,16 +368,16 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.targetedGapRecoveryHypothesisCount = std::clamp(settings.value(
         QStringLiteral("targetedGapRecoveryHypothesisCount")).toInt(2), 1, 3);
     parsed.targetedGapRecoveryConfidence = static_cast<float>(settings.value(
-        QStringLiteral("targetedGapRecoveryConfidence")).toDouble(0.28));
+        QStringLiteral("targetedGapRecoveryConfidence")).toDouble(0.50));
     parsed.targetedGapRecoveryPriorRelativeDifference = static_cast<float>(
         settings.value(QStringLiteral(
-            "targetedGapRecoveryPriorRelativeDifference")).toDouble(0.18));
+            "targetedGapRecoveryPriorRelativeDifference")).toDouble(0.12));
     parsed.targetedGapRecoveryConsensusInverseDepthSpread = static_cast<float>(
         settings.value(QStringLiteral(
-            "targetedGapRecoveryConsensusInverseDepthSpread")).toDouble(0.025));
+            "targetedGapRecoveryConsensusInverseDepthSpread")).toDouble(0.015));
     parsed.targetedGapRecoveryConsensusPriorRelativeDifference = static_cast<float>(
         settings.value(QStringLiteral(
-            "targetedGapRecoveryConsensusPriorRelativeDifference")).toDouble(0.35));
+            "targetedGapRecoveryConsensusPriorRelativeDifference")).toDouble(0.20));
     parsed.enableTargetedGapSurfacePrior = settings.value(
         QStringLiteral("enableTargetedGapSurfacePrior")).toBool(false);
     parsed.targetedGapSurfacePriorMaximumAnchorSpread = static_cast<float>(
@@ -389,7 +389,7 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.targetedGapRecoveryMaximumPriorDistancePixels = std::max(
         1,
         settings.value(QStringLiteral(
-            "targetedGapRecoveryMaximumPriorDistancePixels")).toInt(128));
+            "targetedGapRecoveryMaximumPriorDistancePixels")).toInt(64));
     parsed.enablePostConsistencyResidualReestimation = settings.value(
         QStringLiteral("enablePostConsistencyResidualReestimation")).toBool(true);
     parsed.postConsistencyResidualSourceCount = std::clamp(settings.value(

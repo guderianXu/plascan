@@ -50,7 +50,8 @@ python scripts/env/configure_with_env.py --source-deps --build --test
 GDAL 3.12.4 和 AprilTag 3.4.5；PoissonRecon 直接从固定 submodule 提供源码。PROJ、带 RTree 的 SQLite、
 libgeotiff、libtiff、zlib 等底层依赖仍由同一 vcpkg installed tree 提供，随后在
 `build/<platform>-source-release/` 配置、编译和测试 PlaScan。GDAL 的 HDF5 与 NetCDF 可选驱动固定关闭，
-其它可选驱动默认关闭并只显式启用 PDS 与 JP2OpenJPEG；OpenCV 的 AVIF 自动探测也固定关闭，避免
+其它可选驱动默认关闭，并显式启用 GTiff、HFA、JPEG、PNG、VRT、PDS/ISIS 与 JP2OpenJPEG；OpenCV 的
+AVIF 自动探测也固定关闭，避免
 宿主机或 Conda 库与 vcpkg 依赖混用。Qt 使用其内置 libpng，避免与 OpenCV 使用的 vcpkg libpng
 产生同名动态库冲突。
 CMake 会校验所有源码 checkout 的固定 commit、安装包版本及加载路径，避免静默回退到 vcpkg。
@@ -453,7 +454,7 @@ JSON 报告。高程为 WGS84 椭球高；水平投影按有效交会点中心�
 
 当前重建链路按四个阶段维护：
 
-- MVS 稳定性：`MvsWorkspaceManifest` 记录每帧深度图状态、输入/输出路径、device、耗时、错误和配置 hash。深度图完成后写入项目 metadata，GUI 目录树按文件名自然排序刷新。
+- MVS 稳定性：`MvsWorkspaceManifest` 记录每帧深度图状态、输入/输出路径、device、耗时、错误和配置 hash。深度图首轮按原始影像文件名自然升序领取，多设备完成顺序可以交错；完成后写入项目 metadata，GUI 目录树也按文件名自然排序刷新。
 - MVS 质量：`MvsSourcePlanner` 基于 shared tracks、几何内点、三角角、覆盖率、baseline 和序列距离规划 source view。深度图同时输出 preview、raw depth、confidence 和 valid mask，融合阶段使用同一份 source plan。
 - 模型生成：任意三维的深度源默认执行 `raw depth + confidence + valid/support mask + camera -> TSDF -> Marching Cubes`，不生成或消费密集点云中间产物。Visual Hull 与 Poisson 只保留为显式 legacy/诊断模式，TSDF 失败不会静默换算法。
 - 模型显示：未计算顶点颜色且没有纹理时按真实面法线显示三角面；存在照片派生顶点颜色或完整纹理时才显示颜色。顶点颜色、纹理和网格几何是独立产品，不会因关闭颜色而改变模型拓扑。

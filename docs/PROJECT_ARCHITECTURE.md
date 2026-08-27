@@ -331,7 +331,7 @@ core/
 │   ├── PatchMatchOpenCL.cpp     # 跨厂商 OpenCL GPU 深度假设搜索、设备枚举与运行时缓存
 │   ├── PatchMatchOpenCLKernels.h # OpenCL C 1.2 多源组合光度代价/深度细化 kernel
 │   ├── PatchMatchNoOpenCL.cpp   # 无 OpenCL 构建的稳定接口存根
-│   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker 与优先级帧调度
+│   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker、文件名自然顺序与异构帧调度
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
 │   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
@@ -391,11 +391,12 @@ core/
 │   ├── CameraTextureMapperV4.h/cpp # 多视图纹理 v4 阶段编排
 │   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度和网格邻接准备
 │   ├── TextureOverlapExposure.h/cpp + Solver.cpp # 共同可见 3D 点的 linear-sRGB 鲁棒曝光增益与 fail-closed 诊断
-│   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、top-K 评分、ICM 与小孤岛合并
+│   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、光度一致性 top-K 评分、ICM 与小孤岛合并
 │   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
 │   ├── TextureAtlasPacker.h/cpp # 自适应 MaxRects/shelf chart 图集调度与缩放搜索
 │   ├── TextureAtlasMaxRects.cpp # 有操作预算的确定性无旋转 MaxRects 实现
 │   ├── TextureAtlasSampling.h/cpp # 逐纹素深度/掩膜复核、实样本 medoid 与 Natural 鲁棒融合
+│   ├── TextureNaturalBlender.h/cpp # linear-sRGB 掩膜金字塔的 Natural 低频融合与主视图细节保留
 │   ├── TextureAtlasBaker.cpp   # 图集光栅化、边界填充、锐化及 OBJ/MTL/PNG 输出
 │   ├── StudioForegroundMask.h/cpp # 黑色摄影背景检测、主体轮廓提取与可复用前景掩模
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
@@ -981,9 +982,12 @@ Level 1/2/3 栅格及对应项目元数据，但不会删除源照片。照片�
 像素会恢复为有效状态。`missing_reason_summary` 保存同一分类的逐帧计数和蒙版内缺失率，流式与
 常驻内存的一致性路径使用同一结构。模型属性汇总所用深度批次的缺失率和主要原因。
 
-环拍对象在首轮深度估计后，会对蒙版内仍无解且不超过安全面积上限的缺口执行一次定向恢复。
-恢复区域由最近的有效实测深度建立有限距离先验，只使用 source plan 排名前两位的源视图重新运行
-PatchMatch；候选必须同时通过置信度和相对先验深度差门限，随后仍参与常规跨视一致性与后处理。
+环拍对象在首轮深度估计后，会先用投影 SfM 锚点审计原生深度的绝对深度残差；证据充分但已经达到
+`validation_only` 或 `rejected` 范围的帧禁止执行缺口恢复，避免把错误深度层扩展成高覆盖率诊断图。
+缺少足够稀疏锚点时保持非阻塞。通过预检的帧才会对蒙版内仍无解且不超过安全面积上限的缺口执行
+一次定向恢复。恢复区域由最近的有效实测深度建立有限距离先验，只使用 source plan 排名前两位的
+源视图重新运行 PatchMatch；候选必须同时通过置信度、相对先验深度差和双假设逆深度一致性门限，
+随后仍参与常规跨视一致性与后处理。
 产物通过 `targeted_gap_recovered_mask_path` 标记最终仍有效的恢复像素，并在
 `targeted_gap_recovery_diagnostics` 中记录请求、候选、接受及拒绝数量。该路径不对整片缺口做
 几何插值；诊断重放可用 `--disable-targeted-gap-recovery` 生成同输入 A/B 基线。
@@ -1093,7 +1097,10 @@ A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节�
 `OrbitalSparseScaffoldSurfaceBuilder` 构造独立的闭合全局载体。PLY 与 sidecar 被视为不可拆分的同源工件：
 `SparseSfmPointQualityReader` 流式读取 `point_xyz`、`track_len`、`rms_reproj_px` 和
 `triangulation_angle_deg`/`min_tri_angle_deg` 字段，不把数百 MiB 的 JSON 一次性展开为 DOM；读取后
-必须同时验证点数和逐点坐标与 PLY 对齐。默认只保留轨迹长度至少 3、重投影 RMS 不大于 `1.5 px`、
+必须验证逐点坐标与 PLY 对齐。手动剔点导致 PLY 点数少于同源 sidecar 时，仅当每个剩余 PLY 点都能按
+原顺序和坐标容差证明为 sidecar 的有序子集时，才重新关联对应质量记录；sidecar 少于 PLY、顺序被
+打乱或任一点无法匹配仍立即失败，禁止按索引截断或猜测。默认只保留轨迹长度至少 3、重投影 RMS
+不大于 `1.5 px`、
 最小三角化角不小于
 `5°` 的点，再执行有限值、全局径向及统计离群点过滤和 PlaPoint 体素降采样，并以鲁棒中心生成向外径向
 法向。稀疏 SfM 点不注入 TSDF，因为它们不具备深度像素的自由空间和实测表面语义。
@@ -1109,7 +1116,9 @@ PlaPoint 通用表面重建中的 Poisson/PCG 后端是两条独立实现，环�
 Poisson 输出先只保留最大面连通分量，剔除卫星碎片。若该分量还不是单连通、闭合、genus-0 的二流形，
 `MeshVoxelTopologyRepair` 必须执行保守三角形体素化、六邻域外部空域洪泛和从小到大的形态学闭运算；
 必要时只保留最大实体分量。候选只有在体素实体为单分量且 Euler 数为 1、其边界为单分量闭合二流形且
-表面 Euler 数为 2 时才能返回。已选择该补全分支后，配对不完整、sidecar 缺失或错位、过滤后点数不足、
+表面 Euler 数为 2 时才能返回。默认闭运算搜索上限为 8 个体素，但仍从半径 0 开始，并在首个严格通过
+的结果停止；COLMAP building 回归数据在半径 4 首次通过，因此提高搜索上限不会强制已通过模型使用
+更大的闭运算。已选择该补全分支后，配对不完整、sidecar 缺失或错位、过滤后点数不足、
 Screened Poisson 失败、拓扑修复无法证明上述条件，或最终深度完整性/质量门失败，都会立即停止写出，
 不会仅凭原始 PLY 或旧载体静默继续。两项稀疏工件均未提供时不会伪装成该补全分支，仍由常规 TSDF
 交付门决定是否允许输出。
@@ -1416,7 +1425,8 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   GDAL 3.12.4 和 AprilTag 3.4.5，只初始化 Qt 的 `qtbase` 与 `qtshadertools`，并安装到 source-deps preset
   的共享前缀；PoissonRecon 从固定 submodule 直接提供头文件；`cmake/source-deps/vcpkg.json` 仅提供
   PROJ、带 RTree 的 SQLite、libgeotiff、libtiff、zlib 和图像编解码等底层依赖。GDAL 的 HDF5 与
-  NetCDF 等可选驱动默认关闭，仅显式启用 PDS 和 JP2OpenJPEG；OpenCV 的 AVIF 自动探测也关闭，
+  NetCDF 等可选驱动默认关闭，并显式启用 GTiff、HFA、JPEG、PNG、VRT、PDS/ISIS 和 JP2OpenJPEG；
+  OpenCV 的 AVIF 自动探测也关闭，
   Qt 则使用内置 libpng，避免它先加载同名系统库而破坏 OpenCV 的 vcpkg libpng ABI。安装后的其它
   源码依赖保留其 vcpkg 链接目录 RUNPATH，确保开发构建和测试加载同一 installed tree 的动态库
 - **OpenCV 边界**: C++ 与 Python 运行时均要求 OpenCV 5；C++ 直接使用拆分后的 `features`、`geometry`

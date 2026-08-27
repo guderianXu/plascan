@@ -30,7 +30,9 @@ using xjw::mvs::buildDepthComputeWorkerPool;
 using xjw::mvs::depthComputeWorkerFromId;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
 using xjw::mvs::isNvidiaOpenClVendor;
+using xjw::mvs::isUsefulDepthComputeCompletion;
 using xjw::mvs::isUsableOpenClPatchMatchDevice;
+using xjw::mvs::makeFileNameOrderedDepthFrameTasks;
 using xjw::mvs::normalizedGpuDeviceName;
 using xjw::mvs::recommendedOpenClFullFrameFloorPerDevice;
 using xjw::mvs::resolveDepthComputeBackend;
@@ -53,6 +55,27 @@ TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
     EXPECT_EQ(claim.viewIndex, 1);
     EXPECT_EQ(scheduler.claimNext(worker).status, DepthTaskClaimStatus::Exhausted);
     EXPECT_EQ(worker.id(), "CUDA:1");
+}
+
+TEST(DepthComputeSchedulerTest, ClaimsFirstAttemptsInNaturalFileNameOrder)
+{
+    const std::vector<std::string> image_paths{
+        "C:/a/IMG10.JPG",
+        "C:/z/img2.jpg",
+        "C:/m/IMG1.JPG",
+        "C:/b/img02.JPG",
+        "C:/n/IMG20.JPG"};
+    const std::vector<std::uint8_t> skip_mask{0, 0, 0, 1, 0};
+    DepthComputeScheduler scheduler(
+        makeFileNameOrderedDepthFrameTasks(image_paths, skip_mask));
+    const DepthComputeWorker worker{DepthComputeBackend::Cuda, 0};
+
+    EXPECT_EQ(scheduler.claimNext(worker).viewIndex, 2);
+    EXPECT_EQ(scheduler.claimNext(worker).viewIndex, 1);
+    EXPECT_EQ(scheduler.claimNext(worker).viewIndex, 0);
+    EXPECT_EQ(scheduler.claimNext(worker).viewIndex, 4);
+    EXPECT_EQ(scheduler.claimNext(worker).status,
+              DepthTaskClaimStatus::Exhausted);
 }
 
 TEST(DepthComputeSchedulerTest, OpenClFloorScalesWithPhysicalCudaDevices)
@@ -1376,12 +1399,22 @@ TEST(DepthComputeSchedulerTest, BuildsPreparationSlotsForCallerProvidedMixedPool
 
 TEST(DepthComputeSchedulerTest, AutomaticBackendUsesStrictAcceleratorPriority)
 {
-    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, true, true),
-              DepthComputeBackend::Cuda);
-    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, true),
-              DepthComputeBackend::OpenCl);
-    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, false),
-              DepthComputeBackend::Cpu);
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, true, true), DepthComputeBackend::Cuda);
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, true), DepthComputeBackend::OpenCl);
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, false), DepthComputeBackend::Cpu);
+}
+
+TEST(DepthComputeSchedulerTest, HeterogeneousOpenClQualityRejectionIsNotCountedAsUsefulThroughput)
+{
+    EXPECT_FALSE(isUsefulDepthComputeCompletion(DepthComputeBackend::OpenCl, true, true, true));
+    EXPECT_TRUE(isUsefulDepthComputeCompletion(DepthComputeBackend::OpenCl, true, true, false));
+    EXPECT_TRUE(isUsefulDepthComputeCompletion(DepthComputeBackend::Cuda, true, true, true));
+}
+
+TEST(DepthComputeSchedulerTest, SingleBackendQualityRejectionRemainsACompletedFrame)
+{
+    EXPECT_TRUE(isUsefulDepthComputeCompletion(DepthComputeBackend::OpenCl, false, true, true));
+    EXPECT_FALSE(isUsefulDepthComputeCompletion(DepthComputeBackend::OpenCl, false, false, false));
 }
 
 TEST(PatchMatchBackendSelectionTest, OpenClRequiresAvailableDeviceAndOnlineCompiler)

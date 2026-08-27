@@ -220,6 +220,14 @@ TEST(MatchPhotosTaskTest, PlanOnlyUsesUnifiedAlgorithmWithoutWritingIntermediate
     EXPECT_TRUE(result.features.empty());
     EXPECT_TRUE(result.matches.empty());
     EXPECT_TRUE(result.imageMatchFiles.empty());
+    EXPECT_EQ(result.matchingFunnel.allPairCount, 1);
+    EXPECT_EQ(result.matchingFunnel.selectedPairCount, 1);
+    EXPECT_TRUE(result.trackSummary.contains(QStringLiteral("matching_funnel")));
+    EXPECT_TRUE(std::any_of(result.stages.begin(), result.stages.end(), [](const auto &stage)
+    {
+        return stage.stageId == QStringLiteral("matching_funnel") &&
+               stage.status == xjw::matchphotos::MatchPhotosStageStatus::Completed;
+    }));
     EXPECT_FALSE(QDir(context.matchDirectory).exists());
 }
 
@@ -561,4 +569,47 @@ TEST(MatchPhotosGeometryCacheTest, DisablingGeometryClearsStaleModelAndResiduals
     EXPECT_EQ(pair->geometryMatrix[0], 0.0);
     EXPECT_EQ(pair->correspondences.front().residualPixels, -1.0f);
     EXPECT_FALSE(records.front().settings.value(QStringLiteral("geometry_verified")).toBool(true));
+}
+
+TEST(MatchPhotosFunnelDiagnosticsTest, SummarizesEveryRetentionBoundary)
+{
+    xjw::matchphotos::PairSelectionResult selection;
+    selection.allPairCount = 10;
+    selection.candidates.resize(4);
+
+    std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records(3);
+    records[0].passedGeometry = true;
+    records[0].geometricInlierCount = 80;
+    records[1].passedGeometry = true;
+    records[1].geometricInlierCount = 35;
+
+    const auto diagnostics = xjw::matchphotos::summarizeMatchPhotosFunnel(
+        selection,
+        records,
+        3,
+        200,
+        2,
+        100,
+        15,
+        40);
+
+    EXPECT_EQ(diagnostics.allPairCount, 10);
+    EXPECT_EQ(diagnostics.selectedPairCount, 4);
+    EXPECT_EQ(diagnostics.matchedPairCount, 3);
+    EXPECT_EQ(diagnostics.rawMatchCount, 200);
+    EXPECT_EQ(diagnostics.geometryPassedPairCount, 2);
+    EXPECT_EQ(diagnostics.geometryInlierCount, 100);
+    EXPECT_EQ(diagnostics.guidedAddedInlierCount, 15);
+    EXPECT_EQ(diagnostics.finalPassedPairCount, 2);
+    EXPECT_EQ(diagnostics.finalGeometryInlierCount, 115);
+    EXPECT_EQ(diagnostics.trackCount, 40);
+    EXPECT_DOUBLE_EQ(diagnostics.pairSelectionRatio, 0.4);
+    EXPECT_DOUBLE_EQ(diagnostics.matchingYieldRatio, 0.75);
+    EXPECT_NEAR(diagnostics.geometryPairRetentionRatio, 2.0 / 3.0, 1.0e-12);
+    EXPECT_DOUBLE_EQ(diagnostics.geometryInlierRatio, 0.5);
+    EXPECT_DOUBLE_EQ(diagnostics.guidedGainRatio, 0.15);
+
+    const QJsonObject json = diagnostics.toJson();
+    EXPECT_EQ(json.value(QStringLiteral("final_geometry_inlier_count")).toInt(), 115);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("guided_gain_ratio")).toDouble(), 0.15);
 }

@@ -127,6 +127,7 @@ struct DepthFrameQualityDecision
     float calibratedConfidence = 0.0f;
     DepthConfidenceComponents confidenceComponents;
     SparseDepthResidualSummary sparseDepthResidual;
+    float sparseDepthResidualValidationThreshold = 0.005f;
     std::vector<std::string> reasons;
 };
 
@@ -140,6 +141,20 @@ enum class DepthConsistencyEvidence
 
 float calibrateDepthConfidence(const DepthConfidenceComponents& components);
 float geometryErrorConfidence(const SparseDepthResidualSummary& residual);
+
+/// Returns the maximum sparse absolute log-depth error that can remain a
+/// primary frame. Trusted orbital captures use the same filter-dependent
+/// scale as their multi-view consistency policy; generic captures keep the
+/// stricter half-percent requirement.
+float sparseDepthResidualValidationThreshold(MvsSceneProfile sceneProfile, DepthFilterMode filterMode);
+
+/// Targeted orbital gap recovery is allowed only when independent sparse
+/// geometry does not already identify the native depth as a provisional or
+/// rejected layer. Missing sparse evidence remains non-blocking because many
+/// valid object views do not contain enough projected SfM anchors.
+bool permitsTargetedGapRecovery(MvsSceneProfile sceneProfile,
+                                DepthFilterMode filterMode,
+                                const SparseDepthResidualSummary &residual);
 
 /// Preserve the observed consistency retention independently of any restored
 /// publication coverage. An all-unavailable (-1) tuple is accepted only when

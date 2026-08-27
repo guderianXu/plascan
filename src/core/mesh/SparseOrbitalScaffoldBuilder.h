@@ -30,6 +30,9 @@ struct SparseOrbitalScaffoldStatistics
 {
     std::size_t inputPointCount = 0;
     std::size_t sidecarPointCount = 0;
+    std::size_t sidecarMatchedPointCount = 0;
+    std::size_t sidecarUnmatchedPointCount = 0;
+    bool sidecarSubsetAlignmentUsed = false;
     std::size_t nonFiniteRejectedCount = 0;
     std::size_t missingQualityRejectedCount = 0;
     std::size_t qualityRejectedCount = 0;

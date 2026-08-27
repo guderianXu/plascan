@@ -71,6 +71,9 @@ bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &option
                                              int totalImages,
                                              std::size_t candidateCount);
 
+/// 返回初始像对候选试算的注册目标；有限前瞻至少扩展到第三幅影像。
+int initialPairTrialTargetImages(const IncrementalSfmOptions &options, int totalImages);
+
 /// 对初始模型按注册覆盖、点数和重投影质量形成可比较高分优先分数。
 double scoreInitialPairTrial(const IncrementalSfmResult &result, int totalImages);
 

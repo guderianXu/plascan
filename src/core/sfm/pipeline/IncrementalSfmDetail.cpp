@@ -24,20 +24,32 @@ namespace xjw::incremental_sfm_detail
 {
 
 /**
- * @brief 判断是否对多个初始像对运行完整的小规模 SfM 试算。
+ * @brief 判断是否对多个初始像对运行 SfM 试算。
  *
- * 大数据集逐候选试算成本过高，因此受 multiInitialPairMaxImages 控制；显式初始对
- * 和关闭 autoSelectInitPair 时绝不触发。
+ * 有限前瞻将每个候选限制在少量影像内，可以安全用于大数据集；只有明确
+ * 请求完整试算时才由 multiInitialPairMaxImages 限制规模。
  */
 bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &options,
                                              int totalImages,
                                              std::size_t candidateCount)
 {
+    const bool boundedLookahead = options.initialPairLookaheadMaxImages > 0;
+    const bool fullTrialWithinLimit =
+        totalImages <= std::max(2, options.multiInitialPairMaxImages);
     return options.autoSelectInitPair &&
            options.evaluateMultipleInitialPairModels &&
            candidateCount > 1 &&
            totalImages >= 3 &&
-           totalImages <= std::max(2, options.multiInitialPairMaxImages);
+           (boundedLookahead || fullTrialWithinLimit);
+}
+
+int initialPairTrialTargetImages(const IncrementalSfmOptions &options, int totalImages)
+{
+    if (totalImages <= 0 || options.initialPairLookaheadMaxImages <= 0)
+    {
+        return std::max(0, totalImages);
+    }
+    return std::clamp(options.initialPairLookaheadMaxImages, std::min(3, totalImages), totalImages);
 }
 
 /**

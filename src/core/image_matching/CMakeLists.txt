@@ -8,6 +8,8 @@ endif()
 # 统一影像匹配目标。SIFT、LightGlue、几何验证和 `.pimatch` 存储最终都会在
 # 本目标内注册，调用方只依赖 image_matching，不再分别依赖提取器和匹配器目录。
 add_library(image_matching STATIC
+    orb_binary/OrbBinaryAlgorithm.cpp
+    orb_binary/OrbBinaryAlgorithm.h
     FeatureSet.cpp
     FeatureSet.h
     ImageMatchFile.cpp
@@ -106,6 +108,7 @@ endif()
 
 target_include_directories(image_matching PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/orb_binary
     ${CMAKE_CURRENT_SOURCE_DIR}/lightglue
     ${CMAKE_CURRENT_SOURCE_DIR}/geometry
     ${CMAKE_CURRENT_SOURCE_DIR}/sift
@@ -181,4 +184,14 @@ if(BUILD_TESTS)
         TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
     )
     add_test(NAME AutoSiftTest COMMAND test_auto_sift)
+
+    add_executable(test_orb_binary
+        tests/test_orb_binary.cpp
+    )
+    target_link_libraries(test_orb_binary PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        image_matching
+    )
+    add_test(NAME OrbBinaryTest COMMAND test_orb_binary)
 endif()

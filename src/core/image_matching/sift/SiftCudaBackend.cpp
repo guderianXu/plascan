@@ -343,8 +343,16 @@ namespace xjw::image_matching
             std::vector<SiftNearestMatch> matches(static_cast<std::size_t>(count));
             for (int index = 0; index < count; ++index)
             {
-                matches[static_cast<std::size_t>(index)] = {
-                    points[index].match, points[index].score, points[index].ambiguity};
+                // CUDA Sift stores ambiguity as second-best cosine similarity divided by
+                // the best similarity. The shared filter expects Lowe's Euclidean
+                // distance ratio, as produced by the CPU, OpenCL and Metal backends.
+                const float bestSimilarity = std::clamp(points[index].score, -1.0f, 1.0f);
+                const float secondSimilarity =
+                    std::clamp(points[index].ambiguity * points[index].score, -1.0f, bestSimilarity);
+                const float bestDistance = std::sqrt(std::max(0.0f, 2.0f - 2.0f * bestSimilarity));
+                const float secondDistance = std::sqrt(std::max(1.0e-12f, 2.0f - 2.0f * secondSimilarity));
+                const float distanceRatio = std::clamp(bestDistance / secondDistance, 0.0f, 1.0f);
+                matches[static_cast<std::size_t>(index)] = {points[index].match, bestSimilarity, distanceRatio};
             }
             return matches;
         }

@@ -33,7 +33,9 @@ bool FeatureSet::isConsistent() const
     {
         return descriptors.empty() && scores.empty();
     }
-    return descriptors.type() == CV_32F &&
+    const bool supportedDescriptorType =
+        descriptors.type() == CV_32F || descriptors.type() == CV_8U;
+    return supportedDescriptorType &&
         descriptors.rows == size() &&
         scores.size() == keypoints.size() &&
         imageWidth > 0 && imageHeight > 0;

@@ -259,4 +259,70 @@ TEST(SparseOrbitalScaffoldBuilderTest, RejectsTracksBelowSidecarQualityGate)
     EXPECT_TRUE(result.points.empty());
 }
 
+TEST(SparseOrbitalScaffoldBuilderTest,
+     AcceptsCoordinateVerifiedOrderPreservingManualPrune)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto root = temporaryRoot(directory);
+    const auto mvs_output = root / "mvs_output";
+    const auto sparse_path = root / "manual_prune.ply";
+    const auto sidecar_path = root / "manual_prune_points.json";
+    std::filesystem::create_directories(mvs_output);
+
+    const auto original_points = spherePoints();
+    std::vector<std::array<float, 3>> retained_points;
+    retained_points.reserve(original_points.size() - 3);
+    for (std::size_t index = 0; index < original_points.size(); ++index)
+    {
+        if (index != 2 && index != 19 && index != 73)
+        {
+            retained_points.push_back(original_points[index]);
+        }
+    }
+    writeBinaryPly(sparse_path, retained_points);
+    writePointQualitySidecar(sidecar_path, original_points);
+
+    SparseOrbitalScaffoldOptions options;
+    options.minimumPointCount = 20;
+    options.maximumPointCount = 1000;
+    const auto result = SparseOrbitalScaffoldBuilder::build(
+        mvs_output, sparse_path, sidecar_path, options);
+
+    ASSERT_TRUE(result.succeeded()) << result.error;
+    EXPECT_EQ(result.statistics.inputPointCount, retained_points.size());
+    EXPECT_EQ(result.statistics.sidecarPointCount, original_points.size());
+    EXPECT_EQ(result.statistics.sidecarMatchedPointCount, retained_points.size());
+    EXPECT_EQ(result.statistics.sidecarUnmatchedPointCount, 3U);
+    EXPECT_TRUE(result.statistics.sidecarSubsetAlignmentUsed);
+}
+
+TEST(SparseOrbitalScaffoldBuilderTest,
+     RejectsPointCloudThatIsNotAnOrderedSidecarSubset)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto root = temporaryRoot(directory);
+    const auto mvs_output = root / "mvs_output";
+    const auto sparse_path = root / "unrelated_prune.ply";
+    const auto sidecar_path = root / "unrelated_prune_points.json";
+    std::filesystem::create_directories(mvs_output);
+
+    const auto original_points = spherePoints();
+    std::vector<std::array<float, 3>> unrelated_points(
+        original_points.begin(), original_points.end() - 1);
+    unrelated_points[12] = {9.0f, 8.0f, 7.0f};
+    writeBinaryPly(sparse_path, unrelated_points);
+    writePointQualitySidecar(sidecar_path, original_points);
+
+    SparseOrbitalScaffoldOptions options;
+    options.minimumPointCount = 20;
+    const auto result = SparseOrbitalScaffoldBuilder::build(
+        mvs_output, sparse_path, sidecar_path, options);
+
+    EXPECT_FALSE(result.succeeded());
+    EXPECT_NE(result.error.find("可验证有序子集"), std::string::npos);
+    EXPECT_TRUE(result.points.empty());
+}
+
 } // namespace

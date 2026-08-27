@@ -64,6 +64,8 @@ function(add_plascan_cli name)
     )
     if(WIN32)
         plascan_deploy_onnxruntime(${name})
+        plascan_deploy_vcpkg_runtime(${name})
+        plascan_deploy_source_dependency_runtime(${name})
     endif()
     if(CLI_WITH_NVRTC_RPATH)
         set_target_properties(${name} PROPERTIES

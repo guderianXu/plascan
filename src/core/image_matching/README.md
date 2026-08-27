@@ -1,8 +1,8 @@
 # image_matching 统一影像匹配模块
 
 `image_matching` 是 PlaScan 唯一的局部特征提取、学习型匹配、两视几何验证和匹配结果持久化模块。
-默认生产算法是无需外部模型的 **Auto SIFT**，可选算法包括 **CUDA SIFT + TensorRT LightGlue** 与
-**TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
+默认生产算法是无需外部模型的 **Auto SIFT**，可选算法包括 **ORB 二进制兼容基线**、
+**CUDA SIFT + TensorRT LightGlue** 与 **TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
 CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 TensorRT 数据布局。
 
 ## 模块边界
@@ -16,6 +16,9 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
   `cudaMalloc/cudaFree`；影像级流水线使受保护的 GPU 提取段与另一影像的 CPU 后处理重叠。
   CUDA 描述子匹配为每个 worker 建立非阻塞 stream 和可增长复用缓冲，一次上传完成双向最近邻匹配；
   已完成 RootSIFT/L2 归一化的描述子不会在每个像对内重复克隆和归一化。
+- `orb_binary/` 注册 `orb_binary`，作为当前 OpenCV 5 依赖可用的 clean-room 二进制 benchmark
+  通道。它使用 Hamming 双向 top-2、ratio 和 mutual gate，不代表 Metashape 的私有 LoG/DoG
+  detector、MLDB 采样对或阈值，也不替换默认 Auto SIFT。
 - `lightglue/` 负责本机 TensorRT engine 执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
 - `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
 - `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。

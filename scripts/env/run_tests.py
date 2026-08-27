@@ -7,6 +7,7 @@ import argparse
 import os
 import subprocess
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 
 def default_parallel_jobs(logical_cpus: int | None = None) -> int:
@@ -53,6 +54,71 @@ def build_ctest_command(
     return command
 
 
+def ctest_test_directory(
+    ctest_args: Sequence[str],
+    *,
+    working_directory: Path | None = None,
+) -> Path | None:
+    """Return the resolved directory passed to CTest through --test-dir."""
+    for index, argument in enumerate(ctest_args):
+        if argument == "--test-dir" and index + 1 < len(ctest_args):
+            value = ctest_args[index + 1]
+            break
+        if argument.startswith("--test-dir="):
+            value = argument.partition("=")[2]
+            break
+    else:
+        return None
+
+    if not value:
+        return None
+    base_directory = Path.cwd() if working_directory is None else working_directory
+    test_directory = Path(value)
+    if not test_directory.is_absolute():
+        test_directory = base_directory / test_directory
+    return test_directory.resolve()
+
+
+def build_test_environment(
+    ctest_args: Sequence[str],
+    *,
+    environment: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+    working_directory: Path | None = None,
+) -> dict[str, str]:
+    """Bind Windows build-tree DLLs and Qt plugins for CTest discovery and runs."""
+    result = dict(os.environ if environment is None else environment)
+    effective_platform = os.name if platform_name is None else platform_name
+    if effective_platform != "nt":
+        return result
+
+    test_directory = ctest_test_directory(
+        ctest_args, working_directory=working_directory)
+    if test_directory is None:
+        return result
+
+    runtime_directories = [test_directory / "bin", test_directory / "tests"]
+    existing_runtime_directories = [
+        str(directory) for directory in runtime_directories if directory.is_dir()
+    ]
+    if existing_runtime_directories:
+        current_path = result.get("PATH", "")
+        path_entries = existing_runtime_directories
+        if current_path:
+            path_entries.append(current_path)
+        result["PATH"] = os.pathsep.join(path_entries)
+
+    qt_plugin_root = test_directory / "bin"
+    if (qt_plugin_root / "platforms").is_dir():
+        current_plugin_path = result.get("QT_PLUGIN_PATH", "")
+        plugin_paths = [str(qt_plugin_root)]
+        if current_plugin_path:
+            plugin_paths.append(current_plugin_path)
+        result["QT_PLUGIN_PATH"] = os.pathsep.join(plugin_paths)
+
+    return result
+
+
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -74,7 +140,8 @@ def main() -> int:
     print("+ " + subprocess.list2cmdline(command), flush=True)
     if args.dry_run:
         return 0
-    return subprocess.run(command, check=False).returncode
+    test_environment = build_test_environment(ctest_args)
+    return subprocess.run(command, check=False, env=test_environment).returncode
 
 
 if __name__ == "__main__":

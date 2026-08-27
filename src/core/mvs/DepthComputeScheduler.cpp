@@ -1,5 +1,9 @@
 #include "DepthComputeScheduler.h"
 
+#include "io/PathIO.h"
+
+#include <QFileInfo>
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -17,6 +21,48 @@ namespace
 constexpr std::size_t kMinimumOpenClContributionFramesPerCudaDevice = 64;
 
 } // namespace
+
+std::vector<DepthFrameTask> makeFileNameOrderedDepthFrameTasks(
+    const std::vector<std::string> &imagePaths,
+    const std::vector<std::uint8_t> &skipFrameMask)
+{
+    struct NamedTask
+    {
+        DepthFrameTask task;
+        QString fileName;
+    };
+
+    std::vector<NamedTask> named_tasks;
+    named_tasks.reserve(imagePaths.size());
+    for (std::size_t index = 0; index < imagePaths.size(); ++index)
+    {
+        if (index < skipFrameMask.size() && skipFrameMask[index] != 0)
+        {
+            continue;
+        }
+
+        const QString image_path = common::io::fromUtf8Path(imagePaths[index]);
+        named_tasks.push_back({
+            {static_cast<int>(index), 0.0f},
+            QFileInfo(image_path).fileName()});
+    }
+
+    std::stable_sort(
+        named_tasks.begin(), named_tasks.end(), [](const NamedTask &left,
+                                                    const NamedTask &right)
+        {
+            return common::io::naturalFileNameLessThan(left.fileName,
+                                                       right.fileName);
+        });
+
+    std::vector<DepthFrameTask> tasks;
+    tasks.reserve(named_tasks.size());
+    for (NamedTask &named_task : named_tasks)
+    {
+        tasks.push_back(std::move(named_task.task));
+    }
+    return tasks;
+}
 
 int recommendedOpenClFullFrameFloorPerDevice(
     bool benefitAwareScheduling,
@@ -68,6 +114,19 @@ DepthComputeBackend resolveDepthComputeBackend(
         return DepthComputeBackend::OpenCl;
     }
     return DepthComputeBackend::Cpu;
+}
+
+bool isUsefulDepthComputeCompletion(DepthComputeBackend backend,
+                                    bool heterogeneousScheduling,
+                                    bool computationSucceeded,
+                                    bool frameQualityRejected)
+{
+    if (!computationSucceeded)
+    {
+        return false;
+    }
+
+    return !heterogeneousScheduling || backend != DepthComputeBackend::OpenCl || !frameQualityRejected;
 }
 
 std::string DepthComputeWorker::id() const

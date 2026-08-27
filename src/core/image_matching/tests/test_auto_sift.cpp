@@ -472,6 +472,47 @@ namespace xjw::image_matching
             EXPECT_EQ(result.numMatches, 531);
         }
 
+        TEST(AutoSiftAlgorithmTest, CudaUsesSameDistanceRatioAsCpu)
+        {
+            if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::Cuda, 0))
+            {
+                GTEST_SKIP() << "CUDA SIFT device is unavailable";
+            }
+
+            FeatureSet features0;
+            features0.descriptorsL2Normalized = true;
+            features0.imageWidth = 64;
+            features0.imageHeight = 64;
+            features0.sourceAlgorithm = "sift";
+            features0.keypoints = {cv::KeyPoint(10.0f, 10.0f, 1.0f), cv::KeyPoint(20.0f, 20.0f, 1.0f)};
+            features0.scores = {1.0f, 1.0f};
+            features0.descriptors = cv::Mat::zeros(2, 128, CV_32F);
+            features0.descriptors.at<float>(0, 0) = 1.0f;
+            features0.descriptors.at<float>(1, 1) = 1.0f;
+
+            FeatureSet features1 = features0;
+            features1.descriptors = features0.descriptors.clone();
+            features1.descriptors.at<float>(0, 0) = 0.9f;
+            features1.descriptors.at<float>(0, 1) = std::sqrt(0.19f);
+            features1.descriptors.at<float>(1, 0) = 0.8f;
+            features1.descriptors.at<float>(1, 1) = -0.6f;
+
+            ImageMatchingRuntimeConfig config;
+            config.adaptiveSiftRatio = false;
+            config.siftMaximumRatio = 0.8f;
+            config.siftBackend = SiftComputeBackend::Cpu;
+            AutoSiftAlgorithm cpu(config);
+            const MatchResult cpuResult = cpu.matchFeatures(features0, features1);
+
+            config.siftBackend = SiftComputeBackend::Cuda;
+            AutoSiftAlgorithm cuda(config);
+            const MatchResult cudaResult = cuda.matchFeatures(features0, features1);
+
+            ASSERT_EQ(cpuResult.numMatches, 1);
+            EXPECT_EQ(cudaResult.matches0, cpuResult.matches0);
+            EXPECT_EQ(cudaResult.matches1, cpuResult.matches1);
+        }
+
         TEST(AutoSiftAlgorithmTest, CudaBackendMatchesConcurrentlyOnIndependentStreams)
         {
             if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::Cuda, 0))
@@ -633,6 +674,30 @@ namespace xjw::image_matching
 
             EXPECT_EQ(result.matches0.size(), 67U);
             EXPECT_EQ(result.numMatches, 53);
+        }
+
+        TEST(AutoSiftAlgorithmTest, OpenClMatchesDescriptorsAcrossQueryBatches)
+        {
+            if (!SiftFeatureExtractor::isBackendAvailable(SiftComputeBackend::OpenCl, 0))
+            {
+                GTEST_SKIP() << "OpenCL SIFT device is unavailable";
+            }
+
+            const FeatureSet features0 = makeSiftFeatures(1200);
+            const FeatureSet features1 = makeSiftFeatures(1171);
+            ImageMatchingRuntimeConfig config;
+            config.adaptiveSiftRatio = false;
+            config.siftBackend = SiftComputeBackend::Cpu;
+            AutoSiftAlgorithm cpu(config);
+            const MatchResult cpuResult = cpu.matchFeatures(features0, features1);
+
+            config.siftBackend = SiftComputeBackend::OpenCl;
+            AutoSiftAlgorithm openCl(config);
+            const MatchResult openClResult = openCl.matchFeatures(features0, features1);
+
+            ASSERT_EQ(cpuResult.numMatches, 1171);
+            EXPECT_EQ(openClResult.matches0, cpuResult.matches0);
+            EXPECT_EQ(openClResult.matches1, cpuResult.matches1);
         }
 
         struct DinoBackendMetrics

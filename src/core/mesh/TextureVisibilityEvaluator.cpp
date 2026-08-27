@@ -269,12 +269,14 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
         1.0f);
     const float resolution_score = std::clamp(
         static_cast<float>(std::sqrt(area) / 8.0), 0.10f, 1.0f);
+    const float projected_resolution = std::clamp(
+        static_cast<float>(std::sqrt(area)), 0.10f, 64.0f);
     const float score =
         view.qualityWeight *
         std::pow(depth_score, 2.0f) *
-        std::pow(angle_score, 4.0f) *
-        resolution_score *
-        center_score *
+        std::pow(angle_score, 2.0f) *
+        projected_resolution *
+        std::sqrt(center_score) *
         std::clamp(view.sharpnessWeight, 0.20f, 1.5f);
     return {view_index,
             score,
@@ -323,6 +325,90 @@ bool sampleProjectedColor(const PreparedView &view,
         cv::Vec3f(view.colorBgr.at<cv::Vec3b>(row, column)),
         view.exposureGain);
     return true;
+}
+
+void rankCandidatesByPhotometricConsistency(const PipelineData &data,
+                                             int face_index,
+                                             int maximum_candidates,
+                                             bool enable_photometric_consistency,
+                                             FaceAssignment *assignment)
+{
+    std::sort(assignment->candidates.begin(),
+              assignment->candidates.end(),
+              [](const auto &left, const auto &right)
+    {
+        return left.score > right.score ||
+            (left.score == right.score && left.viewIndex < right.viewIndex);
+    });
+    if (assignment->candidates.size() > maximum_candidates)
+    {
+        assignment->candidates.resize(maximum_candidates);
+    }
+    if (!enable_photometric_consistency)
+    {
+        return;
+    }
+
+    struct LumaSample
+    {
+        int candidateIndex = -1;
+        float value = 0.0f;
+    };
+    QVector<LumaSample> samples;
+    samples.reserve(assignment->candidates.size());
+    for (int candidate_index = 0;
+         candidate_index < assignment->candidates.size();
+         ++candidate_index)
+    {
+        const FaceCandidate &candidate =
+            assignment->candidates[candidate_index];
+        cv::Vec3f color;
+        if (!sampleProjectedColor(data.views[candidate.viewIndex],
+                                  data.geometry[face_index].centroid,
+                                  &color))
+        {
+            continue;
+        }
+        samples.push_back({candidate_index,
+                           0.0722f * color[0] +
+                               0.7152f * color[1] +
+                               0.2126f * color[2]});
+    }
+    if (samples.size() >= 3)
+    {
+        QVector<float> values;
+        values.reserve(samples.size());
+        for (const LumaSample &sample : samples)
+        {
+            values.push_back(sample.value);
+        }
+        std::sort(values.begin(), values.end());
+        const float median = values[values.size() / 2];
+        for (float &value : values)
+        {
+            value = std::fabs(value - median);
+        }
+        std::sort(values.begin(), values.end());
+        const float median_absolute_deviation = values[values.size() / 2];
+        const float scale = std::max(
+            10.0f, 2.5f * 1.4826f * median_absolute_deviation);
+        for (const LumaSample &sample : samples)
+        {
+            const float normalized =
+                (sample.value - median) / scale;
+            const float consistency =
+                std::exp(-0.5f * normalized * normalized);
+            assignment->candidates[sample.candidateIndex].score *=
+                0.35f + 0.65f * consistency;
+        }
+        std::sort(assignment->candidates.begin(),
+                  assignment->candidates.end(),
+                  [](const auto &left, const auto &right)
+        {
+            return left.score > right.score ||
+                (left.score == right.score && left.viewIndex < right.viewIndex);
+        });
+    }
 }
 
 double seamColorPenalty(const PipelineData &data,
@@ -552,17 +638,12 @@ bool selectTextureViews(const TextureMappingConfig &config,
                 assignment.candidates.push_back(candidate);
             }
         }
-        std::sort(assignment.candidates.begin(),
-                  assignment.candidates.end(),
-                  [](const auto &left, const auto &right)
-        {
-            return left.score > right.score ||
-                (left.score == right.score && left.viewIndex < right.viewIndex);
-        });
-        if (assignment.candidates.size() > maximum_candidates)
-        {
-            assignment.candidates.resize(maximum_candidates);
-        }
+        rankCandidatesByPhotometricConsistency(
+            *data,
+            face_index,
+            maximum_candidates,
+            config.enableGhostFilter,
+            &assignment);
 
         if (assignment.candidates.isEmpty() &&
             config.holeFillMode == TextureHoleFillMode::NeighborViewRecovery)
@@ -583,17 +664,12 @@ bool selectTextureViews(const TextureMappingConfig &config,
                     assignment.candidates.push_back(candidate);
                 }
             }
-            std::sort(assignment.candidates.begin(),
-                      assignment.candidates.end(),
-                      [](const auto &left, const auto &right)
-            {
-                return left.score > right.score ||
-                    (left.score == right.score && left.viewIndex < right.viewIndex);
-            });
-            if (assignment.candidates.size() > maximum_candidates)
-            {
-                assignment.candidates.resize(maximum_candidates);
-            }
+            rankCandidatesByPhotometricConsistency(
+                *data,
+                face_index,
+                maximum_candidates,
+                config.enableGhostFilter,
+                &assignment);
             assignment.relaxed = !assignment.candidates.isEmpty();
         }
         if (!assignment.candidates.isEmpty())

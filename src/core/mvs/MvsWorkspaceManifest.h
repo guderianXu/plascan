@@ -93,6 +93,25 @@ inline constexpr int kMvsCacheAndConsistencyAuditRevision = 46;
 /// whether consistency and frozen-depth guidance were expected and actually
 /// completed, and preserves the unavailable single-view consistency state.
 inline constexpr int kMvsDurableDepthPublicationRevision = 47;
+/// Revision 48 prevents a fast but quality-rejected OpenCL device from being
+/// rewarded as useful throughput during automatic CUDA+OpenCL scheduling.
+/// It also aligns the sparse absolute-depth primary threshold for trusted
+/// orbital captures with the selected consistency-filter strength, while
+/// generic captures retain the strict half-percent threshold. Existing depth
+/// results must be recomputed under both corrected policies.
+inline constexpr int kMvsQualityAwareHeterogeneousSchedulingRevision = 48;
+/// Revision 49 blocks targeted orbital gap recovery when independent sparse
+/// anchors already classify the native depth as non-primary, and tightens the
+/// default recovery confidence, consensus spread, and prior search radius.
+inline constexpr int kMvsSparseAnchoredGapRecoveryRevision = 49;
+/// Revision 50 replaces source-count majority voting with a bounded adaptive
+/// three-to-four-view photometric inlier set and keeps strict confidence-filter
+/// output when a frame collapses instead of restoring the rejected depth map.
+inline constexpr int kMvsAdaptivePhotometricInlierRevision = 50;
+/// Revision 51 adds a deterministic final plane-propagation pass after random
+/// refinement and optional reference-raster guidance for the scale-invariant
+/// depth bilateral filter. The guidance remains opt-in after dataset A/B.
+inline constexpr int kMvsFinalPropagationAndGuidedFilterRevision = 51;
 
 struct MvsDepthFrameRecord
 {

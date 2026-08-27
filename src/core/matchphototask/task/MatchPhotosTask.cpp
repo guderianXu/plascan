@@ -20,12 +20,86 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 
 namespace xjw
 {
 namespace matchphotos
 {
+
+QJsonObject MatchPhotosFunnelDiagnostics::toJson() const
+{
+    QJsonObject object;
+    object[QStringLiteral("all_pair_count")] = allPairCount;
+    object[QStringLiteral("selected_pair_count")] = selectedPairCount;
+    object[QStringLiteral("matched_pair_count")] = matchedPairCount;
+    object[QStringLiteral("raw_match_count")] = static_cast<double>(rawMatchCount);
+    object[QStringLiteral("geometry_passed_pair_count")] = geometryPassedPairCount;
+    object[QStringLiteral("geometry_inlier_count")] = static_cast<double>(geometryInlierCount);
+    object[QStringLiteral("guided_added_inlier_count")] = static_cast<double>(guidedAddedInlierCount);
+    object[QStringLiteral("final_passed_pair_count")] = finalPassedPairCount;
+    object[QStringLiteral("final_geometry_inlier_count")] = static_cast<double>(finalGeometryInlierCount);
+    object[QStringLiteral("track_count")] = trackCount;
+    object[QStringLiteral("pair_selection_ratio")] = pairSelectionRatio;
+    object[QStringLiteral("matching_yield_ratio")] = matchingYieldRatio;
+    object[QStringLiteral("geometry_pair_retention_ratio")] = geometryPairRetentionRatio;
+    object[QStringLiteral("geometry_inlier_ratio")] = geometryInlierRatio;
+    object[QStringLiteral("guided_gain_ratio")] = guidedGainRatio;
+    return object;
+}
+
+MatchPhotosFunnelDiagnostics summarizeMatchPhotosFunnel(
+    const PairSelectionResult &pairSelection,
+    const std::vector<MatchPhotosMatchRecord> &finalMatches,
+    int matchedPairCount,
+    std::int64_t rawMatchCount,
+    int geometryPassedPairCount,
+    std::int64_t geometryInlierCount,
+    std::int64_t guidedAddedInlierCount,
+    int trackCount)
+{
+    MatchPhotosFunnelDiagnostics diagnostics;
+    diagnostics.allPairCount = std::max(0, pairSelection.allPairCount);
+    diagnostics.selectedPairCount = static_cast<int>(pairSelection.candidates.size());
+    diagnostics.matchedPairCount = std::max(0, matchedPairCount);
+    diagnostics.rawMatchCount = std::max<std::int64_t>(0, rawMatchCount);
+    diagnostics.geometryPassedPairCount = std::max(0, geometryPassedPairCount);
+    diagnostics.geometryInlierCount = std::max<std::int64_t>(0, geometryInlierCount);
+    diagnostics.guidedAddedInlierCount = std::max<std::int64_t>(0, guidedAddedInlierCount);
+    diagnostics.trackCount = std::max(0, trackCount);
+
+    for (const MatchPhotosMatchRecord &record : finalMatches)
+    {
+        if (record.passedGeometry)
+        {
+            ++diagnostics.finalPassedPairCount;
+            diagnostics.finalGeometryInlierCount += std::max(0, record.geometricInlierCount);
+        }
+    }
+
+    const auto boundedRatio = [](std::int64_t numerator, std::int64_t denominator)
+    {
+        const double value = denominator > 0
+            ? static_cast<double>(numerator) / static_cast<double>(denominator)
+            : 0.0;
+        return std::clamp(value, 0.0, 1.0);
+    };
+    diagnostics.pairSelectionRatio = boundedRatio(
+        diagnostics.selectedPairCount, diagnostics.allPairCount);
+    diagnostics.matchingYieldRatio = boundedRatio(
+        diagnostics.matchedPairCount, diagnostics.selectedPairCount);
+    diagnostics.geometryPairRetentionRatio = boundedRatio(
+        diagnostics.geometryPassedPairCount, diagnostics.matchedPairCount);
+    diagnostics.geometryInlierRatio = boundedRatio(
+        diagnostics.geometryInlierCount, diagnostics.rawMatchCount);
+    diagnostics.guidedGainRatio = diagnostics.geometryInlierCount > 0
+        ? static_cast<double>(diagnostics.guidedAddedInlierCount) /
+              static_cast<double>(diagnostics.geometryInlierCount)
+        : 0.0;
+    return diagnostics;
+}
+
 namespace
 {
 
@@ -60,6 +134,34 @@ MatchPhotosStageReport makePairSelectionReport(const PairSelectionResult &select
     report.status = MatchPhotosStageStatus::Completed;
     report.itemCount = static_cast<int>(selection.candidates.size());
     report.message = selection.detail;
+    return report;
+}
+
+MatchPhotosStageReport makeMatchingFunnelReport(
+    const MatchPhotosFunnelDiagnostics &diagnostics)
+{
+    MatchPhotosStageReport report;
+    report.stageId = QStringLiteral("matching_funnel");
+    report.displayName = QStringLiteral("匹配漏斗诊断");
+    report.status = MatchPhotosStageStatus::Completed;
+    report.itemCount = diagnostics.trackCount;
+    report.message =
+        QStringLiteral("像对 %1/%2（%3%） → 有初始匹配 %4 对/%5 个 → "
+                       "几何通过 %6 对/%7 内点（%8%） → "
+                       "guided +%9（%10%） → 最终 %11 对/%12 内点 → %13 条轨迹")
+            .arg(diagnostics.selectedPairCount)
+            .arg(diagnostics.allPairCount)
+            .arg(diagnostics.pairSelectionRatio * 100.0, 0, 'f', 1)
+            .arg(diagnostics.matchedPairCount)
+            .arg(static_cast<qlonglong>(diagnostics.rawMatchCount))
+            .arg(diagnostics.geometryPassedPairCount)
+            .arg(static_cast<qlonglong>(diagnostics.geometryInlierCount))
+            .arg(diagnostics.geometryInlierRatio * 100.0, 0, 'f', 1)
+            .arg(static_cast<qlonglong>(diagnostics.guidedAddedInlierCount))
+            .arg(diagnostics.guidedGainRatio * 100.0, 0, 'f', 1)
+            .arg(diagnostics.finalPassedPairCount)
+            .arg(static_cast<qlonglong>(diagnostics.finalGeometryInlierCount))
+            .arg(diagnostics.trackCount);
     return report;
 }
 
@@ -118,8 +220,26 @@ bool loadVocabularyFeatures(const MatchPhotosContext &context,
         VocabularyImageFeatures item;
         item.imagePath = common::io::toUtf8Path(imagePath);
         item.keypoints = cached->keypoints;
-        // cv::Mat 采用引用计数；缓存贯穿整个任务，因此这里无需复制数百 MiB 描述子。
-        item.descriptors = cached->descriptors;
+        if (cached->descriptors.type() == CV_32F)
+        {
+            // cv::Mat 采用引用计数；缓存贯穿整个任务，因此浮点描述子无需复制。
+            item.descriptors = cached->descriptors;
+        }
+        else if (cached->descriptors.type() == CV_8U)
+        {
+            // 词汇树当前以欧氏距离量化 float centroid。二进制通道在这里只做
+            // 低成本候选预选，按位字节转换为 [0,1] float；最终匹配仍使用 Hamming。
+            cached->descriptors.convertTo(item.descriptors, CV_32F, 1.0 / 255.0);
+        }
+        else
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("通用预选不支持描述子类型：%1")
+                                    .arg(cached->descriptors.type());
+            }
+            return false;
+        }
         features->push_back(std::move(item));
     }
     return true;
@@ -706,6 +826,13 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         return result;
     }
+    int matchedPairCount = 0;
+    std::int64_t rawMatchCount = 0;
+    for (const MatchPhotosMatchRecord &record : result.matches)
+    {
+        matchedPairCount += record.matchCount > 0 ? 1 : 0;
+        rawMatchCount += std::max(0, record.matchCount);
+    }
     const MatchPhotosStageReport geometryReport =
         geometryVerifyStage.run(runtimeContext, _options, &result.matches);
     reportMatchPhotosProgress(runtimeContext,
@@ -717,6 +844,13 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         clearTransientMatchPayloads(&result.matches);
         return result;
+    }
+    int geometryPassedPairCount = 0;
+    std::int64_t geometryInlierCount = 0;
+    for (const MatchPhotosMatchRecord &record : result.matches)
+    {
+        geometryPassedPairCount += record.passedGeometry ? 1 : 0;
+        geometryInlierCount += std::max(0, record.geometricInlierCount);
     }
     const MatchPhotosStageReport guidedReport = guidedMatchStage.run(
         runtimeContext, _options, result.algorithmPlan, &result.matches);
@@ -738,11 +872,29 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
                               trackReport.itemCount,
                               std::max(1, trackReport.itemCount));
     const bool stopAfterTrackBuild = appendStageAndStopOnFailure(&result, trackReport);
-    clearTransientMatchPayloads(&result.matches);
+    result.matchingFunnel = summarizeMatchPhotosFunnel(
+        result.pairSelection,
+        result.matches,
+        matchedPairCount,
+        rawMatchCount,
+        geometryPassedPairCount,
+        geometryInlierCount,
+        guidedReport.itemCount,
+        result.trackCount);
+    result.trackSummary[QStringLiteral("matching_funnel")] = result.matchingFunnel.toJson();
     if (stopAfterTrackBuild)
     {
+        clearTransientMatchPayloads(&result.matches);
         return result;
     }
+    const MatchPhotosStageReport funnelReport = makeMatchingFunnelReport(result.matchingFunnel);
+    result.stages.push_back(funnelReport);
+    reportMatchPhotosProgress(runtimeContext,
+                              funnelReport.stageId,
+                              funnelReport.message,
+                              funnelReport.itemCount,
+                              std::max(1, funnelReport.itemCount));
+    clearTransientMatchPayloads(&result.matches);
     result.success = true;
     return result;
 }

@@ -49,6 +49,7 @@ constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kRetiredReconstructionWorkflowId = "reconstruction";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
 constexpr auto kAutoSiftAlgorithmId = "auto_sift";
+constexpr auto kOrbBinaryAlgorithmId = "orb_binary";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
 constexpr auto kCudaComputeMode = "cuda";
 constexpr auto kOpenClComputeMode = "opencl";
@@ -525,6 +526,7 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
     const bool modelBacked = algorithmId == QLatin1String(kSiftLightGlueAlgorithmId) ||
         algorithmId == QLatin1String(kLoMaRAlgorithmId);
     const bool autoSift = algorithmId == QLatin1String(kAutoSiftAlgorithmId);
+    const bool orbBinary = algorithmId == QLatin1String(kOrbBinaryAlgorithmId);
     _matchingResourceEdit->setEnabled(modelBacked);
     _matchingResourceBrowseButton->setEnabled(modelBacked);
     _downloadModelButton->setEnabled(modelBacked);
@@ -542,6 +544,15 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
         _matchingResourceStatusLabel->setText(
             QStringLiteral("内置 SIFT，无需下载模型；自动优先 CUDA，"
                            "CUDA 不可用时回退 OpenCV CPU"));
+        _downloadModelButton->setVisible(false);
+    }
+    else if (orbBinary)
+    {
+        QPalette palette = _matchingResourceStatusLabel->palette();
+        palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
+        _matchingResourceStatusLabel->setPalette(palette);
+        _matchingResourceStatusLabel->setText(
+            QStringLiteral("内置 ORB/Hamming 二进制兼容基线，无需下载模型；使用 CPU"));
         _downloadModelButton->setVisible(false);
     }
     else

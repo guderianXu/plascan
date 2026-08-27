@@ -44,8 +44,11 @@ bool pointProjectionJacobian(const FramePinholeCamera &camera,
         minus[static_cast<std::size_t>(axis)] -= step;
         double projectedPlus[2]{};
         double projectedMinus[2]{};
-        if (!camera.projectWorldPoint(plus.data(), projectedPlus)
-            || !camera.projectWorldPoint(minus.data(), projectedMinus))
+        const bool plusProjected = camera.projectWorldPoint(plus.data(), projectedPlus)
+            || camera.projectWorldPointSigned(plus.data(), projectedPlus);
+        const bool minusProjected = camera.projectWorldPoint(minus.data(), projectedMinus)
+            || camera.projectWorldPointSigned(minus.data(), projectedMinus);
+        if (!plusProjected || !minusProjected)
         {
             return false;
         }

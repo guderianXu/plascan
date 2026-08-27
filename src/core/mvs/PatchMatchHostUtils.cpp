@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <opencv2/core/utility.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace xjw
 {
@@ -87,6 +88,7 @@ void maskedMedianFilter(const cv::Mat &source,
 
 void maskedRelativeBilateralFilter(const cv::Mat &source,
                                    const cv::Mat &validMask,
+                                   const cv::Mat &guidance,
                                    const PatchMatchConfig &config,
                                    cv::Mat *filtered)
 {
@@ -103,6 +105,12 @@ void maskedRelativeBilateralFilter(const cv::Mat &source,
         0.5f / (sigma_space * sigma_space);
     const float inverse_two_sigma_depth_squared =
         0.5f / (sigma_log_depth * sigma_log_depth);
+    const bool has_guidance = !guidance.empty() &&
+        guidance.type() == CV_32FC1 && guidance.size() == source.size();
+    const float sigma_guidance = std::max(
+        config.bilateralSigmaGuidance, 1.0e-3f);
+    const float inverse_two_sigma_guidance_squared =
+        0.5f / (sigma_guidance * sigma_guidance);
 
     *filtered = cv::Mat(source.size(), CV_32FC1, cv::Scalar(0.0f));
     cv::parallel_for_(cv::Range(0, source.rows), [&](const cv::Range &range)
@@ -120,6 +128,9 @@ void maskedRelativeBilateralFilter(const cv::Mat &source,
                 }
 
                 const float center_depth = center_row[column];
+                const float center_guidance = has_guidance
+                    ? guidance.at<float>(row, column)
+                    : 0.0f;
                 double weighted_depth_sum = 0.0;
                 double weight_sum = 0.0;
                 const int first_row = std::max(0, row - radius);
@@ -147,10 +158,18 @@ void maskedRelativeBilateralFilter(const cv::Mat &source,
                         const int delta_column = sample_column - column;
                         const float spatial_distance_squared = static_cast<float>(
                             delta_row * delta_row + delta_column * delta_column);
+                        const float guidance_delta = has_guidance
+                            ? guidance.at<float>(sample_row, sample_column) -
+                                center_guidance
+                            : 0.0f;
                         const float exponent =
                             -spatial_distance_squared * inverse_two_sigma_space_squared
                             -log_depth_delta * log_depth_delta *
-                                inverse_two_sigma_depth_squared;
+                                inverse_two_sigma_depth_squared
+                            -(has_guidance
+                                  ? guidance_delta * guidance_delta *
+                                      inverse_two_sigma_guidance_squared
+                                  : 0.0f);
                         const double weight = std::exp(static_cast<double>(exponent));
                         weighted_depth_sum += weight * static_cast<double>(sample_depth);
                         weight_sum += weight;
@@ -163,6 +182,64 @@ void maskedRelativeBilateralFilter(const cv::Mat &source,
             }
         }
     });
+}
+
+cv::Mat normalizedFilterGuidance(const cv::Mat &referenceGuide,
+                                 const cv::Size &targetSize)
+{
+    if (referenceGuide.empty() || targetSize.empty())
+    {
+        return {};
+    }
+
+    cv::Mat gray;
+    if (referenceGuide.channels() == 1)
+    {
+        gray = referenceGuide;
+    }
+    else if (referenceGuide.channels() == 3)
+    {
+        cv::cvtColor(referenceGuide, gray, cv::COLOR_BGR2GRAY);
+    }
+    else if (referenceGuide.channels() == 4)
+    {
+        cv::cvtColor(referenceGuide, gray, cv::COLOR_BGRA2GRAY);
+    }
+    else
+    {
+        return {};
+    }
+
+    cv::Mat resized;
+    if (gray.size() == targetSize)
+    {
+        resized = gray;
+    }
+    else
+    {
+        cv::resize(gray, resized, targetSize, 0.0, 0.0, cv::INTER_AREA);
+    }
+
+    cv::Mat normalized;
+    if (resized.depth() == CV_8U)
+    {
+        resized.convertTo(normalized, CV_32F, 1.0 / 255.0);
+    }
+    else if (resized.depth() == CV_16U)
+    {
+        resized.convertTo(normalized, CV_32F, 1.0 / 65535.0);
+    }
+    else
+    {
+        resized.convertTo(normalized, CV_32F);
+        double maximum = 0.0;
+        cv::minMaxLoc(normalized, nullptr, &maximum);
+        if (maximum > 1.0)
+        {
+            normalized *= static_cast<float>(1.0 / maximum);
+        }
+    }
+    return normalized;
 }
 
 } // namespace
@@ -219,7 +296,8 @@ std::array<float, 16> buildPatchMatchSourceCameraData(
 }
 
 void postprocessPatchMatchDepth(cv::Mat &depth,
-                                const PatchMatchConfig &config)
+                                const PatchMatchConfig &config,
+                                const cv::Mat &referenceGuide)
 {
     if (depth.empty() || depth.type() != CV_32FC1)
     {
@@ -256,8 +334,12 @@ void postprocessPatchMatchDepth(cv::Mat &depth,
 
     if (config.doBilateralFilter)
     {
+        const cv::Mat guidance = config.enableReferenceGuidedFilter
+            ? normalizedFilterGuidance(referenceGuide, depth.size())
+            : cv::Mat();
         cv::Mat filtered;
-        maskedRelativeBilateralFilter(depth, valid_mask, config, &filtered);
+        maskedRelativeBilateralFilter(
+            depth, valid_mask, guidance, config, &filtered);
         depth = std::move(filtered);
     }
 }

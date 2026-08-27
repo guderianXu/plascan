@@ -362,8 +362,10 @@ int main(int argc, char* argv[])
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
-    app.add_option("--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
+    app.add_option("--algorithm-id",
+                   algorithmIdArg,
+                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine",
                    lightGlueEngineArg,
                    "LightGlue .onnx（推荐）或兼容的本机 .engine；留空时按模型目录自动查找");

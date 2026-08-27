@@ -33,6 +33,17 @@ DepthComputeBackend resolveDepthComputeBackend(
     bool cudaAvailable,
     bool openClAvailable);
 
+/// Converts a completed frame into the health signal used by heterogeneous
+/// scheduling. A structurally successful but quality-rejected OpenCL frame is
+/// not useful evidence of device throughput when CUDA is the reference
+/// backend: otherwise a driver that returns empty output very quickly can take
+/// over the queue. Explicit/single-backend runs still publish their normal
+/// frame-quality result without treating scene rejection as a device failure.
+bool isUsefulDepthComputeCompletion(DepthComputeBackend backend,
+                                    bool heterogeneousScheduling,
+                                    bool computationSucceeded,
+                                    bool frameQualityRejected);
+
 struct DepthComputeWorker
 {
     DepthComputeBackend backend = DepthComputeBackend::Cpu;
@@ -58,6 +69,13 @@ struct DepthFrameTask
     int viewIndex = -1;
     float priority = 0.0f;
 };
+
+/// Builds the first-attempt depth queue in case-insensitive natural filename
+/// order (for example image2 before image10). Frames marked in skipFrameMask
+/// are omitted; equal filenames retain their original view order.
+std::vector<DepthFrameTask> makeFileNameOrderedDepthFrameTasks(
+    const std::vector<std::string> &imagePaths,
+    const std::vector<std::uint8_t> &skipFrameMask);
 
 struct DepthComputeWorkerStats
 {

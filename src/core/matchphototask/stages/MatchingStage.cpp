@@ -474,9 +474,21 @@ MatchPhotosStageReport MatchingStage::run(
     }
     else
     {
-        return makeMatchingReport(
-            MatchPhotosStageStatus::Failed,
-            QStringLiteral("未实现匹配运行时：%1").arg(algorithmPlan.algorithmId));
+        if (algorithmPlan.requiresCuda)
+        {
+            return makeMatchingReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("未实现 CUDA 匹配运行时：%1").arg(algorithmPlan.algorithmId));
+        }
+        // 注册表允许增加不依赖外部模型的 CPU 特征算法。它们由自己的
+        // matchFeatures() 消费描述子；算法 ID/版本仍固定进缓存模型指纹。
+        matcherBudget = 0;
+        runtime.maxMatcherKeypoints = 0;
+        runtime.matchThreshold = effectiveThreshold;
+        modelName = QStringLiteral("内置 %1").arg(algorithmPlan.displayName);
+        engineFingerprint = sha256(
+            QByteArrayLiteral("builtin:") + algorithmPlan.algorithmId.toUtf8() +
+            QByteArrayLiteral(":v") + QByteArray::number(algorithmPlan.algorithmVersion));
     }
     const QByteArray configurationFingerprint = rawMatchConfigurationFingerprint(
         options, algorithmPlan, matcherBudget, effectiveThreshold, engineFingerprint);
@@ -613,11 +625,14 @@ MatchPhotosStageReport MatchingStage::run(
         gpuMatchingAlgorithm = GpuMatchingAlgorithm::LoMaR;
         descriptorDimension = std::max(1, runtime.descriptorDimension);
     }
+    const bool usesCudaMatching = algorithmPlan.requiresCuda ||
+        (algorithmPlan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) &&
+         algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda);
     const GpuMatchingParallelismDecision parallelism = resolveGpuMatchingParallelism(
         gpuMatchingAlgorithm,
         options.cudaParallelPairs,
         static_cast<int>(work.size()),
-        algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda,
+        usesCudaMatching,
         parallelismBudget,
         descriptorDimension,
         gpuMemory);
@@ -658,8 +673,8 @@ MatchPhotosStageReport MatchingStage::run(
             reusedPairs);
     }
 
-    if (options.device != ComputeDevice::Auto && options.device != ComputeDevice::Cuda &&
-        algorithmPlan.algorithmId != QLatin1String(image_matching::kAutoSiftAlgorithmId))
+    if (algorithmPlan.requiresCuda &&
+        options.device != ComputeDevice::Auto && options.device != ComputeDevice::Cuda)
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
                                   QStringLiteral("当前匹配算法 %1 仅支持 TensorRT/CUDA")

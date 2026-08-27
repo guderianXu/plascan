@@ -276,10 +276,13 @@ int main(int argc, char **argv)
     bool disableTargetedGapRecovery = false;
     bool disablePerPixelSourceSelection = false;
     bool disableAsymmetricPropagation = false;
+    bool disableFinalPropagationPass = false;
+    bool referenceGuidedFilter = false;
     bool disableGeometricGuidancePass = false;
     bool depthLayerReliabilityAnchorGate = false;
     bool depthLayerReliabilityGuidedCorrection = false;
     std::vector<int> stageSnapshotRefs;
+    std::vector<int> referenceIndices;
     int stageSnapshotMaximumLongEdge = 1024;
     int stageSnapshotBudgetMiB = 128;
 
@@ -366,6 +369,14 @@ int main(int argc, char **argv)
         disableAsymmetricPropagation,
         "诊断：关闭 PatchMatch 近远邻与局部表面法线候选，用于同输入 A/B 对比");
     app.add_flag(
+        "--disable-final-propagation-pass",
+        disableFinalPropagationPass,
+        "诊断：关闭随机细化后的无扰动最终传播，用于同输入 A/B 对比");
+    app.add_flag(
+        "--reference-guided-filter",
+        referenceGuidedFilter,
+        "实验：启用参考影像引导的深度双边权重；默认关闭，用于同输入 A/B 对比");
+    app.add_flag(
         "--disable-geometric-guidance-pass",
         disableGeometricGuidancePass,
         "诊断：关闭使用冻结来源深度的第二轮几何引导 PatchMatch，用于同输入 A/B 对比");
@@ -379,6 +390,13 @@ int main(int argc, char **argv)
         depthLayerReliabilityGuidedCorrection,
         "内部实验：低纹理弱证据层仅在至少三个独立投影来源形成稳定簇时增强纠正；"
         "默认关闭");
+    app.add_option(
+        "--reference-indices",
+        referenceIndices,
+        "诊断：只计算指定 ref_index；逗号分隔。跨视一致性可能缺少未计算的来源深度，"
+        "适合比较 PatchMatch 阶段快照")
+        ->delimiter(',')
+        ->check(CLI::Range(0, 65535));
     app.add_option(
         "--stage-snapshot-refs",
         stageSnapshotRefs,
@@ -453,6 +471,23 @@ int main(int argc, char **argv)
     {
         std::fprintf(stderr,
                      "阶段快照 ref_index 超出当前视图范围 [0,%d]\n",
+                     static_cast<int>(views.size()) - 1);
+        return cli::EXIT_ARG_ERR;
+    }
+    std::sort(referenceIndices.begin(), referenceIndices.end());
+    referenceIndices.erase(
+        std::unique(referenceIndices.begin(), referenceIndices.end()),
+        referenceIndices.end());
+    if (std::any_of(
+            referenceIndices.begin(), referenceIndices.end(),
+            [&views](int reference_index)
+            {
+                return reference_index < 0 ||
+                       reference_index >= static_cast<int>(views.size());
+            }))
+    {
+        std::fprintf(stderr,
+                     "参考帧 ref_index 超出当前视图范围 [0,%d]\n",
                      static_cast<int>(views.size()) - 1);
         return cli::EXIT_ARG_ERR;
     }
@@ -602,6 +637,9 @@ int main(int argc, char **argv)
         !disablePerPixelSourceSelection;
     config.patchMatch.enableAsymmetricPropagation =
         !disableAsymmetricPropagation;
+    config.patchMatch.enableFinalPropagationPass =
+        !disableFinalPropagationPass;
+    config.patchMatch.enableReferenceGuidedFilter = referenceGuidedFilter;
     config.patchMatch.enableGeometricGuidancePass =
         !disableGeometricGuidancePass;
     config.enableDepthLayerReliabilityAnchorGate =
@@ -618,6 +656,8 @@ int main(int argc, char **argv)
                  "source_angle_soft_ranking_strength=%.3f "
                  "per_pixel_source_selection=%s "
                  "asymmetric_propagation=%s "
+                 "final_propagation_pass=%s "
+                 "reference_guided_filter=%s "
                  "geometric_guidance_pass=%s "
                  "depth_layer_reliability_anchor_gate=%s "
                  "depth_layer_reliability_guided_correction=%s "
@@ -632,6 +672,8 @@ int main(int argc, char **argv)
                  sourceAngleSoftRankingStrength,
                  disablePerPixelSourceSelection ? "false" : "true",
                  disableAsymmetricPropagation ? "false" : "true",
+                 disableFinalPropagationPass ? "false" : "true",
+                 referenceGuidedFilter ? "true" : "false",
                  disableGeometricGuidancePass ? "false" : "true",
                  depthLayerReliabilityAnchorGate ? "true" : "false",
                  depthLayerReliabilityGuidedCorrection ? "true" : "false",
@@ -640,6 +682,24 @@ int main(int argc, char **argv)
 
     xjw::mvs::DepthMapGenerator generator;
     generator.setViews(views);
+    if (!referenceIndices.empty())
+    {
+        std::vector<std::uint8_t> selected(views.size(), 0);
+        for (const int reference_index : referenceIndices)
+        {
+            selected[static_cast<std::size_t>(reference_index)] = 1;
+        }
+        std::vector<int> skipped_indices;
+        skipped_indices.reserve(views.size() - referenceIndices.size());
+        for (int index = 0; index < static_cast<int>(views.size()); ++index)
+        {
+            if (selected[static_cast<std::size_t>(index)] == 0)
+            {
+                skipped_indices.push_back(index);
+            }
+        }
+        generator.setSkippedFrameIndices(skipped_indices);
+    }
     generator.setSparseCloud(preprocessResult.cloud);
     generator.setConfig(config);
     generator.setOutputDir(xjw::common::io::toUtf8Path(outputDir));
@@ -731,6 +791,10 @@ int main(int argc, char **argv)
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("targeted_gap_recovery"),
          !disableTargetedGapRecovery},
+        {QStringLiteral("final_propagation_pass"),
+         !disableFinalPropagationPass},
+        {QStringLiteral("reference_guided_filter"),
+         referenceGuidedFilter},
         {QStringLiteral("depth_layer_reliability_anchor_gate"),
          depthLayerReliabilityAnchorGate},
         {QStringLiteral("depth_layer_reliability_guided_correction"),
@@ -747,6 +811,19 @@ int main(int argc, char **argv)
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}
     };
+    if (!referenceIndices.empty())
+    {
+        QJsonArray refs;
+        for (const int reference_index : referenceIndices)
+        {
+            refs.append(reference_index);
+        }
+        report.insert(QStringLiteral("reference_indices"), refs);
+        report.insert(
+            QStringLiteral("subset_consistency_warning"),
+            QStringLiteral(
+                "uncomputed source depths may be unavailable; compare PatchMatch snapshots"));
+    }
     if (completeVisibilityCandidatePool)
     {
         report.insert(

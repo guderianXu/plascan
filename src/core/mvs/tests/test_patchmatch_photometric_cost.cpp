@@ -31,7 +31,7 @@ TEST(PatchMatchPhotometricCostTest, RejectsInsufficientMultiViewSupport)
     EXPECT_FLOAT_EQ(xjw::mvs::robustMultiSourceNcc(scores, 4), 0.0f);
 }
 
-TEST(PatchMatchPhotometricCostTest, KeepsTopRequiredScoresOnly)
+TEST(PatchMatchPhotometricCostTest, KeepsOnlyScoresCloseToTheStrongestObservation)
 {
     const float scores[] = {0.95f, 0.8f, 0.7f, 0.1f, 0.06f};
     EXPECT_NEAR(xjw::mvs::robustMultiSourceNcc(scores, 5),
@@ -53,15 +53,17 @@ TEST(PatchMatchPhotometricCostTest, JointSelectionReturnsCompactDeterministicMas
 
 TEST(PatchMatchPhotometricCostTest, NeighborPriorChangesSelectionWithoutInflatingScore)
 {
-    const float scores[] = {0.90f, 0.80f, 0.79f, 0.78f, 0.10f};
+    const float scores[] = {0.90f, 0.84f, 0.83f, 0.82f, 0.81f, 0.10f};
     const xjw::mvs::JointViewSelection baseline =
-        xjw::mvs::selectJointSourceViews(scores, 5);
+        xjw::mvs::selectJointSourceViews(scores, 6);
     const xjw::mvs::JointViewSelection guided =
-        xjw::mvs::selectJointSourceViews(scores, 5, 0b1000u, 0.04f);
+        xjw::mvs::selectJointSourceViews(scores, 6, 0b010000u, 0.04f);
 
-    EXPECT_EQ(baseline.sourceMask, 0b00111u);
-    EXPECT_EQ(guided.sourceMask, 0b01011u);
-    EXPECT_NEAR(guided.photometricScore, (0.90f + 0.80f + 0.78f) / 3.0f, 1e-6f);
+    EXPECT_EQ(baseline.sourceMask, 0b001111u);
+    EXPECT_EQ(guided.sourceMask, 0b010111u);
+    EXPECT_NEAR(guided.photometricScore,
+                (0.90f + 0.84f + 0.83f + 0.81f) / 4.0f,
+                1e-6f);
 }
 
 TEST(PatchMatchPhotometricCostTest, NeighborPriorCannotRescueUnsupportedSource)
@@ -72,6 +74,43 @@ TEST(PatchMatchPhotometricCostTest, NeighborPriorCannotRescueUnsupportedSource)
 
     EXPECT_FLOAT_EQ(selection.photometricScore, 0.0f);
     EXPECT_EQ(selection.sourceMask, 0u);
+}
+
+TEST(PatchMatchPhotometricCostTest, LargerPoolNeedsThreeComparableSourcesNotAMajority)
+{
+    const float scores[] = {0.92f, 0.86f, 0.81f, 0.50f, 0.20f, 0.0f, 0.0f, 0.0f};
+    const xjw::mvs::JointViewSelection selection =
+        xjw::mvs::selectJointSourceViews(scores, 8);
+
+    EXPECT_EQ(selection.sourceMask, 0b00000111u);
+    EXPECT_EQ(selection.sourceCount, 3);
+    EXPECT_NEAR(selection.photometricScore,
+                (0.92f + 0.86f + 0.81f) / 3.0f,
+                1e-6f);
+}
+
+TEST(PatchMatchPhotometricCostTest, RejectsNominalSupportFarBelowTheBestSource)
+{
+    const float scores[] = {0.95f, 0.60f, 0.55f, 0.10f, 0.0f, 0.0f};
+    const xjw::mvs::JointViewSelection selection =
+        xjw::mvs::selectJointSourceViews(scores, 6);
+
+    EXPECT_FLOAT_EQ(selection.photometricScore, 0.0f);
+    EXPECT_EQ(selection.sourceMask, 0u);
+    EXPECT_EQ(selection.sourceCount, 0);
+}
+
+TEST(PatchMatchPhotometricCostTest, UsesFourthComparableSourceWithoutGrowingPastFour)
+{
+    const float scores[] = {0.94f, 0.90f, 0.87f, 0.82f, 0.80f, 0.79f};
+    const xjw::mvs::JointViewSelection selection =
+        xjw::mvs::selectJointSourceViews(scores, 6);
+
+    EXPECT_EQ(selection.sourceMask, 0b001111u);
+    EXPECT_EQ(selection.sourceCount, 4);
+    EXPECT_NEAR(selection.photometricScore,
+                (0.94f + 0.90f + 0.87f + 0.82f) / 4.0f,
+                1e-6f);
 }
 
 TEST(PatchMatchPhotometricCostTest, RejectsCorrelationCreatedOnlyBySharedBlackBackground)

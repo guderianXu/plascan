@@ -1,6 +1,7 @@
 #include "TextureMappingV4Internal.h"
 
 #include "TextureAtlasSampling.h"
+#include "TextureNaturalBlender.h"
 #include "TextureSeamLeveling.h"
 
 #include "io/PathIO.h"
@@ -555,11 +556,17 @@ bool sampleFaceTextureColor(const PipelineData &data,
                             const TextureMappingConfig &config,
                             int padding,
                             TextureMappingResult *result,
-                            cv::Vec3b *color)
+                            cv::Vec3b *color,
+                            cv::Vec3b *primaryColor = nullptr,
+                            bool *hasPrimaryColor = nullptr)
 {
     if (!color)
     {
         return false;
+    }
+    if (hasPrimaryColor)
+    {
+        *hasPrimaryColor = false;
     }
     std::vector<WeightedColor> samples;
     const int maximum_samples = config.blendMode == TextureBlendMode::BestView
@@ -589,6 +596,18 @@ bool sampleFaceTextureColor(const PipelineData &data,
         {
             missing_primary_sample = sample;
             has_missing_primary_sample = true;
+        }
+        if (candidate.viewIndex == assignment.primaryView &&
+            status != TextureSampleStatus::Rejected && primaryColor)
+        {
+            *primaryColor = cv::Vec3b(
+                cv::saturate_cast<std::uint8_t>(sample.color[0]),
+                cv::saturate_cast<std::uint8_t>(sample.color[1]),
+                cv::saturate_cast<std::uint8_t>(sample.color[2]));
+            if (hasPrimaryColor)
+            {
+                *hasPrimaryColor = true;
+            }
         }
     };
     const auto primary_candidate = std::find_if(
@@ -674,6 +693,8 @@ bool bakeAndExport(const std::string &productsDir,
     const int padding = std::clamp(config.padding, 2, 64);
     cv::Mat atlas(atlas_size, atlas_size, CV_8UC3, cv::Scalar(0, 0, 0));
     cv::Mat filled_mask(atlas_size, atlas_size, CV_8UC1, cv::Scalar(0));
+    cv::Mat primary_atlas(atlas_size, atlas_size, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat primary_mask(atlas_size, atlas_size, CV_8UC1, cv::Scalar(0));
     cv::Mat chart_index_map(atlas_size, atlas_size, CV_32SC1, cv::Scalar(-1));
     const int fallback_size = std::clamp(padding * 2, 6, 128);
     const cv::Vec3b fallback = config.keepUnmapped
@@ -895,6 +916,8 @@ bool bakeAndExport(const std::string &productsDir,
                             corrected_weights[2] * face.vertices[2][axis];
                     }
                     cv::Vec3b color;
+                    cv::Vec3b primary_color;
+                    bool has_primary_color = false;
                     if (!sampleFaceTextureColor(
                             *data,
                             assignment,
@@ -903,12 +926,19 @@ bool bakeAndExport(const std::string &productsDir,
                             config,
                             padding,
                             result,
-                            &color))
+                            &color,
+                            &primary_color,
+                            &has_primary_color))
                     {
                         continue;
                     }
                     atlas.at<cv::Vec3b>(row, column) = color;
                     filled_mask.at<std::uint8_t>(row, column) = 255;
+                    if (has_primary_color)
+                    {
+                        primary_atlas.at<cv::Vec3b>(row, column) = primary_color;
+                        primary_mask.at<std::uint8_t>(row, column) = 255;
+                    }
                     chart_index_map.at<int>(row, column) = chart.index;
                     wrote_face_texel = true;
                 }
@@ -946,6 +976,8 @@ bool bakeAndExport(const std::string &productsDir,
                     }
                 }
                 cv::Vec3b color;
+                cv::Vec3b primary_color;
+                bool has_primary_color = false;
                 if (has_world && sampleFaceTextureColor(
                         *data,
                         assignment,
@@ -954,10 +986,17 @@ bool bakeAndExport(const std::string &productsDir,
                         config,
                         padding,
                         result,
-                        &color))
+                        &color,
+                        &primary_color,
+                        &has_primary_color))
                 {
                     atlas.at<cv::Vec3b>(row, column) = color;
                     filled_mask.at<std::uint8_t>(row, column) = 255;
+                    if (has_primary_color)
+                    {
+                        primary_atlas.at<cv::Vec3b>(row, column) = primary_color;
+                        primary_mask.at<std::uint8_t>(row, column) = 255;
+                    }
                     chart_index_map.at<int>(row, column) = chart.index;
                     ++result->centerRecoveredFaceCount;
                 }
@@ -1041,9 +1080,38 @@ bool bakeAndExport(const std::string &productsDir,
     {
         config.progressFn("正在扩展纹理块边界并执行局部锐化...", 88);
     }
+    const bool use_natural_multiband =
+        config.blendMode == TextureBlendMode::Natural &&
+        result->usedViewCount > 1;
+    const int expansion_radius = config.blendMode == TextureBlendMode::Natural
+        ? std::max(padding, 32)
+        : padding;
     for (const TextureChart &chart : data->charts)
     {
-        expandPadding(&atlas, &filled_mask, chart.atlasBounds, padding);
+        expandPadding(
+            &atlas, &filled_mask, chart.atlasBounds, expansion_radius);
+        if (use_natural_multiband)
+        {
+            expandPadding(
+                &primary_atlas,
+                &primary_mask,
+                chart.atlasBounds,
+                expansion_radius);
+        }
+    }
+    if (use_natural_multiband)
+    {
+        applyTextureNaturalBlend(
+            &atlas,
+            primary_atlas,
+            filled_mask,
+            primary_mask,
+            cv::Rect(0, 0, atlas.cols, atlas.rows),
+            5,
+            1.0f);
+    }
+    for (const TextureChart &chart : data->charts)
+    {
         sharpenTexture(
             &atlas,
             filled_mask,

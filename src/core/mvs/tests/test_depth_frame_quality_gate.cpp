@@ -61,6 +61,52 @@ void applyConsistencyPublicationSummary(const xjw::mvs::DepthConsistencyPublicat
 
 } // namespace
 
+TEST(DepthFrameQualityGateTest,
+     TargetedGapRecoveryRequiresPrimarySparseGeometryWhenAvailable)
+{
+    xjw::mvs::SparseDepthResidualSummary residual;
+    residual.available = true;
+    residual.projectedSampleCount = 80;
+    residual.validSampleCount = 64;
+    residual.medianAbsoluteLogError = 0.014f;
+
+    EXPECT_TRUE(xjw::mvs::permitsTargetedGapRecovery(
+        xjw::mvs::MvsSceneProfile::OrbitalObject,
+        xjw::mvs::DepthFilterMode::Mild,
+        residual));
+
+    residual.medianAbsoluteLogError = 0.016f;
+    EXPECT_FALSE(xjw::mvs::permitsTargetedGapRecovery(
+        xjw::mvs::MvsSceneProfile::OrbitalObject,
+        xjw::mvs::DepthFilterMode::Mild,
+        residual));
+
+    residual.medianAbsoluteLogError = 0.021f;
+    EXPECT_FALSE(xjw::mvs::permitsTargetedGapRecovery(
+        xjw::mvs::MvsSceneProfile::OrbitalObject,
+        xjw::mvs::DepthFilterMode::Mild,
+        residual));
+}
+
+TEST(DepthFrameQualityGateTest,
+     TargetedGapRecoveryKeepsMissingSparseEvidenceNonBlocking)
+{
+    xjw::mvs::SparseDepthResidualSummary residual;
+    residual.available = false;
+    residual.projectedSampleCount = 18;
+    residual.validSampleCount = 18;
+    residual.medianAbsoluteLogError = 0.10f;
+
+    EXPECT_TRUE(xjw::mvs::permitsTargetedGapRecovery(
+        xjw::mvs::MvsSceneProfile::OrbitalObject,
+        xjw::mvs::DepthFilterMode::Mild,
+        residual));
+    EXPECT_FALSE(xjw::mvs::permitsTargetedGapRecovery(
+        xjw::mvs::MvsSceneProfile::Custom,
+        xjw::mvs::DepthFilterMode::Moderate,
+        residual));
+}
+
 TEST(DepthFrameQualityGateTest, ConsistencyPublicationKeepsObservedAndPublishedRetentionSeparate)
 {
     const auto summary = xjw::mvs::summarizeDepthConsistencyPublication(1000, 80, 1000, true, true);
@@ -657,22 +703,60 @@ TEST(DepthFrameQualityGateTest,
 
     EXPECT_EQ(decision.acceptance,
               xjw::mvs::DepthFrameAcceptance::ValidationOnly);
-    EXPECT_NE(std::find(
-                  decision.reasons.begin(),
-                  decision.reasons.end(),
-                  std::string(
-                      "sparse_absolute_depth_residual_validation_only")),
+    EXPECT_NE(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("sparse_absolute_depth_residual_validation_only")),
               decision.reasons.end());
 }
 
-TEST(DepthFrameQualityGateTest,
-     IgnoresSparseAbsoluteDepthResidualWithoutEnoughValidSamples)
+TEST(DepthFrameQualityGateTest, AcceptsSubOneAndHalfPercentSparseResidualForMildOrbitalCapture)
+{
+    auto input = reliableOrbitalInput();
+    input.filterMode = xjw::mvs::DepthFilterMode::Mild;
+    input.sparseDepthResidual.available = true;
+    input.sparseDepthResidual.projectedSampleCount = 1000;
+    input.sparseDepthResidual.validSampleCount = 800;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.014f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+    EXPECT_FLOAT_EQ(decision.sparseDepthResidualValidationThreshold, 0.015f);
+}
+
+TEST(DepthFrameQualityGateTest, KeepsLargerSparseResidualValidationOnlyForMildOrbitalCapture)
+{
+    auto input = reliableOrbitalInput();
+    input.filterMode = xjw::mvs::DepthFilterMode::Mild;
+    input.sparseDepthResidual.available = true;
+    input.sparseDepthResidual.projectedSampleCount = 1000;
+    input.sparseDepthResidual.validSampleCount = 800;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.016f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+}
+
+TEST(DepthFrameQualityGateTest, GenericCaptureKeepsStrictSparseResidualThresholdInMildMode)
+{
+    auto input = reliableCustomInput();
+    input.filterMode = xjw::mvs::DepthFilterMode::Mild;
+    input.fusionPostprocessRetentionRatio = 1.0f;
+    input.sparseDepthResidual.medianAbsoluteLogError = 0.010f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_FLOAT_EQ(decision.sparseDepthResidualValidationThreshold, 0.005f);
+}
+
+TEST(DepthFrameQualityGateTest, IgnoresSparseAbsoluteDepthResidualWithoutEnoughValidSamples)
 {
     auto input = reliableOrbitalInput();
     input.sparseDepthResidual.available = true;
     input.sparseDepthResidual.projectedSampleCount = 30;
-    input.sparseDepthResidual.validSampleCount =
-        xjw::mvs::kSparseDepthResidualMinimumSampleCount - 1;
+    input.sparseDepthResidual.validSampleCount = xjw::mvs::kSparseDepthResidualMinimumSampleCount - 1;
     input.sparseDepthResidual.medianAbsoluteLogError = 0.20f;
 
     const auto decision = xjw::mvs::evaluateDepthFrame(input);

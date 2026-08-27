@@ -76,6 +76,7 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
         << "Standalone PatchMatch callers must retain the historical full-size output contract";
     EXPECT_TRUE(cfg.enablePerPixelSourceSelection);
     EXPECT_TRUE(cfg.enableAsymmetricPropagation);
+    EXPECT_TRUE(cfg.enableFinalPropagationPass);
     EXPECT_TRUE(cfg.enableGeometricGuidancePass);
     EXPECT_GT(cfg.geometricGuidanceWeight, 0.0f);
 }
@@ -94,6 +95,8 @@ TEST(PatchMatchConfigTest, PostProcessingEnabled)
     EXPECT_EQ(cfg.bilateralD, 9);
     EXPECT_GT(cfg.bilateralSigmaColor, 0.f);
     EXPECT_GT(cfg.bilateralSigmaSpace, 0.f);
+    EXPECT_FALSE(cfg.enableReferenceGuidedFilter);
+    EXPECT_GT(cfg.bilateralSigmaGuidance, 0.f);
 }
 
 TEST(PatchMatchConfigTest, BackendIdsAreStableAndUnambiguous)

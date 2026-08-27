@@ -1,5 +1,6 @@
 #include "MvsImageMetadataProbe.h"
 
+#include <cpl_error.h>
 #include <gdal_priv.h>
 
 #include <mutex>
@@ -45,6 +46,7 @@ bool probeMvsImageMetadata(const std::string &imagePath,
     }
 
     registerGdalOnce();
+    CPLErrorReset();
     GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpenEx(
         imagePath.c_str(),
         GDAL_OF_RASTER | GDAL_OF_READONLY,
@@ -53,7 +55,18 @@ bool probeMvsImageMetadata(const std::string &imagePath,
         nullptr));
     if (!dataset)
     {
-        setError(errorMessage, "unable to open image header: " + imagePath);
+        std::string message = "unable to open image header: " + imagePath;
+        const char *gdal_error = CPLGetLastErrorMsg();
+        if (gdal_error && *gdal_error)
+        {
+            message += "; GDAL: ";
+            message += gdal_error;
+        }
+        else
+        {
+            message += "; GDAL: no registered raster driver accepted the file";
+        }
+        setError(errorMessage, message);
         return false;
     }
 

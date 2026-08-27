@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -42,8 +43,17 @@ namespace xjw::image_matching
             float padding;
         };
 
+        struct OpenClPartialNearestMatch
+        {
+            std::int32_t bestIndex;
+            std::int32_t secondIndex;
+            float best;
+            float second;
+        };
+
         static_assert(sizeof(OpenClCandidate) == 32);
         static_assert(sizeof(OpenClNearestMatch) == 16);
+        static_assert(sizeof(OpenClPartialNearestMatch) == 16);
 
         void checkOpenCl(cl_int status, const char* operation)
         {
@@ -247,6 +257,22 @@ namespace xjw::image_matching
             checkOpenCl(
                 clEnqueueNDRangeKernel(runtime.queue(), kernel, 1, nullptr, &global, &local, 0, nullptr, nullptr),
                 "one-dimensional kernel launch");
+        }
+
+        void waitForOpenClEvent(cl_event event, const char* operation)
+        {
+            const cl_int waitStatus = clWaitForEvents(1, &event);
+            cl_int executionStatus = CL_QUEUED;
+            const cl_int eventStatus = clGetEventInfo(
+                event, CL_EVENT_COMMAND_EXECUTION_STATUS, sizeof(executionStatus), &executionStatus, nullptr);
+            clReleaseEvent(event);
+            checkOpenCl(waitStatus, "nearest-match kernel wait");
+            checkOpenCl(eventStatus, "nearest-match event status");
+            if (executionStatus != CL_COMPLETE)
+            {
+                throw std::runtime_error(std::string("SIFT OpenCL ") + operation +
+                                         " did not complete, execution status " + std::to_string(executionStatus));
+            }
         }
 
         void enqueue2d(OpenClRuntime& runtime, cl_kernel kernel, std::size_t width, std::size_t height)
@@ -466,11 +492,9 @@ namespace xjw::image_matching
                 return QString();
             }
             std::size_t size = 0;
-            if (clGetDeviceInfo(devices[static_cast<std::size_t>(deviceIndex)],
-                                CL_DEVICE_NAME,
-                                0,
-                                nullptr,
-                                &size) != CL_SUCCESS || size == 0)
+            if (clGetDeviceInfo(devices[static_cast<std::size_t>(deviceIndex)], CL_DEVICE_NAME, 0, nullptr, &size) !=
+                    CL_SUCCESS ||
+                size == 0)
             {
                 return QString();
             }
@@ -597,17 +621,60 @@ namespace xjw::image_matching
             runtime.context(), query.total() * query.elemSize(), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, query.data);
         OpenClBuffer trainBuffer(
             runtime.context(), train.total() * train.elemSize(), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, train.data);
-        OpenClBuffer outputBuffer(runtime.context(), static_cast<std::size_t>(query.rows) * sizeof(OpenClNearestMatch));
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        std::vector<OpenClNearestMatch> hostOutput(static_cast<std::size_t>(query.rows),
+                                                   {std::numeric_limits<std::int32_t>::min(), nan, nan, nan});
+        OpenClBuffer outputBuffer(runtime.context(),
+                                  hostOutput.size() * sizeof(OpenClNearestMatch),
+                                  CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+                                  hostOutput.data());
         const cl_uint queryCount = static_cast<cl_uint>(query.rows);
         const cl_uint trainCount = static_cast<cl_uint>(train.rows);
-        cl_kernel kernel = runtime.kernel("nearest_match");
-        setKernelBuffer(kernel, 0, queryBuffer);
-        setKernelBuffer(kernel, 1, trainBuffer);
-        setKernelBuffer(kernel, 2, outputBuffer);
-        setKernelValue(kernel, 3, queryCount);
-        setKernelValue(kernel, 4, trainCount);
-        enqueue1d(runtime, kernel, queryCount);
-        std::vector<OpenClNearestMatch> hostOutput(static_cast<std::size_t>(query.rows));
+        constexpr std::size_t trainTileSize = 1024;
+        const std::size_t trainTileCount = rounded(static_cast<std::size_t>(train.rows), trainTileSize) / trainTileSize;
+        constexpr std::size_t targetDescriptorPairsPerLaunch = 4U * 1024U * 1024U;
+        const std::size_t queryBatchSize = std::clamp(
+            targetDescriptorPairsPerLaunch / static_cast<std::size_t>(train.rows), std::size_t{32}, std::size_t{512});
+        OpenClBuffer partialBuffer(runtime.context(),
+                                   queryBatchSize * trainTileCount * sizeof(OpenClPartialNearestMatch));
+        cl_kernel tileKernel = runtime.kernel("nearest_match_tiles");
+        setKernelBuffer(tileKernel, 0, queryBuffer);
+        setKernelBuffer(tileKernel, 1, trainBuffer);
+        setKernelBuffer(tileKernel, 2, partialBuffer);
+        setKernelValue(tileKernel, 3, queryCount);
+        setKernelValue(tileKernel, 4, trainCount);
+        const cl_uint tileCount = static_cast<cl_uint>(trainTileCount);
+        setKernelValue(tileKernel, 7, tileCount);
+        cl_kernel reduceKernel = runtime.kernel("nearest_match_reduce");
+        setKernelBuffer(reduceKernel, 0, partialBuffer);
+        setKernelBuffer(reduceKernel, 1, outputBuffer);
+        setKernelValue(reduceKernel, 2, queryCount);
+        setKernelValue(reduceKernel, 3, tileCount);
+        for (std::size_t offset = 0; offset < hostOutput.size(); offset += queryBatchSize)
+        {
+            const std::size_t batchSize = std::min(queryBatchSize, hostOutput.size() - offset);
+            const cl_uint queryOffset = static_cast<cl_uint>(offset);
+            const cl_uint queryBatchCount = static_cast<cl_uint>(batchSize);
+            setKernelValue(tileKernel, 5, queryOffset);
+            setKernelValue(tileKernel, 6, queryBatchCount);
+            const std::size_t tileLocal[2] = {16, 16};
+            const std::size_t tileGlobal[2] = {rounded(batchSize, tileLocal[0]), trainTileCount * tileLocal[1]};
+            cl_event tileEvent = nullptr;
+            checkOpenCl(clEnqueueNDRangeKernel(
+                            runtime.queue(), tileKernel, 2, nullptr, tileGlobal, tileLocal, 0, nullptr, &tileEvent),
+                        "nearest-match tile kernel launch");
+            waitForOpenClEvent(tileEvent, "nearest-match tile kernel");
+
+            setKernelValue(reduceKernel, 4, queryOffset);
+            constexpr std::size_t reduceLocal = 64;
+            const std::size_t reduceGlobal = batchSize * reduceLocal;
+            cl_event reduceEvent = nullptr;
+            checkOpenCl(
+                clEnqueueNDRangeKernel(
+                    runtime.queue(), reduceKernel, 1, nullptr, &reduceGlobal, &reduceLocal, 0, nullptr, &reduceEvent),
+                "nearest-match reduction kernel launch");
+            waitForOpenClEvent(reduceEvent, "nearest-match reduction kernel");
+        }
         checkOpenCl(clEnqueueReadBuffer(runtime.queue(),
                                         outputBuffer.get(),
                                         CL_TRUE,
@@ -621,6 +688,12 @@ namespace xjw::image_matching
         std::vector<SiftNearestMatch> result(hostOutput.size());
         for (std::size_t index = 0; index < hostOutput.size(); ++index)
         {
+            if (hostOutput[index].index < 0 || hostOutput[index].index >= train.rows ||
+                !std::isfinite(hostOutput[index].similarity) || !std::isfinite(hostOutput[index].ambiguity))
+            {
+                throw std::runtime_error("SIFT OpenCL nearest-match kernel produced incomplete output at query " +
+                                         std::to_string(index));
+            }
             result[index] = {hostOutput[index].index, hostOutput[index].similarity, hostOutput[index].ambiguity};
         }
         return result;

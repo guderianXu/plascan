@@ -180,10 +180,29 @@ TEST(MvsDepthReprocessCliContractTest, PatchMatchUpgradesHaveReproducibleDisable
     expectContainsAll(source, {
         "--disable-per-pixel-source-selection",
         "--disable-asymmetric-propagation",
+        "--disable-final-propagation-pass",
+        "--reference-guided-filter",
         "--disable-geometric-guidance-pass",
         "config.patchMatch.enablePerPixelSourceSelection =",
         "config.patchMatch.enableAsymmetricPropagation =",
+        "config.patchMatch.enableFinalPropagationPass =",
+        "config.patchMatch.enableReferenceGuidedFilter = referenceGuidedFilter",
         "config.patchMatch.enableGeometricGuidancePass =",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest, ReferenceSubsetIsExplicitValidatedAndAudited)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--reference-indices",
+        "参考帧 ref_index 超出当前视图范围",
+        "generator.setSkippedFrameIndices(skipped_indices)",
+        "reference_indices",
+        "subset_consistency_warning",
+        "compare PatchMatch snapshots",
     });
 }
 

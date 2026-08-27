@@ -6166,7 +6166,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 0,
                 request.settings.value(QStringLiteral(
                     "tsdfOrbitalSparseScaffoldMaximumClosingRadius"))
-                    .toInt(3),
+                    .toInt(8),
                 8);
             scaffold_options.topologyRepair.isCancelled = request.isCancelled;
             sparse_scaffold_completion =
@@ -6184,6 +6184,21 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 "orbital_sparse_scaffold_input_points")] =
                 static_cast<double>(
                     scaffold_statistics.scaffold.inputPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_sidecar_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.sidecarPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_sidecar_matched_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.sidecarMatchedPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_sidecar_unmatched_points")] =
+                static_cast<double>(
+                    scaffold_statistics.scaffold.sidecarUnmatchedPointCount);
+            result.payload[QStringLiteral(
+                "orbital_sparse_scaffold_sidecar_subset_alignment_used")] =
+                scaffold_statistics.scaffold.sidecarSubsetAlignmentUsed;
             result.payload[QStringLiteral(
                 "orbital_sparse_scaffold_quality_rejected_points")] =
                 static_cast<double>(

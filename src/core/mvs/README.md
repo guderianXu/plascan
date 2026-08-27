@@ -87,6 +87,20 @@ regenerated because consistency filtering and repaired coverage can change.
   both confidence channels beside the combined confidence map. Residual local PatchMatch uses two overlapping
   three-view baseline groups, and reduced native grids keep the measured contour plus one inward grid shell instead
   of quantizing all boundary protection to zero. Revision-43 depth batches are regenerated.
+- Revision 48 makes automatic CUDA+OpenCL scheduling quality-aware: a fast OpenCL frame rejected by the depth gate
+  is retried on another backend and cannot train the throughput scheduler or take over the remaining queue. Trusted
+  orbital captures use filter-dependent sparse absolute-depth primary thresholds (0.5% aggressive, 0.8% moderate,
+  1.5% mild), while generic captures retain the strict 0.5% threshold and every scene retains the 2% hard rejection
+  boundary. Revision-47 depth batches are regenerated so invalid heterogeneous output is never reused.
+- Revision 50 decouples per-pixel photometric support from the global source-pool majority: two comparable sources
+  are required for a three-view pool and three for larger pools, at most four inliers within 0.25 of the strongest
+  score are averaged, and the neighbour bitset remains ranking-only. Confidence collapse now keeps the strict
+  filtered result for the frame quality gate instead of restoring rejected noisy depth. Revision-49 batches are
+  regenerated.
+- Revision 51 gives CPU/CUDA/OpenCL the same bounded propagation budget and appends one deterministic checkerboard
+  or directional propagation pass after random refinement. The shared scale-invariant depth bilateral filter also
+  supports optional normalized reference-image guidance, but it remains default-off because the initial building
+  A/B increased texture-scale depth discontinuities. Revision-50 batches are regenerated.
 - Downstream geometry consumers use one fail-closed frame-role contract. Only a `completed` frame with explicit
   `acceptance=accepted` and `fusion_eligible=true` is `Primary`; a completed `validation_only` frame with explicit
   eligibility metadata is `CoverageAuxiliary`; rejected, failed, incomplete, and manifestless frames are `Excluded`.
@@ -254,7 +268,10 @@ regenerated because consistency filtering and repaired coverage can change.
 - CUDA workspaces, execution locks, upload streams, and gray-image cache keys are isolated by device index.
   One device still serializes its constant-memory camera updates, while separate devices may execute frames
   concurrently.
-- `DepthComputeScheduler` owns one priority queue and one worker model shared by CPU, CUDA, and OpenCL. Auto probes
+- `DepthComputeScheduler` owns one queue and one worker model shared by CPU, CUDA, and OpenCL. Depth-map first
+  attempts enter that queue in case-insensitive natural filename order (`image2` before `image10`); resumed frames
+  already present on disk are omitted, and an exceptional cross-backend retry may be moved to the front. With
+  multiple workers, claims preserve that order while completion and artifact-save order may differ. Auto probes
   both CUDA and OpenCL, then uses every successfully leased physical accelerator across the two backend families.
   A physical PCI identity is admitted only once. When an OpenCL driver cannot expose the standard PCI identity,
   the device name is matched to the CUDA inventory; an unresolved NVIDIA OpenCL interface is conservatively skipped

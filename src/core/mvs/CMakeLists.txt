@@ -258,6 +258,27 @@ if(BUILD_TESTS)
         )
         gtest_discover_tests(test_mvs_image_preprocessor)
 
+        add_executable(test_mvs_image_metadata_probe
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_metadata_probe.cpp
+        )
+        target_link_libraries(test_mvs_image_metadata_probe PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+            ${PLASCAN_GDAL_TARGET}
+        )
+        target_include_directories(test_mvs_image_metadata_probe PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        if(GDAL_INCLUDE_DIRS)
+            target_include_directories(test_mvs_image_metadata_probe PRIVATE ${GDAL_INCLUDE_DIRS})
+        endif()
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/tmp/mvs-image-metadata-probe")
+        target_compile_definitions(test_mvs_image_metadata_probe PRIVATE
+            PLASCAN_MVS_METADATA_TEST_TMP="${CMAKE_BINARY_DIR}/tmp/mvs-image-metadata-probe"
+        )
+        gtest_discover_tests(test_mvs_image_metadata_probe DISCOVERY_MODE PRE_TEST)
+
         add_executable(test_mvs_image_cache
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_cache.cpp
         )

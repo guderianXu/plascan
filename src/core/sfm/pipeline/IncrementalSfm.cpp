@@ -535,10 +535,15 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
 
         const bool evaluateMultipleSeeds =
             shouldEvaluateMultipleInitialPairModels(_sfmOptions, totalImages, candidates.size());
+        const int trialTargetImages =
+            initialPairTrialTargetImages(_sfmOptions, totalImages);
         const SfmReconstruction baseReconstruction = *_reconstruction;
         IncrementalSfmResult bestTrialResult;
         double bestScore = -std::numeric_limits<double>::infinity();
         bool anyInitialized = false;
+        ImageId bestInitId1 = kInvalidImageId;
+        ImageId bestInitId2 = kInvalidImageId;
+        int evaluatedCandidates = 0;
 
         // 每个初始 pair 都从同一 baseReconstruction 开始，防止前一候选状态泄漏。
         for (size_t ci = 0; ci < candidates.size(); ++ci)
@@ -566,17 +571,26 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
                 return result;
             }
 
-            IncrementalSfmResult trialResult =
-                registration_engine.run(totalImages, progressCb);
+            IncrementalSfmResult trialResult = registration_engine.run(
+                totalImages,
+                progressCb,
+                evaluateMultipleSeeds ? trialTargetImages : 0,
+                !evaluateMultipleSeeds);
+            if (_isAborted)
+            {
+                return result;
+            }
             trialResult.selectedInitialImageId1 = initId1;
             trialResult.selectedInitialImageId2 = initId2;
-            const double trialScore = scoreInitialPairTrial(trialResult, totalImages);
+            const int trialScoreTarget = evaluateMultipleSeeds ? trialTargetImages : totalImages;
+            const double trialScore = scoreInitialPairTrial(trialResult, trialScoreTarget);
+            ++evaluatedCandidates;
             Logger::instance()->infof("[SFM] Init pair trial (%u, %u): registered=%d/%d, points=%d, "
                                       "rms=%.4f, score=%.1f",
                                       initId1,
                                       initId2,
                                       trialResult.numRegisteredImages,
-                                      totalImages,
+                                      trialScoreTarget,
                                       trialResult.numPoints3D,
                                       trialResult.meanReprojError,
                                       trialScore);
@@ -590,10 +604,8 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
             {
                 bestScore = trialScore;
                 bestTrialResult = trialResult;
-            }
-            if (trialResult.numRegisteredImages >= totalImages)
-            {
-                break;
+                bestInitId1 = initId1;
+                bestInitId2 = initId2;
             }
         }
 
@@ -603,18 +615,39 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
             return result;
         }
 
-        if (bestTrialResult.reconstruction)
+        if (!bestTrialResult.reconstruction || bestInitId1 == kInvalidImageId || bestInitId2 == kInvalidImageId)
         {
-            _reconstruction = bestTrialResult.reconstruction;
-            Logger::instance()->infof("[SFM] Selected best initial-pair trial: registered=%d/%d, points=%d, "
-                                      "rms=%.4f, score=%.1f",
-                                      bestTrialResult.numRegisteredImages,
-                                      totalImages,
-                                      bestTrialResult.numPoints3D,
-                                      bestTrialResult.meanReprojError,
-                                      bestScore);
+            result.summary = "Failed to evaluate an initial image pair";
+            return result;
         }
-        return bestTrialResult;
+
+        Logger::instance()->infof("[SFM] Selected bounded initial-pair trial (%u, %u): "
+                                  "registered=%d/%d, points=%d, rms=%.4f, score=%.1f",
+                                  bestInitId1,
+                                  bestInitId2,
+                                  bestTrialResult.numRegisteredImages,
+                                  trialTargetImages,
+                                  bestTrialResult.numPoints3D,
+                                  bestTrialResult.meanReprojError,
+                                  bestScore);
+
+        initializer.resetTrial(baseReconstruction);
+        if (!initializer.initialize(bestInitId1, bestInitId2))
+        {
+            result.summary = "Failed to restart from selected initial image pair: " + _lastErrorMessage;
+            return result;
+        }
+        IncrementalSfmResult finalResult = registration_engine.run(totalImages, progressCb);
+        finalResult.selectedInitialImageId1 = bestInitId1;
+        finalResult.selectedInitialImageId2 = bestInitId2;
+        finalResult.initialPairCandidatesEvaluated = evaluatedCandidates;
+        finalResult.initialPairLookaheadTargetImages =
+            _sfmOptions.initialPairLookaheadMaxImages > 0 ? trialTargetImages : 0;
+        finalResult.selectedInitialPairLookaheadRegisteredImages =
+            bestTrialResult.numRegisteredImages;
+        finalResult.selectedInitialPairLookaheadPoints = bestTrialResult.numPoints3D;
+        finalResult.selectedInitialPairLookaheadRms = bestTrialResult.meanReprojError;
+        return finalResult;
     }
 
     InitialPairInitializer initializer(*this);

@@ -173,14 +173,19 @@ std::vector<ImageId> ImageRegistrationEngine::findParallelAerialPoseOutliers(
 }
 
 IncrementalSfmResult ImageRegistrationEngine::run(int totalImages,
-                                                  SfmProgressCallback progressCb)
+                                                  SfmProgressCallback progressCb,
+                                                  int registrationLimit,
+                                                  bool runFinalRefinement)
 {
-    return _owner.runRegistrationFromCurrentInitialization(totalImages, std::move(progressCb));
+    return _owner.runRegistrationFromCurrentInitialization(
+        totalImages, std::move(progressCb), registrationLimit, runFinalRefinement);
 }
 
 IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     int totalImages,
-    SfmProgressCallback progressCb)
+    SfmProgressCallback progressCb,
+    int registrationLimit,
+    bool runFinalRefinement)
 {
     IncrementalSfmResult result;
     applyPriorTrackDiagnostics(&result);
@@ -188,8 +193,11 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
 
     // ---- 步骤 2：逐帧注册循环 ----
     int regCount = static_cast<int>(_reconstruction->numRegisteredImages());
-    const int registrationTarget = _sfmOptions.maxRegisteredImages > 0
-        ? std::clamp(_sfmOptions.maxRegisteredImages, 2, totalImages)
+    const int configuredRegistrationLimit = registrationLimit > 0
+        ? registrationLimit
+        : _sfmOptions.maxRegisteredImages;
+    const int registrationTarget = configuredRegistrationLimit > 0
+        ? std::clamp(configuredRegistrationLimit, 2, totalImages)
         : totalImages;
     int iterSinceLastLocalBA = 0;
     int iterSinceLastGlobalBA = 0;
@@ -315,7 +323,7 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     }
 
     // ---- 步骤 3：最终全局 BA 和清理（迭代精化） ----
-    if (!_isAborted && _reconstruction->numRegisteredImages() >= 2)
+    if (runFinalRefinement && !_isAborted && _reconstruction->numRegisteredImages() >= 2)
     {
         SfmBundleAdjustCoordinator(*this).iterative(true);
         retryUnregisteredImagesAfterFinalBA(totalImages);

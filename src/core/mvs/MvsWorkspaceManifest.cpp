@@ -1234,6 +1234,8 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                  config.patchMatch.sourceSelectionNeighborBonus);
     patch.insert(QStringLiteral("asymmetric_propagation"),
                  config.patchMatch.enableAsymmetricPropagation);
+    patch.insert(QStringLiteral("final_propagation_pass"),
+                 config.patchMatch.enableFinalPropagationPass);
     patch.insert(QStringLiteral("geometric_guidance_pass"),
                  config.patchMatch.enableGeometricGuidancePass);
     patch.insert(QStringLiteral("geometric_guidance_iterations"),
@@ -1252,6 +1254,10 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("bilateral_d"), config.patchMatch.bilateralD);
     patch.insert(QStringLiteral("bilateral_sigma_color"), config.patchMatch.bilateralSigmaColor);
     patch.insert(QStringLiteral("bilateral_sigma_space"), config.patchMatch.bilateralSigmaSpace);
+    patch.insert(QStringLiteral("reference_guided_filter"),
+                 config.patchMatch.enableReferenceGuidedFilter);
+    patch.insert(QStringLiteral("bilateral_sigma_guidance"),
+                 config.patchMatch.bilateralSigmaGuidance);
     patch.insert(QStringLiteral("geom_consistency"), config.patchMatch.geomConsistency);
     patch.insert(QStringLiteral("geom_consistency_max_err"), config.patchMatch.geomConsistencyMaxErr);
     patch.insert(QStringLiteral("epipolar_rectified"), config.patchMatch.epipolarRectified);

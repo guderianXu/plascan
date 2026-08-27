@@ -13,7 +13,11 @@ namespace xjw::mesh
 struct MeshVoxelTopologyRepairOptions
 {
     int targetResolution = 160;
-    int maximumClosingRadius = 3;
+    // Try radii from zero upward and stop at the first strict genus-zero result.
+    // A radius of four is required by the COLMAP building regression fixture;
+    // keeping headroom up to the implementation clamp avoids a false failure
+    // without forcing wider closing on inputs that already pass earlier.
+    int maximumClosingRadius = 8;
     bool allowLargestComponentFallback = true;
     bool requireEnclosedInterior = true;
     bool preferSmoothExtraction = true;

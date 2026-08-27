@@ -111,6 +111,7 @@ add_library(meshing STATIC
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp
     TextureAtlasSampling.cpp
+    TextureNaturalBlender.cpp
     TextureSeamLeveling.cpp
     TextureAtlasBaker.cpp
     ModelOutputPolicy.cpp

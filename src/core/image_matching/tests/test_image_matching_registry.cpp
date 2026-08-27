@@ -1,4 +1,5 @@
 #include "ImageMatchingRegistry.h"
+#include "orb_binary/OrbBinaryAlgorithm.h"
 #include "loma_r/LoMaRAlgorithm.h"
 #include "sift/AutoSiftAlgorithm.h"
 #include "sift_lightglue/SiftLightGlueAlgorithm.h"
@@ -14,7 +15,7 @@ TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
 {
     const std::vector<ImageMatchingAlgorithmDescriptor> algorithms =
         ImageMatchingRegistry::descriptors();
-    ASSERT_EQ(algorithms.size(), 3U);
+    ASSERT_EQ(algorithms.size(), 4U);
 
     const auto findAlgorithm = [&](const QString &id)
     {
@@ -24,9 +25,11 @@ TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
     const auto sift = findAlgorithm(QString::fromLatin1(kSiftLightGlueAlgorithmId));
     const auto autoSift = findAlgorithm(QString::fromLatin1(kAutoSiftAlgorithmId));
     const auto loma = findAlgorithm(QString::fromLatin1(kLoMaRAlgorithmId));
+    const auto orb = findAlgorithm(QString::fromLatin1(kOrbBinaryAlgorithmId));
     ASSERT_NE(sift, algorithms.cend());
     ASSERT_NE(autoSift, algorithms.cend());
     ASSERT_NE(loma, algorithms.cend());
+    ASSERT_NE(orb, algorithms.cend());
     EXPECT_EQ(sift->version, kSiftLightGlueAlgorithmVersion);
     EXPECT_EQ(autoSift->version, kAutoSiftAlgorithmVersion);
     EXPECT_EQ(autoSift->inputModel, AlgorithmInputModel::ReusableFeatures);
@@ -38,6 +41,11 @@ TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
     EXPECT_TRUE(loma->requiresCuda);
     EXPECT_TRUE(loma->suppliesStableFeatureIds);
     EXPECT_TRUE(loma->requiresColorInput);
+    EXPECT_EQ(orb->version, kOrbBinaryAlgorithmVersion);
+    EXPECT_EQ(orb->inputModel, AlgorithmInputModel::ReusableFeatures);
+    EXPECT_FALSE(orb->requiresCuda);
+    EXPECT_TRUE(orb->suppliesStableFeatureIds);
+    EXPECT_FALSE(orb->requiresColorInput);
 }
 
 #if !defined(PLASCAN_HAS_TENSORRT)

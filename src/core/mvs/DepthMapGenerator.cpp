@@ -5747,7 +5747,6 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
     const bool hasConfidence = !confidenceMap.empty()
         && confidenceMap.size() == depthMap.size()
         && confidenceMap.type() == CV_32F;
-    bool adaptiveConfidenceRaised = false;
     if (hasConfidence)
     {
         double cMin = 0.0;
@@ -5785,7 +5784,6 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                               confThresh,
                               strictThreshold);
                     confThresh = strictThreshold;
-                    adaptiveConfidenceRaised = true;
                 }
             }
         }
@@ -5960,12 +5958,13 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                       independentGeometryConfidenceRetainedCount,
                       boundaryGeometryRetainedCount);
 
-            if (!adaptiveConfidenceRaised &&
-                validAfterConfidence < stats.validBeforePostprocess / 20)
+            if (validAfterConfidence < stats.validBeforePostprocess / 20)
             {
-                LOG_WARN("[MVS][帧 %d][后处理] 置信度过滤后像素过少，已回退为不过滤", refIdx);
-                depthMap = std::move(beforeConfidence);
-                validAfterConfidence = stats.validBeforePostprocess;
+                LOG_WARN("[MVS][帧 %d][后处理] 置信度过滤后可信像素过少 %d->%d，"
+                         "保留严格结果并交由帧质量门判定",
+                         refIdx,
+                         stats.validBeforePostprocess,
+                         validAfterConfidence);
             }
 
             stats.validAfterConfidenceFilter = validAfterConfidence;
@@ -6766,11 +6765,22 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     }
     result.depthCompleteness.afterMaskValidCount = cv::countNonZero(depthMap > 0.0f);
 
+    const SparseDepthResidualSummary pre_recovery_sparse_residual =
+        summarizeSparseDepthResidual(
+            depthMap,
+            result.projectedSparseDepthSamples,
+            effectiveSparseResidualRadius(result, depthMap.size()));
+    const bool sparse_geometry_allows_targeted_recovery =
+        permitsTargetedGapRecovery(
+            _effectiveSceneProfile,
+            _effectiveDepthFilterMode,
+            pre_recovery_sparse_residual);
     cv::Mat targeted_gap_recovered_mask;
     DepthGapTargetedRecoveryStats targeted_gap_stats;
     if (config.enableTargetedGapRecovery &&
         _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
-        !useRectified && srcGrays.size() >= 2)
+        !useRectified && srcGrays.size() >= 2 &&
+        sparse_geometry_allows_targeted_recovery)
     {
         DepthGapTargetedRecoveryOptions recovery_options;
         recovery_options.minimumCandidateConfidence = std::clamp(
@@ -6972,10 +6982,28 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
             ? QStringLiteral("disabled")
             : (_effectiveSceneProfile != MvsSceneProfile::OrbitalObject
                    ? QStringLiteral("non_orbital_scene")
-                   : QStringLiteral("insufficient_sources_or_rectified_pair"));
+                   : (!sparse_geometry_allows_targeted_recovery
+                          ? QStringLiteral("sparse_absolute_depth_residual_not_primary")
+                          : QStringLiteral("insufficient_sources_or_rectified_pair")));
     }
     result.targetedGapRecoveryDiagnostics =
         depthGapTargetedRecoveryStatsToJson(targeted_gap_stats);
+    result.targetedGapRecoveryDiagnostics.insert(
+        QStringLiteral("pre_recovery_sparse_residual_available"),
+        pre_recovery_sparse_residual.available);
+    result.targetedGapRecoveryDiagnostics.insert(
+        QStringLiteral("pre_recovery_sparse_valid_sample_count"),
+        pre_recovery_sparse_residual.validSampleCount);
+    result.targetedGapRecoveryDiagnostics.insert(
+        QStringLiteral("pre_recovery_sparse_median_absolute_log_error"),
+        pre_recovery_sparse_residual.medianAbsoluteLogError);
+    result.targetedGapRecoveryDiagnostics.insert(
+        QStringLiteral("sparse_residual_primary_threshold"),
+        sparseDepthResidualValidationThreshold(
+            _effectiveSceneProfile, _effectiveDepthFilterMode));
+    result.targetedGapRecoveryDiagnostics.insert(
+        QStringLiteral("sparse_geometry_admitted"),
+        sparse_geometry_allows_targeted_recovery);
 
     if (!sparseSupportMask.empty())
     {
@@ -12517,50 +12545,15 @@ void DepthMapGenerator::runInBackgroundImpl()
     std::atomic<int> activeOpenClTasks{0};
     std::atomic<int> activeCpuTasks{0};
     std::atomic<bool> anyFailure{false};
-    struct FramePriority
+    std::vector<std::string> depth_frame_image_paths;
+    depth_frame_image_paths.reserve(_views.size());
+    for (const CameraView &view : _views)
     {
-        int viewIndex = -1;
-        float score = 0.f;
-    };
-
-    std::vector<FramePriority> framePriorities;
-    framePriorities.reserve(static_cast<size_t>(NV));
-    for (int i = 0; i < NV; ++i)
-    {
-        if (i >= 0 && i < static_cast<int>(_skipFrameMask.size()) && _skipFrameMask[static_cast<size_t>(i)] != 0)
-        {
-            continue;
-        }
-
-        const CameraView &priorityView = _views[static_cast<std::size_t>(i)];
-        const float resolutionScore = static_cast<float>(
-            static_cast<double>(priorityView.imageWidth) *
-            static_cast<double>(priorityView.imageHeight));
-        constexpr float contentRatio = 0.5f;
-
-        const int leftNeighbors = i;
-        const int rightNeighbors = (NV - 1) - i;
-        const int localSupport = std::min(leftNeighbors, rightNeighbors);
-
-        FramePriority priority;
-        priority.viewIndex = i;
-        priority.score = resolutionScore * (0.70f + 0.30f * contentRatio)
-                       + static_cast<float>(localSupport) * 100000.0f;
-        framePriorities.push_back(priority);
+        depth_frame_image_paths.push_back(view.imagePath);
     }
-
-    std::sort(framePriorities.begin(), framePriorities.end(), [](const FramePriority &a, const FramePriority &b)
-    {
-        return a.score > b.score;
-    });
-
-    std::vector<DepthFrameTask> frameTasks;
-    frameTasks.reserve(framePriorities.size());
-    for (const FramePriority &priority : framePriorities)
-    {
-        frameTasks.push_back({priority.viewIndex, priority.score});
-    }
-    const int pendingFrameCount = static_cast<int>(framePriorities.size());
+    std::vector<DepthFrameTask> frameTasks = makeFileNameOrderedDepthFrameTasks(
+        depth_frame_image_paths, _skipFrameMask);
+    const int pendingFrameCount = static_cast<int>(frameTasks.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
     const int maxFrameWorkers = std::min(
         std::max(4, static_cast<int>(physicalAcceleratorWorkers.size())),
@@ -12674,6 +12667,8 @@ void DepthMapGenerator::runInBackgroundImpl()
                  .arg(benefitAwareScheduling ? 1 : 0)
                  .arg(guaranteedOpenClFullFrameTarget)
                  .arg(schedulingPolicy.maximumOpenClInFlightTasksPerDevice));
+    LOG_INFO(QStringLiteral(
+        "[MVS] 深度图首轮领取顺序：影像文件名自然升序；多设备并行时完成顺序可能交错"));
     if (skippedFrames > 0)
     {
         LOG_INFO(QStringLiteral("[MVS] 续跑模式：跳过已存在深度图 %1 帧").arg(skippedFrames));
@@ -13009,8 +13004,11 @@ void DepthMapGenerator::runInBackgroundImpl()
                     emitDepthProgress(workerTag, i, false);
                     continue;
                 }
+                const bool frame_quality_rejected = res.qualityDecision.acceptance == DepthFrameAcceptance::Rejected;
+                const bool useful_compute_completion = isUsefulDepthComputeCompletion(
+                    worker.backend, benefitAwareScheduling, res.success, frame_quality_rejected);
                 const DepthTaskCompletionResult completion =
-                    computeScheduler.complete(worker, i, frameEnd - frameStart, res.success);
+                    computeScheduler.complete(worker, i, frameEnd - frameStart, useful_compute_completion);
                 completionReported = completion.accepted;
                 res.device = worker.id();
                 res.elapsedMs = elapsedMs;
@@ -13020,8 +13018,7 @@ void DepthMapGenerator::runInBackgroundImpl()
                     res.success = false;
                     res.errorMsg = "depth scheduler rejected frame completion ownership";
                 }
-                else if (res.success && claim.requiresFullFrame &&
-                         worker.backend == DepthComputeBackend::OpenCl)
+                else if (res.success && claim.requiresFullFrame && worker.backend == DepthComputeBackend::OpenCl)
                 {
                     const int completed_opencl_full_frames = completedGuaranteedOpenClFullFrames.fetch_add(1) + 1;
                     LOG_INFO(QStringLiteral("[MVS][深度估计] OpenCL 保留完整帧已完成: %1/%2 "
@@ -13036,16 +13033,19 @@ void DepthMapGenerator::runInBackgroundImpl()
                 res.geometricGuidancePassExpected = _config.patchMatch.enableGeometricGuidancePass && NV >= 2 &&
                                                     res.success && res.sourceViewIndices.size() >= 2;
                 res.geometricGuidancePassApplied = false;
-                if (!res.success && completion.retryScheduled)
+                if (!useful_compute_completion && completion.retryScheduled)
                 {
-                    LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 在 %3 失败，将由其他后端限次重试: "
-                                            "id=%4 elapsed=%5 ms error=%6")
+                    const QString failure_detail = res.success
+                                                       ? QStringLiteral("输出未通过深度质量门（acceptance=rejected）")
+                                                       : QString::fromStdString(res.errorMsg);
+                    LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 在 %3 未产生可用输出，"
+                                            "将由其他后端限次重试: id=%4 elapsed=%5 ms detail=%6")
                                  .arg(i + 1)
                                  .arg(NV)
                                  .arg(workerTag)
                                  .arg(i)
                                  .arg(elapsedMs, 0, 'f', 1)
-                                 .arg(QString::fromStdString(res.errorMsg)));
+                                 .arg(failure_detail));
                     adjust_active_task_count(-1);
                     activeTask = false;
                     claimedViewIndex = -1;

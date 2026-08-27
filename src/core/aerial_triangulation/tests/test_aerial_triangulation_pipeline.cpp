@@ -938,6 +938,24 @@ TEST(AerialTriangulationPipelineTest, RunsSfmAndWritesPreparedReconstruction)
     EXPECT_GT(result.sfmDiagnostics.value(
         QStringLiteral("tie_point_graph_pair_count")).toInt(), 0);
     EXPECT_TRUE(QFile::exists(result.sparseCloudPath));
+
+    const QString sidecarPath = result.resultRecordExtra
+        .value(QStringLiteral("files")).toObject()
+        .value(QStringLiteral("sparse_cloud_points_json")).toString();
+    QFile sidecarFile(sidecarPath);
+    ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
+    const QJsonArray publishedPoints = QJsonDocument::fromJson(sidecarFile.readAll())
+        .object().value(QStringLiteral("points")).toArray();
+    ASSERT_GE(publishedPoints.size(), 20);
+    for (const QJsonValue &value : publishedPoints)
+    {
+        const QJsonObject point = value.toObject();
+        EXPECT_TRUE(point.contains(QStringLiteral("rms_reproj_px")));
+        EXPECT_TRUE(point.contains(QStringLiteral("reconstruction_uncertainty")));
+        EXPECT_TRUE(point.contains(QStringLiteral("track_len")));
+        EXPECT_TRUE(point.contains(QStringLiteral("projection_accuracy")));
+        EXPECT_TRUE(point.contains(QStringLiteral("min_tri_angle_deg")));
+    }
 }
 
 TEST(AerialTriangulationPipelineTest, FlagsParallelCurvedBlockWithoutAbsoluteControl)

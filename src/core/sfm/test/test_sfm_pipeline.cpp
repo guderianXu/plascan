@@ -1456,6 +1456,39 @@ TEST(IncrementalSfmOptionsTest, FullExecutionProfilePreservesConfiguredRefinemen
     EXPECT_EQ(effective.iterativeBARounds, 3);
 }
 
+TEST(IncrementalSfmInitialPairTest, BoundedLookaheadEnablesMultiSeedEvaluationForLargeProjects)
+{
+    IncrementalSfmOptions options;
+    options.initialPairLookaheadMaxImages = 8;
+    options.multiInitialPairMaxImages = 32;
+
+    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
+        options, 500, 4));
+    EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 500), 8);
+    EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 5), 5);
+}
+
+TEST(IncrementalSfmInitialPairTest, FullTrialsRetainSmallProjectSafetyLimit)
+{
+    IncrementalSfmOptions options;
+    options.initialPairLookaheadMaxImages = 0;
+    options.multiInitialPairMaxImages = 32;
+
+    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
+        options, 32, 2));
+    EXPECT_FALSE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
+        options, 33, 2));
+    EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 33), 33);
+}
+
+TEST(IncrementalSfmInitialPairTest, LookaheadAlwaysTestsRegistrationBeyondTheSeedPair)
+{
+    IncrementalSfmOptions options;
+    options.initialPairLookaheadMaxImages = 1;
+
+    EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 20), 3);
+}
+
 TEST(IncrementalSfmOptionsTest, ReprojectionThresholdIsSharedWithBundleAdjustment)
 {
     IncrementalSfmOptions options;

@@ -3697,6 +3697,34 @@ TEST(MvsPipelineTest, FusionDepthPostprocessRaisesThresholdForLowConfidenceFullC
     EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 10.0f);
 }
 
+TEST(MvsPipelineTest, ConfidenceCollapseKeepsStrictResultInsteadOfRestoringNoise)
+{
+    cv::Mat depth(10, 10, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(10, 10, CV_32F, cv::Scalar(0.10f));
+    confidence.at<float>(3, 3) = 0.90f;
+    confidence.at<float>(4, 4) = 0.85f;
+    confidence.at<float>(5, 5) = 0.80f;
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.60f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableGeometrySupportedLowConfidenceRetention = false;
+    config.enableBoundaryAwareRetention = false;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = false;
+
+    const xjw::mvs::DepthPostProcessStats stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            depth, confidence, config, 0, 4);
+
+    EXPECT_EQ(stats.validBeforePostprocess, 100);
+    EXPECT_EQ(stats.validAfterConfidenceFilter, 3);
+    EXPECT_EQ(stats.confidenceRemoved, 97);
+    EXPECT_EQ(stats.validAfterPostprocess, 3);
+    EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 10.0f);
+}
+
 TEST(MvsPipelineTest, StreamingFirstFrameFusionEstimatesNormalsWhenNormalMapMissing)
 {
     constexpr int W = 16;

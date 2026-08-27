@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +53,50 @@ class RunTestsTest(unittest.TestCase):
     def test_jobs_rejects_conflicting_ctest_override(self):
         with self.assertRaisesRegex(ValueError, "either --jobs"):
             RUN_TESTS.build_ctest_command(["--parallel", "4"], jobs=2, environment={})
+
+    def test_test_directory_supports_split_and_equals_forms(self):
+        root = Path.cwd() / "workspace"
+        self.assertEqual(
+            RUN_TESTS.ctest_test_directory(
+                ["--test-dir", "build/release"], working_directory=root
+            ),
+            (root / "build/release").resolve(),
+        )
+        self.assertEqual(
+            RUN_TESTS.ctest_test_directory(
+                ["--test-dir=build/release"], working_directory=root
+            ),
+            (root / "build/release").resolve(),
+        )
+
+    def test_windows_environment_binds_build_runtime_and_qt_plugins(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            test_directory = root / "build"
+            (test_directory / "bin" / "platforms").mkdir(parents=True)
+            (test_directory / "tests").mkdir()
+
+            environment = RUN_TESTS.build_test_environment(
+                ["--test-dir", str(test_directory)],
+                environment={"PATH": "system-runtime"},
+                platform_name="nt",
+                working_directory=root,
+            )
+
+            path_entries = environment["PATH"].split(os.pathsep)
+            self.assertEqual(path_entries[0], str(test_directory / "bin"))
+            self.assertEqual(path_entries[1], str(test_directory / "tests"))
+            self.assertEqual(path_entries[2], "system-runtime")
+            self.assertEqual(environment["QT_PLUGIN_PATH"], str(test_directory / "bin"))
+
+    def test_non_windows_environment_is_unchanged(self):
+        original = {"PATH": "system-runtime", "QT_PLUGIN_PATH": "custom-plugins"}
+        environment = RUN_TESTS.build_test_environment(
+            ["--test-dir", "build"],
+            environment=original,
+            platform_name="posix",
+        )
+        self.assertEqual(environment, original)
 
 
 if __name__ == "__main__":

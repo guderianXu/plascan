@@ -22,8 +22,8 @@ namespace xjw::cli
             ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
         app.add_option("--sfm-matching-algorithm",
                        sfmMatchingAlgorithmId,
-                       "SfM 影像匹配算法: auto_sift, sift_lightglue, loma_r")
-            ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
+                       "SfM 影像匹配算法: auto_sift, orb_binary, sift_lightglue, loma_r")
+            ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
         app.add_option(
             "--sfm-lightglue-engine", sfmLightGlueEnginePath, "TensorRT LightGlue .engine；留空时从模型目录查找");
         app.add_option(

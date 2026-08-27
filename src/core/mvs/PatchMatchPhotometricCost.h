@@ -18,6 +18,8 @@ constexpr int kMaxPatchMatchSourceViews = 32;
 constexpr float kDefaultMinimumMaskedPatchSupportRatio = 0.35f;
 constexpr float kDefaultPatchMatchHintRadiusRatio = 0.05f;
 constexpr float kDefaultSourceSelectionNeighborBonus = 0.04f;
+constexpr int kMaximumAdaptivePhotometricSupport = 4;
+constexpr float kAdaptivePhotometricInlierScoreWindow = 0.25f;
 
 /// Keep CUDA and OpenCL on the same deterministic search budget. The public
 /// numIterations value controls both the coarse inverse-depth sweep and a
@@ -32,6 +34,13 @@ constexpr int patchMatchPropagationIterationCount(int num_iterations)
 {
     const int iterations = (num_iterations + 3) / 4;
     return iterations < 2 ? 2 : (iterations > 4 ? 4 : iterations);
+}
+
+constexpr int patchMatchScheduledPropagationPassCount(int num_iterations,
+                                                      bool enable_final_pass)
+{
+    return patchMatchPropagationIterationCount(num_iterations) +
+        (enable_final_pass ? 1 : 0);
 }
 
 struct PatchNccAccumulator
@@ -251,7 +260,11 @@ PLASCAN_MVS_HOST_DEVICE inline int requiredPhotometricSupport(int source_count)
     {
         return source_count;
     }
-    return source_count / 2 + 1;
+    if (source_count == 3)
+    {
+        return 2;
+    }
+    return 3;
 }
 
 /// Aggregate NCC scores while requiring genuine multi-view support.
@@ -266,12 +279,16 @@ struct JointViewSelection
     int sourceCount = 0;
 };
 
-/// Select the strongest supported sources for one pixel/hypothesis.
+/// Select a compact, mutually plausible source set for one pixel/hypothesis.
 ///
 /// The neighbour mask is only a bounded ranking prior. The returned score is
 /// always averaged from the original NCC observations, so spatial agreement
 /// cannot manufacture photometric confidence. This keeps the bitset useful for
-/// PatchMatch propagation without confusing it with independent geometry.
+/// PatchMatch propagation without confusing it with independent geometry. A
+/// fixed majority couples occlusion tolerance to the global candidate-pool
+/// size; instead, require two sources for a three-view pool and three sources
+/// for larger pools, reject scores far below the strongest observation, and
+/// average at most four inliers.
 PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
     const float *scores,
     int source_count,
@@ -289,16 +306,38 @@ PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
                                     ? source_count
                                     : kMaxPatchMatchSourceViews;
     const int required_support = requiredPhotometricSupport(effective_count);
+    const int maximum_support = effective_count < kMaximumAdaptivePhotometricSupport
+                                    ? effective_count
+                                    : kMaximumAdaptivePhotometricSupport;
     float strongest[kMaxPatchMatchSourceViews] = {};
     float strongest_rank[kMaxPatchMatchSourceViews] = {};
     int strongest_index[kMaxPatchMatchSourceViews] = {};
     int support_count = 0;
     int stored_count = 0;
 
+    float best_score = 0.0f;
     for (int source_index = 0; source_index < effective_count; ++source_index)
     {
         const float score = scores[source_index];
-        if (!(score > minimum_ncc))
+        if (score > minimum_ncc && score > best_score)
+        {
+            best_score = score;
+        }
+    }
+    if (!(best_score > minimum_ncc))
+    {
+        return result;
+    }
+    const float relative_inlier_floor =
+        best_score - kAdaptivePhotometricInlierScoreWindow;
+    const float inlier_floor = relative_inlier_floor > minimum_ncc
+        ? relative_inlier_floor
+        : minimum_ncc;
+
+    for (int source_index = 0; source_index < effective_count; ++source_index)
+    {
+        const float score = scores[source_index];
+        if (!(score > minimum_ncc) || score < inlier_floor)
         {
             continue;
         }
@@ -308,20 +347,20 @@ PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
             (((neighbor_mask >> source_index) & 1u) != 0u
                  ? (neighbor_bonus > 0.0f ? neighbor_bonus : 0.0f)
                  : 0.0f);
-        if (stored_count == required_support &&
-            (rank_score < strongest_rank[required_support - 1] ||
-             (rank_score == strongest_rank[required_support - 1] &&
-              source_index > strongest_index[required_support - 1])))
+        if (stored_count == maximum_support &&
+            (rank_score < strongest_rank[maximum_support - 1] ||
+             (rank_score == strongest_rank[maximum_support - 1] &&
+              source_index > strongest_index[maximum_support - 1])))
         {
             continue;
         }
-        int insert_at = stored_count < required_support ? stored_count : required_support - 1;
+        int insert_at = stored_count < maximum_support ? stored_count : maximum_support - 1;
         while (insert_at > 0 &&
                (strongest_rank[insert_at - 1] < rank_score ||
                 (strongest_rank[insert_at - 1] == rank_score &&
                  strongest_index[insert_at - 1] > source_index)))
         {
-            if (insert_at < required_support)
+            if (insert_at < maximum_support)
             {
                 strongest[insert_at] = strongest[insert_at - 1];
                 strongest_rank[insert_at] = strongest_rank[insert_at - 1];
@@ -329,12 +368,12 @@ PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
             }
             --insert_at;
         }
-        if (insert_at < required_support)
+        if (insert_at < maximum_support)
         {
             strongest[insert_at] = score;
             strongest_rank[insert_at] = rank_score;
             strongest_index[insert_at] = source_index;
-            if (stored_count < required_support)
+            if (stored_count < maximum_support)
             {
                 ++stored_count;
             }
@@ -347,16 +386,16 @@ PLASCAN_MVS_HOST_DEVICE inline JointViewSelection selectJointSourceViews(
     }
 
     float score_sum = 0.0f;
-    for (int support_index = 0; support_index < required_support; ++support_index)
+    for (int support_index = 0; support_index < stored_count; ++support_index)
     {
         score_sum += strongest[support_index];
         result.sourceMask |= 1u << strongest_index[support_index];
     }
-    const float average_score = score_sum / static_cast<float>(required_support);
+    const float average_score = score_sum / static_cast<float>(stored_count);
     result.photometricScore = average_score < 0.0f
         ? 0.0f
         : (average_score > 1.0f ? 1.0f : average_score);
-    result.sourceCount = required_support;
+    result.sourceCount = stored_count;
     return result;
 }
 

@@ -137,7 +137,8 @@ their vcpkg installed tree are kept below `<build-dir>/source-deps/`.
 The host-specific source presets use `build/<platform>-source-deps-release/install` as their shared prefix and a
 dedicated vcpkg manifest that excludes Qt, OpenCV, GDAL, and AprilTag. PlaScan configuration verifies exact versions and that
 the loaded package configs came from this prefix. The manifest enables SQLite RTree for GDAL/Spatialite, while the source
-GDAL build disables optional drivers by default and enables only PDS and JP2OpenJPEG; OpenCV disables AVIF auto-detection.
+GDAL build disables optional drivers by default, then explicitly enables the application-required GTiff, HFA, JPEG,
+PNG, VRT, PDS/ISIS and JP2OpenJPEG drivers; OpenCV disables AVIF auto-detection.
 Qt uses its bundled libpng so it cannot preload a host libpng with the same soname before OpenCV. Together these settings
 avoid mixing host or Conda libraries with vcpkg dependencies. ONNX Runtime
 1.29.0 release archives are SHA-256 verified and reused
@@ -166,7 +167,10 @@ python scripts/env/run_tests.py --test-dir build/linux-source-release --output-o
 ```
 
 Windows、Linux 都默认使用全部逻辑线程；其余参数会原样转发给 CTest，
-也可以直接传入原生 `--parallel <n>` 或 `-j<n>` 覆盖。
+也可以直接传入原生 `--parallel <n>` 或 `-j<n>` 覆盖。Windows 使用
+`--test-dir` 时，脚本会自动把该构建树的 `bin/`、`tests/` 和已部署 Qt
+插件根目录绑定到测试进程环境，GTest 的 `PRE_TEST` 枚举和 GUI 测试均
+不需要调用者手工修改 `PATH`、`QT_PLUGIN_PATH`。
 
 The configure script passes `CUDAToolkit_ROOT` and `CUDA_TOOLKIT_ROOT_DIR` to CMake when
 those values exist in `plascan-env.json`. It also

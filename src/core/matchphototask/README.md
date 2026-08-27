@@ -8,9 +8,11 @@
 当前框架：
 
 - `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持
-  `auto_sift`、`sift_lightglue` 和 `loma_r`。
+  `auto_sift`、`orb_binary`、`sift_lightglue` 和 `loma_r`。
 - `auto_sift` 是默认算法，自动设备顺序为 CUDA、Metal、OpenCL、OpenCV CPU。显式选择的设备
   不可用时明确失败；不保留 `cuda_sift` 算法别名。
+- `orb_binary` 是用于衡量二进制描述子内存、速度与召回的 CPU 基线。通用预选会把二进制字节临时
+  转为 float 词汇输入，最终像对匹配仍使用 Hamming；当前不执行 SIFT 专用 guided rematch。
 - `pair_selection/` 负责影像对类型、影像对选择策略和 `PairSelector`。
 - `runtime/` 负责任务级 SIFT 内存缓存、ONNX 资源解析、本机 TensorRT engine 缓存、蒙版约束和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
@@ -84,6 +86,10 @@
   top-2，随后执行互选和 ratio 门控。新增对应与原对应合并后只运行一次 USAC，并删除新增外点再更新统计。
   参考相机索引、可靠观测邻接和软蒙版在任务级缓存；最终日志分别报告 graph、policy、descriptor、mask、
   filter 和 geometry 累计耗时，便于判断瓶颈来自候选搜索还是几何验证。
+- 任务成功构建轨迹后追加稳定的 `matching_funnel` 阶段报告，并在 `MatchPhotosResult::matchingFunnel` 和
+  `trackSummary.matching_funnel` 中保留结构化统计。漏斗依次记录全量/入选像对、有原始匹配像对与匹配数、
+  guided 前几何通过像对/内点、guided 新增内点、最终几何边和轨迹数，同时输出预选率、匹配产出率、
+  几何像对留存率、几何内点率和 guided 增益率，用来区分“候选召回不足”、“特征匹配弱”与“几何退化”。
 
 `src/core/overlap` 保持为可复用的候选生成模块，由 `PairSelector` 调用；
 它不会被改名，也不会被嵌入到本模块目录下。

@@ -1,0 +1,32 @@
+flowchart LR
+  input["多视角影像与可选参考位姿"] --> pair_select["通用/参考/序列预选"]
+
+  pair_select --> feature_mode{"局部特征算法"}
+  feature_mode -- "默认" --> sift["Auto SIFT / RootSIFT"]
+  feature_mode -- "实验兼容" --> orb["ORB binary"]
+  feature_mode -- "模型通道" --> learned["SIFT-LightGlue / LoMa-R"]
+
+  sift --> float_match["浮点描述子匹配"]
+  orb --> hamming["Hamming top-2 + ratio + mutual"]
+  learned --> learned_match["TensorRT 匹配"]
+
+  float_match --> geometry["USAC/MAGSAC 两视几何"]
+  hamming --> geometry
+  learned_match --> geometry
+  geometry --> guided{"Auto SIFT 引导重匹配?"}
+  guided -- "是" --> rematch["基础矩阵引导二次匹配"]
+  guided -- "否" --> tracks["多视图连接点轨迹"]
+  rematch --> tracks
+
+  tracks --> seed["初始像对评分与有限前瞻"]
+  seed --> register["增量 resection / 失败重试"]
+  register --> triangulate["双视/三视三角化与重三角化"]
+  triangulate --> ba["局部/全局 Bundle Adjustment"]
+  ba --> more{"仍有可注册影像?"}
+  more -- "是" --> register
+  more -- "否" --> output["已对齐相机、稀疏点云与质量报告"]
+
+  pair_select -. "漏斗统计" .-> diagnostics["matching_funnel"]
+  geometry -. "像对/内点" .-> diagnostics
+  tracks -. "轨迹数" .-> diagnostics
+  output -. "注册率/重投影误差" .-> diagnostics

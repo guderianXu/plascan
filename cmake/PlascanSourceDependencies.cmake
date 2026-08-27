@@ -165,8 +165,6 @@ ExternalProject_Add(plascan_apriltag_source
   CMAKE_GENERATOR Ninja
   CMAKE_ARGS
     ${_plascan_external_cmake_args}
-    "-UGDAL_ENABLE_DRIVER_*"
-    "-UOGR_ENABLE_DRIVER_*"
     "-DBUILD_SHARED_LIBS:BOOL=ON"
     "-DBUILD_EXAMPLES:BOOL=OFF"
     "-DBUILD_PYTHON_WRAPPER:BOOL=OFF"
@@ -184,6 +182,10 @@ ExternalProject_Add(plascan_gdal_source
   CMAKE_GENERATOR Ninja
   CMAKE_ARGS
     ${_plascan_external_cmake_args}
+    # Clear driver decisions cached by an older source-dependency build before
+    # applying PlaScan's deliberately small, but application-complete, set.
+    "-UGDAL_ENABLE_DRIVER_*"
+    "-UOGR_ENABLE_DRIVER_*"
     "-DBUILD_SHARED_LIBS:BOOL=ON"
     "-DBUILD_APPS:BOOL=OFF"
     "-DBUILD_PYTHON_BINDINGS:BOOL=OFF"
@@ -203,11 +205,16 @@ ExternalProject_Add(plascan_gdal_source
     "-DGDAL_USE_TIFF:BOOL=ON"
     "-DGDAL_USE_ZLIB:BOOL=ON"
     "-DGDAL_USE_ZSTD:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_GTIFF:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_HFA:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_JPEG:BOOL=ON"
     "-DGDAL_ENABLE_DRIVER_JP2OPENJPEG:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_PDS:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_PNG:BOOL=ON"
+    "-DGDAL_ENABLE_DRIVER_VRT:BOOL=ON"
     "-DGDAL_ENABLE_DRIVER_HDF5:BOOL=OFF"
     "-DGDAL_ENABLE_DRIVER_MBTILES:BOOL=OFF"
     "-DGDAL_ENABLE_DRIVER_NETCDF:BOOL=OFF"
-    "-DGDAL_ENABLE_DRIVER_PDS:BOOL=ON"
     "-DOGR_ENABLE_DRIVER_GPKG:BOOL=OFF"
   BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel
   INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR>

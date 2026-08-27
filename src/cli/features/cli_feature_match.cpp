@@ -52,8 +52,10 @@ int main(int argc, char* argv[])
                    enginePathArg,
                    "算法模型资源：LightGlue .onnx/本机 .engine 或 LoMa-R JSON 清单；"
                    "Auto SIFT 无需模型");
-    app.add_option("-a,--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "sift_lightglue", "loma_r"}));
+    app.add_option("-a,--algorithm-id",
+                   algorithmIdArg,
+                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
     app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大关键点数");
     app.add_option("--max-image-dim", maxImageDim, "提取输入最长边，0 表示保持原始分辨率");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");

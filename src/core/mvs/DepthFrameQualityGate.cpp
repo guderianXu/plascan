@@ -63,11 +63,11 @@ bool hasAccurateSparseAbsoluteDepthEvidence(
     const DepthFrameQualityInput &input)
 {
     return hasSufficientSparseAbsoluteDepthEvidence(input) &&
-        input.sparseDepthResidual.medianAbsoluteLogError <=
-            kSparseDepthResidualValidationThreshold;
+           input.sparseDepthResidual.medianAbsoluteLogError <=
+               sparseDepthResidualValidationThreshold(input.sceneProfile, input.filterMode);
 }
 
-bool hasStrongDiscreteGeometryCore(const DepthFrameQualityInput &input)
+bool hasStrongDiscreteGeometryCore(const DepthFrameQualityInput& input)
 {
     return input.discreteGeometryCoreAvailable &&
         std::isfinite(input.discreteGeometryCoreRatio) &&
@@ -126,6 +126,44 @@ float geometryErrorConfidence(const SparseDepthResidualSummary &residual)
                                   : 0.0f;
     const float evidence_strength = sample_strength * valid_ratio;
     return std::pow(std::max(0.01f, error_score), evidence_strength);
+}
+
+float sparseDepthResidualValidationThreshold(MvsSceneProfile sceneProfile, DepthFilterMode filterMode)
+{
+    if (sceneProfile != MvsSceneProfile::OrbitalObject)
+    {
+        return kSparseDepthResidualValidationThreshold;
+    }
+
+    switch (filterMode)
+    {
+    case DepthFilterMode::Mild:
+        return 0.015f;
+    case DepthFilterMode::Moderate:
+        return 0.008f;
+    case DepthFilterMode::Aggressive:
+    default:
+        return kSparseDepthResidualValidationThreshold;
+    }
+}
+
+bool permitsTargetedGapRecovery(MvsSceneProfile sceneProfile,
+                                DepthFilterMode filterMode,
+                                const SparseDepthResidualSummary &residual)
+{
+    if (sceneProfile != MvsSceneProfile::OrbitalObject)
+    {
+        return false;
+    }
+    if (!residual.available ||
+        residual.validSampleCount < kSparseDepthResidualMinimumSampleCount ||
+        !std::isfinite(residual.medianAbsoluteLogError) ||
+        residual.medianAbsoluteLogError < 0.0f)
+    {
+        return true;
+    }
+    return residual.medianAbsoluteLogError <=
+        sparseDepthResidualValidationThreshold(sceneProfile, filterMode);
 }
 
 DepthConsistencyPublicationSummary summarizeDepthConsistencyPublication(int preConsistencyValidCount,
@@ -380,13 +418,14 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     decision.acceptance = DepthFrameAcceptance::Accepted;
     decision.filterSettings = depthFilterSettings(input.filterMode, input.sourceViewCount);
     decision.sparseDepthResidual = input.sparseDepthResidual;
+    decision.sparseDepthResidualValidationThreshold =
+        sparseDepthResidualValidationThreshold(input.sceneProfile, input.filterMode);
 
     DepthConfidenceComponents components;
-    components.photometric = input.dualChannelConfidenceAvailable &&
-            std::isfinite(input.meanPhotometricConfidence) &&
-            input.meanPhotometricConfidence >= 0.0f
-        ? input.meanPhotometricConfidence
-        : input.meanConfidence;
+    components.photometric = input.dualChannelConfidenceAvailable && std::isfinite(input.meanPhotometricConfidence) &&
+                                     input.meanPhotometricConfidence >= 0.0f
+                                 ? input.meanPhotometricConfidence
+                                 : input.meanConfidence;
     components.support =
         input.sourceViewCount > 0 ? std::min(1.0f, static_cast<float>(input.sourceViewCount) / 4.0f) : 0.0f;
     components.uniqueness = 1.0f - input.depthAtSearchBoundaryRatio;
@@ -604,16 +643,13 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
             kSparseDepthResidualRejectionThreshold)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
-        decision.reasons.emplace_back(
-            "sparse_absolute_depth_residual_rejected");
+        decision.reasons.emplace_back("sparse_absolute_depth_residual_rejected");
     }
     else if (has_sufficient_sparse_residual &&
-             sparse_residual.medianAbsoluteLogError >
-                 kSparseDepthResidualValidationThreshold)
+             sparse_residual.medianAbsoluteLogError > decision.sparseDepthResidualValidationThreshold)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
-        decision.reasons.emplace_back(
-            "sparse_absolute_depth_residual_validation_only");
+        decision.reasons.emplace_back("sparse_absolute_depth_residual_validation_only");
     }
 
     const bool accurate_sparse_absolute_depth =

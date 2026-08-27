@@ -131,6 +131,13 @@ TEST(MeshVoxelTopologyRepairTest, ClosesNarrowTorusHandle)
     EXPECT_GT(result.statistics.selectedClosingRadius, 0);
 }
 
+TEST(MeshVoxelTopologyRepairTest, DefaultClosingBudgetKeepsVerifiedHeadroom)
+{
+    const xjw::mesh::MeshVoxelTopologyRepairOptions options;
+
+    EXPECT_EQ(options.maximumClosingRadius, 8);
+}
+
 TEST(MeshVoxelTopologyRepairTest, FailsClosedForEmptyInput)
 {
     const auto result = xjw::mesh::MeshVoxelTopologyRepair::repair({});
@@ -197,7 +204,7 @@ TEST(MeshVoxelTopologyRepairTest, RepairsOptInRealMesh)
     options.targetResolution = resolution && *resolution != '\0'
         ? std::max(24, std::atoi(resolution))
         : 192;
-    options.maximumClosingRadius = 3;
+    options.maximumClosingRadius = 8;
     const auto result =
         xjw::mesh::MeshVoxelTopologyRepair::repair(input, options);
     EXPECT_TRUE(result.ok)

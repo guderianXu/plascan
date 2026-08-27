@@ -48,29 +48,24 @@ bool fail(const QString &message, QString *errorMessage)
 }
 
 /**
- * @brief 从最终重建收集可发布点。
+ * @brief 按质量报告确认的点 ID 从最终重建收集可发布点。
  *
- * 发布门槛与质量报告保持一致：轨迹至少两视、误差不高于 4 px、坐标有限。
- * 这里不修改 reconstruction，也不重新三角化。
+ * 发布门槛由 QualityReportWriter 统一执行；这里保持其顺序并补充颜色采样索引，
+ * 不修改 reconstruction，也不重新三角化。
  */
-std::vector<ExportPoint> collectExportPoints(const SfmReconstruction &reconstruction)
+std::vector<ExportPoint> collectExportPoints(
+    const SfmReconstruction &reconstruction,
+    const std::vector<Point3DId> &publishedPointIds)
 {
     std::vector<ExportPoint> points;
-    points.reserve(reconstruction.numPoints3D());
-    for (const Point3DId pointId : reconstruction.allPoint3DIds())
+    points.reserve(publishedPointIds.size());
+    for (const Point3DId pointId : publishedPointIds)
     {
         if (!reconstruction.hasPoint3D(pointId))
         {
             continue;
         }
         const ScenePoint3D &point = reconstruction.point3D(pointId);
-        if (point.error > 4.0 || point.track.length() < 2 ||
-            !std::isfinite(point.xyz[0]) || !std::isfinite(point.xyz[1]) ||
-            !std::isfinite(point.xyz[2]))
-        {
-            continue;
-        }
-
         ExportPoint output;
         output.xyz = {static_cast<float>(point.xyz[0]),
                       static_cast<float>(point.xyz[1]),
@@ -207,8 +202,17 @@ bool AerialTriangulationResultWriter::write(
         return fail(QStringLiteral("无法创建空三输出目录: %1").arg(input.outputDir), errorMessage);
     }
 
-    // 先在内存中完成点过滤和颜色采样，再开始任何正式文件提交。
-    std::vector<ExportPoint> points = collectExportPoints(*execution->reconstruction);
+    // 质量报告先建立正式发布点集合；PLY 与 sidecar 必须消费同一顺序，确保逐点指标
+    // 和顶点永远一一对应。
+    const SparseQualityReport report = QualityReportWriter::build(
+        input, *execution->reconstruction, execution->result);
+    std::vector<ExportPoint> points = collectExportPoints(
+        *execution->reconstruction, report.publishedPointIds);
+    if (points.empty() || points.size() != static_cast<std::size_t>(report.points.size()))
+    {
+        return fail(QStringLiteral("空三结果没有通过最终多指标质量门禁的可发布连接点"),
+                    errorMessage);
+    }
     samplePointColors(*execution->reconstruction, &points);
     const QString plyPath = QDir(input.outputDir).filePath(QStringLiteral("sfm_sparse.ply"));
     if (!writeBinaryPly(plyPath, points, errorMessage))
@@ -217,8 +221,6 @@ bool AerialTriangulationResultWriter::write(
     }
 
     // 质量 sidecar 与 PLY 基于同一最终 reconstruction，避免候选试算指标混入。
-    const SparseQualityReport report = QualityReportWriter::build(
-        input, *execution->reconstruction, execution->result);
     const QString sidecarPath = QDir(input.outputDir)
         .filePath(QStringLiteral("sfm_sparse_points.json"));
     QJsonObject sidecar = xjw::common::project::mergeSparseQualityIntoRecord(
@@ -242,6 +244,7 @@ bool AerialTriangulationResultWriter::write(
 
     // 到达此处表示两个正式文件均成功，随后才更新返回结果记录。
     execution->result.sparseCloudPath = plyPath;
+    execution->result.numPoints3D = static_cast<int>(points.size());
     execution->result.qualityMetadata = report.qualityMetadata;
     execution->result.sfmDiagnostics = report.diagnostics;
     execution->result.perCameraResiduals = report.perCameraResiduals;

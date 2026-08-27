@@ -412,18 +412,14 @@ QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &dec
         : 0.0;
     sparse_residual_object.insert(QStringLiteral("valid_sample_ratio"),
                                   valid_sample_ratio);
-    sparse_residual_object.insert(QStringLiteral("median_absolute_log_error"),
-                                  sparse_residual.medianAbsoluteLogError);
-    sparse_residual_object.insert(QStringLiteral("minimum_sample_count"),
-                                  kSparseDepthResidualMinimumSampleCount);
+    sparse_residual_object.insert(QStringLiteral("median_absolute_log_error"), sparse_residual.medianAbsoluteLogError);
+    sparse_residual_object.insert(QStringLiteral("minimum_sample_count"), kSparseDepthResidualMinimumSampleCount);
     sparse_residual_object.insert(QStringLiteral("validation_only_threshold"),
-                                  kSparseDepthResidualValidationThreshold);
-    sparse_residual_object.insert(QStringLiteral("rejection_threshold"),
-                                  kSparseDepthResidualRejectionThreshold);
+                                  decision.sparseDepthResidualValidationThreshold);
+    sparse_residual_object.insert(QStringLiteral("rejection_threshold"), kSparseDepthResidualRejectionThreshold);
     sparse_residual_object.insert(QStringLiteral("neighborhood_radius_pixels"),
                                   sparse_residual.neighborhoodRadiusPixels);
-    object.insert(QStringLiteral("sparse_absolute_depth_residual"),
-                  sparse_residual_object);
+    object.insert(QStringLiteral("sparse_absolute_depth_residual"), sparse_residual_object);
 
     QJsonArray reasons;
     for (const std::string &reason : decision.reasons)
