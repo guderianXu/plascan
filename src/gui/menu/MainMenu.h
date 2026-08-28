@@ -288,6 +288,10 @@ signals:
     void clearRecentRequested();
 
 private:
+    void buildMenuSystem();
+    void installDepthOverlayActions(QMenu *viewMenu, QObject *actionParent);
+    void installTiePointsMenu(QMenu *toolsMenu, QAction *before = nullptr);
+    void installPointInteractionActions();
     void updateImageActionAvailability();
 
     /** @brief 目标主窗口指针，用于 addMenu/addToolBar 等操作。 */

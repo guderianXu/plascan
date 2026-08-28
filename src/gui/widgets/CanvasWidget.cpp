@@ -5,7 +5,6 @@
 #include "LayerRenderer.h"
 #include "DepthOverlayController.h"
 #include "project/ProjectIO.h"
-#include "ImageMatchFile.h"
 #include "GuiTaskRunner.h"
 #include "io/PathIO.h"
 #include "image/MaskEditorSettingsDialog.h"
@@ -134,7 +133,7 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
         && opts.showPoints && !_currentImagePath.trimmed().isEmpty()
         && !isDepthMapPreviewPath(_currentImagePath)) {
         _layerRenderer->clearFeatureLayers();
-        startMatchObservationLoadForImage(_currentImagePath);
+        startFeaturePointLoadForImage(_currentImagePath);
     } else {
         _layerRenderer->clearFeatureLayers();
     }
@@ -284,7 +283,7 @@ void CanvasWidget::showImage(const QString &path)
         if (!isDepthMap && self->shouldRenderFeatureDiagnostics()) {
             if (self->_showInterestPoints)
             {
-                self->startMatchObservationLoadForImage(loadedPath);
+                self->startFeaturePointLoadForImage(loadedPath);
             }
             if (self->_currentFeatureOpts.showResiduals)
             {
@@ -439,7 +438,7 @@ void CanvasWidget::setDepthInspectionActive(bool active)
     }
     if (_showInterestPoints && _currentFeatureOpts.showPoints)
     {
-        startMatchObservationLoadForImage(_currentImagePath);
+        startFeaturePointLoadForImage(_currentImagePath);
     }
     if (_currentFeatureOpts.showResiduals)
     {
@@ -466,7 +465,7 @@ void CanvasWidget::setShowInterestPoints(bool show)
     {
         // 异步加载当前影像实际参与匹配的观测。
         _layerRenderer->clearFeatureLayers();
-        startMatchObservationLoadForImage(_currentImagePath);
+        startFeaturePointLoadForImage(_currentImagePath);
     }
     else
     {
@@ -497,7 +496,7 @@ void CanvasWidget::setShowFeatureResiduals(bool show)
     emit featureResidualVisibilityChanged(show);
 }
 
-void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
+void CanvasWidget::startFeaturePointLoadForImage(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
     if (!shouldRenderFeatureDiagnostics())
@@ -511,15 +510,14 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
 
     const QString imagePathCopy = imagePath;
     const QString projectPath = property("currentProjectPath").toString();
+    const xjw::gui::views::FeaturePointSource source = _currentFeatureOpts.pointSource;
     const int generation = ++_featureLoadGeneration;
-    const QString match_file_path = xjw::image_matching::ImageMatchFile::filePathForImage(
-        xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath), imagePathCopy);
-    const QDateTime match_modified = QFileInfo(match_file_path).lastModified();
-    const QString cache_key = matchObservationCacheKey(imagePathCopy);
-    auto it = _matchObservationCache.find(cache_key);
-    if (it != _matchObservationCache.end())
+    const QString cacheKey = featurePointCacheKey(imagePathCopy, source);
+    auto it = _featurePointCache.find(cacheKey);
+    if (it != _featurePointCache.end())
     {
-        if (it->second.first == match_modified)
+        const QDateTime currentModified = QFileInfo(it->second.sourcePath).lastModified();
+        if (!it->second.sourcePath.isEmpty() && it->second.sourceModified == currentModified)
         {
             const bool is_current_image =
                 QDir::cleanPath(imagePathCopy) == QDir::cleanPath(_currentImagePath);
@@ -527,12 +525,15 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
             {
                 _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
                 _layerRenderer->clearFeatureLayers();
-                if (!it->second.second.empty())
+                if (!it->second.keypoints.empty())
                 {
-                    _layerRenderer->addFeatureItems(it->second.second);
+                    _layerRenderer->addFeatureItems(it->second.keypoints);
                 }
             }
-            emit featuresLoaded(imagePathCopy, static_cast<int>(it->second.second.size()));
+            const int count = static_cast<int>(it->second.keypoints.size());
+            emit featuresLoaded(imagePathCopy, count);
+            publishFeaturePointStatus(
+                it->second.message, it->second.available, count, source);
             return;
         }
     }
@@ -540,25 +541,26 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
     QPointer<CanvasWidget> self(this);
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [imagePathCopy, projectPath]() -> std::vector<cv::KeyPoint>
+        [imagePathCopy, projectPath, source]()
         {
-            // SIFT 的尺度、方向和响应值已经随匹配结果持久化，无需重新读取影像估计。
-            std::vector<cv::KeyPoint> keypoints =
-                xjw::gui::views::loadMatchedKeypointsForImage(projectPath, imagePathCopy);
-            LOG_DEBUG(QStringLiteral("从匹配分片加载 %1 个观测: %2")
-                          .arg(static_cast<int>(keypoints.size()))
+            xjw::gui::views::FeaturePointLoadResult result =
+                xjw::gui::views::loadFeaturePointsForImage(projectPath, imagePathCopy, source);
+            LOG_DEBUG(QStringLiteral("加载%1 %2 个: %3")
+                          .arg(xjw::gui::views::featurePointSourceDisplayName(source))
+                          .arg(static_cast<int>(result.keypoints.size()))
                           .arg(imagePathCopy));
-            return keypoints;
+            return result;
         },
-        [self, imagePathCopy, match_modified, generation](
+        [self, imagePathCopy, source, cacheKey, generation](
             CanvasWidget *widget,
-            xjw::gui::tasks::TaskOutcome<std::vector<cv::KeyPoint>> outcome) mutable
+            xjw::gui::tasks::TaskOutcome<xjw::gui::views::FeaturePointLoadResult> outcome) mutable
         {
             if (!self || widget != self.data() || !self->shouldRenderFeatureDiagnostics())
             {
                 return;
             }
-            if (generation != self->_featureLoadGeneration)
+            if (generation != self->_featureLoadGeneration
+                || source != self->_currentFeatureOpts.pointSource)
             {
                 return;
             }
@@ -566,28 +568,38 @@ void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
             {
                 LOG_ERROR("%s", qUtf8Printable(outcome.errorMessage));
                 emit self->featuresLoaded(imagePathCopy, 0);
+                self->publishFeaturePointStatus(outcome.errorMessage, false, 0, source);
                 return;
             }
-            std::vector<cv::KeyPoint> kps = std::move(*outcome.value);
+            xjw::gui::views::FeaturePointLoadResult result = std::move(*outcome.value);
+            std::vector<cv::KeyPoint> keypoints = std::move(result.keypoints);
 
-            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
-            if (!imagePathCopy.trimmed().isEmpty())
+            const bool isCurrentImage =
+                QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
+            if (!cacheKey.isEmpty() && !result.sourcePath.isEmpty())
             {
-                const QString key = self->matchObservationCacheKey(imagePathCopy);
-                self->_matchObservationCache[key] = std::make_pair(match_modified, kps);
+                CanvasWidget::FeaturePointCacheEntry entry;
+                entry.sourcePath = result.sourcePath;
+                entry.sourceModified = QFileInfo(result.sourcePath).lastModified();
+                entry.keypoints = keypoints;
+                entry.message = result.message;
+                entry.available = result.available;
+                self->_featurePointCache[cacheKey] = std::move(entry);
             }
             if (isCurrentImage && self->_layerRenderer)
             {
                 // 重新应用当前显示设置，确保使用 UI 中的参数。
                 self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
                 self->_layerRenderer->clearFeatureLayers();
-                if (!kps.empty())
+                if (!keypoints.empty())
                 {
-                    self->_layerRenderer->addFeatureItems(kps);
+                    self->_layerRenderer->addFeatureItems(keypoints);
                 }
             }
             // 发出信号以便主窗体更新状态栏 / 面板。
-            emit self->featuresLoaded(imagePathCopy, static_cast<int>(kps.size()));
+            const int count = static_cast<int>(keypoints.size());
+            emit self->featuresLoaded(imagePathCopy, count);
+            self->publishFeaturePointStatus(result.message, result.available, count, source);
         });
 }
 
@@ -692,12 +704,13 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
         this,
         [projectPath, imagePathCopy]()
         {
-            return xjw::gui::views::loadFeatureResidualsForImage(projectPath, imagePathCopy);
+            return xjw::gui::views::loadValidTiePointDiagnosticsForImage(
+                projectPath, imagePathCopy);
         },
         [self, imagePathCopy, generation](
             CanvasWidget *widget,
             xjw::gui::tasks::TaskOutcome<
-                QVector<xjw::gui::views::FeatureResidualVector>> outcome)
+                xjw::gui::views::ValidTiePointDiagnostics> outcome)
         {
             if (!self || widget != self.data()
                 || !self->shouldRenderFeatureDiagnostics()
@@ -714,10 +727,13 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
             {
                 LOG_ERROR("%s", qUtf8Printable(outcome.errorMessage));
                 emit self->featureResidualAvailabilityChanged(false);
+                self->publishFeatureResidualStatus(outcome.errorMessage, false, 0);
                 return;
             }
-            QVector<xjw::gui::views::FeatureResidualVector> residuals =
+            xjw::gui::views::ValidTiePointDiagnostics diagnostics =
                 std::move(*outcome.value);
+            QVector<xjw::gui::views::FeatureResidualVector> residuals =
+                std::move(diagnostics.residuals);
 
             self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
             self->_layerRenderer->clearFeatureResidualLayers();
@@ -725,7 +741,10 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
             {
                 self->_layerRenderer->addFeatureResidualItems(residuals);
             }
-            emit self->featureResidualAvailabilityChanged(!residuals.isEmpty());
+            const bool available = !residuals.isEmpty();
+            const int count = residuals.size();
+            emit self->featureResidualAvailabilityChanged(available);
+            self->publishFeatureResidualStatus(diagnostics.message, available, count);
         });
 }
 
@@ -853,18 +872,20 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
         if (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath)) {
             // 对当前显示影像，直接触发加载并叠加
             _layerRenderer->clearFeatureLayers();
-            startMatchObservationLoadForImage(_currentImagePath);
+            startFeaturePointLoadForImage(_currentImagePath);
         } else {
             // 对非当前显示影像，只更新缓存：启动后台加载但不要修改当前 scene
-            startMatchObservationLoadForImage(imagePath);
+            startFeaturePointLoadForImage(imagePath);
         }
     } else {
         // 即使未开启叠加，也更新缓存以便后续打开影像时能立即得到最新数据
-        startMatchObservationLoadForImage(imagePath);
+        startFeaturePointLoadForImage(imagePath);
     }
 }
 
-QString CanvasWidget::matchObservationCacheKey(const QString &imagePath) const
+QString CanvasWidget::featurePointCacheKey(
+    const QString &imagePath,
+    xjw::gui::views::FeaturePointSource source) const
 {
     const QString cleanPath = QDir::cleanPath(imagePath.trimmed());
     if (cleanPath.isEmpty())
@@ -877,17 +898,41 @@ QString CanvasWidget::matchObservationCacheKey(const QString &imagePath) const
     const QString absolutePath = canonicalPath.isEmpty()
         ? QDir::cleanPath(fileInfo.absoluteFilePath())
         : QDir::cleanPath(canonicalPath);
-    return absolutePath;
+    return absolutePath + QLatin1Char('\n') + xjw::gui::views::featurePointSourceToken(source);
 }
 
 void CanvasWidget::clearFeatureCacheForImage(const QString &imagePath)
 {
-    const QString key = matchObservationCacheKey(imagePath);
-    if (key.isEmpty())
-    {
-        return;
-    }
-    _matchObservationCache.erase(key);
+    _featurePointCache.erase(featurePointCacheKey(
+        imagePath, xjw::gui::views::FeaturePointSource::ExtractedFeatures));
+    _featurePointCache.erase(featurePointCacheKey(
+        imagePath, xjw::gui::views::FeaturePointSource::RawMatches));
+    _featurePointCache.erase(featurePointCacheKey(
+        imagePath, xjw::gui::views::FeaturePointSource::ValidTiePoints));
+}
+
+void CanvasWidget::publishFeaturePointStatus(
+    const QString &message,
+    bool available,
+    int count,
+    xjw::gui::views::FeaturePointSource source)
+{
+    _featurePointStatusMessage = message;
+    _featurePointStatusAvailable = available;
+    _featurePointStatusCount = count;
+    _featurePointStatusSource = source;
+    emit featurePointStatusChanged(message, available, count);
+}
+
+void CanvasWidget::publishFeatureResidualStatus(
+    const QString &message,
+    bool available,
+    int count)
+{
+    _featureResidualStatusMessage = message;
+    _featureResidualStatusAvailable = available;
+    _featureResidualStatusCount = count;
+    emit featureResidualStatusChanged(message, available, count);
 }
 
 QString CanvasWidget::currentImagePath() const

@@ -445,7 +445,7 @@ TEST(PatchMatchOpenClCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
         const auto [ok, error] = future.get();
         const auto cancellation_latency = std::chrono::steady_clock::now() - cancel_started;
         EXPECT_FALSE(ok);
-        EXPECT_NE(error.find("cancelled"), std::string::npos);
+        EXPECT_NE(error.find("cancelled"), std::string::npos) << error;
         EXPECT_LT(cancellation_latency, std::chrono::seconds(2));
     }
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();

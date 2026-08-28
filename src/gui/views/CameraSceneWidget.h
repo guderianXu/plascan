@@ -37,6 +37,8 @@
 #include <plapoint/core/point_cloud.h>
 
 #include "CameraSceneViewMath.h"
+#include "CameraSceneImageCache.h"
+#include "CameraSceneRhiResources.h"
 #include "ModelVisualization.h"
 #include "ObjRenderPreparation.h"
 #include "PointCloudEditPreparation.h"
@@ -387,7 +389,7 @@ private:
     void pumpSceneLoad();
     void fitViewToLoadedGeometry();
 
-    struct RhiPipelineSet;
+    using RhiPipelineSet = xjw::gui::camera_scene::RhiPipelineSet;
 
     // 将点云和模型数据整理为 RHI 顶点缓冲，在 render 中按需上传。
     bool uploadGpuData();
@@ -430,115 +432,16 @@ private:
     void cancelMeshTexturePreparation();
     void prepareMeshTextureUploadImage(int maximumTextureSize);
 
-    struct RhiBufferSet
-    {
-        QScopedPointer<QRhiBuffer> vertexBuffer;
-        QByteArray vertexData;
-        int vertexCount = 0;
-        int strideBytes = 0;
-        bool dirty = true;
-    };
-
-    struct RhiPipelineSet
-    {
-        QScopedPointer<QRhiBuffer> uniformBuffer;
-        QScopedPointer<QRhiShaderResourceBindings> bindings;
-        QScopedPointer<QRhiGraphicsPipeline> pipeline;
-        QString vertexShaderPath;
-        QString fragmentShaderPath;
-    };
-
-    struct RhiIndexBufferSet
-    {
-        QScopedPointer<QRhiBuffer> indexBuffer;
-        QByteArray indexData;
-        int indexCount = 0;
-        bool dirty = true;
-    };
-
-    struct RhiPointChunk
-    {
-        RhiBufferSet points;
-        RhiBufferSet scalars;
-        QVector<PointVertexIndex> sourceIndices;
-        QVector3D aabbMinimum;
-        QVector3D aabbMaximum;
-        QVector3D center;
-        float radius = 0.0f;
-        int pointCount = 0;
-    };
-
-    struct RhiMeshPointPreviewChunk
-    {
-        RhiBufferSet points;
-    };
-
-    struct RhiImagePipelineSet
-    {
-        QScopedPointer<QRhiBuffer> vertexBuffer;
-        QScopedPointer<QRhiBuffer> uniformBuffer;
-        QScopedPointer<QRhiTexture> texture;
-        QScopedPointer<QRhiSampler> sampler;
-        QScopedPointer<QRhiShaderResourceBindings> bindings;
-        QScopedPointer<QRhiGraphicsPipeline> pipeline;
-        QSize textureSize;
-        QString uploadedImageKey;
-        QString uploadedGeometryKey;
-        bool pipelineDirty = true;
-    };
-
-    struct RhiTexturedMeshPipelineSet
-    {
-        QScopedPointer<QRhiBuffer> uniformBuffer;
-        QScopedPointer<QRhiTexture> texture;
-        QScopedPointer<QRhiSampler> sampler;
-        QScopedPointer<QRhiShaderResourceBindings> bindings;
-        QScopedPointer<QRhiGraphicsPipeline> pipeline;
-        QSize textureSize;
-        QString uploadedTexturePath;
-        QString vertexShaderPath;
-        QString fragmentShaderPath;
-    };
-
-    struct RhiCameraThumbnailResource
-    {
-        QScopedPointer<QRhiBuffer> instanceBuffer;
-        QScopedPointer<QRhiTexture> texture;
-        QScopedPointer<QRhiShaderResourceBindings> bindings;
-        int instanceCapacity = 0;
-        int instanceCount = 0;
-    };
-
-    struct RhiCameraThumbnailAtlasPage
-    {
-        QScopedPointer<QRhiBuffer> instanceBuffer;
-        QScopedPointer<QRhiTexture> texture;
-        QScopedPointer<QRhiShaderResourceBindings> bindings;
-        QSet<int> uploadedPoseIndices;
-        QHash<int, QSize> imageSizes;
-        int instanceCapacity = 0;
-        int instanceCount = 0;
-    };
-
-    struct RhiCameraThumbnailPipelineSet
-    {
-        QScopedPointer<QRhiBuffer> uniformBuffer;
-        QScopedPointer<QRhiSampler> sampler;
-        QScopedPointer<QRhiGraphicsPipeline> pipeline;
-        QScopedPointer<QRhiGraphicsPipeline> leaderPipeline;
-        QScopedPointer<QRhiShaderResourceBindings> leaderBindings;
-        QVector<QSharedPointer<RhiCameraThumbnailAtlasPage>> atlasPages;
-        QSharedPointer<RhiCameraThumbnailResource> solidResource;
-        QSharedPointer<RhiCameraThumbnailResource> highlightedSolidResource;
-        QScopedPointer<QRhiBuffer> leaderInstanceBuffer;
-        int leaderInstanceCapacity = 0;
-        int leaderInstanceCount = 0;
-        int segmentInstanceCount = 0;
-        int atlasSize = 0;
-        bool resourcesDirty = true;
-        bool instancesDirty = true;
-        bool pipelinesDirty = true;
-    };
+    using RhiBufferSet = xjw::gui::camera_scene::RhiBufferSet;
+    using RhiIndexBufferSet = xjw::gui::camera_scene::RhiIndexBufferSet;
+    using RhiPointChunk = xjw::gui::camera_scene::RhiPointChunk;
+    using RhiMeshPointPreviewChunk = xjw::gui::camera_scene::RhiMeshPointPreviewChunk;
+    using RhiImagePipelineSet = xjw::gui::camera_scene::RhiImagePipelineSet;
+    using RhiTexturedMeshPipelineSet = xjw::gui::camera_scene::RhiTexturedMeshPipelineSet;
+    using RhiCameraThumbnailResource = xjw::gui::camera_scene::RhiCameraThumbnailResource;
+    using RhiCameraThumbnailAtlasPage = xjw::gui::camera_scene::RhiCameraThumbnailAtlasPage;
+    using RhiCameraThumbnailPipelineSet =
+        xjw::gui::camera_scene::RhiCameraThumbnailPipelineSet;
 
     struct alignas(16) SceneUniforms
     {
@@ -783,15 +686,12 @@ private:
     int _lockedCameraImagePoseIndex = -1;
     QString _lockedCameraImagePath;
     QString _lockedCameraImageName;
-    QHash<QString, QImage> _cameraImageCache;
+    xjw::gui::camera_scene::CameraSceneImageCache _cameraImageCache;
     QHash<QString, int> _poseIndexByNormalizedPath;
-    QQueue<QString> _fullImageCacheLru;
-    qint64 _fullImageCacheBytes = 0;
     QSet<int> _pendingThumbnailPoseIndices;
     QSet<QString> _cameraImageLoadsInFlight;
     QSet<QString> _cameraImageLoadsQueued;
     QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue;
-    QSet<QString> _cameraImageLoadFailures;
     int _maximumCameraImageLoads = 4;
     int _cameraImageLoadGeneration = 0;
     int _cameraThumbnailLoadTotal = 0;

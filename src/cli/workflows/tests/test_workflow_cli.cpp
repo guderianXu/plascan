@@ -661,6 +661,31 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
     });
 }
 
+TEST(WorkflowCliModuleTest, PipelineReportStateUsesDedicatedContext)
+{
+    const QString runner = readSourceFile(
+        QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+    const QString context = readSourceFile(
+        QStringLiteral("src/cli/workflows/ReconstructionPipelineReportContext.cpp"));
+
+    expectContainsAll(runner, {
+        "ReconstructionPipelineReportContext reportContext",
+        "reportContext.recordTiming",
+        "reportContext.markSkippedStage",
+        "reportContext.writeFinalReport",
+    });
+    expectNotContainsAll(runner, {
+        "auto writeFinalReport =",
+        "auto recordTiming =",
+        "auto markSkippedStage =",
+    });
+    expectContainsAll(context, {
+        "writeReconstructionReport",
+        "upsertResultByPath",
+        "_projectSession.save",
+    });
+}
+
 TEST(ReconstructPipelineCliGTest, SourceUsesUtf8ProgressAndCapsLargeDenseRefineInput)
 {
     const QString source = readSourceFile(

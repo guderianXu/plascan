@@ -5,6 +5,7 @@
 //       PLASCAN_THREE_D_ONLY: 独立三维重建流程，仅 SFM -> MVS -> 三维模型
 // =============================================================================
 #include "ReconstructionPipelineRunner.h"
+#include "ReconstructionPipelineReportContext.h"
 
 #include "ProjectCameraIO.h"
 #include "ReconstructionCliOptions.h"
@@ -1291,20 +1292,21 @@ xjw::cli::ReconstructionCliOptions options;
     }
     QJsonObject projectMeta = projectSession.mergedMetadata();
 
-    QJsonObject report;
-    report[QStringLiteral("status")] = QStringLiteral("running");
-    report[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    report[QStringLiteral("list_file")] = listPath;
-    report[QStringLiteral("output_dir")] = outputDir;
-    report[QStringLiteral("project_path")] = projectPath;
-    report[QStringLiteral("chunk_directory")] =
+    QJsonObject initialReport;
+    initialReport[QStringLiteral("status")] = QStringLiteral("running");
+    initialReport[QStringLiteral("created_at")] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    initialReport[QStringLiteral("list_file")] = listPath;
+    initialReport[QStringLiteral("output_dir")] = outputDir;
+    initialReport[QStringLiteral("project_path")] = projectPath;
+    initialReport[QStringLiteral("chunk_directory")] =
         projectSession.activeChunk().directory;
-    report[QStringLiteral("chunk_root")] =
+    initialReport[QStringLiteral("chunk_root")] =
         projectSession.activeChunkRoot();
-    report[QStringLiteral("inputs")] = xjw::cli::inputPairsToJson(items);
-    report[QStringLiteral("point_cloud_backend_requested")] =
+    initialReport[QStringLiteral("inputs")] = xjw::cli::inputPairsToJson(items);
+    initialReport[QStringLiteral("point_cloud_backend_requested")] =
         xjw::core::project::processingDeviceId(point_cloud_processing_device);
-    report[QStringLiteral("mvs_backend_requested")] =
+    initialReport[QStringLiteral("mvs_backend_requested")] =
         QString::fromStdString(mvs_backend);
     std::fprintf(stdout,
                  "point_cloud_backend_requested=%s (auto priority: CUDA > OpenCL > CPU)\n",
@@ -1312,35 +1314,12 @@ xjw::cli::ReconstructionCliOptions options;
                      point_cloud_processing_device)));
     if (!mvs_mask_dir.isEmpty())
     {
-        report[QStringLiteral("mvs_mask_dir")] = mvs_mask_dir;
+        initialReport[QStringLiteral("mvs_mask_dir")] = mvs_mask_dir;
     }
 
-    auto writeFinalReport = [&](QJsonObject *finalReport) {
-        QString reportError;
-        if (!xjw::cli::writeReconstructionReport(
-                reportsRoot, report, finalReport, &reportError))
-        {
-            std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(reportError));
-            return false;
-        }
-        QJsonObject reportRecord = report;
-        reportRecord[QStringLiteral("kind")] =
-            QStringLiteral("reconstruction_pipeline_cli");
-        reportRecord[QStringLiteral("path")] =
-            finalReport->value(QStringLiteral("report_json")).toString();
-        projectSession.upsertResultByPath(
-            QStringLiteral("report_results"),
-            QStringLiteral("path"),
-            reportRecord);
-        if (!projectSession.save(&reportError))
-        {
-            std::fprintf(stderr,
-                         "报告已生成，但 Chunk 写回失败: %s\n",
-                         qUtf8Printable(reportError));
-            return false;
-        }
-        return true;
-    };
+    xjw::cli::ReconstructionPipelineReportContext reportContext(
+        reportsRoot, projectSession, std::move(initialReport));
+    QJsonObject &report = reportContext.report();
 
     if (!stopAfterSfm && !skipMvs)
     {
@@ -1354,7 +1333,7 @@ xjw::cli::ReconstructionCliOptions options;
             report[QStringLiteral("point_cloud_backend_actual")] =
                 QStringLiteral("unavailable");
             QJsonObject final_report;
-            if (!writeFinalReport(&final_report))
+            if (!reportContext.writeFinalReport(&final_report))
             {
                 return cli::EXIT_IO_ERR;
             }
@@ -1373,20 +1352,8 @@ xjw::cli::ReconstructionCliOptions options;
     constexpr int kTotalStages = 4;
 #endif
 
-    QJsonObject timings;
+    QJsonObject &timings = reportContext.timings();
     const auto pipelineStart = std::chrono::steady_clock::now();
-    auto recordTiming = [&timings](const QString &key,
-                                   const std::chrono::steady_clock::time_point &start) {
-        const double elapsedMs = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-        timings[key] = elapsedMs;
-        return elapsedMs;
-    };
-    auto markSkippedStage = [&report](const QString &stage, const QString &reason) {
-        QJsonObject skippedStages = report.value(QStringLiteral("skipped_stages")).toObject();
-        skippedStages[stage] = reason;
-        report[QStringLiteral("skipped_stages")] = skippedStages;
-    };
     double sfmElapsedMs = 0.0;
     double sparsePreprocessElapsedMs = 0.0;
     double mvsElapsedMs = 0.0;
@@ -1439,7 +1406,8 @@ xjw::cli::ReconstructionCliOptions options;
         xjw::aerial_triangulation::AerialTriangulationWorkflow::run(sfmOptions);
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &sfmResult =
         sfmWorkflowResult.reconstructionResult;
-    sfmElapsedMs = recordTiming(QStringLiteral("sfm_elapsed_ms"), sfmStart);
+    sfmElapsedMs = reportContext.recordTiming(
+        QStringLiteral("sfm_elapsed_ms"), sfmStart);
     QJsonObject sfmJson;
     sfmJson[QStringLiteral("success")] = sfmResult.success;
     sfmJson[QStringLiteral("summary")] = sfmResult.summary;
@@ -1509,7 +1477,7 @@ xjw::cli::ReconstructionCliOptions options;
         report[QStringLiteral("reason")] =
             QStringLiteral("SFM 相机写回失败: %1").arg(error);
         QJsonObject finalReport;
-        writeFinalReport(&finalReport);
+        reportContext.writeFinalReport(&finalReport);
         return cli::EXIT_IO_ERR;
     }
     if (!sfmResult.success || sfmResult.sparseCloudPath.isEmpty())
@@ -1517,7 +1485,7 @@ xjw::cli::ReconstructionCliOptions options;
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] = sfmResult.errorMessage;
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1543,10 +1511,10 @@ xjw::cli::ReconstructionCliOptions options;
             {QStringLiteral("status"), QStringLiteral("skipped")},
             {QStringLiteral("reason"), reason}
         };
-        markSkippedStage(QStringLiteral("mvs"), reason);
-        markSkippedStage(QStringLiteral("mesh"), reason);
+        reportContext.markSkippedStage(QStringLiteral("mvs"), reason);
+        reportContext.markSkippedStage(QStringLiteral("mesh"), reason);
 #ifndef PLASCAN_THREE_D_ONLY
-        markSkippedStage(QStringLiteral("terrain"), reason);
+        reportContext.markSkippedStage(QStringLiteral("terrain"), reason);
 #endif
         timings[QStringLiteral("sparse_preprocess_elapsed_ms")] = 0.0;
         timings[QStringLiteral("mvs_elapsed_ms")] = 0.0;
@@ -1554,11 +1522,12 @@ xjw::cli::ReconstructionCliOptions options;
 #ifndef PLASCAN_THREE_D_ONLY
         timings[QStringLiteral("terrain_elapsed_ms")] = 0.0;
 #endif
-        const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
+        const double totalElapsedMs = reportContext.recordTiming(
+            QStringLiteral("total_elapsed_ms"), pipelineStart);
         report[QStringLiteral("timings")] = timings;
 
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1590,7 +1559,7 @@ xjw::cli::ReconstructionCliOptions options;
                 .arg(sfmResult.numPoints3D)
                 .arg(kMinimumSparsePointsForDenseWorkflow);
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1702,7 +1671,7 @@ xjw::cli::ReconstructionCliOptions options;
                 .arg(views.size())
                 .arg(kMinimumRegisteredImagesForDenseWorkflow);
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1746,7 +1715,7 @@ xjw::cli::ReconstructionCliOptions options;
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] = sparse_preprocess_exception;
         QJsonObject final_report;
-        if (!writeFinalReport(&final_report))
+        if (!reportContext.writeFinalReport(&final_report))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1768,7 +1737,7 @@ xjw::cli::ReconstructionCliOptions options;
                 .arg(sparse.points.size())
                 .arg(kMinimumSparsePointsForDenseWorkflow);
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -1778,7 +1747,7 @@ xjw::cli::ReconstructionCliOptions options;
                      qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
     }
-    sparsePreprocessElapsedMs = recordTiming(
+    sparsePreprocessElapsedMs = reportContext.recordTiming(
         QStringLiteral("sparse_preprocess_elapsed_ms"),
         sparsePreprocessStart);
 
@@ -1958,21 +1927,24 @@ xjw::cli::ReconstructionCliOptions options;
             {QStringLiteral("reason"), depthOnlyReason}
         };
 #endif
-        markSkippedStage(QStringLiteral("mvs_fusion"), depthOnlyReason);
-        markSkippedStage(QStringLiteral("mesh"), depthOnlyReason);
+        reportContext.markSkippedStage(
+            QStringLiteral("mvs_fusion"), depthOnlyReason);
+        reportContext.markSkippedStage(QStringLiteral("mesh"), depthOnlyReason);
 #ifndef PLASCAN_THREE_D_ONLY
-        markSkippedStage(QStringLiteral("terrain"), depthOnlyReason);
+        reportContext.markSkippedStage(QStringLiteral("terrain"), depthOnlyReason);
 #endif
-        mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
+        mvsElapsedMs = reportContext.recordTiming(
+            QStringLiteral("mvs_elapsed_ms"), mvsStart);
         timings[QStringLiteral("mesh_elapsed_ms")] = 0.0;
 #ifndef PLASCAN_THREE_D_ONLY
         timings[QStringLiteral("terrain_elapsed_ms")] = 0.0;
 #endif
-        const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
+        const double totalElapsedMs = reportContext.recordTiming(
+            QStringLiteral("total_elapsed_ms"), pipelineStart);
         report[QStringLiteral("timings")] = timings;
 
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -2204,7 +2176,7 @@ xjw::cli::ReconstructionCliOptions options;
             ? error
             : (mvsError.isEmpty() ? QStringLiteral("MVS 未生成有效稠密点云") : mvsError);
         QJsonObject finalReport;
-        if (!writeFinalReport(&finalReport))
+        if (!reportContext.writeFinalReport(&finalReport))
         {
             return cli::EXIT_IO_ERR;
         }
@@ -2235,7 +2207,8 @@ xjw::cli::ReconstructionCliOptions options;
     report[QStringLiteral("dense_point_cloud_backend_actual_by_stage")] =
         pointProcessingReports;
     report[QStringLiteral("dense")] = denseReport;
-    mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
+    mvsElapsedMs = reportContext.recordTiming(
+        QStringLiteral("mvs_elapsed_ms"), mvsStart);
 
     if (!skipModel)
     {
@@ -2281,11 +2254,13 @@ xjw::cli::ReconstructionCliOptions options;
             report[QStringLiteral("model_error")] = meshResult.errorMessage;
             std::fprintf(stderr, "模型生成失败: %s\n", qUtf8Printable(meshResult.errorMessage));
         }
-        meshElapsedMs = recordTiming(QStringLiteral("mesh_elapsed_ms"), meshStart);
+        meshElapsedMs = reportContext.recordTiming(
+            QStringLiteral("mesh_elapsed_ms"), meshStart);
     }
     else
     {
-        markSkippedStage(QStringLiteral("mesh"), QStringLiteral("用户请求跳过网格模型"));
+        reportContext.markSkippedStage(
+            QStringLiteral("mesh"), QStringLiteral("用户请求跳过网格模型"));
         timings[QStringLiteral("mesh_elapsed_ms")] = 0.0;
     }
 
@@ -2328,7 +2303,8 @@ xjw::cli::ReconstructionCliOptions options;
                 {QStringLiteral("dom"), domResult}
             };
         }
-        terrainElapsedMs = recordTiming(QStringLiteral("terrain_elapsed_ms"), terrainStart);
+        terrainElapsedMs = reportContext.recordTiming(
+            QStringLiteral("terrain_elapsed_ms"), terrainStart);
     }
     else
     {
@@ -2355,7 +2331,8 @@ xjw::cli::ReconstructionCliOptions options;
                                            && (!domPath.isEmpty() && QFileInfo::exists(domPath)));
 #endif
     report[QStringLiteral("status")] = (modelOk && terrainOk) ? QStringLiteral("ok") : QStringLiteral("partial");
-    const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
+    const double totalElapsedMs = reportContext.recordTiming(
+        QStringLiteral("total_elapsed_ms"), pipelineStart);
     report[QStringLiteral("timings")] = timings;
 
     if (!denseCloudPathForReport.isEmpty())
@@ -2422,7 +2399,7 @@ xjw::cli::ReconstructionCliOptions options;
     }
 #endif
     QJsonObject finalReport;
-    if (!writeFinalReport(&finalReport))
+    if (!reportContext.writeFinalReport(&finalReport))
     {
         return cli::EXIT_IO_ERR;
     }

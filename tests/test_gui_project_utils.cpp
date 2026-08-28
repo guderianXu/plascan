@@ -2924,7 +2924,7 @@ TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
     EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
     EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("loadMatchedKeypointsForImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("loadFeaturePointsForImage")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgcodecs.hpp>")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgproc.hpp>")));
 }
@@ -3452,7 +3452,7 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral("LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;"),
         QStringLiteral("QString _currentImagePath;"),
         QStringLiteral("QFutureWatcher<QImage> *_imageWatcher{nullptr};"),
-        QStringLiteral("std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _matchObservationCache;"),
+        QStringLiteral("std::map<QString, FeaturePointCacheEntry> _featurePointCache;"),
         QStringLiteral("int _featureLoadGeneration{0};"),
         QStringLiteral("double _zoomFactor{1.0};"),
         QStringLiteral("const double _zoomStep{1.15};"),
@@ -3475,6 +3475,7 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_spWatcher"),
         QStringLiteral("m_imageWatcher"),
         QStringLiteral("m_matchObservationCache"),
+        QStringLiteral("m_featurePointCache"),
         QStringLiteral("m_zoomFactor"),
         QStringLiteral("m_zoomStep"),
         QStringLiteral("m_zoomMin"),
@@ -6406,7 +6407,7 @@ TEST(FeatureResidualVisualizationTest, ExportsAndLoadsTrueReprojectionVectorsAsy
     EXPECT_TRUE(canvasSource.contains(QStringLiteral("_residualLoadGeneration")));
 }
 
-TEST(FeatureResidualVisualizationTest, DialogControlsResidualExtentAndRendererDrawsVectors)
+TEST(FeatureResidualVisualizationTest, DialogControlsResidualAppearanceAndRendererDrawsVectors)
 {
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
     const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));
@@ -6419,14 +6420,17 @@ TEST(FeatureResidualVisualizationTest, DialogControlsResidualExtentAndRendererDr
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("residualScale")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("minimumResidualPx")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("maximumResidualLengthPx")));
-    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("residualColor")));
+    EXPECT_FALSE(rendererHeader.contains(QStringLiteral("residualColor")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("createFeatureResidualOverlayItem")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("residualMagnitudeColor")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("observationColor")));
     EXPECT_TRUE(dialogHeader.contains(QStringLiteral("_showResidualsChk")));
     EXPECT_TRUE(dialogHeader.contains(QStringLiteral("_residualScaleSpin")));
-    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("_minimumResidualSpin")));
-    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("_maximumResidualLengthSpin")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("opts.showResiduals")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("opts.residualScale")));
+    EXPECT_FALSE(dialogHeader.contains(QStringLiteral("_residualColorBtn")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("options.showResiduals")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("options.residualScale")));
+    EXPECT_FALSE(dialogHeader.contains(QStringLiteral("_minimumResidualSpin")));
+    EXPECT_FALSE(dialogHeader.contains(QStringLiteral("_maximumResidualLengthSpin")));
 }
 
 TEST(FeatureResidualLoaderTest, SelectsOnlyTheCurrentImagesTrueResidualVectors)
@@ -6471,6 +6475,102 @@ TEST(FeatureResidualLoaderTest, SelectsOnlyTheCurrentImagesTrueResidualVectors)
     EXPECT_EQ(residuals.first().observed, QPointF(10.0, 20.0));
     EXPECT_EQ(residuals.first().projected, QPointF(13.0, 24.0));
     EXPECT_DOUBLE_EQ(residuals.first().magnitudePx, 5.0);
+}
+
+TEST(FeatureResidualLoaderTest, UsesAnUnambiguousPhotoNameAfterProjectRelocation)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
+    const QString oldImagePath = QStringLiteral("/old/project/images/frame_001.jpg");
+    const QString relocatedImagePath = tempDir.filePath(QStringLiteral("images/frame_001.jpg"));
+    const QJsonObject observation{
+        {QStringLiteral("image_path"), oldImagePath},
+        {QStringLiteral("image_name"), QStringLiteral("frame_001.jpg")},
+        {QStringLiteral("feature_idx"), 19},
+        {QStringLiteral("xy"), QJsonArray{12.0, 18.0}},
+        {QStringLiteral("projected_xy"), QJsonArray{12.2, 17.9}}};
+    QFile sidecar(sidecarPath);
+    ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(QJsonDocument(QJsonObject{
+        {QStringLiteral("points"),
+         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+                      .toJson());
+    sidecar.close();
+
+    const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
+        sidecarPath, relocatedImagePath);
+    ASSERT_TRUE(diagnostics.available);
+    EXPECT_TRUE(diagnostics.usedUniqueNameFallback);
+    ASSERT_EQ(diagnostics.keypoints.size(), 1U);
+    EXPECT_EQ(diagnostics.keypoints.front().class_id, 19);
+    ASSERT_EQ(diagnostics.residuals.size(), 1);
+}
+
+TEST(FeatureResidualLoaderTest, RejectsAmbiguousPhotoNameFallback)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
+    const QJsonObject first{
+        {QStringLiteral("image_path"), QStringLiteral("/old/a/frame.jpg")},
+        {QStringLiteral("xy"), QJsonArray{1.0, 2.0}}};
+    const QJsonObject second{
+        {QStringLiteral("image_path"), QStringLiteral("/old/b/frame.jpg")},
+        {QStringLiteral("xy"), QJsonArray{3.0, 4.0}}};
+    QFile sidecar(sidecarPath);
+    ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(QJsonDocument(QJsonObject{
+        {QStringLiteral("points"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("observations"), QJsonArray{first, second}}}}}})
+                      .toJson());
+    sidecar.close();
+
+    const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
+        sidecarPath, tempDir.filePath(QStringLiteral("new/frame.jpg")));
+    EXPECT_FALSE(diagnostics.available);
+    EXPECT_FALSE(diagnostics.usedUniqueNameFallback);
+    EXPECT_TRUE(diagnostics.keypoints.empty());
+}
+
+TEST(FeatureResidualLoaderTest, ReusesTheSingleParsedObservationIndex)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = tempDir.filePath(QStringLiteral("cached_points.json"));
+    const QString imagePath = tempDir.filePath(QStringLiteral("frame.jpg"));
+    const QJsonObject observation{
+        {QStringLiteral("image_path"), imagePath},
+        {QStringLiteral("xy"), QJsonArray{4.0, 6.0}},
+        {QStringLiteral("projected_xy"), QJsonArray{4.2, 6.1}}};
+    QFile sidecar(sidecarPath);
+    ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(QJsonDocument(QJsonObject{
+        {QStringLiteral("points"),
+         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+                      .toJson());
+    sidecar.close();
+
+    const auto first = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
+        sidecarPath, imagePath);
+    const auto second = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
+        sidecarPath, imagePath);
+
+    ASSERT_TRUE(first.available);
+    ASSERT_TRUE(second.available);
+    EXPECT_FALSE(first.loadedFromCache);
+    EXPECT_TRUE(second.loadedFromCache);
+    EXPECT_EQ(second.keypoints.size(), first.keypoints.size());
+    EXPECT_EQ(second.residuals.size(), first.residuals.size());
+
+    ASSERT_TRUE(sidecar.open(QIODevice::Append));
+    sidecar.write("\n");
+    sidecar.close();
+    const auto afterChange = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
+        sidecarPath, imagePath);
+    ASSERT_TRUE(afterChange.available);
+    EXPECT_FALSE(afterChange.loadedFromCache);
 }
 
 TEST(MainMenuToolbarTemplateTest, ExtractsReusableToolbarComponentsFromMainMenu)
@@ -10691,17 +10791,37 @@ TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
     ASSERT_FALSE(dialogUi.isEmpty());
 
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("int pointSize = 1")));
-    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("markerShape = QStringLiteral(\"cross\")")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("const double crossRadius")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("crossPen.setWidthF(1.0)")));
+    EXPECT_FALSE(rendererHeader.contains(QStringLiteral("markerShape")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("painter->drawLine")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("pointPen.setWidthF(1.0)")));
 
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"pointSize\"]         = 1")));
-    EXPECT_TRUE(
-        uiDefaults.contains(QStringLiteral("featureDisplay[\"markerShape\"]       = QStringLiteral(\"cross\")")));
-
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_markerShapeCombo->setCurrentIndex(2)")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointSizeSpin->setValue(1)")));
+    EXPECT_FALSE(uiDefaults.contains(QStringLiteral("markerShape")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("FeatureDisplayOptions{}")));
     EXPECT_TRUE(dialogUi.contains(QStringLiteral("<number>1</number>")));
+}
+
+TEST(FeatureVisualizationSettingsTest, CompactDialogKeepsActionsVisibleAndRemovesObsoleteControls)
+{
+    const QString dialogHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.h"));
+    const QString dialogUi =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.ui"));
+    ASSERT_FALSE(dialogHeader.isEmpty());
+    ASSERT_FALSE(dialogUi.isEmpty());
+
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("<height>500</height>")));
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("name=\"m_applyBtn\"")));
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("name=\"m_closeBtn\"")));
+    EXPECT_FALSE(dialogUi.contains(QStringLiteral("m_showScaleChk")));
+    EXPECT_FALSE(dialogUi.contains(QStringLiteral("m_showOrientationChk")));
+    EXPECT_FALSE(dialogUi.contains(QStringLiteral("m_markerShapeCombo")));
+    EXPECT_FALSE(dialogUi.contains(QStringLiteral("m_previewLabel")));
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("m_residualColorLegend")));
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("m_residualLegendTicks")));
+    EXPECT_FALSE(dialogUi.contains(QStringLiteral("m_residualColorBtn")));
+    EXPECT_FALSE(dialogHeader.contains(QStringLiteral("_scaleColor")));
+    EXPECT_FALSE(dialogHeader.contains(QStringLiteral("_orientColor")));
 }
 
 TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
@@ -10723,7 +10843,7 @@ TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"g\"] = 120")));
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"b\"] = 255")));
     EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor _pointColor{0, 120, 255}")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointColor = QColor(0, 120, 255)")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("FeatureDisplayOptions{}")));
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("点颜色黄")));
 }
 
@@ -11108,7 +11228,7 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadi
     ASSERT_FALSE(featureLoaderSource.isEmpty());
 
     EXPECT_TRUE(canvasSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(canvasSource.contains(QStringLiteral("loadMatchedKeypointsForImage(projectPath, imagePathCopy)")));
+    EXPECT_TRUE(canvasSource.contains(QStringLiteral("loadFeaturePointsForImage(projectPath, imagePathCopy, source)")));
     EXPECT_FALSE(canvasSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
     EXPECT_FALSE(canvasSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
     EXPECT_FALSE(canvasSource.contains(QStringLiteral("xjw::common::project::ProjectIO::findFeatureForImage")))
@@ -11118,10 +11238,66 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadi
 
     EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsFromFile")));
     EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsForImage")));
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("FeaturePointSource")));
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeaturePointsForImage")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ProjectIO::imageMatchOutputDir")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ImageMatchFile::filePathForImage")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ImageMatchFile::read")));
     EXPECT_FALSE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO")));
+}
+
+TEST(LayerFeatureLoaderTest, RawMatchSourceExcludesUnreferencedOwnerObservations)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString ownerPath = temporary.filePath(QStringLiteral("owner.jpg"));
+    const QString peerPath = temporary.filePath(QStringLiteral("peer.jpg"));
+    QFile ownerFile(ownerPath);
+    ASSERT_TRUE(ownerFile.open(QIODevice::WriteOnly));
+    ownerFile.write("owner");
+    ownerFile.close();
+    QFile peerFile(peerPath);
+    ASSERT_TRUE(peerFile.open(QIODevice::WriteOnly));
+    peerFile.write("peer");
+    peerFile.close();
+
+    xjw::image_matching::KeypointObservation referenced;
+    referenced.featureId = 4;
+    referenced.x = 10.0f;
+    referenced.y = 20.0f;
+    referenced.scale = 3.0f;
+    referenced.orientation = 45.0f;
+    referenced.response = 0.8f;
+    xjw::image_matching::KeypointObservation orphan = referenced;
+    orphan.featureId = 99;
+    orphan.x = 90.0f;
+
+    xjw::image_matching::NeighborMatchBlock block;
+    block.peer = xjw::image_matching::ImageMatchFile::identityForImage(peerPath);
+    block.algorithmId = QStringLiteral("sift");
+    block.algorithmVersion = 1;
+    block.configFingerprint = QByteArrayLiteral("config");
+    block.rawMatchCount = 1;
+    block.ownerObservations = {referenced, orphan};
+    xjw::image_matching::MatchRecord match;
+    match.ownerFeatureId = referenced.featureId;
+    match.peerFeatureId = 8;
+    match.peerX = 30.0f;
+    match.peerY = 40.0f;
+    block.matches = {match};
+
+    xjw::image_matching::ImageMatchShard shard;
+    shard.owner = xjw::image_matching::ImageMatchFile::identityForImage(ownerPath);
+    shard.neighbors = {block};
+    const QString matchPath = temporary.filePath(QStringLiteral("owner.pimatch"));
+    QString errorMessage;
+    ASSERT_TRUE(xjw::image_matching::ImageMatchFile::write(matchPath, shard, &errorMessage))
+        << errorMessage.toStdString();
+
+    const auto keypoints = xjw::gui::views::loadMatchedKeypointsFromFile(matchPath);
+    ASSERT_EQ(keypoints.size(), 1U);
+    EXPECT_EQ(keypoints.front().class_id, 4);
+    EXPECT_FLOAT_EQ(keypoints.front().pt.x, 10.0f);
 }
 
 TEST(CanvasWidgetResponsivenessTest, MissingMatchObservationShardIsAQuietEmptyState)
@@ -11171,7 +11347,7 @@ TEST(CanvasWidgetResponsivenessTest, MatchObservationLoadUsesPersistedSiftGeomet
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int startIndex = source.indexOf(QStringLiteral("void CanvasWidget::startMatchObservationLoadForImage"));
+    const int startIndex = source.indexOf(QStringLiteral("void CanvasWidget::startFeaturePointLoadForImage"));
     ASSERT_GE(startIndex, 0);
     const int endIndex = source.indexOf(QStringLiteral("void CanvasWidget::reloadMaskOverlay"), startIndex);
     ASSERT_GT(endIndex, startIndex);
@@ -11179,8 +11355,8 @@ TEST(CanvasWidgetResponsivenessTest, MatchObservationLoadUsesPersistedSiftGeomet
 
     EXPECT_TRUE(
         loadBlock.contains(QStringLiteral("const QString projectPath = property(\"currentProjectPath\").toString()")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("loadMatchedKeypointsForImage")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("SIFT 的尺度、方向和响应值已经随匹配结果持久化")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("loadFeaturePointsForImage")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("FeaturePointSource source")));
     EXPECT_FALSE(loadBlock.contains(QStringLiteral("readImage")));
     EXPECT_FALSE(loadBlock.contains(QStringLiteral("activeSuffix")));
 }

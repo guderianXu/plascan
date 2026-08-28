@@ -76,7 +76,6 @@ constexpr int kSmallCameraAtlasCapacity =
     (kSmallCameraAtlasSize / kCameraThumbnailWidth)
     * (kSmallCameraAtlasSize / kCameraThumbnailHeight);
 constexpr int kCameraInstanceStrideFloats = 20;
-constexpr qint64 kFullCameraImageCacheLimitBytes = 128LL * 1024LL * 1024LL;
 constexpr std::size_t kMaximumCompactSelectionPoints = 1'000'000;
 
 QRhiWidget::Api preferredSceneApi()
@@ -624,12 +623,9 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
     {
         ++_cameraImageLoadGeneration;
         _cameraImageCache.clear();
-        _fullImageCacheLru.clear();
-        _fullImageCacheBytes = 0;
         _pendingThumbnailPoseIndices.clear();
         _cameraImageLoadQueue.clear();
         _cameraImageLoadsQueued.clear();
-        _cameraImageLoadFailures.clear();
         _cameraThumbnailLoadTotal = 0;
         for (const CameraPose &pose : _poses)
         {
@@ -843,12 +839,9 @@ void CameraSceneWidget::clearProjectScene()
     clearPreparedGeometry();
     _currentCloudPath.clear();
     _cameraImageCache.clear();
-    _fullImageCacheLru.clear();
-    _fullImageCacheBytes = 0;
     _pendingThumbnailPoseIndices.clear();
     _cameraImageLoadQueue.clear();
     _cameraImageLoadsQueued.clear();
-    _cameraImageLoadFailures.clear();
     _cameraThumbnailLoadTotal = 0;
     _cameraThumbnailLoadCompleted = 0;
     _activeCameraImagePoseIndex = -1;
@@ -2322,7 +2315,7 @@ QImage CameraSceneWidget::cachedCameraPlaneImage(const QString &imagePath, Camer
         return QImage();
     }
 
-    return _cameraImageCache.value(cameraPlaneImageKey(imagePath, mode));
+    return _cameraImageCache.image(cameraPlaneImageKey(imagePath, mode));
 }
 
 void CameraSceneWidget::discardQueuedCameraThumbnails()
@@ -2343,30 +2336,7 @@ void CameraSceneWidget::discardQueuedCameraThumbnails()
     }
     _cameraImageLoadQueue = std::move(retained_requests);
 
-    const QString thumbnail_prefix = QStringLiteral("thumb|");
-    for (auto it = _cameraImageCache.begin(); it != _cameraImageCache.end();)
-    {
-        if (it.key().startsWith(thumbnail_prefix))
-        {
-            it = _cameraImageCache.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-    for (auto it = _cameraImageLoadFailures.begin();
-         it != _cameraImageLoadFailures.end();)
-    {
-        if (it->startsWith(thumbnail_prefix))
-        {
-            it = _cameraImageLoadFailures.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
+    _cameraImageCache.clearWithPrefix(QStringLiteral("thumb|"));
     _pendingThumbnailPoseIndices.clear();
     _cameraThumbnailLoadCompleted = 0;
 }
@@ -2385,7 +2355,7 @@ void CameraSceneWidget::requestCameraPlaneImage(const QString &imagePath, Camera
     const QString key = cameraPlaneImageKey(imagePath, mode);
     if (key.isEmpty() || _cameraImageCache.contains(key) || _cameraImageLoadsInFlight.contains(key)
         || _cameraImageLoadsQueued.contains(key)
-        || _cameraImageLoadFailures.contains(key))
+        || _cameraImageCache.hasFailure(key))
     {
         return;
     }
@@ -2419,7 +2389,7 @@ void CameraSceneWidget::pumpCameraPlaneImageLoads()
             || (request.mode == CameraImagePlaneMode::Thumbnail
                 && !_showCameraThumbnails)
             || _cameraImageCache.contains(key) || _cameraImageLoadsInFlight.contains(key)
-            || _cameraImageLoadFailures.contains(key))
+            || _cameraImageCache.hasFailure(key))
         {
             continue;
         }
@@ -2502,8 +2472,7 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
     {
         if (!key.isEmpty())
         {
-            const bool first_failure = !_cameraImageLoadFailures.contains(key);
-            _cameraImageLoadFailures.insert(key);
+            const bool first_failure = _cameraImageCache.markFailure(key);
             if (first_failure
                 && result.mode == CameraImagePlaneMode::Thumbnail
                 && !thumbnail_was_uploaded)
@@ -2522,7 +2491,7 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
     {
         return;
     }
-    const bool was_failed = _cameraImageLoadFailures.remove(key);
+    const bool was_failed = _cameraImageCache.clearFailure(key);
 
     if (result.mode == CameraImagePlaneMode::Image)
     {
@@ -2533,19 +2502,10 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
         {
             _imagePipeline.uploadedImageKey.clear();
         }
-        const auto existing = _cameraImageCache.constFind(key);
-        if (existing != _cameraImageCache.cend())
-        {
-            _fullImageCacheBytes -= static_cast<qint64>(existing.value().sizeInBytes());
-        }
-        _fullImageCacheLru.removeAll(key);
-        _fullImageCacheLru.enqueue(key);
-        _fullImageCacheBytes += static_cast<qint64>(result.image.sizeInBytes());
     }
-    _cameraImageCache.insert(key, result.image);
+    QString active_image_key;
     if (result.mode == CameraImagePlaneMode::Image)
     {
-        QString active_image_key;
         const int active_pose_index = displayedCameraImagePoseIndex();
         if (active_pose_index >= 0 && active_pose_index < _poses.size())
         {
@@ -2553,25 +2513,9 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
                 _poses.at(active_pose_index).imagePath,
                 CameraImagePlaneMode::Image);
         }
-        int remaining_candidates = _fullImageCacheLru.size();
-        while (_fullImageCacheBytes > kFullCameraImageCacheLimitBytes
-               && _fullImageCacheLru.size() > 1
-               && remaining_candidates-- > 0)
-        {
-            const QString candidate = _fullImageCacheLru.dequeue();
-            if (candidate == key || candidate == active_image_key)
-            {
-                _fullImageCacheLru.enqueue(candidate);
-                continue;
-            }
-            const auto cached = _cameraImageCache.find(candidate);
-            if (cached != _cameraImageCache.end())
-            {
-                _fullImageCacheBytes -= static_cast<qint64>(cached.value().sizeInBytes());
-                _cameraImageCache.erase(cached);
-            }
-        }
     }
+    _cameraImageCache.store(
+        key, result.image, result.mode == CameraImagePlaneMode::Image, active_image_key);
     if (result.mode == CameraImagePlaneMode::Thumbnail && pose_index >= 0)
     {
         for (const auto &page : std::as_const(_thumbnailPipeline.atlasPages))
@@ -4766,7 +4710,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
                 }
                 const QString thumbnail_key = cameraPlaneImageKey(
                     pose.imagePath, CameraImagePlaneMode::Thumbnail);
-                if (_cameraImageLoadFailures.contains(thumbnail_key))
+                if (_cameraImageCache.hasFailure(thumbnail_key))
                 {
                     ++_cameraThumbnailLoadCompleted;
                     continue;

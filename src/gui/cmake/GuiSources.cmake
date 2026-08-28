@@ -62,6 +62,8 @@ set(GUI_SOURCES
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
   views/CameraSceneViewMath.cpp
+  views/CameraSceneImageCache.cpp
+  views/CameraSceneRhiResources.h
   views/SceneGeometryPreparation.cpp
   views/PointCloudEditPreparation.cpp
   views/PointCloudSnapshotIO.cpp
@@ -109,6 +111,7 @@ set(GUI_PROJECT_SOURCES
   config/settings/FileDialogStateManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
+  project/services/ProjectSessionFacade.cpp
   project/services/ProjectTiePointResultService.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp

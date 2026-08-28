@@ -1,67 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">PlaScan application icon</title>
+  <desc id="desc">A scanned planetary surface with a photogrammetry mesh and control points.</desc>
+
   <defs>
-    <!-- 行星渐变 -->
-    <radialGradient id="planet" cx="35%" cy="35%" r="65%">
-      <stop offset="0%" stop-color="#4fc3f7"/>
-      <stop offset="40%" stop-color="#1565c0"/>
-      <stop offset="100%" stop-color="#0d2137"/>
-    </radialGradient>
-    <!-- 光束渐变 -->
-    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0"/>
-      <stop offset="50%" stop-color="#00e5ff" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+    <linearGradient id="background" x1="72" y1="40" x2="440" y2="472" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#102a4a"/>
+      <stop offset="0.55" stop-color="#071a30"/>
+      <stop offset="1" stop-color="#04101f"/>
     </linearGradient>
-    <!-- 高光 -->
-    <radialGradient id="highlight" cx="30%" cy="30%" r="40%">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25"/>
-      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    <radialGradient id="planet" cx="0" cy="0" r="1" gradientTransform="translate(190 176) rotate(48) scale(316)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.38" stop-color="#1767b5"/>
+      <stop offset="0.76" stop-color="#0c3a71"/>
+      <stop offset="1" stop-color="#071d3a"/>
     </radialGradient>
+    <linearGradient id="scanBand" x1="113" y1="355" x2="400" y2="197" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.1"/>
+      <stop offset="0.5" stop-color="#67e8f9" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.1"/>
+    </linearGradient>
+    <clipPath id="planetClip">
+      <circle cx="256" cy="260" r="174"/>
+    </clipPath>
   </defs>
 
-  <!-- 背景圆 -->
-  <rect width="512" height="512" rx="100" fill="#0a1628"/>
+  <!-- Dark tile keeps the mark legible on both light and dark desktops. -->
+  <rect x="12" y="12" width="488" height="488" rx="116" fill="url(#background)"/>
+  <rect x="18" y="18" width="476" height="476" rx="110" fill="none" stroke="#8bdcff" stroke-opacity="0.12" stroke-width="4"/>
 
-  <!-- 行星 -->
-  <circle cx="256" cy="240" r="160" fill="url(#planet)"/>
-  <circle cx="256" cy="240" r="160" fill="url(#highlight)"/>
+  <!-- The planet fills the tile so its silhouette survives taskbar-size rendering. -->
+  <circle cx="256" cy="260" r="180" fill="#031428" stroke="#55d9ff" stroke-opacity="0.42" stroke-width="6"/>
+  <circle cx="256" cy="260" r="174" fill="url(#planet)"/>
 
-  <!-- 3D 网格线 (纬线) -->
-  <ellipse cx="256" cy="240" rx="160" ry="30" fill="none" stroke="#4fc3f7" stroke-width="1.5" opacity="0.3"/>
-  <ellipse cx="256" cy="240" rx="160" ry="60" fill="none" stroke="#4fc3f7" stroke-width="1.2" opacity="0.25"/>
-  <ellipse cx="256" cy="240" rx="160" ry="90" fill="none" stroke="#4fc3f7" stroke-width="1" opacity="0.2"/>
-  <ellipse cx="256" cy="240" rx="160" ry="120" fill="none" stroke="#4fc3f7" stroke-width="0.8" opacity="0.15"/>
-  <ellipse cx="256" cy="240" rx="160" ry="150" fill="none" stroke="#4fc3f7" stroke-width="0.6" opacity="0.1"/>
+  <g clip-path="url(#planetClip)">
+    <!-- A sparse, heavy photogrammetry mesh replaces the old hairline globe grid. -->
+    <g fill="none" stroke="#83ddff" stroke-linecap="round">
+      <path d="M74 197 C151 235 361 235 438 197" stroke-width="5" stroke-opacity="0.34"/>
+      <path d="M68 262 C156 291 356 291 444 262" stroke-width="5" stroke-opacity="0.52"/>
+      <path d="M77 329 C162 345 350 345 435 329" stroke-width="5" stroke-opacity="0.34"/>
+      <path d="M256 75 C188 139 188 382 256 445" stroke-width="5" stroke-opacity="0.42"/>
+      <path d="M256 75 C324 139 324 382 256 445" stroke-width="5" stroke-opacity="0.42"/>
+      <path d="M151 106 C98 207 122 352 211 429" stroke-width="4" stroke-opacity="0.24"/>
+      <path d="M361 106 C414 207 390 352 301 429" stroke-width="4" stroke-opacity="0.24"/>
+    </g>
 
-  <!-- 3D 网格线 (经线) -->
-  <ellipse cx="256" cy="240" rx="40" ry="160" fill="none" stroke="#4fc3f7" stroke-width="1.5" opacity="0.3"/>
-  <ellipse cx="256" cy="240" rx="80" ry="160" fill="none" stroke="#4fc3f7" stroke-width="1" opacity="0.2"/>
-  <ellipse cx="256" cy="240" rx="120" ry="160" fill="none" stroke="#4fc3f7" stroke-width="0.8" opacity="0.15"/>
+    <!-- Terrain relief makes the sphere read as a mapped planetary surface. -->
+    <path d="M67 362 C116 339 132 288 178 303 C218 316 226 274 267 282 C310 290 324 233 367 249 C399 261 424 238 451 220 L456 453 L62 453 Z"
+          fill="#061b35" fill-opacity="0.78"/>
+    <g fill="none" stroke="#2e8ed0" stroke-linecap="round" stroke-width="5">
+      <path d="M73 365 C121 342 136 298 180 311 C221 323 230 283 270 291 C312 300 327 244 368 259 C401 271 426 248 449 230" stroke-opacity="0.85"/>
+      <path d="M80 395 C131 373 151 335 192 346 C235 358 247 321 286 329 C329 337 350 288 390 302 C414 310 431 299 449 286" stroke-opacity="0.55"/>
+      <path d="M105 422 C157 400 176 375 216 385 C255 395 280 367 319 373 C358 379 390 347 422 356" stroke-opacity="0.35"/>
+    </g>
 
-  <!-- 扫描光束 -->
-  <polygon points="96,240 416,80 416,400" fill="url(#beam)" opacity="0.15"/>
-  <line x1="96" y1="240" x2="416" y2="240" stroke="#00e5ff" stroke-width="2" opacity="0.5"/>
-
-  <!-- 特征点 (十字星) -->
-  <g transform="translate(180, 180)" stroke="#00e5ff" stroke-width="2" opacity="0.9">
-    <line x1="-6" y1="0" x2="6" y2="0"/>
-    <line x1="0" y1="-6" x2="0" y2="6"/>
-    <line x1="-3" y1="-3" x2="3" y2="3" stroke-width="1" opacity="0.5"/>
-    <line x1="3" y1="-3" x2="-3" y2="3" stroke-width="1" opacity="0.5"/>
-  </g>
-  <g transform="translate(300, 170)" stroke="#00e5ff" stroke-width="1.5" opacity="0.7">
-    <line x1="-4" y1="0" x2="4" y2="0"/>
-    <line x1="0" y1="-4" x2="0" y2="4"/>
-  </g>
-  <g transform="translate(240, 290)" stroke="#00e5ff" stroke-width="1.5" opacity="0.6">
-    <line x1="-4" y1="0" x2="4" y2="0"/>
-    <line x1="0" y1="-4" x2="0" y2="4"/>
-  </g>
-  <g transform="translate(150, 260)" stroke="#00e5ff" stroke-width="1.2" opacity="0.5">
-    <line x1="-3" y1="0" x2="3" y2="0"/>
-    <line x1="0" y1="-3" x2="0" y2="3"/>
+    <!-- The luminous swath is the distinctive PlaScan scanning gesture. -->
+    <path d="M72 385 L431 186 L450 220 L91 419 Z" fill="url(#scanBand)"/>
+    <path d="M82 397 L440 199" fill="none" stroke="#7df5ff" stroke-linecap="round" stroke-width="10"/>
+    <path d="M82 397 L440 199" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-opacity="0.7" stroke-width="3"/>
   </g>
 
-  <!-- 项目名称 -->
-  <text x="256" y="460" text-anchor="middle" font-family="'Segoe UI',Arial,sans-serif" font-weight="700" font-size="48" letter-spacing="8" fill="#4fc3f7">PLASCAN</text>
+  <!-- Control points remain intentionally few and oversized for small icons. -->
+  <g fill="#07182b" stroke="#d8fbff" stroke-width="7">
+    <circle cx="153" cy="358" r="15"/>
+    <circle cx="257" cy="300" r="15"/>
+    <circle cx="361" cy="242" r="15"/>
+  </g>
+  <g fill="#5eeaff">
+    <circle cx="153" cy="358" r="5"/>
+    <circle cx="257" cy="300" r="5"/>
+    <circle cx="361" cy="242" r="5"/>
+  </g>
+
+  <!-- Focus corners turn the planet into an active survey target. -->
+  <g fill="none" stroke="#b8f3ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="12">
+    <path d="M105 166 V116 H155"/>
+    <path d="M357 116 H407 V166"/>
+    <path d="M105 354 V404 H155"/>
+    <path d="M357 404 H407 V354"/>
+  </g>
 </svg>

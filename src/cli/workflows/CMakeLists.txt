@@ -69,6 +69,8 @@ function(add_reconstruction_workflow_cli name)
             ReconstructionCliReport.h
             ReconstructionPipelineRunner.cpp
             ReconstructionPipelineRunner.h
+            ReconstructionPipelineReportContext.cpp
+            ReconstructionPipelineReportContext.h
         LIBRARIES
             aerial_triangulation
             plascan_cli_photogrammetry_common

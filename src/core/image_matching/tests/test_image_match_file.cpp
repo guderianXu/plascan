@@ -1,4 +1,5 @@
 #include "ImageMatchFile.h"
+#include "ImageFeaturePointFile.h"
 #include "ImageMatchIndexFile.h"
 #include "ImageMatchRepository.h"
 
@@ -74,6 +75,68 @@ bool createImageFile(const QString &path)
         return false;
     }
     return file.write("image", 5) == 5;
+}
+
+TEST(ImageFeaturePointFileTest, RoundTripsAllExtractedKeypointGeometry)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString imagePath = temporary.filePath(QStringLiteral("source image.jpg"));
+    ASSERT_TRUE(createImageFile(imagePath));
+
+    ImageFeaturePointCatalog expected;
+    expected.owner = ImageMatchFile::identityForImage(imagePath, 640, 480);
+    expected.algorithmId = QStringLiteral("auto_sift");
+    expected.algorithmVersion = 7;
+    expected.featureSchemaVersion = 3;
+    expected.observations = {
+        observation(4, 10.5f, 20.25f),
+        observation(9, 30.75f, 40.5f)};
+
+    const QString filePath = ImageFeaturePointFile::filePathForImage(
+        temporary.filePath(QStringLiteral("matches")), imagePath);
+    EXPECT_TRUE(filePath.endsWith(QStringLiteral(".pifeature")));
+    QString errorMessage;
+    ASSERT_TRUE(ImageFeaturePointFile::write(filePath, expected, &errorMessage))
+        << errorMessage.toStdString();
+
+    ImageFeaturePointCatalog actual;
+    ASSERT_TRUE(ImageFeaturePointFile::read(filePath, &actual, &errorMessage))
+        << errorMessage.toStdString();
+    EXPECT_EQ(actual.owner.stableId, expected.owner.stableId);
+    EXPECT_EQ(actual.algorithmId, expected.algorithmId);
+    EXPECT_EQ(actual.algorithmVersion, expected.algorithmVersion);
+    EXPECT_EQ(actual.featureSchemaVersion, expected.featureSchemaVersion);
+    ASSERT_EQ(actual.observations.size(), expected.observations.size());
+    EXPECT_FLOAT_EQ(actual.observations.at(1).x, 30.75f);
+    EXPECT_FLOAT_EQ(actual.observations.at(1).orientation, 45.0f);
+    EXPECT_FLOAT_EQ(actual.observations.at(1).response, 0.8f);
+}
+
+TEST(ImageFeaturePointFileTest, RejectsTrailingCorruption)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString imagePath = temporary.filePath(QStringLiteral("source.jpg"));
+    ASSERT_TRUE(createImageFile(imagePath));
+
+    ImageFeaturePointCatalog catalog;
+    catalog.owner = ImageMatchFile::identityForImage(imagePath, 16, 12);
+    catalog.algorithmId = QStringLiteral("sift");
+    catalog.observations = {observation(1, 2.0f, 3.0f)};
+    const QString filePath = ImageFeaturePointFile::filePathForImage(temporary.path(), imagePath);
+    QString errorMessage;
+    ASSERT_TRUE(ImageFeaturePointFile::write(filePath, catalog, &errorMessage));
+
+    QFile file(filePath);
+    ASSERT_TRUE(file.open(QIODevice::Append));
+    ASSERT_EQ(file.write("x", 1), 1);
+    file.close();
+
+    ImageFeaturePointCatalog loaded;
+    EXPECT_FALSE(ImageFeaturePointFile::read(filePath, &loaded, &errorMessage));
+    EXPECT_TRUE(loaded.observations.empty());
+    EXPECT_TRUE(errorMessage.contains(QStringLiteral("尾部")));
 }
 
 TEST(ImageMatchFileTest, RoundTripsOneShardWithResidualAndFlags)

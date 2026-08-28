@@ -18,6 +18,15 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiSources.cmake)
 
 add_library(gui_project STATIC ${GUI_PROJECT_SOURCES})
 
+if(PLASCAN_BUILD_GUI)
+  set(GUI_RUNTIME_SOURCES ${GUI_SOURCES})
+  list(REMOVE_ITEM GUI_RUNTIME_SOURCES main.cpp)
+  add_library(gui_runtime STATIC
+    ${GUI_RUNTIME_SOURCES}
+    ${GUI_DIALOG_SOURCES}
+  )
+endif()
+
 set(PLASCAN_GUI_RESOURCES ${CMAKE_SOURCE_DIR}/resources/resources.qrc)
 set_source_files_properties(${PLASCAN_GUI_RESOURCES} PROPERTIES
   AUTORCC_OPTIONS "--no-compress"
@@ -35,8 +44,7 @@ if(PLASCAN_BUILD_GUI)
   endif()
 
   add_executable(plascan_gui
-    ${GUI_SOURCES}
-    ${GUI_DIALOG_SOURCES}
+    main.cpp
     ${PLASCAN_GUI_RESOURCES}
   )
 
@@ -114,6 +122,13 @@ if(PLASCAN_BUILD_GUI)
     PLASCAN_VERSION="${PROJECT_VERSION}"
   )
 endif()
+if(PLASCAN_BUILD_GUI)
+  target_include_directories(gui_runtime PUBLIC ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
+  target_compile_definitions(gui_runtime PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    PLASCAN_VERSION="${PROJECT_VERSION}"
+  )
+endif()
 target_include_directories(gui_project PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
 target_compile_definitions(gui_project PRIVATE
   PLASCAN_VERSION="${PROJECT_VERSION}"
@@ -124,6 +139,15 @@ set_target_properties(gui_project PROPERTIES
   AUTOUIC OFF
   AUTORCC OFF
 )
+
+if(PLASCAN_BUILD_GUI)
+  set_target_properties(gui_runtime PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
+    AUTORCC OFF
+    CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+  )
+endif()
 
 target_link_libraries(gui_project PRIVATE
   Qt6::Core
@@ -163,17 +187,28 @@ endif()
 
 if(PLASCAN_BUILD_GUI)
   if(GDAL_INCLUDE_DIRS)
-    target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
+    target_include_directories(gui_runtime PRIVATE ${GDAL_INCLUDE_DIRS})
   endif()
 
   if(TIFF_INCLUDE_DIRS)
-    target_include_directories(plascan_gui PRIVATE ${TIFF_INCLUDE_DIRS})
+    target_include_directories(gui_runtime PRIVATE ${TIFF_INCLUDE_DIRS})
   endif()
 
+  set(PLASCAN_GUI_CORE_LINK_TARGET gui_runtime)
   include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiCoreLinking.cmake)
 
 # 链接Qt和其他库
 target_link_libraries(plascan_gui PRIVATE
+  gui_runtime
+  mvs
+  plascan_common_log
+  Qt6::Core
+  Qt6::Gui
+  Qt6::Widgets
+  ${PLASCAN_TIFF_TARGET}
+)
+
+target_link_libraries(gui_runtime PRIVATE
   gui_project
   Qt6::Core
   Qt6::Gui

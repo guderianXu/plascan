@@ -73,7 +73,7 @@ if(_invalidResult EQUAL 0)
     message(FATAL_ERROR "Configure without the vcpkg toolchain unexpectedly passed")
 endif()
 set(_invalidLog "${_invalidOutput}\n${_invalidError}")
-if(NOT _invalidLog MATCHES "requires the vcpkg toolchain")
+if(NOT _invalidLog MATCHES "requires (the vcpkg toolchain|vcpkg manifest mode)")
     message(FATAL_ERROR
         "Missing-toolchain failure was not actionable:\n${_invalidLog}")
 endif()

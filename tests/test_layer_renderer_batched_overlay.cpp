@@ -1,4 +1,5 @@
 #include "LayerRenderer.h"
+#include "LayerOverlayItems.h"
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,7 @@
 #include <QGraphicsPathItem>
 #include <QGraphicsScene>
 #include <QImage>
+#include <QPainter>
 #include <QTemporaryDir>
 #include <QThread>
 
@@ -100,6 +102,64 @@ TEST(LayerRendererResponsivenessTest, ClearingFeatureLayerKeepsImageLayer)
 
     EXPECT_EQ(countFeatureOverlayItems(scene), 0);
     EXPECT_EQ(scene.items().size(), 1);
+}
+
+TEST(LayerRendererResidualOverlayTest, SubpixelResidualRendersAsVisibleArrow)
+{
+    QGraphicsScene scene;
+    LayerRenderer renderer(&scene);
+    QImage base(128, 128, QImage::Format_RGB32);
+    base.fill(Qt::black);
+    ASSERT_TRUE(renderer.addImageLayer(base, 0));
+
+    LayerRenderer::FeatureDisplayOptions options;
+    options.showPoints = false;
+    options.showResiduals = true;
+    options.residualScale = 50.0;
+    options.maximumResidualLengthPx = 80.0;
+    options.opacity = 255;
+    renderer.setFeatureDisplayOptions(options);
+
+    xjw::gui::views::FeatureResidualVector residual;
+    residual.observed = QPointF(30.0, 64.0);
+    residual.projected = QPointF(30.4, 64.0);
+    residual.magnitudePx = 0.4;
+    renderer.addFeatureResidualItems({residual});
+
+    QImage rendered(128, 128, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(Qt::transparent);
+    QPainter painter(&rendered);
+    scene.render(&painter, QRectF(0.0, 0.0, 128.0, 128.0), QRectF(0.0, 0.0, 128.0, 128.0));
+    painter.end();
+
+    bool hasVisibleEndpoint = false;
+    for (int y = 56; y <= 72 && !hasVisibleEndpoint; ++y)
+    {
+        for (int x = 46; x <= 54; ++x)
+        {
+            const QColor pixel = rendered.pixelColor(x, y);
+            if (pixel.blue() > 200 && pixel.green() > 120 && pixel.red() < 100)
+            {
+                hasVisibleEndpoint = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(hasVisibleEndpoint);
+}
+
+TEST(LayerRendererResidualOverlayTest, ResidualMagnitudeUsesBlueToRedQualityRamp)
+{
+    const QColor small = xjw::gui::views::residualMagnitudeColor(0.0);
+    const QColor subpixel = xjw::gui::views::residualMagnitudeColor(0.5);
+    const QColor medium = xjw::gui::views::residualMagnitudeColor(1.0);
+    const QColor large = xjw::gui::views::residualMagnitudeColor(2.5);
+
+    EXPECT_GT(small.blue(), small.red());
+    EXPECT_GT(subpixel.blue(), subpixel.red());
+    EXPECT_GT(medium.green(), medium.red());
+    EXPECT_GT(large.red(), large.green());
+    EXPECT_EQ(large, xjw::gui::views::residualMagnitudeColor(2.0));
 }
 
 TEST(LayerRendererMaskOverlayTest, MaskContourUsesCosmeticHaloAndOutline)

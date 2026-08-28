@@ -154,7 +154,9 @@ target_include_directories(test_patchmatch_cpu PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core
 )
-gtest_discover_tests(test_patchmatch_cpu)
+gtest_discover_tests(test_patchmatch_cpu
+    PROPERTIES RUN_SERIAL TRUE
+)
 
 add_executable(test_lightglue_feature_budget
     test_lightglue_feature_budget.cpp
@@ -564,102 +566,36 @@ gtest_discover_tests(test_mvs_source_pair_quality_loader)
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
 if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
-set(MARKER_PANEL_TEST_SOURCES)
-set(MARKER_PANEL_REQUIRED_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_marker_panels.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerProjectionPanel.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerReferencePanel.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerFocusMeasurementDialog.cpp
+add_executable(test_camera_scene_image_cache
+    test_camera_scene_image_cache.cpp
 )
-set(MARKER_PANEL_FILES_COMPLETE TRUE)
-foreach(marker_panel_file IN LISTS MARKER_PANEL_REQUIRED_FILES)
-    if(NOT EXISTS "${marker_panel_file}")
-        set(MARKER_PANEL_FILES_COMPLETE FALSE)
-    endif()
-endforeach()
-if(MARKER_PANEL_FILES_COMPLETE)
-    list(APPEND MARKER_PANEL_TEST_SOURCES ${MARKER_PANEL_REQUIRED_FILES})
-    list(APPEND MARKER_PANEL_TEST_SOURCES
-        ${CMAKE_SOURCE_DIR}/src/gui/markers/DetectMarkersDialog.cpp
-        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerTaskRunner.cpp
-        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionJobBuilder.cpp
-        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionReviewDialog.cpp
-        ${CMAKE_SOURCE_DIR}/src/gui/markers/PrintMarkersDialog.cpp
-    )
-else()
-    message(STATUS "plascan tests: marker panel tests skipped until all panel sources are present")
-endif()
+target_link_libraries(test_camera_scene_image_cache PRIVATE
+    gui_runtime
+    Qt6::Gui
+    GTest::gtest_main
+)
+target_include_directories(test_camera_scene_image_cache PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+)
+gtest_discover_tests(test_camera_scene_image_cache)
+
+add_executable(test_project_session_facade
+    test_project_session_facade.cpp
+)
+target_link_libraries(test_project_session_facade PRIVATE
+    gui_project
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_project_session_facade PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+)
+gtest_discover_tests(test_project_session_facade)
 
 add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
     test_marker_canvas_interaction.cpp
-    ${MARKER_PANEL_TEST_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/AboutDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/ModelPackageDownloadDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/PythonRuntimeDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/runtime/PythonRuntimeManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/runtime/GeospatialRuntimePaths.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/MaskEditorSettingsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/CameraCalibrationData.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/CameraCalibrationDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/SurveyControlDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CreateTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/ThinTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CleanTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjPointPreviewPreparation.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjRenderPreparation.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjStreamingLoader.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjStreamingLoaderAssembly.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/menu/ToolbarButton.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectTaskStatusController.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/platform/TaskbarProgressController.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DepthOverlayController.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerFeatureLoader.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/FeatureResidualLoader.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/CanvasWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MaskEditor.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerOverlayItems.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceController.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceDetection.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceView.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerUndoCommand.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/markers/ProjectMarkerRepository.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DualImageViewer.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DualImageViewer.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchPointBatchItem.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchSpatialIndex.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchGpuRenderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeContextMenu.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeModel.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreePopulation.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceAlignment.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceMetadata.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkPanelWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/SelectionPropertiesWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/HenuBrandWidget.cpp
+    test_marker_panels.cpp
 )
 set_target_properties(test_gui_project_utils PROPERTIES
     AUTOMOC ON
@@ -679,6 +615,7 @@ if(MSVC)
     target_compile_options(test_gui_project_utils PRIVATE /bigobj)
 endif()
 target_link_libraries(test_gui_project_utils PRIVATE
+    gui_runtime
     gui_project
     plascan_common_project
     mvs

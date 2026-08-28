@@ -3,443 +3,190 @@
  <class>FeaturePointVisualizationDialog</class>
  <widget class="QDialog" name="FeaturePointVisualizationDialog">
   <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>560</width>
-    <height>680</height>
-   </rect>
+   <rect><x>0</x><y>0</y><width>520</width><height>500</height></rect>
   </property>
-  <property name="windowTitle">
-   <string>匹配观测显示设置</string>
+  <property name="minimumSize">
+   <size><width>480</width><height>460</height></size>
   </property>
+  <property name="windowTitle"><string>匹配观测显示设置</string></property>
   <layout class="QVBoxLayout" name="mainLayout">
    <item>
-    <widget class="QGroupBox" name="residualGroup">
-     <property name="title">
-      <string>重投影残差</string>
-     </property>
-     <layout class="QFormLayout" name="residualForm">
-     <item row="0" column="1">
-      <widget class="QCheckBox" name="m_showResidualsChk">
-       <property name="text"><string>显示点残差</string></property>
-       <property name="toolTip"><string>绘制观测像素到三维点重投影像素的真实残差向量</string></property>
-      </widget>
-     </item>
-     <item row="1" column="0"><widget class="QLabel" name="residualScaleLabel"><property name="text"><string>向量倍率:</string></property></widget></item>
-     <item row="1" column="1">
-      <widget class="QDoubleSpinBox" name="m_residualScaleSpin">
-       <property name="minimum"><double>0.100000000000000</double></property>
-       <property name="maximum"><double>100.000000000000000</double></property>
-       <property name="value"><double>10.000000000000000</double></property>
-      </widget>
-     </item>
-     <item row="2" column="0"><widget class="QLabel" name="minimumResidualLabel"><property name="text"><string>最小残差:</string></property></widget></item>
-     <item row="2" column="1">
-      <widget class="QDoubleSpinBox" name="m_minimumResidualSpin">
-       <property name="suffix"><string> px</string></property>
-       <property name="maximum"><double>1000.000000000000000</double></property>
-      </widget>
-     </item>
-     <item row="3" column="0"><widget class="QLabel" name="maximumResidualLengthLabel"><property name="text"><string>最大绘制长度:</string></property></widget></item>
-     <item row="3" column="1">
-      <widget class="QDoubleSpinBox" name="m_maximumResidualLengthSpin">
-       <property name="suffix"><string> px</string></property>
-       <property name="specialValueText"><string>不限</string></property>
-       <property name="maximum"><double>1000.000000000000000</double></property>
-       <property name="value"><double>80.000000000000000</double></property>
-      </widget>
-     </item>
-     <item row="4" column="0"><widget class="QLabel" name="residualColorLabel"><property name="text"><string>残差颜色:</string></property></widget></item>
-     <item row="4" column="1"><widget class="QPushButton" name="m_residualColorBtn"><property name="text"><string>    </string></property></widget></item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="displayGroup">
-     <property name="title">
-      <string>显示内容</string>
-     </property>
-     <layout class="QVBoxLayout" name="displayLayout">
-      <item>
-       <widget class="QCheckBox" name="m_showPointsChk">
-        <property name="toolTip">
-         <string>显示关键点中心标记</string>
-        </property>
-        <property name="text">
-         <string>显示匹配关键点</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="m_showScaleChk">
-        <property name="toolTip">
-         <string>显示关键点的尺度圆圈（基于KeyPoint.size）</string>
-        </property>
-        <property name="text">
-         <string>显示尺度圈</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="m_showOrientationChk">
-        <property name="toolTip">
-          <string>显示匹配结果中保存的 SIFT 关键点方向</string>
-        </property>
-        <property name="text">
-         <string>显示方向箭头</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="m_useFillChk">
-        <property name="toolTip">
-         <string>使用实心标记（默认空心）</string>
-        </property>
-        <property name="text">
-         <string>实心填充</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="styleGroup">
-     <property name="title">
-      <string>样式设置</string>
-     </property>
-     <layout class="QFormLayout" name="styleForm">
+    <widget class="QGroupBox" name="pointGroup">
+     <property name="title"><string>点显示</string></property>
+     <layout class="QFormLayout" name="pointForm">
       <item row="0" column="0">
-       <widget class="QLabel" name="markerShapeLabel">
-        <property name="text">
-         <string>标记形状:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_markerShapeCombo</cstring>
-        </property>
+       <widget class="QLabel" name="pointSourceLabel">
+        <property name="text"><string>数据来源:</string></property>
+        <property name="buddy"><cstring>m_pointSourceCombo</cstring></property>
        </widget>
       </item>
       <item row="0" column="1">
-       <widget class="QComboBox" name="m_markerShapeCombo">
+       <widget class="QComboBox" name="m_pointSourceCombo">
         <property name="toolTip">
-         <string>特征点标记的形状</string>
+         <string>提取特征点为检测器全部输出；原始匹配点为匹配记录引用的点；
+有效连接点为当前空三成果中的有效观测</string>
         </property>
-        <property name="currentIndex">
-         <number>2</number>
-        </property>
-        <item>
-         <property name="text">
-          <string>点</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>圆形</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>十字</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>加号</string>
-         </property>
-        </item>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="pointSizeLabel">
-        <property name="text">
-         <string>点大小:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_pointSizeSpin</cstring>
-        </property>
+        <property name="currentIndex"><number>2</number></property>
+        <item><property name="text"><string>提取特征点</string></property></item>
+        <item><property name="text"><string>原始匹配点</string></property></item>
+        <item><property name="text"><string>有效连接点</string></property></item>
        </widget>
       </item>
       <item row="1" column="1">
-       <widget class="QSpinBox" name="m_pointSizeSpin">
-        <property name="toolTip">
-         <string>特征点标记的大小（像素）</string>
-        </property>
-        <property name="minimum">
-         <number>1</number>
-        </property>
-        <property name="maximum">
-         <number>20</number>
-        </property>
-        <property name="value">
-         <number>1</number>
-        </property>
+       <widget class="QCheckBox" name="m_showPointsChk">
+        <property name="text"><string>显示点标记</string></property>
+        <property name="checked"><bool>true</bool></property>
        </widget>
       </item>
       <item row="2" column="0">
-       <widget class="QLabel" name="scaleMultiplierLabel">
-        <property name="text">
-         <string>尺度倍数:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_scaleMultiplierSpin</cstring>
-        </property>
+       <widget class="QLabel" name="pointSizeLabel">
+        <property name="text"><string>点大小:</string></property>
+        <property name="buddy"><cstring>m_pointSizeSpin</cstring></property>
        </widget>
       </item>
       <item row="2" column="1">
-       <widget class="QDoubleSpinBox" name="m_scaleMultiplierSpin">
-        <property name="toolTip">
-         <string>尺度圈相对于KeyPoint.size的倍数</string>
-        </property>
-        <property name="decimals">
-         <number>1</number>
-        </property>
-        <property name="minimum">
-         <double>0.100000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>10.000000000000000</double>
-        </property>
-        <property name="singleStep">
-         <double>0.100000000000000</double>
-        </property>
-        <property name="value">
-         <double>1.000000000000000</double>
-        </property>
+       <widget class="QSpinBox" name="m_pointSizeSpin">
+        <property name="minimum"><number>1</number></property>
+        <property name="maximum"><number>12</number></property>
+        <property name="value"><number>1</number></property>
        </widget>
       </item>
       <item row="3" column="0">
-       <widget class="QLabel" name="opacityTitleLabel">
-        <property name="text">
-         <string>透明度:</string>
-        </property>
+       <widget class="QLabel" name="pointColorLabel">
+        <property name="text"><string>点颜色:</string></property>
+        <property name="buddy"><cstring>m_pointColorBtn</cstring></property>
        </widget>
       </item>
       <item row="3" column="1">
+       <widget class="QPushButton" name="m_pointColorBtn">
+        <property name="text"><string>选择颜色</string></property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="opacityTitleLabel">
+        <property name="text"><string>透明度:</string></property>
+       </widget>
+      </item>
+      <item row="4" column="1">
        <layout class="QHBoxLayout" name="opacityLayout">
         <item>
          <widget class="QSlider" name="m_opacitySlider">
-          <property name="toolTip">
-           <string>显示透明度 (0=完全透明, 255=完全不透明)</string>
-          </property>
-          <property name="maximum">
-           <number>255</number>
-          </property>
-          <property name="value">
-           <number>180</number>
-          </property>
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
+          <property name="maximum"><number>255</number></property>
+          <property name="value"><number>180</number></property>
+          <property name="orientation"><enum>Qt::Horizontal</enum></property>
          </widget>
         </item>
         <item>
          <widget class="QLabel" name="m_opacityLabel">
-          <property name="minimumWidth">
-           <number>40</number>
-          </property>
-          <property name="text">
-           <string>180</string>
-          </property>
+          <property name="minimumWidth"><number>32</number></property>
+          <property name="text"><string>180</string></property>
          </widget>
         </item>
        </layout>
       </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="maxDisplayLabel">
+        <property name="text"><string>最大显示数:</string></property>
+        <property name="buddy"><cstring>m_maxDisplaySpin</cstring></property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QSpinBox" name="m_maxDisplaySpin">
+        <property name="specialValueText"><string>全部显示</string></property>
+        <property name="maximum"><number>100000</number></property>
+       </widget>
+      </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QLabel" name="m_pointStatusLabel">
+        <property name="text"><string>当前照片的数据状态将在这里显示</string></property>
+        <property name="wordWrap"><bool>true</bool></property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="colorGroup">
-     <property name="title">
-      <string>颜色设置</string>
-     </property>
-     <layout class="QFormLayout" name="colorForm">
-      <item row="0" column="0">
-       <widget class="QLabel" name="pointColorLabel">
-        <property name="text">
-         <string>点颜色:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_pointColorBtn</cstring>
-        </property>
-       </widget>
-      </item>
+    <widget class="QGroupBox" name="residualGroup">
+     <property name="title"><string>重投影残差</string></property>
+     <layout class="QFormLayout" name="residualForm">
       <item row="0" column="1">
-       <widget class="QPushButton" name="m_pointColorBtn">
-        <property name="toolTip">
-         <string>点击选择特征点颜色</string>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 200, 0);</string>
-        </property>
-        <property name="text">
-         <string>    </string>
-        </property>
+       <widget class="QCheckBox" name="m_showResidualsChk">
+        <property name="text"><string>显示残差箭头</string></property>
+        <property name="toolTip"><string>从观测像素指向三维点重投影像素</string></property>
        </widget>
       </item>
       <item row="1" column="0">
-       <widget class="QLabel" name="scaleColorLabel">
-        <property name="text">
-         <string>尺度圈颜色:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_scaleColorBtn</cstring>
-        </property>
+       <widget class="QLabel" name="residualScaleLabel">
+        <property name="text"><string>向量倍率:</string></property>
+        <property name="buddy"><cstring>m_residualScaleSpin</cstring></property>
        </widget>
       </item>
       <item row="1" column="1">
-       <widget class="QPushButton" name="m_scaleColorBtn">
-        <property name="toolTip">
-         <string>点击选择尺度圈颜色</string>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 0);</string>
-        </property>
-        <property name="text">
-         <string>    </string>
-        </property>
+       <widget class="QDoubleSpinBox" name="m_residualScaleSpin">
+        <property name="suffix"><string> ×</string></property>
+        <property name="minimum"><double>1.000000000000000</double></property>
+        <property name="maximum"><double>100.000000000000000</double></property>
+        <property name="value"><double>50.000000000000000</double></property>
        </widget>
       </item>
       <item row="2" column="0">
-       <widget class="QLabel" name="orientColorLabel">
-        <property name="text">
-         <string>方向箭头颜色:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_orientColorBtn</cstring>
-        </property>
+       <widget class="QLabel" name="residualColorLabel">
+        <property name="text"><string>残差颜色:</string></property>
        </widget>
       </item>
       <item row="2" column="1">
-       <widget class="QPushButton" name="m_orientColorBtn">
-        <property name="toolTip">
-         <string>点击选择方向箭头颜色</string>
-        </property>
+       <widget class="QLabel" name="m_residualColorLegend">
+        <property name="minimumSize"><size><width>220</width><height>18</height></size></property>
+        <property name="toolTip"><string>颜色按未放大的真实重投影残差分级</string></property>
         <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 0, 0);</string>
+         <string notr="true">border: 1px solid palette(mid); border-radius: 3px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1976ff, stop:0.25 #00c8ff, stop:0.5 #18d56f, stop:0.75 #ffd23f, stop:1 #ff4545);</string>
         </property>
-        <property name="text">
-         <string>    </string>
-        </property>
+        <property name="text"><string/></property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="m_residualLegendTicks">
+        <property name="text"><string>小  0 px        0.5        1.0        1.5        ≥2 px  大</string></property>
+        <property name="alignment"><set>Qt::AlignCenter</set></property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QLabel" name="m_residualStatusLabel">
+        <property name="text"><string>残差来自有效连接点</string></property>
+        <property name="wordWrap"><bool>true</bool></property>
        </widget>
       </item>
      </layout>
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="filterGroup">
-     <property name="title">
-      <string>显示过滤</string>
-     </property>
-     <layout class="QFormLayout" name="filterForm">
-      <item row="0" column="0">
-       <widget class="QLabel" name="maxDisplayLabel">
-        <property name="text">
-         <string>最大显示数:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_maxDisplaySpin</cstring>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QSpinBox" name="m_maxDisplaySpin">
-        <property name="toolTip">
-         <string>限制显示的特征点数量
-0 = 全部显示</string>
-        </property>
-        <property name="specialValueText">
-         <string>全部显示</string>
-        </property>
-        <property name="maximum">
-         <number>100000</number>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="QCheckBox" name="m_showTopScoresChk">
-        <property name="toolTip">
-         <string>当限制显示数量时，优先显示score最高的点</string>
-        </property>
-        <property name="text">
-         <string>优先显示高分点</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="previewGroup">
-     <property name="title">
-      <string>预览</string>
-     </property>
-     <layout class="QVBoxLayout" name="previewLayout">
-      <item>
-       <widget class="QLabel" name="m_previewLabel">
-        <property name="minimumHeight">
-         <number>36</number>
-        </property>
-        <property name="frameShape">
-         <enum>QFrame::Panel</enum>
-        </property>
-        <property name="frameShadow">
-         <enum>QFrame::Sunken</enum>
-        </property>
-        <property name="text">
-         <string>调整参数后点击应用查看效果</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignCenter</set>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
+    <spacer name="verticalSpacer">
+     <property name="orientation"><enum>Qt::Vertical</enum></property>
+     <property name="sizeHint" stdset="0"><size><width>20</width><height>8</height></size></property>
+    </spacer>
    </item>
    <item>
     <layout class="QHBoxLayout" name="buttonLayout">
      <item>
       <widget class="QPushButton" name="m_resetBtn">
-       <property name="text">
-        <string>恢复默认</string>
-       </property>
+       <property name="text"><string>恢复默认</string></property>
       </widget>
      </item>
      <item>
       <spacer name="buttonSpacer">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
+       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+       <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
       </spacer>
      </item>
      <item>
       <widget class="QPushButton" name="m_applyBtn">
-       <property name="text">
-        <string>应用</string>
-       </property>
-       <property name="default">
-        <bool>true</bool>
-       </property>
+       <property name="text"><string>应用</string></property>
+       <property name="default"><bool>true</bool></property>
       </widget>
      </item>
      <item>
       <widget class="QPushButton" name="m_closeBtn">
-       <property name="text">
-        <string>关闭</string>
-       </property>
+       <property name="text"><string>关闭</string></property>
       </widget>
      </item>
     </layout>

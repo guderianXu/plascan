@@ -485,98 +485,14 @@ QIcon makePointSelectionToolbarIcon(int shape)
 MainMenu::MainMenu(QMainWindow *mainWindow)
     : QObject(mainWindow), _mainWindow(mainWindow)
 {
-    if (!_mainWindow) return;
-
-    auto installDepthOverlayActions = [this](QMenu *view_menu, QObject *action_parent)
+    if (_mainWindow)
     {
-        _showDepthOverlayAct = ensureCheckableAction(
-            _mainWindow,
-            action_parent,
-            view_menu,
-            QStringLiteral("actionShowDepthOverlay"),
-            tr("显示深度图"),
-            false,
-            _featureVisualizationAct);
-        _showDepthOverlayAct->setIcon(makeDepthOverlayToolbarIcon());
-        _showDepthOverlayAct->setToolTip(tr("在当前照片上叠加显示深度信息"));
+        buildMenuSystem();
+    }
+}
 
-        _depthOverlayAllLevelsAct = ensureCheckableAction(
-            _mainWindow, action_parent, nullptr,
-            QStringLiteral("actionDepthOverlayAllLevels"), tr("所有级别"), true);
-        _depthOverlayLevel1Act = ensureCheckableAction(
-            _mainWindow, action_parent, nullptr,
-            QStringLiteral("actionDepthOverlayLevel1"), tr("级别 1"), false);
-        _depthOverlayLevel2Act = ensureCheckableAction(
-            _mainWindow, action_parent, nullptr,
-            QStringLiteral("actionDepthOverlayLevel2"), tr("级别 2"), false);
-        _depthOverlayLevel3Act = ensureCheckableAction(
-            _mainWindow, action_parent, nullptr,
-            QStringLiteral("actionDepthOverlayLevel3"), tr("级别 3"), false);
-        _showDepthIntensityAct = ensureCheckableAction(
-            _mainWindow, action_parent, nullptr,
-            QStringLiteral("actionShowDepthIntensity"), tr("显示强度"), false);
-
-        _depthOverlayLevelGroup = new QActionGroup(this);
-        _depthOverlayLevelGroup->setObjectName(QStringLiteral("depthOverlayLevelActionGroup"));
-        _depthOverlayLevelGroup->setExclusive(true);
-        _depthOverlayLevelGroup->addAction(_depthOverlayAllLevelsAct);
-        _depthOverlayLevelGroup->addAction(_depthOverlayLevel1Act);
-        _depthOverlayLevelGroup->addAction(_depthOverlayLevel2Act);
-        _depthOverlayLevelGroup->addAction(_depthOverlayLevel3Act);
-    };
-
-    auto installTiePointsMenu = [this](QMenu *toolsMenu, QAction *before = nullptr)
-    {
-        QMenu *tiePointsMenu = ensureSubMenu(_mainWindow,
-                                             toolsMenu,
-                                             QStringLiteral("menuTiePoints"),
-                                             tr("连接点"),
-                                             before);
-        if (!tiePointsMenu)
-        {
-            return;
-        }
-
-        _createTiePointsAct = ensurePlainAction(_mainWindow,
-                                                tiePointsMenu,
-                                                tiePointsMenu,
-                                                QStringLiteral("actionCreateTiePoints"),
-                                                tr("创建连接点..."));
-        _createTiePointsAct->setToolTip(tr("打开连接点创建参数对话框"));
-
-        _thinTiePointsAct = ensurePlainAction(_mainWindow,
-                                              tiePointsMenu,
-                                              tiePointsMenu,
-                                              QStringLiteral("actionThinTiePoints"),
-                                              tr("稀释连接点..."));
-        _thinTiePointsAct->setToolTip(tr("按连接点数量限制稀释当前连接点"));
-
-        _cleanTiePointsAct = ensurePlainAction(_mainWindow,
-                                               tiePointsMenu,
-                                               tiePointsMenu,
-                                               QStringLiteral("actionCleanTiePoints"),
-                                               QStringLiteral("Clean Tie Points..."));
-        _cleanTiePointsAct->setToolTip(tr("按误差或观测指标筛选连接点"));
-
-        auto *separator = _mainWindow->findChild<QAction *>(QStringLiteral("actionTiePointsViewSeparator"));
-        if (!separator)
-        {
-            separator = new QAction(tiePointsMenu);
-            separator->setObjectName(QStringLiteral("actionTiePointsViewSeparator"));
-            separator->setSeparator(true);
-        }
-        if (!tiePointsMenu->actions().contains(separator))
-        {
-            tiePointsMenu->addAction(separator);
-        }
-
-        _viewTiePointMatchesAct = ensurePlainAction(_mainWindow,
-                                                    tiePointsMenu,
-                                                    tiePointsMenu,
-                                                    QStringLiteral("actionViewTiePointMatches"),
-                                                    tr("查看匹配..."));
-        _viewTiePointMatchesAct->setToolTip(tr("打开当前项目的匹配查看器"));
-    };
+void MainMenu::buildMenuSystem()
+{
 
     auto installModelDisplayMenu = [this](QMenu *modelMenu)
     {
@@ -1179,45 +1095,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
         installButton(_zoomInAct, QStringLiteral("toolButtonZoomIn"), _zoomInToolbarWidgetAct);
         installButton(_zoomOutAct, QStringLiteral("toolButtonZoomOut"), _zoomOutToolbarWidgetAct);
-    };
-
-    auto installPointInteractionActions = [this]()
-    {
-        if (_pointInteractionGroup)
-        {
-            return;
-        }
-        _pointInteractionGroup = new QActionGroup(this);
-        _pointInteractionGroup->setExclusive(true);
-        auto create_action = [this](const QString &object_name,
-                                    const QString &text,
-                                    const QString &tool_tip,
-                                    const QIcon &icon)
-        {
-            auto *action = new QAction(icon, text, _mainWindow);
-            action->setObjectName(object_name);
-            action->setToolTip(tool_tip);
-            action->setCheckable(true);
-            _pointInteractionGroup->addAction(action);
-            return action;
-        };
-        _navigationAct = create_action(
-            QStringLiteral("actionNavigateModel"), tr("导航"),
-            tr("导航：左键旋转，右键或中键平移，滚轮缩放"),
-            makeNavigationToolbarIcon());
-        _rectangleSelectionAct = create_action(
-            QStringLiteral("actionRectanglePointSelection"), tr("矩形选择"),
-            tr("矩形选择点云；框选后按 Delete 删除"),
-            makePointSelectionToolbarIcon(0));
-        _circleSelectionAct = create_action(
-            QStringLiteral("actionCirclePointSelection"), tr("圆选"),
-            tr("圆形选择点云；选择后按 Delete 删除"),
-            makePointSelectionToolbarIcon(1));
-        _freehandSelectionAct = create_action(
-            QStringLiteral("actionFreehandPointSelection"), tr("自由选择"),
-            tr("自由绘制选择点云；选择后按 Delete 删除"),
-            makePointSelectionToolbarIcon(2));
-        _navigationAct->setChecked(true);
     };
 
     auto initializeToolbar = [this, &installZoomToolbarButtons]()
@@ -2189,6 +2066,152 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         setContextualToolbarVisibility(true, false);
     }
     installViewMenuLayout(viewMenu, windowMenu);
+}
+
+void MainMenu::installDepthOverlayActions(QMenu *viewMenu, QObject *actionParent)
+{
+    _showDepthOverlayAct = ensureCheckableAction(
+        _mainWindow,
+        actionParent,
+        viewMenu,
+        QStringLiteral("actionShowDepthOverlay"),
+        tr("显示深度图"),
+        false,
+        _featureVisualizationAct);
+    _showDepthOverlayAct->setIcon(makeDepthOverlayToolbarIcon());
+    _showDepthOverlayAct->setToolTip(tr("在当前照片上叠加显示深度信息"));
+
+    _depthOverlayAllLevelsAct = ensureCheckableAction(
+        _mainWindow, actionParent, nullptr,
+        QStringLiteral("actionDepthOverlayAllLevels"), tr("所有级别"), true);
+    _depthOverlayLevel1Act = ensureCheckableAction(
+        _mainWindow, actionParent, nullptr,
+        QStringLiteral("actionDepthOverlayLevel1"), tr("级别 1"), false);
+    _depthOverlayLevel2Act = ensureCheckableAction(
+        _mainWindow, actionParent, nullptr,
+        QStringLiteral("actionDepthOverlayLevel2"), tr("级别 2"), false);
+    _depthOverlayLevel3Act = ensureCheckableAction(
+        _mainWindow, actionParent, nullptr,
+        QStringLiteral("actionDepthOverlayLevel3"), tr("级别 3"), false);
+    _showDepthIntensityAct = ensureCheckableAction(
+        _mainWindow, actionParent, nullptr,
+        QStringLiteral("actionShowDepthIntensity"), tr("显示强度"), false);
+
+    _depthOverlayLevelGroup = new QActionGroup(this);
+    _depthOverlayLevelGroup->setObjectName(QStringLiteral("depthOverlayLevelActionGroup"));
+    _depthOverlayLevelGroup->setExclusive(true);
+    _depthOverlayLevelGroup->addAction(_depthOverlayAllLevelsAct);
+    _depthOverlayLevelGroup->addAction(_depthOverlayLevel1Act);
+    _depthOverlayLevelGroup->addAction(_depthOverlayLevel2Act);
+    _depthOverlayLevelGroup->addAction(_depthOverlayLevel3Act);
+}
+
+void MainMenu::installTiePointsMenu(QMenu *toolsMenu, QAction *before)
+{
+    QMenu *tiePointsMenu = ensureSubMenu(_mainWindow,
+                                         toolsMenu,
+                                         QStringLiteral("menuTiePoints"),
+                                         tr("连接点"),
+                                         before);
+    if (!tiePointsMenu)
+    {
+        return;
+    }
+
+    _createTiePointsAct = ensurePlainAction(_mainWindow,
+                                            tiePointsMenu,
+                                            tiePointsMenu,
+                                            QStringLiteral("actionCreateTiePoints"),
+                                            tr("创建连接点..."));
+    _createTiePointsAct->setToolTip(tr("打开连接点创建参数对话框"));
+
+    _thinTiePointsAct = ensurePlainAction(_mainWindow,
+                                          tiePointsMenu,
+                                          tiePointsMenu,
+                                          QStringLiteral("actionThinTiePoints"),
+                                          tr("稀释连接点..."));
+    _thinTiePointsAct->setToolTip(tr("按连接点数量限制稀释当前连接点"));
+
+    _cleanTiePointsAct = ensurePlainAction(_mainWindow,
+                                           tiePointsMenu,
+                                           tiePointsMenu,
+                                           QStringLiteral("actionCleanTiePoints"),
+                                           QStringLiteral("Clean Tie Points..."));
+    _cleanTiePointsAct->setToolTip(tr("按误差或观测指标筛选连接点"));
+
+    auto *separator =
+        _mainWindow->findChild<QAction *>(QStringLiteral("actionTiePointsViewSeparator"));
+    if (!separator)
+    {
+        separator = new QAction(tiePointsMenu);
+        separator->setObjectName(QStringLiteral("actionTiePointsViewSeparator"));
+        separator->setSeparator(true);
+    }
+    if (!tiePointsMenu->actions().contains(separator))
+    {
+        tiePointsMenu->addAction(separator);
+    }
+
+    _viewTiePointMatchesAct = ensurePlainAction(_mainWindow,
+                                                tiePointsMenu,
+                                                tiePointsMenu,
+                                                QStringLiteral("actionViewTiePointMatches"),
+                                                tr("查看匹配..."));
+    _viewTiePointMatchesAct->setToolTip(tr("打开当前项目的匹配查看器"));
+}
+
+void MainMenu::installPointInteractionActions()
+{
+    if (_pointInteractionGroup)
+    {
+        return;
+    }
+
+    struct PointInteractionActionDescriptor
+    {
+        QString objectName;
+        QString text;
+        QString toolTip;
+        QIcon icon;
+        QAction **destination{};
+    };
+
+    _pointInteractionGroup = new QActionGroup(this);
+    _pointInteractionGroup->setExclusive(true);
+
+    const QList<PointInteractionActionDescriptor> descriptors{
+        {QStringLiteral("actionNavigateModel"),
+         tr("导航"),
+         tr("导航：左键旋转，右键或中键平移，滚轮缩放"),
+         makeNavigationToolbarIcon(),
+         &_navigationAct},
+        {QStringLiteral("actionRectanglePointSelection"),
+         tr("矩形选择"),
+         tr("矩形选择点云；框选后按 Delete 删除"),
+         makePointSelectionToolbarIcon(0),
+         &_rectangleSelectionAct},
+        {QStringLiteral("actionCirclePointSelection"),
+         tr("圆选"),
+         tr("圆形选择点云；选择后按 Delete 删除"),
+         makePointSelectionToolbarIcon(1),
+         &_circleSelectionAct},
+        {QStringLiteral("actionFreehandPointSelection"),
+         tr("自由选择"),
+         tr("自由绘制选择点云；选择后按 Delete 删除"),
+         makePointSelectionToolbarIcon(2),
+         &_freehandSelectionAct},
+    };
+
+    for (const PointInteractionActionDescriptor &descriptor : descriptors)
+    {
+        auto *action = new QAction(descriptor.icon, descriptor.text, _mainWindow);
+        action->setObjectName(descriptor.objectName);
+        action->setToolTip(descriptor.toolTip);
+        action->setCheckable(true);
+        _pointInteractionGroup->addAction(action);
+        *descriptor.destination = action;
+    }
+    _navigationAct->setChecked(true);
 }
 
 /** @brief 析构函数（默认实现，所有成员由 Qt 对象树释放）。 */

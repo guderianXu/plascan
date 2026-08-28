@@ -211,6 +211,8 @@ TEST(CameraSceneRenderContractTest, ViewMatchedImageUsesCalibratedPhotoPlane)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString resourceHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneRhiResources.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
@@ -220,7 +222,8 @@ TEST(CameraSceneRenderContractTest, ViewMatchedImageUsesCalibratedPhotoPlane)
     EXPECT_TRUE(source.contains(QStringLiteral("drawActiveCameraImage(")));
     EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners(")));
     EXPECT_TRUE(source.contains(QStringLiteral("blend.srcColor = QRhiGraphicsPipeline::SrcAlpha")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QScopedPointer<QRhiBuffer> vertexBuffer")));
+    EXPECT_TRUE(resourceHeader.contains(
+        QStringLiteral("QScopedPointer<QRhiBuffer> vertexBuffer")));
     EXPECT_FALSE(source.contains(QStringLiteral("foregroundCameraImageOcclusionPath")));
 }
 
@@ -278,6 +281,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString resourceHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneRhiResources.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString mathSource =
@@ -367,7 +372,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
     ASSERT_GE(ensureStart, 0);
     ASSERT_GT(drawStart, ensureStart);
     const QString ensureBlock = source.mid(ensureStart, drawStart - ensureStart);
-    EXPECT_TRUE(header.contains(QStringLiteral("int segmentInstanceCount = 0")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("int segmentInstanceCount = 0")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("segment_instances")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("cameraLocalAxes(")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("axis_origin_offset")));
@@ -933,12 +938,17 @@ TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
 {
     const QString header = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString cacheHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneImageCache.h"));
+    const QString cacheSource =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneImageCache.cpp"));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("_cameraImageLoadFailures")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_cameraImageLoadFailures.contains(key)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_cameraImageLoadFailures.insert(key)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("CameraSceneImageCache _cameraImageCache")));
+    EXPECT_TRUE(cacheHeader.contains(QStringLiteral("QSet<QString> _failures")));
+    EXPECT_TRUE(cacheSource.contains(QStringLiteral("_failures.insert(key)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cameraImageCache.hasFailure(key)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "_cameraImageLoadFailures.contains(thumbnail_key)")));
+        "_cameraImageCache.hasFailure(thumbnail_key)")));
     EXPECT_TRUE(source.contains(QStringLiteral("++_cameraThumbnailLoadCompleted")));
 }
 
@@ -965,13 +975,13 @@ TEST(CameraSceneRenderContractTest, RefreshedCameraImagesInvalidateGpuUploadStat
 
 TEST(CameraSceneRenderContractTest, HiddenCameraResourcesKeepIndependentPipelineState)
 {
-    const QString header =
-        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString resourceHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneRhiResources.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("bool pipelineDirty = true")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool pipelinesDirty = true")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("bool pipelineDirty = true")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("bool pipelinesDirty = true")));
     EXPECT_TRUE(source.contains(QStringLiteral("_imagePipeline.pipelineDirty")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipelinesDirty")));
     EXPECT_TRUE(source.contains(QStringLiteral("_imagePipeline.pipelineDirty = false")));
@@ -1038,6 +1048,8 @@ TEST(CameraSceneRenderContractTest, HiddenThumbnailsStopQueuedDecodeAndDiscardRe
 {
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString cacheSource =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneImageCache.cpp"));
     const qsizetype discardStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::discardQueuedCameraThumbnails"));
     const qsizetype requestStart = source.indexOf(
@@ -1051,7 +1063,9 @@ TEST(CameraSceneRenderContractTest, HiddenThumbnailsStopQueuedDecodeAndDiscardRe
     const QString discardBlock = source.mid(discardStart, requestStart - discardStart);
     const QString requestBlock = source.mid(requestStart, applyStart - requestStart);
     EXPECT_TRUE(discardBlock.contains(QStringLiteral("_cameraImageLoadQueue.dequeue()")));
-    EXPECT_TRUE(discardBlock.contains(QStringLiteral("_cameraImageCache.erase(it)")));
+    EXPECT_TRUE(discardBlock.contains(QStringLiteral(
+        "_cameraImageCache.clearWithPrefix(QStringLiteral(\"thumb|\"))")));
+    EXPECT_TRUE(cacheSource.contains(QStringLiteral("it = _images.erase(it)")));
     EXPECT_TRUE(requestBlock.contains(
         QStringLiteral("&& !_showCameraThumbnails")));
     EXPECT_FALSE(requestBlock.contains(
@@ -1175,6 +1189,8 @@ TEST(CameraSceneRenderContractTest, ActiveImageUsesIndependentCalibratedPlaneFor
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString resourceHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneRhiResources.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
@@ -1193,8 +1209,8 @@ TEST(CameraSceneRenderContractTest, ActiveImageUsesIndependentCalibratedPlaneFor
 
     const QString ensureBlock = source.mid(ensureStart, ensureEnd - ensureStart);
     const QString drawBlock = source.mid(drawStart, sceneStart - drawStart);
-    EXPECT_TRUE(header.contains(QStringLiteral("QString uploadedGeometryKey")));
-    EXPECT_FALSE(header.contains(QStringLiteral("bool geometryDirty = true")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("QString uploadedGeometryKey")));
+    EXPECT_FALSE(resourceHeader.contains(QStringLiteral("bool geometryDirty = true")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("updateDynamicBuffer(")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("_imagePipeline.vertexBuffer")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(false)")));
@@ -1641,6 +1657,8 @@ TEST(CameraSceneRenderContractTest, MeshModesReuseStaticVerticesAndUInt32IndexBu
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString resourceHeader =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneRhiResources.h"));
     const QString sceneSource =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString preparationHeader =
@@ -1650,7 +1668,7 @@ TEST(CameraSceneRenderContractTest, MeshModesReuseStaticVerticesAndUInt32IndexBu
     const QString fragmentShader =
         readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_mesh.frag"));
 
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("struct RhiIndexBufferSet")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("struct RhiIndexBufferSet")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("RhiBufferSet _meshBuffer")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("RhiIndexBufferSet _meshTriangleIndices")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("RhiIndexBufferSet _meshWireframeIndices")));

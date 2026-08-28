@@ -4,6 +4,8 @@
 #include "MatchPhotosMaskSupport.h"
 #include "MatchPhotosRuntime.h"
 #include "FeaturePreparationQueue.h"
+#include "ImageFeaturePointFile.h"
+#include "ImageMatchFile.h"
 #include "io/PathIO.h"
 #include "ImageMatchingRegistry.h"
 #include "concurrency/SafeWorkerGroup.h"
@@ -69,6 +71,33 @@ namespace xjw::matchphotos
             return resized;
         }
 
+        image_matching::ImageFeaturePointCatalog makeFeaturePointCatalog(
+            const QString& imagePath,
+            const image_matching::FeatureSet& features,
+            const MatchPhotosAlgorithmPlan& algorithmPlan)
+        {
+            image_matching::ImageFeaturePointCatalog catalog;
+            catalog.owner = image_matching::ImageMatchFile::identityForImage(
+                imagePath, features.imageWidth, features.imageHeight);
+            catalog.algorithmId = algorithmPlan.algorithmId;
+            catalog.algorithmVersion = algorithmPlan.algorithmVersion;
+            catalog.featureSchemaVersion = algorithmPlan.featureSchemaVersion;
+            catalog.observations.reserve(features.keypoints.size());
+            for (std::size_t index = 0; index < features.keypoints.size(); ++index)
+            {
+                const cv::KeyPoint& keypoint = features.keypoints[index];
+                image_matching::KeypointObservation observation;
+                observation.featureId = static_cast<std::uint32_t>(index);
+                observation.x = keypoint.pt.x;
+                observation.y = keypoint.pt.y;
+                observation.scale = keypoint.size;
+                observation.orientation = keypoint.angle;
+                observation.response = keypoint.response;
+                catalog.observations.push_back(observation);
+            }
+            return catalog;
+        }
+
     } // namespace
 
     MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext& context,
@@ -129,6 +158,12 @@ namespace xjw::matchphotos
                 ? std::min(prefetchDepth, 2)
                 : 1;
         const int totalImages = images.size();
+        const bool persistFeaturePoints = !context.projectPath.trimmed().isEmpty()
+            || !context.workingDirectory.trimmed().isEmpty()
+            || !context.matchDirectory.trimmed().isEmpty();
+        const QString featurePointDirectory = persistFeaturePoints
+            ? matchPhotosMatchDirectory(context)
+            : QString();
         std::vector<FeaturePreparationRequest> requests;
         requests.reserve(static_cast<std::size_t>(totalImages));
         for (int index = 0; index < totalImages; ++index)
@@ -306,12 +341,29 @@ namespace xjw::matchphotos
                         }
 
                         const std::int64_t extractionMs = extractTimer.elapsed();
+                        QString featurePointPath;
+                        if (persistFeaturePoints)
+                        {
+                            featurePointPath = image_matching::ImageFeaturePointFile::filePathForImage(
+                                featurePointDirectory, prepared.imagePath);
+                            const image_matching::ImageFeaturePointCatalog catalog = makeFeaturePointCatalog(
+                                prepared.imagePath, *features, algorithmPlan);
+                            QString writeError;
+                            if (!image_matching::ImageFeaturePointFile::write(
+                                    featurePointPath, catalog, &writeError))
+                            {
+                                throw std::runtime_error(writeError.toStdString());
+                            }
+                        }
                         context.featureCache->insert(prepared.imagePath, features);
                         totalPreparationMs.fetch_add(prepared.preparationMs, std::memory_order_relaxed);
                         totalExtractionMs.fetch_add(extractionMs, std::memory_order_relaxed);
 
                         QJsonObject settings = makeFeatureRecordSettings(algorithmPlan, options);
-                        settings[QStringLiteral("storage")] = QStringLiteral("memory_only");
+                        settings[QStringLiteral("storage")] = persistFeaturePoints
+                            ? QStringLiteral("pifeature")
+                            : QStringLiteral("memory_only");
+                        settings[QStringLiteral("feature_point_path")] = featurePointPath;
                         settings[QStringLiteral("effective_keypoint_limit")] = prepared.effectiveKeypointLimit;
                         settings[QStringLiteral("image_width")] = prepared.originalWidth;
                         settings[QStringLiteral("image_height")] = prepared.originalHeight;
@@ -382,12 +434,16 @@ namespace xjw::matchphotos
         }
 
         return makeFeatureReport(MatchPhotosStageStatus::Completed,
-                                 QStringLiteral("%1 特征提取完成：%2 张，全部保存在任务内存中，%3；"
-                                                "CPU 预取 %4 worker，峰值缓冲 %5/%6 张；"
-                                                "提取流水线 %7 worker；累计准备 %8 ms、"
-                                                "队列等待 %9 ms、提取后端 %10 ms")
+                                 QStringLiteral("%1 特征提取完成：%2 张，描述子保存在任务内存中，"
+                                                "特征点几何%3，%4；"
+                                                "CPU 预取 %5 worker，峰值缓冲 %6/%7 张；"
+                                                "提取流水线 %8 worker；累计准备 %9 ms、"
+                                                "队列等待 %10 ms、提取后端 %11 ms")
                                      .arg(algorithmPlan.displayName)
                                      .arg(extractedCount.load())
+                                     .arg(persistFeaturePoints
+                                              ? QStringLiteral("已持久化")
+                                              : QStringLiteral("未持久化"))
                                      .arg(algorithmPlan.backendReason)
                                      .arg(prepareWorkerCount)
                                      .arg(queue.peakBufferedCount())

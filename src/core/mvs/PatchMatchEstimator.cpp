@@ -181,7 +181,10 @@ bool PatchMatchDepthEstimator::estimate(
         }
         if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
         {
-            if (errorMsg && errorMsg->empty()) *errorMsg = "PatchMatch cancelled";
+            if (errorMsg)
+            {
+                *errorMsg = "PatchMatch cancelled";
+            }
             return false;
         }
         if (!fallback_to_cpu)

@@ -15,17 +15,12 @@
  * 各字段含义：
  *
  * feature_display（特征点显示参数）：
+ *   - pointSource       : 点数据来源（提取特征/原始匹配/有效连接点）
  *   - showPoints        : 是否显示特征点（默认开启）
- *   - showScale         : 是否显示特征点尺度圆（默认关闭）
- *   - showOrientation   : 是否显示特征点方向线（默认关闭）
- *   - useFill           : 是否填充特征点标记（默认关闭）
  *   - pointSize         : 标记大小（像素，默认 1）
  *   - pointColor        : 点颜色（默认蓝色 RGB 0/120/255）
- *   - scaleMultiplier   : 尺度圆半径倍数（默认 1.0）
  *   - opacity           : 不透明度 0-255（默认 180，约 70%）
- *   - markerShape       : 标记形状（"point"/"circle"/"cross" 等）
  *   - maxDisplayCount   : 最大显示数量（0 表示不限制）
- *   - showTopScores     : 是否优先显示得分最高的特征点（默认开启）
  *
  * match_display（匹配线显示参数）：
  *   - showLines         : 是否显示连接线（默认开启）
@@ -45,30 +40,20 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
 
     // ---- 特征点显示默认参数 ----
     QJsonObject featureDisplay;
+    featureDisplay["pointSource"]       = "valid_tie_points";
     featureDisplay["showPoints"]        = true;    // 默认显示特征点
-    featureDisplay["showScale"]         = false;   // 默认不显示尺度圆
-    featureDisplay["showOrientation"]   = false;   // 默认不显示方向线
     featureDisplay["showResiduals"]     = false;
-    featureDisplay["residualScale"]     = 10.0;
+    featureDisplay["residualScale"]     = 50.0;
     featureDisplay["minimumResidualPx"] = 0.0;
     featureDisplay["maximumResidualLengthPx"] = 80.0;
-    featureDisplay["useFill"]           = false;   // 默认不填充
     featureDisplay["pointSize"]         = 1;        // 默认标记大小为 1 像素
     QJsonObject pointColor;
     pointColor["r"] = 0;
     pointColor["g"] = 120;
     pointColor["b"] = 255;
     featureDisplay["pointColor"]        = pointColor; // 默认蓝色
-    QJsonObject residualColor;
-    residualColor["r"] = 255;
-    residualColor["g"] = 80;
-    residualColor["b"] = 80;
-    featureDisplay["residualColor"] = residualColor;
-    featureDisplay["scaleMultiplier"]   = 1.0;     // 尺度圆半径不做额外放大
     featureDisplay["opacity"]           = 180;     // 约 70% 不透明
-    featureDisplay["markerShape"]       = QStringLiteral("cross"); // 默认十字标记
     featureDisplay["maxDisplayCount"]   = 0;       // 0 = 不限数量
-    featureDisplay["showTopScores"]     = true;    // 默认优先显示高分特征点
 
     // ---- 匹配线显示默认参数 ----
     QJsonObject matchDisplay;

@@ -138,8 +138,9 @@ core/
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
 │   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；auto_sift / sift_lightglue / loma_r
-│   ├── FeatureSet.h/cpp        # 任务内关键点与描述子，不持久化
+│   ├── FeatureSet.h/cpp        # 任务内关键点与描述子；描述子不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
+│   ├── ImageFeaturePointFile.h/cpp # 逐影像 `.pifeature` 特征点几何目录，不含描述子
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
 │   ├── ImageMatchIndexFile.h/cpp # 与 payload 签名绑定的轻量 `.pidx` 邻接索引及增量缓存
 │   ├── ImageMatchRepository.h/cpp # 对称写入、完整指纹键缓存和按影像查询
@@ -636,7 +637,7 @@ SfM 诊断；`AerialTriangulationResultWriter.cpp` 再把 `sfm_sparse.ply` 与 `
 ```
 gui/
 ├── main.cpp                    # 应用入口 (QApplication, 全局字体, 异常处理)
-├── CMakeLists.txt              # GUI 构建 (链接所有模块)
+├── CMakeLists.txt              # gui_runtime 复用库与轻量应用入口；测试不再重复编译生产 GUI 源
 │
 ├── main_window/                # 主窗口层
 │   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
@@ -649,7 +650,7 @@ gui/
 │   └── WorkspacePanelController.h/cpp     # Dock/工具栏可见性、菜单动作与项目状态统一管理
 │
 ├── menu/
-│   ├── MainMenu.h/cpp          # 菜单栏/工具栏动作编排；按工作区模式切换三维与影像专属工具组
+│   ├── MainMenu.h/cpp          # 菜单栏/工具栏动作编排；入口、分区构建器和动作描述表分责
 │   └── ToolbarButton.h/cpp     # 统一快捷栏模板：尺寸、绘制状态、普通/下拉按钮工厂
 │
 ├── markers/                    # 标记点 GUI、工程 repository 与后台检测
@@ -719,6 +720,7 @@ gui/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
+│   │   ├── ProjectSessionFacade.h/cpp                 # ProjectManager 与 ProjectData 间的会话查询/修改兼容门面
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
@@ -748,6 +750,8 @@ gui/
 │   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
 │   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
 │   ├── CameraSceneWidget.h/cpp           # 三维场景生命周期、模型/点云与相机的 RHI 渲染及交互；独立红色层异步预览候选剔除连接点
+│   ├── CameraSceneImageCache.h/cpp        # 相机缩略图/原图缓存、失败记忆、LRU 预算与失效
+│   ├── CameraSceneRhiResources.h          # 三维场景缓冲、管线、相机图集资源状态 DTO
 │   ├── CameraSceneWidgetOverlay.cpp      # 三维场景的 QPainter 交互覆盖层与相机标签绘制
 │   ├── CameraSceneWidgetLegends.cpp      # 三维场景的图例和后台加载进度绘制
 │   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
@@ -864,8 +868,9 @@ DOM 输入；模型支持 OBJ、PLY，OBJ 的 MTL 与其引用纹理会一起复
 ```
 影像导入
   │
-  ├─ 1. CUDA SIFT + TensorRT LightGlue → 每影像一个 `.pimatch` 分片
-  │     └─ SIFT 描述子只存在于任务内存，分片保存像点、匹配、残差和版本指纹
+  ├─ 1. CUDA SIFT + TensorRT LightGlue → 每影像一个 `.pifeature` 目录和 `.pimatch` 分片
+  │     ├─ SIFT 描述子只存在于任务内存，`.pifeature` 保存全部提取点几何
+  │     └─ `.pimatch` 保存原始匹配引用的像点、匹配、残差和版本指纹
   ├─ 2. 多视连接点轨迹整理             → latest_tie_points.json
   ├─ 3. 空中三角测量 / 增量式 SfM       → 相机位姿 + 稀疏点云
   │     ├─ 构建观测网络
@@ -1339,7 +1344,7 @@ cli/
 ├── features/                 # 特征提取、匹配与连接点生成；tests/ 就近维护
 ├── dense/                    # 极线校正、密集匹配、三角化和点云细化；tests/ 就近维护
 ├── reconstruction/           # 可独立执行的重建阶段与诊断工具；tests/ 就近维护
-├── workflows/                # GUI“工作流程”菜单入口；Options/Runner/Progress/Report 分责；tests/ 就近维护
+├── workflows/                # GUI“工作流程”菜单入口；Options/Runner/Progress/ReportContext 分责；tests/ 就近维护
 ├── quality/                  # 模型影像质量验收；tests/ 就近维护
 ├── terrain/                  # RPC 立体 DEM/DOM 入口
 ├── common/                   # 公共路径/token/控制台/JSON/输出策略/摄影测量列表基础设施
@@ -1413,7 +1418,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 覆盖层、几何准备与点云编辑已拆分；继续将相机图集资源生命周期提取为独立渲染器 |
+| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 缓存、RHI 资源 DTO、覆盖层、几何准备与点云编辑已拆分；继续将具体图集上传/绘制方法提取为独立渲染器 |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
 
@@ -1456,7 +1461,9 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   `ProjectResourceCleanup{Plan,Artifacts,Transaction,TransactionManifest,Purge,Recovery}` 拆分计划、产物边界、
   WAL 事务、不可逆清除态和启动恢复职责，worker 仅消费不可变计划，不访问 GUI 或 `ProjectData` QObject。
 - `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
-  控制器。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
+  控制器；其对 `ProjectData` 的 UI 设置、元数据/影像查询、相机替换和交会结果兼容调用统一经过
+  `ProjectSessionFacade`。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController`
+  只协调深度估计与点云融合。
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
   `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理，特征点/残差显示配置由
   `FeatureVisualizationController` 管理。任务栏图标进度由 `ProjectTaskStatusController` 聚合项目打开、保存、

@@ -2045,6 +2045,30 @@ TEST(GuiArchitectureContractTest, DenseMatchDiagnosticLibraryIsNotLinkedIntoGui)
     EXPECT_FALSE(guiCmake.contains(QStringLiteral("dense_match")));
 }
 
+TEST(GuiArchitectureContractTest, GuiTestsReuseProductionRuntimeLibrary)
+{
+    const QString guiCmake = readSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
+    const QString testsCmake = readSourceFile(QStringLiteral("tests/CMakeLists.txt"));
+    const QString testSources = sectionBetween(
+        testsCmake,
+        "add_executable(test_gui_project_utils",
+        "set_target_properties(test_gui_project_utils");
+    const QString testLinks = sectionBetween(
+        testsCmake,
+        "target_link_libraries(test_gui_project_utils PRIVATE",
+        "target_compile_definitions(test_gui_project_utils");
+
+    expectContainsAll(guiCmake, {
+        "add_library(gui_runtime STATIC",
+        "list(REMOVE_ITEM GUI_RUNTIME_SOURCES main.cpp)",
+        "target_link_libraries(plascan_gui PRIVATE",
+        "gui_runtime",
+    });
+    EXPECT_FALSE(testSources.contains(QStringLiteral(
+        "${CMAKE_SOURCE_DIR}/src/gui/")));
+    EXPECT_TRUE(testLinks.contains(QStringLiteral("gui_runtime")));
+}
+
 TEST(CoreArchitectureContractTest, IntersectionDemoIsRemoved)
 {
     const QString intersectionCmake =

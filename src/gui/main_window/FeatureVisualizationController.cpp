@@ -35,10 +35,9 @@ QJsonObject colorToJson(const QColor &color)
 LayerRenderer::FeatureDisplayOptions optionsFromJson(const QJsonObject &settings)
 {
     LayerRenderer::FeatureDisplayOptions options;
+    options.pointSource = xjw::gui::views::featurePointSourceFromToken(
+        settings.value(QStringLiteral("pointSource")).toString());
     options.showPoints = settings.value(QStringLiteral("showPoints")).toBool(options.showPoints);
-    options.showScale = settings.value(QStringLiteral("showScale")).toBool(options.showScale);
-    options.showOrientation =
-        settings.value(QStringLiteral("showOrientation")).toBool(options.showOrientation);
     options.showResiduals =
         settings.value(QStringLiteral("showResiduals")).toBool(options.showResiduals);
     options.residualScale =
@@ -47,49 +46,29 @@ LayerRenderer::FeatureDisplayOptions optionsFromJson(const QJsonObject &settings
         settings.value(QStringLiteral("minimumResidualPx")).toDouble(options.minimumResidualPx);
     options.maximumResidualLengthPx = settings.value(QStringLiteral("maximumResidualLengthPx"))
                                           .toDouble(options.maximumResidualLengthPx);
-    options.useFill = settings.value(QStringLiteral("useFill")).toBool(options.useFill);
     options.pointSize = settings.value(QStringLiteral("pointSize")).toInt(options.pointSize);
-    options.scaleMultiplier =
-        settings.value(QStringLiteral("scaleMultiplier")).toDouble(options.scaleMultiplier);
     options.opacity = settings.value(QStringLiteral("opacity")).toInt(options.opacity);
-    options.markerShape =
-        settings.value(QStringLiteral("markerShape")).toString(options.markerShape);
     options.maxDisplayCount =
         settings.value(QStringLiteral("maxDisplayCount")).toInt(options.maxDisplayCount);
-    options.showTopScores =
-        settings.value(QStringLiteral("showTopScores")).toBool(options.showTopScores);
     options.pointColor = colorFromJson(settings.value(QStringLiteral("pointColor")).toObject(),
                                        options.pointColor);
-    options.scaleColor = colorFromJson(settings.value(QStringLiteral("scaleColor")).toObject(),
-                                       options.scaleColor);
-    options.orientColor = colorFromJson(settings.value(QStringLiteral("orientColor")).toObject(),
-                                        options.orientColor);
-    options.residualColor = colorFromJson(settings.value(QStringLiteral("residualColor")).toObject(),
-                                          options.residualColor);
     return options;
 }
 
 QJsonObject optionsToJson(const LayerRenderer::FeatureDisplayOptions &options)
 {
     return QJsonObject{
+        {QStringLiteral("pointSource"),
+         xjw::gui::views::featurePointSourceToken(options.pointSource)},
         {QStringLiteral("showPoints"), options.showPoints},
-        {QStringLiteral("showScale"), options.showScale},
-        {QStringLiteral("showOrientation"), options.showOrientation},
         {QStringLiteral("showResiduals"), options.showResiduals},
         {QStringLiteral("residualScale"), options.residualScale},
         {QStringLiteral("minimumResidualPx"), options.minimumResidualPx},
         {QStringLiteral("maximumResidualLengthPx"), options.maximumResidualLengthPx},
-        {QStringLiteral("useFill"), options.useFill},
         {QStringLiteral("pointSize"), options.pointSize},
-        {QStringLiteral("scaleMultiplier"), options.scaleMultiplier},
         {QStringLiteral("opacity"), options.opacity},
-        {QStringLiteral("markerShape"), options.markerShape},
         {QStringLiteral("maxDisplayCount"), options.maxDisplayCount},
-        {QStringLiteral("showTopScores"), options.showTopScores},
-        {QStringLiteral("pointColor"), colorToJson(options.pointColor)},
-        {QStringLiteral("scaleColor"), colorToJson(options.scaleColor)},
-        {QStringLiteral("orientColor"), colorToJson(options.orientColor)},
-        {QStringLiteral("residualColor"), colorToJson(options.residualColor)}};
+        {QStringLiteral("pointColor"), colorToJson(options.pointColor)}};
 }
 
 } // namespace
@@ -162,6 +141,27 @@ void FeatureVisualizationController::openDialog()
         current.showPoints = canvas->showsInterestPoints();
         current.showResiduals = canvas->showsFeatureResiduals();
         dialog->setDisplayOptions(current);
+        connect(canvas,
+                &CanvasWidget::featurePointStatusChanged,
+                dialog,
+                &FeaturePointVisualizationDialog::setPointStatus);
+        connect(canvas,
+                &CanvasWidget::featureResidualStatusChanged,
+                dialog,
+                &FeaturePointVisualizationDialog::setResidualStatus);
+        if (!canvas->featurePointStatusMessage().isEmpty()
+            && canvas->featurePointStatusSource() == current.pointSource)
+        {
+            dialog->setPointStatus(canvas->featurePointStatusMessage(),
+                                   canvas->featurePointStatusAvailable(),
+                                   canvas->featurePointStatusCount());
+        }
+        if (!canvas->featureResidualStatusMessage().isEmpty())
+        {
+            dialog->setResidualStatus(canvas->featureResidualStatusMessage(),
+                                      canvas->featureResidualStatusAvailable(),
+                                      canvas->featureResidualStatusCount());
+        }
     }
 
     connect(dialog,

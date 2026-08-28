@@ -2,6 +2,7 @@
 
 #include "LayerRenderer.h"
 
+#include <QColor>
 #include <QRectF>
 #include <QPainterPath>
 #include <QString>
@@ -31,6 +32,9 @@ QPainterPath extractMaskContoursPath(
     const std::shared_ptr<std::atomic<bool>> &cancellation);
 
 QList<QGraphicsItem *> createMaskContourOverlayItems(const QPainterPath &path, int z);
+
+// 固定像素残差色带：蓝（小）→ 青 → 绿 → 黄 → 红（>= 2 px）。
+QColor residualMagnitudeColor(double magnitudePx);
 
 QGraphicsItem *createFeatureOverlayItem(const std::vector<cv::KeyPoint> &keypoints,
                                         const LayerRenderer::FeatureDisplayOptions &options,

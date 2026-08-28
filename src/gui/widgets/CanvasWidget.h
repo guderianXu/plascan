@@ -41,6 +41,16 @@ public:
     bool depthOverlayVisible() const { return _depthOverlayVisible; }
     bool depthIntensityVisible() const { return _depthIntensityVisible; }
     bool featureDiagnosticsSuppressed() const { return _depthInspectionActive; }
+    QString featurePointStatusMessage() const { return _featurePointStatusMessage; }
+    bool featurePointStatusAvailable() const { return _featurePointStatusAvailable; }
+    int featurePointStatusCount() const { return _featurePointStatusCount; }
+    xjw::gui::views::FeaturePointSource featurePointStatusSource() const
+    {
+        return _featurePointStatusSource;
+    }
+    QString featureResidualStatusMessage() const { return _featureResidualStatusMessage; }
+    bool featureResidualStatusAvailable() const { return _featureResidualStatusAvailable; }
+    int featureResidualStatusCount() const { return _featureResidualStatusCount; }
     xjw::gui::views::DepthOverlayLevel depthOverlayLevel() const { return _depthOverlayLevel; }
     QRectF imageBounds() const
     {
@@ -111,6 +121,8 @@ signals:
     void depthOverlayVisibilityChanged(bool visible);
     void depthOverlayError(const QString &message);
     void featureResidualAvailabilityChanged(bool available);
+    void featurePointStatusChanged(const QString &message, bool available, int count);
+    void featureResidualStatusChanged(const QString &message, bool available, int count);
     // 照片区域被右键时发送原始影像像素坐标；视图旋转和缩放不会改变该坐标。
     void imageContextRequested(const QString &imagePath, const QPointF &originalPixel);
     void interactiveMaskEditRequested(const QString &imagePath,
@@ -120,11 +132,19 @@ signals:
     void maskSelectionActiveChanged(bool active);
 
 private:
-    // 在后台加载当前影像的 `.pimatch` 观测，主线程只负责更新场景。
-    void startMatchObservationLoadForImage(const QString &imagePath);
+    // 在后台加载当前选择的点数据源，主线程只负责更新场景。
+    void startFeaturePointLoadForImage(const QString &imagePath);
     void startResidualLoadForImage(const QString &imagePath);
-    QString matchObservationCacheKey(const QString &imagePath) const;
+    QString featurePointCacheKey(
+        const QString &imagePath,
+        xjw::gui::views::FeaturePointSource source) const;
     void clearFeatureCacheForImage(const QString &imagePath);
+    void publishFeaturePointStatus(
+        const QString &message,
+        bool available,
+        int count,
+        xjw::gui::views::FeaturePointSource source);
+    void publishFeatureResidualStatus(const QString &message, bool available, int count);
     void refreshDepthOverlay();
     void setDepthInspectionActive(bool active);
     void setMaskTool(MaskEditor::Tool tool);
@@ -154,8 +174,25 @@ private:
     LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;
     QString _currentImagePath;
     QFutureWatcher<QImage> *_imageWatcher{nullptr};
-    // 缓存键为影像规范路径，时间戳来自对应 `.pimatch`，而不是源影像。
-    std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _matchObservationCache;
+    struct FeaturePointCacheEntry
+    {
+        QString sourcePath;
+        QDateTime sourceModified;
+        std::vector<cv::KeyPoint> keypoints;
+        QString message;
+        bool available = false;
+    };
+    // 缓存键包含影像规范路径和点来源；时间戳来自实际特征目录、
+    // 匹配分片或稀疏点旁车文件。
+    std::map<QString, FeaturePointCacheEntry> _featurePointCache;
+    QString _featurePointStatusMessage;
+    QString _featureResidualStatusMessage;
+    bool _featurePointStatusAvailable = false;
+    bool _featureResidualStatusAvailable = false;
+    int _featurePointStatusCount = 0;
+    int _featureResidualStatusCount = 0;
+    xjw::gui::views::FeaturePointSource _featurePointStatusSource =
+        xjw::gui::views::FeaturePointSource::ValidTiePoints;
     int _featureLoadGeneration{0};
     int _residualLoadGeneration{0};
     int _maskLoadGeneration{0};

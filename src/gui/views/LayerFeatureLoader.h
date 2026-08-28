@@ -9,6 +9,25 @@
 namespace xjw::gui::views
 {
 
+enum class FeaturePointSource
+{
+    ExtractedFeatures,
+    RawMatches,
+    ValidTiePoints
+};
+
+struct FeaturePointLoadResult
+{
+    std::vector<cv::KeyPoint> keypoints;
+    QString sourcePath;
+    QString message;
+    bool available = false;
+};
+
+QString featurePointSourceToken(FeaturePointSource source);
+FeaturePointSource featurePointSourceFromToken(const QString &token);
+QString featurePointSourceDisplayName(FeaturePointSource source);
+
 /**
  * @brief 从单影像匹配分片中读取参与过匹配的关键点观测。
  *
@@ -19,5 +38,9 @@ std::vector<cv::KeyPoint> loadMatchedKeypointsFromFile(const QString &matchFileP
 
 std::vector<cv::KeyPoint> loadMatchedKeypointsForImage(const QString &plascanPath,
                                                        const QString &imagePath);
+
+FeaturePointLoadResult loadFeaturePointsForImage(const QString &plascanPath,
+                                                 const QString &imagePath,
+                                                 FeaturePointSource source);
 
 } // namespace xjw::gui::views

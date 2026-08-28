@@ -12,6 +12,8 @@ add_library(image_matching STATIC
     orb_binary/OrbBinaryAlgorithm.h
     FeatureSet.cpp
     FeatureSet.h
+    ImageFeaturePointFile.cpp
+    ImageFeaturePointFile.h
     ImageMatchFile.cpp
     ImageMatchFile.h
     ImageMatchIndexFile.cpp

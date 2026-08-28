@@ -20,6 +20,7 @@
 #include "ProjectCameraInitialization.h"
 #include "ProjectResourceCleanup.h"
 #include "ProjectTiePointResultService.h"
+#include "ProjectSessionFacade.h"
 
 #include "ProjectMetadataOperations.h"
 #include "ProjectOpenGuard.h"
@@ -473,6 +474,8 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     : QObject(parent)
     , _parent(parent)
     , _projectData(projectData)
+    , _sessionFacade(
+          std::make_unique<xjw::gui::project::ProjectSessionFacade>(projectData))
     , _sparseReconstructionManager(
           new ProjectSparseReconstructionManager(this, projectData, parent, this))
     , _pointCloudWorkflowController(
@@ -2011,7 +2014,7 @@ void ProjectManager::packResource(const QString &resourcePath)
 
 QJsonObject ProjectManager::loadUiSettings() const
 {
-    return _projectData ? _projectData->loadUiSettings() : QJsonObject();
+    return _sessionFacade->loadUiSettings();
 }
 
 void ProjectManager::createChunk()
@@ -2181,18 +2184,12 @@ bool ProjectManager::rejectLifecycleChangeDuringResourceCleanup(
 
 void ProjectManager::saveUiSettings(const QJsonObject &settings)
 {
-    if (_projectData)
-    {
-        _projectData->saveUiSettings(settings);
-    }
+    _sessionFacade->saveUiSettings(settings);
 }
 
 void ProjectManager::markWorkspaceDirty()
 {
-    if (_projectData)
-    {
-        _projectData->markWorkspaceDirty();
-    }
+    _sessionFacade->markWorkspaceDirty();
 }
 
 //==============================================================================
@@ -2201,21 +2198,19 @@ void ProjectManager::markWorkspaceDirty()
 
 bool ProjectManager::isDirty() const
 {
-    return _projectData
-        && _projectData->hasProject()
-        && _projectData->isDirty();
+    return _sessionFacade->isDirty();
 }
 
 QString ProjectManager::currentProjectPath() const
 {
-    return _projectData ? _projectData->currentProjectPath() : QString();
+    return _sessionFacade->projectPath();
 }
 
 xjw::gui::project::ProjectSessionContext ProjectManager::currentSessionContext() const
 {
     return {
         currentProjectPath(),
-        _projectData ? _projectData->activeChunkId() : QString(),
+        _sessionFacade->activeChunkId(),
         _projectSessionGeneration
     };
 }
@@ -2233,41 +2228,32 @@ bool ProjectManager::isModelGenerationRunning() const
 
 QJsonObject ProjectManager::currentMeta() const
 {
-    if (!_projectData)
-    {
-        return {};
-    }
-
-    return xjw::gui::project::ProjectTiePointResultService::metadataWithCurrentOnly(
-        _projectData->metadataIncludingResults(),
-        _projectData->currentProjectPath());
+    return _sessionFacade->metadata();
 }
 
 QJsonObject ProjectManager::coreProjectMeta() const
 {
-    return _projectData ? _projectData->coreFilesMeta() : QJsonObject();
+    return _sessionFacade->coreMetadata();
 }
 
 QStringList ProjectManager::getImagesByCategory(const QString &category) const
 {
-    return _projectData ? _projectData->getImagesByCategory(category) : QStringList();
+    return _sessionFacade->imagesByCategory(category);
 }
 
 QStringList ProjectManager::getAllImages() const
 {
-    return _projectData ? _projectData->getAllImages() : QStringList();
+    return _sessionFacade->allImages();
 }
 
 QString ProjectManager::findMatchFileForPair(const QString &imgA, const QString &imgB) const
 {
-    return _projectData ? _projectData->findMatchFile(imgA, imgB) : QString();
+    return _sessionFacade->matchFile(imgA, imgB);
 }
 
 void ProjectManager::discardTemporaryMeta()
 {
-    if (_projectData) {
-        _projectData->clearTemporaryMetadata();
-    }
+    _sessionFacade->discardTemporaryMetadata();
 }
 
 void ProjectManager::refreshReconstructionQualityReport()
@@ -2762,14 +2748,7 @@ bool ProjectManager::setImageCameras(const QMap<QString, QJsonObject> &cameras,
                                      int    *updatedCount,
                                      QString *errorMsg)
 {
-    // 直接委托给数据层——ProjectManager 不持有算法逻辑，仅转发
-    if (!_projectData)
-    {
-        if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
-        if (updatedCount) *updatedCount = 0;
-        return false;
-    }
-    return _projectData->setImageCameras(cameras, updatedCount, errorMsg);
+    return _sessionFacade->setImageCameras(cameras, updatedCount, errorMsg);
 }
 
 bool ProjectManager::replaceImageCameras(const QStringList &targetImagePaths,
@@ -2778,30 +2757,18 @@ bool ProjectManager::replaceImageCameras(const QStringList &targetImagePaths,
                                          int *clearedCount,
                                          QString *errorMsg)
 {
-    if (!_projectData)
-    {
-        if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
-        if (updatedCount) *updatedCount = 0;
-        if (clearedCount) *clearedCount = 0;
-        return false;
-    }
-    return _projectData->replaceImageCameras(targetImagePaths,
-                                             cameras,
-                                             updatedCount,
-                                             clearedCount,
-                                             errorMsg);
+    return _sessionFacade->replaceImageCameras(targetImagePaths,
+                                               cameras,
+                                               updatedCount,
+                                               clearedCount,
+                                               errorMsg);
 }
 
 bool ProjectManager::clearImageCameras(const QStringList &imagePaths,
                                        int    *updatedCount,
                                        QString *errorMsg)
 {
-    if (!_projectData) {
-        if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
-        if (updatedCount) *updatedCount = 0;
-        return false;
-    }
-    return _projectData->clearImageCameras(imagePaths, updatedCount, errorMsg);
+    return _sessionFacade->clearImageCameras(imagePaths, updatedCount, errorMsg);
 }
 
 QMap<QString, xjw::FramePinholeCamera> ProjectManager::getCamerasForImages(
@@ -3178,12 +3145,12 @@ void ProjectManager::discardBundleAdjustPreview()
 
 bool ProjectManager::appendIntersectionResult(const QJsonObject &result, QString *errorMsg)
 {
-    return _projectData ? _projectData->appendIntersectionResult(result, errorMsg) : false;
+    return _sessionFacade->appendIntersectionResult(result, errorMsg);
 }
 
 QJsonArray ProjectManager::intersectionResults() const
 {
-    return _projectData ? _projectData->getIntersectionResults() : QJsonArray();
+    return _sessionFacade->intersectionResults();
 }
 
 //==============================================================================

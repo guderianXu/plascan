@@ -18,6 +18,7 @@
 #include <QTransform>
 
 #include "FeatureResidualLoader.h"
+#include "LayerFeatureLoader.h"
 
 class QGraphicsScene;
 class QGraphicsPixmapItem;
@@ -55,24 +56,17 @@ public:
 
     // 可配置的兴趣点显示选项
     struct FeatureDisplayOptions {
+        xjw::gui::views::FeaturePointSource pointSource =
+            xjw::gui::views::FeaturePointSource::ValidTiePoints;
         bool showPoints = true;
-        bool showScale = false;
-        bool showOrientation = false;
         int pointSize = 1;
-        double scaleMultiplier = 1.0;
         QColor pointColor = QColor(0, 120, 255);
-        QColor scaleColor = QColor(255,255,0);
-        QColor orientColor = QColor(255,0,0);
         int opacity = 180; // 0-255
-        QString markerShape = QStringLiteral("cross");
         int maxDisplayCount = 0; // 0=all
-        bool showTopScores = true;
-        bool useFill = false; // 是否使用实心填充(默认空心)
         bool showResiduals = false;
-        double residualScale = 10.0;
+        double residualScale = 50.0;
         double minimumResidualPx = 0.0;
         double maximumResidualLengthPx = 80.0;
-        QColor residualColor = QColor(255, 80, 80);
     };
 
     void setFeatureDisplayOptions(const FeatureDisplayOptions &opts);

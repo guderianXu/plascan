@@ -54,6 +54,11 @@ class ProjectTerrainProductsManager;
 class ProjectCameraSetupManager;
 class ProjectUiCommands;
 
+namespace xjw::gui::project
+{
+class ProjectSessionFacade;
+}
+
 // ProjectManager: 简化版 - 只负责UI对话框协调
 // 职责:
 // 1. 触发项目创建/打开/保存的文件对话框
@@ -383,6 +388,7 @@ public slots:
 private:
     QWidget *_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
     ProjectData *_projectData = nullptr;               // 数据层：负责所有数据读写
+    std::unique_ptr<xjw::gui::project::ProjectSessionFacade> _sessionFacade;
     FileDialogStateManager *_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
     ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;
     ProjectPointCloudWorkflowController *_pointCloudWorkflowController = nullptr;
