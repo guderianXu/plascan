@@ -21,7 +21,7 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
-- vcpkg；manifest 提供底层编解码、测试和系统库，OpenCV 仅支持仓库锁定的 5.0.0 源码构建。Qt 6.11.2、GDAL 3.12.4 与 AprilTag 3.4.5 也可由同一源码依赖入口构建。OpenMP 由编译器工具链提供，PoissonRecon 始终使用仓库固定源码，CPU 稠密线性代数由 PlaMatrix 原生实现，不依赖 BLAS/LAPACK。
+- vcpkg；manifest 提供底层编解码、测试和系统库，OpenCV 仅支持仓库锁定的 5.0.0 源码构建。Qt 6.11.2、GDAL 3.12.4、AprilTag 3.4.5、OpenEXR 3.2.2 与 Imath 3.1.9 由同一源码依赖入口构建。OpenMP 由编译器工具链提供，PoissonRecon 始终使用仓库固定源码；PlaMatrix 的 CPU 稠密和块稀疏线性代数均为原生实现。
 - TensorRT 可选；用于 GPU 匹配与 AI 蒙版，并与 CUDA Toolkit 一样作为外部 SDK 提供。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
 - OpenCL 1.2 SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
@@ -35,7 +35,7 @@
 ```bash
 git clone https://github.com/guderianXu/plascan.git
 cd plascan
-git submodule update --init 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon
+git submodule update --init 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon 3rdparty/Imath 3rdparty/openexr
 git -C 3rdparty/qt submodule update --init qtbase qtshadertools
 ```
 
@@ -47,7 +47,7 @@ python scripts/env/configure_with_env.py --source-deps --build --test
 ```
 
 该入口先在 `build/<platform>-source-deps-release/` 编译并安装 Qt 6.11.2、OpenCV 5.0.0、
-GDAL 3.12.4 和 AprilTag 3.4.5；PoissonRecon 直接从固定 submodule 提供源码。PROJ、带 RTree 的 SQLite、
+GDAL 3.12.4、AprilTag 3.4.5、OpenEXR 3.2.2 和 Imath 3.1.9；PoissonRecon 直接从固定 submodule 提供源码。PROJ、带 RTree 的 SQLite、
 libgeotiff、libtiff、zlib 等底层依赖仍由同一 vcpkg installed tree 提供，随后在
 `build/<platform>-source-release/` 配置、编译和测试 PlaScan。GDAL 的 HDF5 与 NetCDF 可选驱动固定关闭，
 其它可选驱动默认关闭，并显式启用 GTiff、HFA、JPEG、PNG、VRT、PDS/ISIS 与 JP2OpenJPEG；OpenCV 的
@@ -103,7 +103,7 @@ python scripts/env/configure_with_env.py --source-deps --build --test -- \
 PlaScan 的 C++ 构建统一使用 `vcpkg.json` 和 `CMakePresets.json`，配置时必须启用 vcpkg manifest
 toolchain。CMake 不读取 Conda 环境作为 C++ 依赖来源；CUDA 与 TensorRT 是可选的外部 SDK，通过其
 标准 CMake 路径显式提供。根 manifest 不再安装 OpenCV；标准入口使用锁定的 OpenCV 5.0.0 源码包，
-vcpkg 负责其余通用依赖。PlaMatrix 提供自包含的 CPU 稠密线性代数。
+vcpkg 负责其余通用依赖。PlaMatrix 原生提供 CPU 稠密线性代数和块稀疏 Schur 直接求解，不依赖外部 BLAS、LAPACK 或稀疏求解库。
 
 Linux:
 
@@ -526,32 +526,35 @@ PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量�
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
 
 `bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
-point-only BA 使用 legacy/OpenMP；联合相机、共享内参或物方软约束的小问题使用 PlaMatrix CPU，达到阈值后
+point-only、已知位姿和联合相机/内参的小问题统一使用参考 PlaMatrix CPU，达到阈值后
 Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix OpenCL。
 联合相机/三维点问题还可显式传 `--ba-backend plamatrix_cpu`、`plamatrix_cuda` 或
-`plamatrix_opencl`，使用同一套 PlaMatrix 块法方程、Schur 消元和 LM。CPU 会按规模自动选择 PlaMatrix 原生
-稠密 Cholesky 或矩阵自由块 Jacobi-PCG；CUDA/OpenCL 使用 CSR 块 Jacobi-PCG。线性容差会随 LM 进展动态收紧，
-CPU 上限为 `2e-3`，CUDA/OpenCL 上限为 `1e-3`，以保持跨后端结果一致。法方程和目标代价只遍历一次，
-LM 拒绝步复用当前线性化，track/Jacobian 采用确定性分片并行装配。设备路径会记录实际设备名且不隐式回退 CPU，
+`plamatrix_opencl`。三者使用同一套参考 BA：关键点尺度白化普通最小二乘、右乘 Euler/参考点局部参数化、
+定长基线 gauge、零阻尼起步、Armijo 回溯和 `1e-6` RMS 更新终止。CPU 使用直接稠密 Cholesky；
+CUDA/OpenCL 使用严格容差的 CSR 块 Jacobi-PCG，只把 Schur 线性代数放到设备上。track/Jacobian 采用确定性
+分片并行装配。设备路径会记录实际设备名且不隐式回退 CPU，
 并复用 Schur CSR pattern、设备缓冲和固定拓扑；CUDA 的 Schur 数值由装配 kernel 直接交给 PCG，不再经过
 device-host-device 往返。OpenCL 在 NVIDIA 595.84 驱动上保留稳定的主机 handoff，但同样复用装配缓冲和拓扑。
 这些路径已进入 Auto 默认选择，并支持分组共享焦距、完整 Brown 内参以及
 GCP/LiDAR/比例尺/位姿/相机平面/激光测距约束。GPU 不可用或求解失败时只回退 PlaMatrix CPU。
 `ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、`ba_used_gpu`、
 `ba_valid_track_ratio`、setup/solve/total 耗时、
-PlaMatrix 初始/最终代价、线性化/目标遍历次数、LM 接受/拒绝步数、线性求解器、设备名、PCG 迭代、
+PlaMatrix 初始/最终代价、线性化/目标遍历次数、Armijo 接受/拒绝步数、线性求解器、设备名、PCG 迭代、
 Schur 数值装配位置与耗时、混合精度实际使用状态、
 质量门控和回退原因。Auto 后端会优先保证 RMS 和有效
 track 比例；CUDA 候选若比 legacy 明显变差，
 会自动回退而不是强行使用 GPU。
-需要复现 point-only 旧路径时可传
-`--ba-backend legacy_cpu`；联合 BA 可传 `--ba-backend plamatrix_cpu`、
+旧工程仍可传 `--ba-backend legacy_cpu`，但该名称会映射到参考 PlaMatrix CPU，不再执行旧算法；
+联合 BA 可传 `--ba-backend plamatrix_cpu`、
 `--ba-backend plamatrix_cuda` 或 `--ba-backend plamatrix_opencl`。
 `--ba-plamatrix-device` 指定 PlaMatrix CUDA/OpenCL 设备索引；OpenCL 进程级选择仍由
 `PLAMATRIX_OPENCL_DEVICE_INDEX` 初始化，二者不一致时明确报错。
-`--ba-min-cuda-cameras` 和
-`--ba-min-cuda-observations` 用于 PlaMatrix GPU 自动选择阈值。当前默认交叉阈值为 128 台相机且
-30000 条观测；更小问题优先使用 CPU 稠密 Cholesky。
+Auto BA 使用后端独立的两层规模策略。常规门槛为 CUDA `128` 台相机且 `30000` 条观测、OpenCL
+`160` 台相机且 `50000` 条观测；高密度覆盖要求至少 `120` 台相机，并分别达到 CUDA `150000`、
+OpenCL `200000` 条观测。任一层满足即可选择对应设备，CUDA 仍优先于 OpenCL。CLI 可用
+`--ba-min-cuda-*`、`--ba-min-opencl-*`、`--ba-min-dense-cameras` 和对应的
+`--ba-min-*-dense-observations` 覆盖默认值。阈值依据与适用边界见
+`docs/benchmarks/2026-09-04-reference-ba-backend-efficiency.md`。
 
 BA 后端基准可单独运行：
 
@@ -579,10 +582,10 @@ build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
   --backend plamatrix_cpu --iterations 20 --threads 32 --repetitions 5 --refine-pose
 ```
 
-PlaMatrix CPU 按问题规模选择稠密 Cholesky 或矩阵自由块 Jacobi-PCG。基准调优时可用
-`--max-dense-schur-cameras` 强制跨过稠密求解阈值；输出同时保留
+参考 PlaMatrix 三后端共享零阻尼起步和 Armijo 回溯；CPU 使用可复用块图最小度符号分析的原生稀疏 Schur Cholesky，CUDA/OpenCL
+仅使用设备 Schur-PCG。旧 `--max-dense-schur-cameras` 保留读取兼容但不再改变正式 BA。输出同时保留
 `seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器、PlaMatrix
-LM/代价统计和 RMS。
+接受/拒绝步、代价统计和 RMS。
 
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
 `--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；
@@ -686,16 +689,28 @@ Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
 ### 双影像匹配 (`feature_match_cli`)
 
 ```powershell
-# 默认 Auto SIFT；无需下载模型，为 A、B 分别写一个 .pimatch 分片
+# 默认 PlaMatch-HCT；自动选择 CUDA → OpenCL → CPU，为 A、B 分别写一个 .pimatch 分片
+feature_match_cli -L A.tif -R B.tif `
+  -o E:\project\assets\image_matches `
+  --max-keypoints 40000
+
+# 如需 Auto SIFT，可显式选择
 feature_match_cli -L A.tif -R B.tif `
   -o E:\project\assets\image_matches `
   -a auto_sift --max-keypoints 40000 --guided-image-matching
 ```
 
-SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。Auto SIFT 按 CUDA、Metal、OpenCL、CPU 的顺序
+SIFT、PlaMatch-HCT 或 LoMa-R 描述子只存在于本次任务的内存缓存。Auto SIFT 按 CUDA、Metal、OpenCL、CPU 的顺序
 选择可用后端且不依赖模型；可用 `--device cpu|cuda|opencl|metal` 显式固定设备，设备不可用时明确失败。
 除快速档外，Auto SIFT 会保留原图特征，并只在 8x8 空间网格中覆盖不足的有效区域追加稳健灰度拉伸与
 CLAHE 局部对比度增强特征；两个通道独立执行双向 ratio 互检后再合并，补点仍需通过 USAC 几何验证。
+PlaMatch-HCT 按 CUDA、OpenCL、CPU 的顺序自动选择后端，执行 LoG/MLDB、双向 ratio、唯一性和局部一致性；
+GPU 正式匹配按任务批量驻留描述子，多图任务按“对齐照片”的 generic coarse/forest → reference union 流程
+执行预选，不再经过词汇召回硬筛。Auto SIFT、SIFT+LightGlue 和 LoMa-R 复用各自正式描述子生成最多
+2048 点的 coarse 视图后进入同一预选链，不会重复提取 PlaMatch 特征。Source/Estimated 使用最近相机中心，
+缺少坐标时按索引邻域回退；Sequential 遵循普通影像目录无 group 元数据时不额外增补的语义。PlaMatch-HCT
+不需要外部模型；
+显式设备不可用时明确失败，不静默切到 CPU。CPU 路径继续按影像预建并复用 HCTree。
 LightGlue 和 LoMa-R 都只使用 TensorRT；Release
 分发 ONNX，目标机器首次使用时由 C++ TensorRT Builder 生成并缓存本机 engine。最终分片保存关键点观测、
 相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。ONNX 导出、固定容量和
@@ -704,7 +719,7 @@ LightGlue 和 LoMa-R 都只使用 TensorRT；Release
 ### 密集重建流水线
 
 ```bash
-feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -a auto_sift
+feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches
 rectify_cli         -L A.tif -R B.tif --camL A.txt --camR B.txt -o rect
 dense_match_cli     -L rect_L.tif -R rect_R.tif -o disp.tif --cuda --algorithm mgm
 triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud.ply

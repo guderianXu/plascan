@@ -53,242 +53,236 @@
 #include <cmath>
 #include <memory>
 #include <numeric>
+#include <optional>
 
 namespace
 {
 
-bool isSequenceReferencePreselection(const QJsonObject &settings)
-{
-    if (!settings.value(QStringLiteral("reference_preselection")).toBool(false))
+    bool isSequenceReferencePreselection(const QJsonObject& settings)
     {
-        return false;
-    }
-
-    const QString source = settings.value(QStringLiteral("reference_preselection_source"))
-                               .toString(QStringLiteral("source_code"))
-                               .trimmed()
-                               .toLower();
-    return source == QStringLiteral("sequence") ||
-           source == QStringLiteral("sequential") ||
-           source == QStringLiteral("photo_sequence");
-}
-
-QString normalizedReferencePreselectionSource(const QJsonObject &settings)
-{
-    const QString source = settings.value(QStringLiteral("reference_preselection_source"))
-                               .toString(QStringLiteral("source_code"))
-                               .trimmed()
-                               .toLower();
-    return source == QStringLiteral("estimated_pose") ? QStringLiteral("estimated") : source;
-}
-
-QMap<QString, xjw::FramePinholeCamera> referenceCamerasForMode(ProjectManager *projectManager,
-                                                   const QStringList &images,
-                                                   const QJsonObject &projectMeta,
-                                                   const QString &requestedMode,
-                                                   bool *hasCamerasForAll)
-{
-    if (hasCamerasForAll)
-    {
-        *hasCamerasForAll = false;
-    }
-    if (!projectManager)
-    {
-        return {};
-    }
-
-    bool loadedAll = false;
-    const QMap<QString, xjw::FramePinholeCamera> allCameras =
-        projectManager->getCamerasForImages(images, &loadedAll);
-    if (!loadedAll)
-    {
-        return {};
-    }
-
-    const QString mode = requestedMode.trimmed().toLower() == QStringLiteral("estimated_pose")
-        ? QStringLiteral("estimated")
-        : requestedMode.trimmed().toLower();
-    const QMap<QString, QJsonObject> imageMetaByPath =
-        xjw::common::project::projectImageMetaByPath(projectMeta, true);
-    const QJsonArray imageEntries = xjw::common::project::projectImageEntries(projectMeta);
-    QMap<QString, xjw::FramePinholeCamera> filtered;
-    for (const QString &imagePath : images)
-    {
-        const QString normalized = xjw::common::project::normalizePath(imagePath);
-        const auto cameraIt = allCameras.constFind(normalized);
-        if (cameraIt == allCameras.constEnd())
+        if (!settings.value(QStringLiteral("reference_preselection")).toBool(false))
         {
-            continue;
+            return false;
         }
 
-        QJsonObject imageMeta = imageMetaByPath.value(normalized);
-        if (imageMeta.isEmpty())
+        const QString source = settings.value(QStringLiteral("reference_preselection_source"))
+                                   .toString(QStringLiteral("source_code"))
+                                   .trimmed()
+                                   .toLower();
+        return source == QStringLiteral("sequence") || source == QStringLiteral("sequential") ||
+               source == QStringLiteral("photo_sequence");
+    }
+
+    QString normalizedReferencePreselectionSource(const QJsonObject& settings)
+    {
+        const QString source = settings.value(QStringLiteral("reference_preselection_source"))
+                                   .toString(QStringLiteral("source_code"))
+                                   .trimmed()
+                                   .toLower();
+        return source == QStringLiteral("estimated_pose") ? QStringLiteral("estimated") : source;
+    }
+
+    QMap<QString, xjw::FramePinholeCamera> referenceCamerasForMode(ProjectManager* projectManager,
+                                                                   const QStringList& images,
+                                                                   const QJsonObject& projectMeta,
+                                                                   const QString& requestedMode,
+                                                                   bool* hasCamerasForAll)
+    {
+        if (hasCamerasForAll)
         {
-            // 运行时影像通常是已解析绝对路径，而持久化元数据可能仍是 plascan URI。
-            for (const QJsonValue &value : imageEntries)
+            *hasCamerasForAll = false;
+        }
+        if (!projectManager)
+        {
+            return {};
+        }
+
+        bool loadedAll = false;
+        const QMap<QString, xjw::FramePinholeCamera> allCameras =
+            projectManager->getCamerasForImages(images, &loadedAll);
+
+        const QString mode = requestedMode.trimmed().toLower() == QStringLiteral("estimated_pose")
+                                 ? QStringLiteral("estimated")
+                                 : requestedMode.trimmed().toLower();
+        const QMap<QString, QJsonObject> imageMetaByPath =
+            xjw::common::project::projectImageMetaByPath(projectMeta, true);
+        const QJsonArray imageEntries = xjw::common::project::projectImageEntries(projectMeta);
+        QMap<QString, xjw::FramePinholeCamera> filtered;
+        for (const QString& imagePath : images)
+        {
+            const QString normalized = xjw::common::project::normalizePath(imagePath);
+            const auto cameraIt = allCameras.constFind(normalized);
+            if (cameraIt == allCameras.constEnd())
             {
-                const QJsonObject entry = value.toObject();
-                if (xjw::common::project::pathTokenMatchesImage(
-                        entry.value(QStringLiteral("path")).toString(), imagePath))
+                continue;
+            }
+
+            QJsonObject imageMeta = imageMetaByPath.value(normalized);
+            if (imageMeta.isEmpty())
+            {
+                // 运行时影像通常是已解析绝对路径，而持久化元数据可能仍是 plascan URI。
+                for (const QJsonValue& value : imageEntries)
                 {
-                    imageMeta = entry;
-                    break;
+                    const QJsonObject entry = value.toObject();
+                    if (xjw::common::project::pathTokenMatchesImage(entry.value(QStringLiteral("path")).toString(),
+                                                                    imagePath))
+                    {
+                        imageMeta = entry;
+                        break;
+                    }
                 }
             }
+            const QString poseSource = imageMeta.value(QStringLiteral("camera"))
+                                           .toObject()
+                                           .value(QStringLiteral("pose_source"))
+                                           .toString()
+                                           .trimmed()
+                                           .toLower();
+            const bool sfmEstimated = poseSource == QStringLiteral("sfm_estimated");
+            const bool sourceMode = mode == QStringLiteral("source") || mode == QStringLiteral("source_code");
+            if ((mode == QStringLiteral("estimated") && !sfmEstimated) || (sourceMode && sfmEstimated))
+            {
+                continue;
+            }
+            filtered.insert(normalized, cameraIt.value());
         }
-        const QString poseSource = imageMeta.value(QStringLiteral("camera"))
-                                       .toObject()
-                                       .value(QStringLiteral("pose_source"))
-                                       .toString()
-                                       .trimmed()
-                                       .toLower();
-        const bool sfmEstimated = poseSource == QStringLiteral("sfm_estimated");
-        if ((mode == QStringLiteral("estimated") && !sfmEstimated) ||
-            (mode == QStringLiteral("source_code") && sfmEstimated))
+
+        if (hasCamerasForAll)
         {
-            continue;
+            *hasCamerasForAll = filtered.size() == images.size();
         }
-        filtered.insert(normalized, cameraIt.value());
+        return filtered;
     }
 
-    if (hasCamerasForAll)
+    bool shouldUseStoredGeneratedPairConstraints(const QJsonObject& settings)
     {
-        *hasCamerasForAll = filtered.size() == images.size();
-    }
-    return filtered;
-}
-
-bool shouldUseStoredGeneratedPairConstraints(const QJsonObject &settings)
-{
-    if (settings.value(QStringLiteral("reference_preselection")).toBool(false))
-    {
-        // 参考来源是用户本次显式选择的配对先验。历史 generated_pairs 多来自另一次
-        // 词汇树/重叠配置，不能继续作为 ManualOnly 白名单覆盖当前位姿或序列策略。
-        return false;
-    }
-    return true;
-}
-
-float normalizedFeatureGrayscaleMin(const QJsonObject &settings)
-{
-    if (settings.contains(QStringLiteral("feature_grayscale_min_px")))
-    {
-        const int px = std::clamp(settings.value(QStringLiteral("feature_grayscale_min_px")).toInt(5), 0, 255);
-        return static_cast<float>(px) / 255.0f;
-    }
-
-    double value = settings.value(QStringLiteral("feature_grayscale_min")).toDouble(5.0 / 255.0);
-    if (value > 1.0)
-    {
-        value /= 255.0;
-    }
-    return static_cast<float>(std::clamp(value, 0.0, 1.0));
-}
-
-/// 从特征匹配对话框设置中读取已生成的配对约束，并检测其是否覆盖当前选图。
-QStringList loadGeneratedPairConstraints(const QString &projectPath,
-                                         const QJsonObject &projectMeta,
-                                         const QStringList &selectedImages,
-                                         bool *usedStoredPairs,
-                                         bool *storedPairsStale)
-{
-    if (usedStoredPairs)
-    {
-        *usedStoredPairs = false;
-    }
-    if (storedPairsStale)
-    {
-        *storedPairsStale = false;
-    }
-    if (projectPath.isEmpty())
-    {
-        return {};
-    }
-
-    DialogSettingStore store(DialogSettingKeys::FeatureMatching, nullptr);
-    store.setProjectPath(projectPath);
-    const QJsonObject saved = store.load();
-    const QJsonArray generatedPairs = saved.value(QStringLiteral("generated_pairs")).toArray();
-    if (generatedPairs.isEmpty())
-    {
-        return {};
-    }
-
-    if (usedStoredPairs)
-    {
-        *usedStoredPairs = true;
-    }
-
-    QSet<QString> selectedSet;
-    QSet<QString> coveredSelectedImages;
-    for (const QString &imagePath : selectedImages)
-    {
-        selectedSet.insert(xjw::common::project::normalizePath(imagePath));
-    }
-
-    QStringList allowedPairs;
-    QSet<QString> seenPairs;
-    for (const QJsonValue &value : generatedPairs)
-    {
-        const QString pairText = value.toString().trimmed();
-        const int separator = pairText.indexOf(QStringLiteral("__"));
-        if (separator <= 0)
+        if (settings.value(QStringLiteral("reference_preselection")).toBool(false))
         {
-            continue;
+            // 参考来源是用户本次显式选择的配对先验。历史 generated_pairs 多来自另一次
+            // 词汇树/重叠配置，不能继续作为 ManualOnly 白名单覆盖当前位姿或序列策略。
+            return false;
         }
-
-        const QString tokenA = pairText.left(separator);
-        const QString tokenB = pairText.mid(separator + 2);
-        const QString imageA = xjw::common::project::resolveProjectImagePathFromToken(tokenA, projectMeta);
-        const QString imageB = xjw::common::project::resolveProjectImagePathFromToken(tokenB, projectMeta);
-        if (imageA.isEmpty() || imageB.isEmpty())
-        {
-            continue;
-        }
-
-        const QString normA = xjw::common::project::normalizePath(imageA);
-        const QString normB = xjw::common::project::normalizePath(imageB);
-        if (!selectedSet.contains(normA) || !selectedSet.contains(normB))
-        {
-            continue;
-        }
-
-        const QString pairKey = xjw::common::project::canonicalImagePairKey(
-            normA, normB, QStringLiteral("\n"));
-        if (pairKey.isEmpty() || seenPairs.contains(pairKey))
-        {
-            continue;
-        }
-
-        seenPairs.insert(pairKey);
-        allowedPairs.append(pairKey);
-        coveredSelectedImages.insert(normA);
-        coveredSelectedImages.insert(normB);
+        return true;
     }
 
-    if (!selectedSet.isEmpty() && coveredSelectedImages.size() != selectedSet.size())
+    float normalizedFeatureGrayscaleMin(const QJsonObject& settings)
     {
+        if (settings.contains(QStringLiteral("feature_grayscale_min_px")))
+        {
+            const int px = std::clamp(settings.value(QStringLiteral("feature_grayscale_min_px")).toInt(5), 0, 255);
+            return static_cast<float>(px) / 255.0f;
+        }
+
+        double value = settings.value(QStringLiteral("feature_grayscale_min")).toDouble(5.0 / 255.0);
+        if (value > 1.0)
+        {
+            value /= 255.0;
+        }
+        return static_cast<float>(std::clamp(value, 0.0, 1.0));
+    }
+
+    /// 从特征匹配对话框设置中读取已生成的配对约束，并检测其是否覆盖当前选图。
+    QStringList loadGeneratedPairConstraints(const QString& projectPath,
+                                             const QJsonObject& projectMeta,
+                                             const QStringList& selectedImages,
+                                             bool* usedStoredPairs,
+                                             bool* storedPairsStale)
+    {
+        if (usedStoredPairs)
+        {
+            *usedStoredPairs = false;
+        }
         if (storedPairsStale)
         {
-            *storedPairsStale = true;
+            *storedPairsStale = false;
         }
-        return {};
-    }
+        if (projectPath.isEmpty())
+        {
+            return {};
+        }
 
-    if (usedStoredPairs)
-    {
-        *usedStoredPairs = !allowedPairs.isEmpty();
-    }
+        DialogSettingStore store(DialogSettingKeys::FeatureMatching, nullptr);
+        store.setProjectPath(projectPath);
+        const QJsonObject saved = store.load();
+        const QJsonArray generatedPairs = saved.value(QStringLiteral("generated_pairs")).toArray();
+        if (generatedPairs.isEmpty())
+        {
+            return {};
+        }
 
-    return allowedPairs;
-}
+        if (usedStoredPairs)
+        {
+            *usedStoredPairs = true;
+        }
+
+        QSet<QString> selectedSet;
+        QSet<QString> coveredSelectedImages;
+        for (const QString& imagePath : selectedImages)
+        {
+            selectedSet.insert(xjw::common::project::normalizePath(imagePath));
+        }
+
+        QStringList allowedPairs;
+        QSet<QString> seenPairs;
+        for (const QJsonValue& value : generatedPairs)
+        {
+            const QString pairText = value.toString().trimmed();
+            const int separator = pairText.indexOf(QStringLiteral("__"));
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            const QString tokenA = pairText.left(separator);
+            const QString tokenB = pairText.mid(separator + 2);
+            const QString imageA = xjw::common::project::resolveProjectImagePathFromToken(tokenA, projectMeta);
+            const QString imageB = xjw::common::project::resolveProjectImagePathFromToken(tokenB, projectMeta);
+            if (imageA.isEmpty() || imageB.isEmpty())
+            {
+                continue;
+            }
+
+            const QString normA = xjw::common::project::normalizePath(imageA);
+            const QString normB = xjw::common::project::normalizePath(imageB);
+            if (!selectedSet.contains(normA) || !selectedSet.contains(normB))
+            {
+                continue;
+            }
+
+            const QString pairKey = xjw::common::project::canonicalImagePairKey(normA, normB, QStringLiteral("\n"));
+            if (pairKey.isEmpty() || seenPairs.contains(pairKey))
+            {
+                continue;
+            }
+
+            seenPairs.insert(pairKey);
+            allowedPairs.append(pairKey);
+            coveredSelectedImages.insert(normA);
+            coveredSelectedImages.insert(normB);
+        }
+
+        if (!selectedSet.isEmpty() && coveredSelectedImages.size() != selectedSet.size())
+        {
+            if (storedPairsStale)
+            {
+                *storedPairsStale = true;
+            }
+            return {};
+        }
+
+        if (usedStoredPairs)
+        {
+            *usedStoredPairs = !allowedPairs.isEmpty();
+        }
+
+        return allowedPairs;
+    }
 
 } // namespace
 
-MenuWorkflowController::MenuWorkflowController(QMainWindow *mainWindow, QObject *parent)
-    : QObject(parent)
-    , _mainWindow(mainWindow)
-    , _featureVisualizationController(new FeatureVisualizationController(mainWindow, this))
+MenuWorkflowController::MenuWorkflowController(QMainWindow* mainWindow, QObject* parent)
+    : QObject(parent), _mainWindow(mainWindow),
+      _featureVisualizationController(new FeatureVisualizationController(mainWindow, this))
 {
     connect(_featureVisualizationController,
             &FeatureVisualizationController::optionsChanged,
@@ -296,34 +290,34 @@ MenuWorkflowController::MenuWorkflowController(QMainWindow *mainWindow, QObject 
             &MenuWorkflowController::requestApplyFeatureDisplayOptions);
 }
 
-void MenuWorkflowController::setProjectManager(ProjectManager *projectManager)
+void MenuWorkflowController::setProjectManager(ProjectManager* projectManager)
 {
     _projectManager = projectManager;
     _featureVisualizationController->setProjectManager(projectManager);
 }
 
-DialogSettingStore *MenuWorkflowController::createDialogSettingStore(
-    const QString &settingKey)
+DialogSettingStore* MenuWorkflowController::createDialogSettingStore(const QString& settingKey)
 {
-    auto *store = new DialogSettingStore(settingKey, this);
-    store->setChangeCallback([this]()
-    {
-        if (_projectManager)
+    auto* store = new DialogSettingStore(settingKey, this);
+    store->setChangeCallback(
+        [this]()
         {
-            _projectManager->markWorkspaceDirty();
-        }
-    });
+            if (_projectManager)
+            {
+                _projectManager->markWorkspaceDirty();
+            }
+        });
     return store;
 }
 
-void MenuWorkflowController::bindActions(MainMenu *mainMenu)
+void MenuWorkflowController::bindActions(MainMenu* mainMenu)
 {
     if (!mainMenu)
     {
         return;
     }
 
-    auto connectAction = [this](QAction *action, void (MenuWorkflowController::*slot)())
+    auto connectAction = [this](QAction* action, void (MenuWorkflowController::*slot)())
     {
         if (action)
         {
@@ -333,8 +327,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
 
     connectAction(mainMenu->workflowAerialTriangulationAction(),
                   &MenuWorkflowController::openWorkflowAerialTriangulationDialog);
-    connectAction(mainMenu->workflowSettingsAction(),
-                  &MenuWorkflowController::openWorkflowSettingsDialog);
+    connectAction(mainMenu->workflowSettingsAction(), &MenuWorkflowController::openWorkflowSettingsDialog);
     if (mainMenu->featureVisualizationAction())
     {
         connect(mainMenu->featureVisualizationAction(),
@@ -356,7 +349,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
         return;
     }
 
-    auto connectProjectAction = [this](QAction *action, void (ProjectManager::*slot)())
+    auto connectProjectAction = [this](QAction* action, void (ProjectManager::*slot)())
     {
         if (action)
         {
@@ -380,28 +373,30 @@ QStringList MenuWorkflowController::getProjectImages() const
     }
 
     QStringList images = _projectManager->getImagesByCategory(QStringLiteral("源数据"));
-    if (images.isEmpty()) images = _projectManager->getImagesByCategory(QStringLiteral("照片"));
-    if (images.isEmpty()) images = _projectManager->getImagesByCategory(QStringLiteral("Photos"));
-    if (images.isEmpty()) images = _projectManager->getAllImages();
+    if (images.isEmpty())
+        images = _projectManager->getImagesByCategory(QStringLiteral("照片"));
+    if (images.isEmpty())
+        images = _projectManager->getImagesByCategory(QStringLiteral("Photos"));
+    if (images.isEmpty())
+        images = _projectManager->getAllImages();
     return images;
 }
 
 MenuWorkflowController::SparsePrerequisiteSummary
-MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
-                                                     const QJsonObject &meta,
-                                                     const QString &projectPath,
-                                                     const QString &algorithmId,
-                                                     const std::function<void(int, int)> &progressCallback)
+MenuWorkflowController::summarizeSparsePrerequisites(const QStringList& images,
+                                                     const QJsonObject& meta,
+                                                     const QString& projectPath,
+                                                     const QString& algorithmId,
+                                                     const std::function<void(int, int)>& progressCallback)
 {
     SparsePrerequisiteSummary summary;
     summary.imageCount = images.size();
     // 新匹配链路只有组合算法标识，不再把“特征算法”和“匹配算法”拆成两个
     // 自由字符串。SIFT 描述子只驻留任务内存，预检也不再查找特征中间文件。
-    const QString selectedAlgorithmId = algorithmId.trimmed().isEmpty()
-        ? QStringLiteral("auto_sift")
-        : algorithmId.trimmed().toLower();
+    const QString selectedAlgorithmId =
+        algorithmId.trimmed().isEmpty() ? QStringLiteral("plamatch_hct") : algorithmId.trimmed().toLower();
 
-    auto nameAliases = [](const QString &pathOrName) -> QStringList
+    auto nameAliases = [](const QString& pathOrName) -> QStringList
     {
         const QFileInfo info(pathOrName);
         QStringList aliases;
@@ -423,18 +418,16 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         return aliases;
     };
 
-    auto matchPairKey = [](const QString &left, const QString &right) -> QString
+    auto matchPairKey = [](const QString& left, const QString& right) -> QString
     {
         if (left.isEmpty() || right.isEmpty() || left == right)
         {
             return QString();
         }
-        return (left < right)
-            ? (left + QStringLiteral("\n") + right)
-            : (right + QStringLiteral("\n") + left);
+        return (left < right) ? (left + QStringLiteral("\n") + right) : (right + QStringLiteral("\n") + left);
     };
 
-    auto variantAlgorithmMatches = [&](const xjw::aerial_triangulation::MatchVariant &variant) -> bool
+    auto variantAlgorithmMatches = [&](const xjw::aerial_triangulation::MatchVariant& variant) -> bool
     {
         if (!variant.compatible)
         {
@@ -450,13 +443,11 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     if (!projectPath.isEmpty())
     {
         xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
-        catalogConfig.matchDirectory =
-            xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
+        catalogConfig.matchDirectory = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
         catalogConfig.targetImagePaths = images;
         catalogConfig.progressCallback = progressCallback;
         catalogSummary = xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
-        LOG_INFO(QStringLiteral(
-                     "空三上游索引: 分片=%1 内存命中=%2 持久索引命中=%3 首次重建=%4 损坏=%5")
+        LOG_INFO(QStringLiteral("空三上游索引: 分片=%1 内存命中=%2 持久索引命中=%3 首次重建=%4 损坏=%5")
                      .arg(catalogSummary.matchFileCount)
                      .arg(catalogSummary.memoryIndexHitCount)
                      .arg(catalogSummary.persistentIndexHitCount)
@@ -464,13 +455,13 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                      .arg(catalogSummary.incompatibleVariantCount));
     }
 
-    auto appendPreflightPair = [&](const QString &leftToken, const QString &rightToken)
+    auto appendPreflightPair = [&](const QString& leftToken, const QString& rightToken)
     {
         const QStringList leftAliases = nameAliases(leftToken);
         const QStringList rightAliases = nameAliases(rightToken);
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 const QString key = matchPairKey(left, right);
                 if (!key.isEmpty() && !matchedPairKeys.contains(key))
@@ -485,9 +476,9 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     if (!catalogSummary.pairGroups.isEmpty())
     {
-        for (const xjw::aerial_triangulation::MatchPairGroup &group : catalogSummary.pairGroups)
+        for (const xjw::aerial_triangulation::MatchPairGroup& group : catalogSummary.pairGroups)
         {
-            for (const xjw::aerial_triangulation::MatchVariant &variant : group.variants)
+            for (const xjw::aerial_triangulation::MatchVariant& variant : group.variants)
             {
                 if (!variantAlgorithmMatches(variant))
                 {
@@ -504,13 +495,13 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     }
 
-    for (const auto &pair : matchedPairs)
+    for (const auto& pair : matchedPairs)
     {
         const QStringList leftAliases = nameAliases(pair.first);
         const QStringList rightAliases = nameAliases(pair.second);
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 const QString key = matchPairKey(left, right);
                 if (!key.isEmpty())
@@ -524,13 +515,13 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     QSet<QString> processedPairKeys = matchedPairKeys;
     QVector<QPair<QString, QString>> settledNoMatchPairs;
     QSet<QString> settledNoMatchKeys;
-    auto appendSettledNoMatchPair = [&](const QString &leftToken, const QString &rightToken)
+    auto appendSettledNoMatchPair = [&](const QString& leftToken, const QString& rightToken)
     {
         const QStringList leftAliases = nameAliases(leftToken);
         const QStringList rightAliases = nameAliases(rightToken);
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 const QString key = matchPairKey(left, right);
                 if (!key.isEmpty() && !settledNoMatchKeys.contains(key))
@@ -547,16 +538,17 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     {
         // 无匹配或几何失败也是 `.pimatch` 中的一种确定结果。它与有效匹配
         // 共用同一格式和版本，不再维护容易失同步的 no_match_pairs.json。
-        for (const auto &group : catalogSummary.pairGroups)
+        for (const auto& group : catalogSummary.pairGroups)
         {
-            const auto settled = std::find_if(
-                group.variants.cbegin(), group.variants.cend(),
-                [&](const xjw::aerial_triangulation::MatchVariant &variant)
-                {
-                    return variant.compatible &&
-                        variant.algorithmId.trimmed().toLower() == selectedAlgorithmId &&
-                        (!variant.geometryPassed || variant.geometricVerifiedInliers <= 0);
-                });
+            const auto settled =
+                std::find_if(group.variants.cbegin(),
+                             group.variants.cend(),
+                             [&](const xjw::aerial_triangulation::MatchVariant& variant)
+                             {
+                                 return variant.compatible &&
+                                        variant.algorithmId.trimmed().toLower() == selectedAlgorithmId &&
+                                        (!variant.geometryPassed || variant.geometricVerifiedInliers <= 0);
+                             });
             if (settled != group.variants.cend())
             {
                 appendSettledNoMatchPair(group.imageA, group.imageB);
@@ -564,13 +556,13 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     }
 
-    for (const auto &pair : settledNoMatchPairs)
+    for (const auto& pair : settledNoMatchPairs)
     {
         const QStringList leftAliases = nameAliases(pair.first);
         const QStringList rightAliases = nameAliases(pair.second);
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 const QString key = matchPairKey(left, right);
                 if (!key.isEmpty())
@@ -581,11 +573,11 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     }
 
-    auto pairCoveredByAliases = [&](const QStringList &leftAliases, const QStringList &rightAliases) -> bool
+    auto pairCoveredByAliases = [&](const QStringList& leftAliases, const QStringList& rightAliases) -> bool
     {
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 if (matchedPairKeys.contains(matchPairKey(left, right)))
                 {
@@ -596,11 +588,11 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         return false;
     };
 
-    auto pairProcessedByAliases = [&](const QStringList &leftAliases, const QStringList &rightAliases) -> bool
+    auto pairProcessedByAliases = [&](const QStringList& leftAliases, const QStringList& rightAliases) -> bool
     {
-        for (const QString &left : leftAliases)
+        for (const QString& left : leftAliases)
         {
-            for (const QString &right : rightAliases)
+            for (const QString& right : rightAliases)
             {
                 if (processedPairKeys.contains(matchPairKey(left, right)))
                 {
@@ -611,23 +603,16 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         return false;
     };
 
-    auto imagePairCovered = [&](const QString &leftImage, const QString &rightImage) -> bool
-    {
-        return pairCoveredByAliases(nameAliases(leftImage), nameAliases(rightImage));
-    };
+    auto imagePairCovered = [&](const QString& leftImage, const QString& rightImage) -> bool
+    { return pairCoveredByAliases(nameAliases(leftImage), nameAliases(rightImage)); };
 
-    auto imagePairProcessed = [&](const QString &leftImage, const QString &rightImage) -> bool
-    {
-        return pairProcessedByAliases(nameAliases(leftImage), nameAliases(rightImage));
-    };
+    auto imagePairProcessed = [&](const QString& leftImage, const QString& rightImage) -> bool
+    { return pairProcessedByAliases(nameAliases(leftImage), nameAliases(rightImage)); };
 
     bool usedStoredPairs = false;
     bool storedPairsStale = false;
-    const QStringList generatedPairs = loadGeneratedPairConstraints(projectPath,
-                                                                    meta,
-                                                                    images,
-                                                                    &usedStoredPairs,
-                                                                    &storedPairsStale);
+    const QStringList generatedPairs =
+        loadGeneratedPairConstraints(projectPath, meta, images, &usedStoredPairs, &storedPairsStale);
     int generatedPairRequiredCount = 0;
     int generatedPairCoveredCount = 0;
     int generatedPairProcessedCount = 0;
@@ -657,7 +642,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         for (int i = 0; i < images.size(); ++i)
         {
             const QStringList aliases = nameAliases(images.at(i));
-            for (const QString &alias : aliases)
+            for (const QString& alias : aliases)
             {
                 if (!imageIndexByAlias.contains(alias))
                 {
@@ -684,10 +669,10 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             return root;
         };
 
-        auto resolveImageIndex = [&](const QString &pathOrName) -> int
+        auto resolveImageIndex = [&](const QString& pathOrName) -> int
         {
             const QStringList aliases = nameAliases(pathOrName);
-            for (const QString &alias : aliases)
+            for (const QString& alias : aliases)
             {
                 const auto it = imageIndexByAlias.constFind(alias);
                 if (it != imageIndexByAlias.constEnd())
@@ -699,7 +684,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         };
 
         QSet<int> matchedImageIndices;
-        for (const auto &pair : matchedPairs)
+        for (const auto& pair : matchedPairs)
         {
             const int leftIndex = resolveImageIndex(pair.first);
             const int rightIndex = resolveImageIndex(pair.second);
@@ -748,7 +733,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     if (usedStoredPairs && !storedPairsStale)
     {
-        for (const QString &pairKey : generatedPairs)
+        for (const QString& pairKey : generatedPairs)
         {
             const QStringList parts = pairKey.split(QStringLiteral("\n"));
             if (parts.size() != 2)
@@ -767,10 +752,8 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             }
         }
     }
-    const bool generatedPlanHasNoProcessedPairs = usedStoredPairs
-        && !storedPairsStale
-        && generatedPairRequiredCount > 0
-        && generatedPairProcessedCount == 0;
+    const bool generatedPlanHasNoProcessedPairs =
+        usedStoredPairs && !storedPairsStale && generatedPairRequiredCount > 0 && generatedPairProcessedCount == 0;
     summary.hasMatches = images.size() < 2 || (!generatedPlanHasNoProcessedPairs && matchStats.matchedEdgeCount > 0);
 
     xjw::aerial_triangulation::ReconstructionPrerequisiteReport prerequisiteReport;
@@ -787,7 +770,8 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     const auto recommendedAction = prerequisiteReport.recommendedAction();
     const bool matchingProducedNoUsableEdges =
-        recommendedAction == xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality;
+        recommendedAction ==
+        xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality;
     summary.blockOnMatchQuality = matchingProducedNoUsableEdges;
 
     switch (recommendedAction)
@@ -853,14 +837,14 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                     .arg(images.size()));
         }
     }
-    for (const QString &warning : summary.warningMessages)
+    for (const QString& warning : summary.warningMessages)
     {
         LOG_WARN(QStringLiteral("空中三角测量预检: %1").arg(warning));
     }
     return summary;
 }
 
-void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &uiSettings)
+void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject& uiSettings)
 {
     _featureVisualizationController->applySavedOptions(uiSettings);
 }
@@ -877,18 +861,14 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
     const QStringList images = getProjectImages();
     dlg.setImageCount(images.size());
     bool hasAllReferenceCameras = false;
-    const int cameraCount = _projectManager
-        ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size()
-        : 0;
+    const int cameraCount =
+        _projectManager ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size() : 0;
     dlg.setReferencePreselectionAvailable(
-        hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2,
-        cameraCount,
-        images.size());
+        hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2, cameraCount, images.size());
 
     if (!_aerialTriangulationSetting)
     {
-        _aerialTriangulationSetting =
-            createDialogSettingStore(DialogSettingKeys::AerialTriangulation);
+        _aerialTriangulationSetting = createDialogSettingStore(DialogSettingKeys::AerialTriangulation);
     }
 
     if (_projectManager)
@@ -896,14 +876,24 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
         const QString projectPath = _projectManager->currentProjectPath();
         _aerialTriangulationSetting->setProjectPath(projectPath);
         dlg.applySettings(_aerialTriangulationSetting->load());
+        const QString projectRoot = xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath);
+        const QString tiePointPath =
+            QDir(projectRoot).filePath(QStringLiteral("assets/tie_points/latest_tie_points.json"));
+        const std::optional<int> cachedLimit =
+            xjw::aerial_triangulation::AerialTriangulationWorkflow::storedTiePointLimit(tiePointPath);
+        dlg.setCachedTiePointLimit(QFileInfo::exists(tiePointPath), cachedLimit.value_or(-1));
     }
 
-    connect(&dlg, &AerialTriangulationDialog::settingsChanged, this, [this](const QJsonObject &settings) {
-        if (_aerialTriangulationSetting)
-        {
-            _aerialTriangulationSetting->save(settings);
-        }
-    });
+    connect(&dlg,
+            &AerialTriangulationDialog::settingsChanged,
+            this,
+            [this](const QJsonObject& settings)
+            {
+                if (_aerialTriangulationSetting)
+                {
+                    _aerialTriangulationSetting->save(settings);
+                }
+            });
 
     if (dlg.exec() == QDialog::Accepted)
     {
@@ -912,8 +902,7 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
         {
             _aerialTriangulationSetting->save(dialogSettings);
         }
-        startAerialTriangulationWorkflow(
-            mergeAerialTriangulationSettings(dialogSettings));
+        startAerialTriangulationWorkflow(mergeAerialTriangulationSettings(dialogSettings));
     }
 }
 
@@ -925,16 +914,14 @@ void MenuWorkflowController::openWorkflowSettingsDialog()
     }
     if (!_projectManager || _projectManager->currentProjectPath().trimmed().isEmpty())
     {
-        QMessageBox::warning(_mainWindow,
-                             QStringLiteral("工作流程设置"),
-                             QStringLiteral("请先打开项目。工作流程设置按项目保存。"));
+        QMessageBox::warning(
+            _mainWindow, QStringLiteral("工作流程设置"), QStringLiteral("请先打开项目。工作流程设置按项目保存。"));
         return;
     }
 
     if (!_workflowSettingsStore)
     {
-        _workflowSettingsStore = createDialogSettingStore(
-            DialogSettingKeys::WorkflowSettings);
+        _workflowSettingsStore = createDialogSettingStore(DialogSettingKeys::WorkflowSettings);
     }
     _workflowSettingsStore->setProjectPath(_projectManager->currentProjectPath());
 
@@ -947,22 +934,17 @@ void MenuWorkflowController::openWorkflowSettingsDialog()
         {
             QMessageBox::warning(_mainWindow,
                                  QStringLiteral("工作流程设置"),
-                                 saveError.isEmpty()
-                                     ? QStringLiteral("无法保存工作流程设置。")
-                                     : saveError);
+                                 saveError.isEmpty() ? QStringLiteral("无法保存工作流程设置。") : saveError);
         }
     }
 }
 
-QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
-    const QJsonObject &dialogSettings)
+QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(const QJsonObject& dialogSettings)
 {
     QJsonObject merged;
     const QJsonObject defaultAerialSettings =
-        WorkflowSettingsDialog::aerialTriangulationSettings(
-            WorkflowSettingsDialog::defaultSettings());
-    for (auto it = defaultAerialSettings.constBegin();
-         it != defaultAerialSettings.constEnd(); ++it)
+        WorkflowSettingsDialog::aerialTriangulationSettings(WorkflowSettingsDialog::defaultSettings());
+    for (auto it = defaultAerialSettings.constBegin(); it != defaultAerialSettings.constEnd(); ++it)
     {
         merged.insert(it.key(), it.value());
     }
@@ -970,15 +952,12 @@ QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
     {
         if (!_workflowSettingsStore)
         {
-            _workflowSettingsStore = createDialogSettingStore(
-                DialogSettingKeys::WorkflowSettings);
+            _workflowSettingsStore = createDialogSettingStore(DialogSettingKeys::WorkflowSettings);
         }
         _workflowSettingsStore->setProjectPath(_projectManager->currentProjectPath());
         const QJsonObject savedAerialSettings =
-            WorkflowSettingsDialog::aerialTriangulationSettings(
-                _workflowSettingsStore->load());
-        for (auto it = savedAerialSettings.constBegin();
-             it != savedAerialSettings.constEnd(); ++it)
+            WorkflowSettingsDialog::aerialTriangulationSettings(_workflowSettingsStore->load());
+        for (auto it = savedAerialSettings.constBegin(); it != savedAerialSettings.constEnd(); ++it)
         {
             merged.insert(it.key(), it.value());
         }
@@ -994,9 +973,7 @@ QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
 }
 
 QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselection(
-    const QJsonObject &requestedSettings,
-    const QStringList &images,
-    const QJsonObject &projectMeta) const
+    const QJsonObject& requestedSettings, const QStringList& images, const QJsonObject& projectMeta) const
 {
     QJsonObject settings = requestedSettings;
     if (!settings.value(QStringLiteral("reference_preselection")).toBool(false))
@@ -1010,15 +987,22 @@ QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselec
 
     bool hasAllReferenceCameras = false;
     const QString referenceMode = normalizedReferencePreselectionSource(settings);
-    const int cameraCount = referenceCamerasForMode(_projectManager,
-                                                    images,
-                                                    projectMeta,
-                                                    referenceMode,
-                                                    &hasAllReferenceCameras).size();
-    const bool available =
-        hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2;
+    const int cameraCount =
+        referenceCamerasForMode(_projectManager, images, projectMeta, referenceMode, &hasAllReferenceCameras).size();
+    const bool available = hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2;
     if (!available)
     {
+        const QString algorithmId =
+            settings.value(QStringLiteral("algorithm_id")).toString(QStringLiteral("plamatch_hct")).trimmed().toLower();
+        if (algorithmId == QStringLiteral("plamatch_hct"))
+        {
+            LOG_INFO(QStringLiteral("空中三角测量: %1 参考位姿为 %2/%3；PlaMatch 将使用已有坐标，"
+                                    "坐标集合为空时回退索引邻域。")
+                         .arg(referenceMode)
+                         .arg(cameraCount)
+                         .arg(images.size()));
+            return settings;
+        }
         settings[QStringLiteral("reference_preselection")] = false;
         LOG_WARN(QStringLiteral("空中三角测量: %1 参考位姿不完整，参考预选已关闭（相机 %2/%3）。")
                      .arg(referenceMode)
@@ -1028,7 +1012,7 @@ QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselec
     return settings;
 }
 
-void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject &settings)
+void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject& settings)
 {
     if (!_projectManager || _projectManager->currentProjectPath().trimmed().isEmpty())
     {
@@ -1036,41 +1020,38 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         return;
     }
 
-    auto *pm = _projectManager;
+    auto* pm = _projectManager;
     if (pm->hasActiveAtTask())
     {
-        QMessageBox::information(
-            _mainWindow,
-            QStringLiteral("空中三角测量"),
-            QStringLiteral("已有空三或光束法平差任务正在运行，请等待其结束或先取消当前任务。"));
+        QMessageBox::information(_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 QStringLiteral("已有空三或光束法平差任务正在运行，请等待其结束或先取消当前任务。"));
         return;
     }
 
     const QStringList images = getProjectImages();
     if (images.size() < 2)
     {
-        QMessageBox::warning(_mainWindow,
-                             QStringLiteral("空中三角测量"),
-                             QStringLiteral("至少需要 2 张影像才能进行空中三角测量。"));
+        QMessageBox::warning(
+            _mainWindow, QStringLiteral("空中三角测量"), QStringLiteral("至少需要 2 张影像才能进行空中三角测量。"));
         return;
     }
 
     const QJsonObject projectMeta = _projectManager->currentMeta();
     const bool hasDepthMaps = !projectMeta.value(QStringLiteral("depth_map_results")).toArray().isEmpty();
     QSettings warningSettings(QStringLiteral("PlaScan"), QStringLiteral("plascan_gui"));
-    const bool suppressDepthInvalidationWarning = warningSettings.value(
-        QStringLiteral("Warnings/suppressDepthMapInvalidationBeforeAerialTriangulation"),
-        false).toBool();
+    const bool suppressDepthInvalidationWarning =
+        warningSettings.value(QStringLiteral("Warnings/suppressDepthMapInvalidationBeforeAerialTriangulation"), false)
+            .toBool();
     if (hasDepthMaps && !suppressDepthInvalidationWarning)
     {
         QMessageBox confirmation(_mainWindow);
         confirmation.setWindowTitle(QStringLiteral("空中三角测量"));
         confirmation.setIcon(QMessageBox::Warning);
-        confirmation.setText(
-            QStringLiteral("当前深度图将在空中三角测量成功后失效并从项目中移除。是否继续？"));
+        confirmation.setText(QStringLiteral("当前深度图将在空中三角测量成功后失效并从项目中移除。是否继续？"));
         confirmation.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
         confirmation.setDefaultButton(QMessageBox::No);
-        auto *dontShowAgain = new QCheckBox(QStringLiteral("不再显示该信息"), &confirmation);
+        auto* dontShowAgain = new QCheckBox(QStringLiteral("不再显示该信息"), &confirmation);
         confirmation.setCheckBox(dontShowAgain);
         const auto answer = static_cast<QMessageBox::StandardButton>(confirmation.exec());
         if (answer != QMessageBox::Yes)
@@ -1079,9 +1060,8 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         }
         if (dontShowAgain->isChecked())
         {
-            warningSettings.setValue(
-                QStringLiteral("Warnings/suppressDepthMapInvalidationBeforeAerialTriangulation"),
-                true);
+            warningSettings.setValue(QStringLiteral("Warnings/suppressDepthMapInvalidationBeforeAerialTriangulation"),
+                                     true);
         }
     }
 
@@ -1100,10 +1080,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     runSettings[QStringLiteral("output_dir")] = outputRoot;
     runSettings = sanitizeAerialTriangulationReferencePreselection(runSettings, images, projectMeta);
     const QString selectedAlgorithmId =
-        runSettings.value(QStringLiteral("algorithm_id"))
-            .toString(QStringLiteral("auto_sift"))
-            .trimmed()
-            .toLower();
+        runSettings.value(QStringLiteral("algorithm_id")).toString(QStringLiteral("plamatch_hct")).trimmed().toLower();
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     pm->setAtCancelFlag(cancelFlag);
@@ -1116,37 +1093,29 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         {
             return;
         }
-        const int percent = total <= 0
-            ? 100
-            : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
-        xjw::gui::tasks::postGuarded(pmGuard,
-            [session, cancelFlag, processed, total, percent](ProjectManager *manager)
-        {
-            if (manager->ownsAtCancelFlag(cancelFlag)
-                && manager->isCurrentSession(session)
-                && !cancelFlag->load(std::memory_order_relaxed))
+        const int percent =
+            total <= 0 ? 100 : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
+        xjw::gui::tasks::postGuarded(
+            pmGuard,
+            [session, cancelFlag, processed, total, percent](ProjectManager* manager)
             {
-                emit manager->atProgressChanged(
-                    QStringLiteral("空中三角测量: 检查上游匹配索引 %1/%2")
-                        .arg(processed)
-                        .arg(total),
-                    percent);
-            }
-        });
+                if (manager->ownsAtCancelFlag(cancelFlag) && manager->isCurrentSession(session) &&
+                    !cancelFlag->load(std::memory_order_relaxed))
+                {
+                    emit manager->atProgressChanged(
+                        QStringLiteral("空中三角测量: 检查上游匹配索引 %1/%2").arg(processed).arg(total), percent);
+                }
+            });
     };
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [images, projectMeta, projectPath, selectedAlgorithmId, preflightProgress]()
         {
-            return MenuWorkflowController::summarizeSparsePrerequisites(images,
-                                                                        projectMeta,
-                                                                        projectPath,
-                                                                        selectedAlgorithmId,
-                                                                        preflightProgress);
+            return MenuWorkflowController::summarizeSparsePrerequisites(
+                images, projectMeta, projectPath, selectedAlgorithmId, preflightProgress);
         },
         [pmGuard, cancelFlag, runSettings, images, session, projectMeta, outputRoot](
-            MenuWorkflowController *controller,
-            xjw::gui::tasks::TaskOutcome<SparsePrerequisiteSummary> outcome)
+            MenuWorkflowController* controller, xjw::gui::tasks::TaskOutcome<SparsePrerequisiteSummary> outcome)
         {
             if (!pmGuard)
             {
@@ -1171,13 +1140,11 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             {
                 pmGuard->clearAtCancelFlag(cancelFlag);
                 emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     outcome.errorMessage);
+                QMessageBox::warning(controller->_mainWindow, QStringLiteral("空中三角测量"), outcome.errorMessage);
                 return;
             }
 
-            const auto &prereq = *outcome.value;
+            const auto& prereq = *outcome.value;
             if (!prereq.prerequisiteReport.isEmpty())
             {
                 LOG_INFO(QStringLiteral("空三前置报告: %1")
@@ -1186,56 +1153,51 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             }
 
             bool autoFillMissing = false;
-            const bool reuseExistingMatches =
-                runSettings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
+            const bool reuseExistingMatches = runSettings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
             if (prereq.blockOnMatchQuality && reuseExistingMatches)
             {
                 pmGuard->clearAtCancelFlag(cancelFlag);
                 emit pmGuard->atProgressFinished(false);
-                const QString details = prereq.warningMessages.isEmpty()
-                    ? QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。")
-                    : prereq.warningMessages.join(QStringLiteral("\n"));
+                const QString details =
+                    prereq.warningMessages.isEmpty()
+                        ? QStringLiteral(
+                              "匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。")
+                        : prereq.warningMessages.join(QStringLiteral("\n"));
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
-                                     QStringLiteral(
-                                         "%1\n\n当前已选择“重用现有匹配”，不会自动重新跑完整匹配。"
-                                         "如需重建匹配，请在高级设置中取消该选项。")
+                                     QStringLiteral("%1\n\n当前已选择“重用现有匹配”，不会自动重新跑完整匹配。"
+                                                    "如需重建匹配，请在高级设置中取消该选项。")
                                          .arg(details));
                 return;
             }
             if (!prereq.missingMessages.isEmpty())
             {
                 autoFillMissing = true;
-                LOG_INFO(QStringLiteral("空中三角测量: 检测到缺少连接点输入，直接运行创建连接点流程；该流程会自动提取特征并匹配。"));
+                LOG_INFO(QStringLiteral(
+                    "空中三角测量: 检测到缺少连接点输入，直接运行创建连接点流程；该流程会自动提取特征并匹配。"));
             }
 
-            controller->runUnifiedAerialTriangulation(runSettings,
-                                                      images,
-                                                      session,
-                                                      projectMeta,
-                                                      outputRoot,
-                                                      autoFillMissing,
-                                                      cancelFlag);
+            controller->runUnifiedAerialTriangulation(
+                runSettings, images, session, projectMeta, outputRoot, autoFillMissing, cancelFlag);
         });
 }
 
-void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &settings,
-                                                            const QStringList &images,
-                                                            const xjw::gui::project::ProjectSessionContext &session,
-                                                            const QJsonObject &projectMeta,
-                                                            const QString &outputRoot,
-                                                            bool fillMissingTiePoints,
-                                                            const std::shared_ptr<std::atomic<bool>> &cancelFlag)
+void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject& settings,
+                                                           const QStringList& images,
+                                                           const xjw::gui::project::ProjectSessionContext& session,
+                                                           const QJsonObject& projectMeta,
+                                                           const QString& outputRoot,
+                                                           bool fillMissingTiePoints,
+                                                           const std::shared_ptr<std::atomic<bool>>& cancelFlag)
 {
     if (!_projectManager)
     {
         return;
     }
 
-    auto *pm = _projectManager;
-    if (!pm->isCurrentSession(session)
-        || !pm->ownsAtCancelFlag(cancelFlag)
-        || cancelFlag->load(std::memory_order_relaxed))
+    auto* pm = _projectManager;
+    if (!pm->isCurrentSession(session) || !pm->ownsAtCancelFlag(cancelFlag) ||
+        cancelFlag->load(std::memory_order_relaxed))
     {
         pm->clearAtCancelFlag(cancelFlag);
         return;
@@ -1243,8 +1205,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
 
     const QString projectPath = session.projectPath;
 
-    const bool resetCurrentAlignment =
-        settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
+    const bool resetCurrentAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
 
     // 线程数属于机器运行时能力，不能复用项目里由另一台电脑保存的历史固定值。
     // 统一传 0，由核心层在每次启动时按当前机器逻辑线程数解析。
@@ -1260,13 +1221,11 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     workflowOptions.referenceMode =
         settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code"));
     workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
-    workflowOptions.reuseExistingMatches =
-        settings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
-    workflowOptions.lockInputCameraPoses =
-        settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
+    workflowOptions.reuseExistingMatches = settings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
+    workflowOptions.lockInputCameraPoses = settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
     workflowOptions.saveAfterEachStep = settings.value(QStringLiteral("save_project_after_each_step")).toBool(false);
     workflowOptions.keypointLimit = settings.value(QStringLiteral("keypoint_limit")).toInt(40000);
-    workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(8000);
+    workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(4000);
     workflowOptions.maskApplyMode =
         settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("keypoints"));
     workflowOptions.excludeFixedTiePoints = settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true);
@@ -1274,55 +1233,45 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     workflowOptions.adaptiveCameraModelFitting =
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true);
     workflowOptions.matchingAlgorithmId =
-        settings.value(QStringLiteral("algorithm_id"))
-            .toString(QStringLiteral("auto_sift"))
-            .trimmed()
-            .toLower();
+        settings.value(QStringLiteral("algorithm_id")).toString(QStringLiteral("plamatch_hct")).trimmed().toLower();
     workflowOptions.lightGlueTensorRtEnginePath =
         settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString().trimmed();
     workflowOptions.lomaRTensorRtPackagePath =
         settings.value(QStringLiteral("loma_r_tensorrt_package")).toString().trimmed();
-    workflowOptions.lomaRKeypointBudget =
-        settings.value(QStringLiteral("loma_r_keypoint_budget")).toInt(0);
+    workflowOptions.lomaRKeypointBudget = settings.value(QStringLiteral("loma_r_keypoint_budget")).toInt(0);
     workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
     workflowOptions.threads = workflowThreads;
-    workflowOptions.cudaDevice = std::max(
-        0, settings.value(QStringLiteral("cuda_device")).toInt(0));
-    workflowOptions.featureMaxImageDim = std::max(
-        0, settings.value(QStringLiteral("feature_max_image_dim")).toInt(0));
-    workflowOptions.cudaParallelPairs = std::max(
-        0, settings.value(QStringLiteral("cuda_parallel_pairs")).toInt(0));
-    workflowOptions.featurePrefetchDepth = std::clamp(
-        settings.value(QStringLiteral("feature_prefetch_depth")).toInt(2), 1, 4);
-    workflowOptions.matchThreshold = static_cast<float>(std::clamp(
-        settings.value(QStringLiteral("match_threshold")).toDouble(0.15), 0.0, 1.0));
-    workflowOptions.siftMaximumRatio = static_cast<float>(std::clamp(
-        settings.value(QStringLiteral("sift_maximum_ratio")).toDouble(0.98), 0.0, 1.0));
-    workflowOptions.siftMinimumAdaptiveRatio = static_cast<float>(std::clamp(
-        settings.value(QStringLiteral("sift_minimum_adaptive_ratio")).toDouble(0.78),
-        0.0,
-        static_cast<double>(workflowOptions.siftMaximumRatio)));
-    workflowOptions.adaptiveSiftRatio =
-        settings.value(QStringLiteral("adaptive_sift_ratio")).toBool(true);
-    workflowOptions.geometryReprojThreshold = std::max(
-        0.1, settings.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble(1.5));
-    workflowOptions.geometryMinInliers = std::max(
-        8, settings.value(QStringLiteral("geometry_min_inliers")).toInt(20));
-    workflowOptions.geometryMinInlierRatio = std::clamp(
-        settings.value(QStringLiteral("geometry_min_inlier_ratio")).toDouble(0.18), 0.01, 0.95);
-    workflowOptions.geometryMinGridCoverage = std::clamp(
-        settings.value(QStringLiteral("geometry_min_grid_coverage")).toDouble(0.12), 0.01, 1.0);
-    workflowOptions.geometryMaxIterations = std::max(
-        100, settings.value(QStringLiteral("geometry_max_iterations")).toInt(10000));
-    workflowOptions.tiePointGridColumns = std::clamp(
-        settings.value(QStringLiteral("tie_point_grid_columns")).toInt(8), 1, 64);
-    workflowOptions.tiePointGridRows = std::clamp(
-        settings.value(QStringLiteral("tie_point_grid_rows")).toInt(8), 1, 64);
-    workflowOptions.maxTiePointsPerGridCell = std::max(
-        0, settings.value(QStringLiteral("tie_point_grid_cell_limit")).toInt(0));
-    workflowOptions.stationaryTiePointMaxPixelMotion = static_cast<float>(std::max(
-        0.0,
-        settings.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble(1.0)));
+    workflowOptions.cudaDevice = std::max(0, settings.value(QStringLiteral("cuda_device")).toInt(0));
+    workflowOptions.featureMaxImageDim = std::max(0, settings.value(QStringLiteral("feature_max_image_dim")).toInt(0));
+    workflowOptions.cudaParallelPairs = std::max(0, settings.value(QStringLiteral("cuda_parallel_pairs")).toInt(0));
+    workflowOptions.featurePrefetchDepth =
+        std::clamp(settings.value(QStringLiteral("feature_prefetch_depth")).toInt(2), 1, 4);
+    workflowOptions.matchThreshold =
+        static_cast<float>(std::clamp(settings.value(QStringLiteral("match_threshold")).toDouble(0.15), 0.0, 1.0));
+    workflowOptions.siftMaximumRatio =
+        static_cast<float>(std::clamp(settings.value(QStringLiteral("sift_maximum_ratio")).toDouble(0.98), 0.0, 1.0));
+    workflowOptions.siftMinimumAdaptiveRatio =
+        static_cast<float>(std::clamp(settings.value(QStringLiteral("sift_minimum_adaptive_ratio")).toDouble(0.78),
+                                      0.0,
+                                      static_cast<double>(workflowOptions.siftMaximumRatio)));
+    workflowOptions.adaptiveSiftRatio = settings.value(QStringLiteral("adaptive_sift_ratio")).toBool(true);
+    workflowOptions.geometryReprojThreshold =
+        std::max(0.1, settings.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble(1.5));
+    workflowOptions.geometryMinInliers = std::max(8, settings.value(QStringLiteral("geometry_min_inliers")).toInt(20));
+    workflowOptions.geometryMinInlierRatio =
+        std::clamp(settings.value(QStringLiteral("geometry_min_inlier_ratio")).toDouble(0.18), 0.01, 0.95);
+    workflowOptions.geometryMinGridCoverage =
+        std::clamp(settings.value(QStringLiteral("geometry_min_grid_coverage")).toDouble(0.12), 0.01, 1.0);
+    workflowOptions.geometryMaxIterations =
+        std::max(100, settings.value(QStringLiteral("geometry_max_iterations")).toInt(10000));
+    workflowOptions.tiePointGridColumns =
+        std::clamp(settings.value(QStringLiteral("tie_point_grid_columns")).toInt(8), 1, 64);
+    workflowOptions.tiePointGridRows =
+        std::clamp(settings.value(QStringLiteral("tie_point_grid_rows")).toInt(8), 1, 64);
+    workflowOptions.maxTiePointsPerGridCell =
+        std::max(0, settings.value(QStringLiteral("tie_point_grid_cell_limit")).toInt(0));
+    workflowOptions.stationaryTiePointMaxPixelMotion = static_cast<float>(
+        std::max(0.0, settings.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble(1.0)));
     workflowOptions.autoGenerateMissingMatches = fillMissingTiePoints;
     workflowOptions.assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     workflowOptions.matchDir = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
@@ -1334,16 +1283,12 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         workflowOptions.referenceMode.trimmed().toLower() != QStringLiteral("sequence"))
     {
         bool hasAllReferenceCameras = false;
-        workflowOptions.referenceCameras = referenceCamerasForMode(
-            pm,
-            images,
-            projectMeta,
-            workflowOptions.referenceMode,
-            &hasAllReferenceCameras);
+        workflowOptions.referenceCameras =
+            referenceCamerasForMode(pm, images, projectMeta, workflowOptions.referenceMode, &hasAllReferenceCameras);
         if (!hasAllReferenceCameras)
         {
-            LOG_WARN(QStringLiteral("空中三角测量: 参考预选已启用，但 %1 位姿不完整")
-                         .arg(workflowOptions.referenceMode));
+            LOG_WARN(
+                QStringLiteral("空中三角测量: 参考预选已启用，但 %1 位姿不完整").arg(workflowOptions.referenceMode));
         }
         else
         {
@@ -1356,13 +1301,10 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     bool usedStoredPairs = false;
     bool storedPairsStale = false;
     const bool useStoredGeneratedPairs = shouldUseStoredGeneratedPairConstraints(settings);
-    const QStringList allowedPairs = useStoredGeneratedPairs
-        ? loadGeneratedPairConstraints(projectPath,
-                                       projectMeta,
-                                       images,
-                                       &usedStoredPairs,
-                                       &storedPairsStale)
-        : QStringList();
+    const QStringList allowedPairs =
+        useStoredGeneratedPairs
+            ? loadGeneratedPairConstraints(projectPath, projectMeta, images, &usedStoredPairs, &storedPairsStale)
+            : QStringList();
     if (!allowedPairs.isEmpty())
     {
         workflowOptions.restrictPairs = true;
@@ -1379,7 +1321,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     }
 
     QPointer<ProjectManager> pmGuard(pm);
-    workflowOptions.progressFn = [pmGuard, session, cancelFlag](const QString &stage, int percent)
+    workflowOptions.progressFn = [pmGuard, session, cancelFlag](const QString& stage, int percent)
     {
         if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
@@ -1387,65 +1329,59 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         }
         xjw::gui::tasks::postGuarded(
             pmGuard,
-            [session, cancelFlag, stage, percent](ProjectManager *manager)
-        {
-            if (manager->ownsAtCancelFlag(cancelFlag)
-                && manager->isCurrentSession(session)
-                && !cancelFlag->load(std::memory_order_relaxed))
+            [session, cancelFlag, stage, percent](ProjectManager* manager)
             {
-                emit manager->atProgressChanged(
-                    QStringLiteral("空中三角测量: %1").arg(stage), percent);
-            }
-        });
+                if (manager->ownsAtCancelFlag(cancelFlag) && manager->isCurrentSession(session) &&
+                    !cancelFlag->load(std::memory_order_relaxed))
+                {
+                    emit manager->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
+                }
+            });
     };
-    workflowOptions.computeDeviceFn = [pmGuard, session, cancelFlag](const QString &displayName)
+    workflowOptions.computeDeviceFn = [pmGuard, session, cancelFlag](const QString& displayName)
     {
         if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(
-            pmGuard,
-            [session, cancelFlag, displayName](ProjectManager *manager)
-        {
-            if (manager->ownsAtCancelFlag(cancelFlag)
-                && manager->isCurrentSession(session)
-                && !cancelFlag->load(std::memory_order_relaxed))
-            {
-                emit manager->atComputeDeviceChanged(displayName);
-            }
-        });
+        xjw::gui::tasks::postGuarded(pmGuard,
+                                     [session, cancelFlag, displayName](ProjectManager* manager)
+                                     {
+                                         if (manager->ownsAtCancelFlag(cancelFlag) &&
+                                             manager->isCurrentSession(session) &&
+                                             !cancelFlag->load(std::memory_order_relaxed))
+                                         {
+                                             emit manager->atComputeDeviceChanged(displayName);
+                                         }
+                                     });
     };
-    workflowOptions.pairMatchedFn = [pmGuard, session, cancelFlag](const QString &img0,
-                                                                  const QString &img1,
-                                                                  const QString &matchPath,
-                                                                  int numMatches)
+    workflowOptions.pairMatchedFn =
+        [pmGuard, session, cancelFlag](
+            const QString& img0, const QString& img1, const QString& matchPath, int numMatches)
     {
         if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(
-            pmGuard,
-            [session, cancelFlag, img0, img1, matchPath, numMatches](ProjectManager *manager)
-        {
-            if (manager->ownsAtCancelFlag(cancelFlag)
-                && manager->isCurrentSession(session)
-                && !cancelFlag->load(std::memory_order_relaxed))
-            {
-                emit manager->matchPairReady(img0, img1, matchPath, numMatches);
-            }
-        });
+        xjw::gui::tasks::postGuarded(pmGuard,
+                                     [session, cancelFlag, img0, img1, matchPath, numMatches](ProjectManager* manager)
+                                     {
+                                         if (manager->ownsAtCancelFlag(cancelFlag) &&
+                                             manager->isCurrentSession(session) &&
+                                             !cancelFlag->load(std::memory_order_relaxed))
+                                         {
+                                             emit manager->matchPairReady(img0, img1, matchPath, numMatches);
+                                         }
+                                     });
     };
 
     workflowOptions.cancelFlag = cancelFlag;
     const xjw::aerial_triangulation::AerialTriangulationResolvedConfig resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
 
-    emit pm->atProgressChanged(resolved.prepareTiePoints
-                                    ? QStringLiteral("空中三角测量: 准备连接点...")
-                                    : QStringLiteral("空中三角测量: 启动 SfM/BA..."),
-                                0);
+    emit pm->atProgressChanged(resolved.prepareTiePoints ? QStringLiteral("空中三角测量: 准备连接点...")
+                                                         : QStringLiteral("空中三角测量: 启动 SfM/BA..."),
+                               0);
 
     const QStringList sfmImages = images;
     const QString sfmOutputDir = resolved.pipelineInput.outputDir;
@@ -1453,26 +1389,16 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [runWorkflowOptions = std::move(workflowOptions)]() mutable
+        { return xjw::aerial_triangulation::AerialTriangulationWorkflow::run(runWorkflowOptions); },
+        [pmGuard, cancelFlag, sfmImages, sfmOutputDir, assetsDir, projectMeta, session, resetCurrentAlignment](
+            MenuWorkflowController* controller,
+            xjw::gui::tasks::TaskOutcome<xjw::aerial_triangulation::AerialTriangulationResult> outcome) mutable
         {
-            return xjw::aerial_triangulation::AerialTriangulationWorkflow::run(
-                runWorkflowOptions);
-        },
-        [pmGuard,
-         cancelFlag,
-         sfmImages,
-         sfmOutputDir,
-         assetsDir,
-         projectMeta,
-         session,
-         resetCurrentAlignment](MenuWorkflowController *controller,
-                                xjw::gui::tasks::TaskOutcome<
-                                    xjw::aerial_triangulation::AerialTriangulationResult> outcome) mutable {
             if (!pmGuard)
             {
                 return;
             }
-            if (!pmGuard->ownsAtCancelFlag(cancelFlag)
-                || !pmGuard->isCurrentSession(session))
+            if (!pmGuard->ownsAtCancelFlag(cancelFlag) || !pmGuard->isCurrentSession(session))
             {
                 return;
             }
@@ -1481,13 +1407,11 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             if (!outcome.succeeded())
             {
                 emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     outcome.errorMessage);
+                QMessageBox::warning(controller->_mainWindow, QStringLiteral("空中三角测量"), outcome.errorMessage);
                 return;
             }
             auto workflowResult = std::move(*outcome.value);
-            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult& result =
                 workflowResult.reconstructionResult;
             const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
             if (wasCanceled)
@@ -1499,8 +1423,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             if (workflowResult.tiePointPreparationExecuted)
             {
                 pmGuard->appendImageMatchResults(
-                    xjw::gui::project::makeImageMatchResultRecords(
-                        workflowResult.tiePointResult));
+                    xjw::gui::project::makeImageMatchResultRecords(workflowResult.tiePointResult));
             }
 
             if (!result.success)
@@ -1508,9 +1431,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
-                                     result.errorMessage.isEmpty()
-                                         ? QStringLiteral("空中三角测量失败。")
-                                         : result.errorMessage);
+                                     result.errorMessage.isEmpty() ? QStringLiteral("空中三角测量失败。")
+                                                                   : result.errorMessage);
                 return;
             }
 
@@ -1522,7 +1444,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             {
                 const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
                 registeredImages.reserve(sfmImages.size());
-                for (const QString &imagePath : sfmImages)
+                for (const QString& imagePath : sfmImages)
                 {
                     const QString normalized = xjw::common::project::normalizePath(imagePath);
                     if (registeredCameraKeys.contains(normalized))
@@ -1532,7 +1454,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 }
                 if (registeredImages.size() < registeredCameraKeys.size())
                 {
-                    for (const QString &imagePath : registeredCameraKeys)
+                    for (const QString& imagePath : registeredCameraKeys)
                     {
                         if (!registeredImages.contains(imagePath))
                         {
@@ -1551,15 +1473,14 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
-                                     sparseBlockingReason.isEmpty()
-                                         ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
-                                         : sparseBlockingReason);
+                                     sparseBlockingReason.isEmpty() ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
+                                                                    : sparseBlockingReason);
                 return;
             }
 
-            const bool rpcAerialTriangulation =
-                resultRecordExtra.value(QStringLiteral("camera_model")).toString()
-                    .compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
+            const bool rpcAerialTriangulation = resultRecordExtra.value(QStringLiteral("camera_model"))
+                                                    .toString()
+                                                    .compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
 
             // 只有正式空三结果才写回工程，避免失败候选污染相机状态。
             if (resetCurrentAlignment)
@@ -1567,11 +1488,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 int updated = 0;
                 int cleared = 0;
                 QString err;
-                if (!pmGuard->replaceImageCameras(sfmImages,
-                                                  result.pendingCamUpdates,
-                                                  &updated,
-                                                  &cleared,
-                                                  &err))
+                if (!pmGuard->replaceImageCameras(sfmImages, result.pendingCamUpdates, &updated, &cleared, &err))
                 {
                     LOG_WARN(QStringLiteral("空中三角测量: SFM 相机写回失败: %1").arg(err));
                 }
@@ -1592,11 +1509,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 }
             }
 
-            if (!pmGuard->replaceTiePointResult(result.sparseCloudPath,
-                                                result.numPoints3D,
-                                                registeredImages,
-                                                sfmOutputDir,
-                                                resultRecordExtra))
+            if (!pmGuard->replaceTiePointResult(
+                    result.sparseCloudPath, result.numPoints3D, registeredImages, sfmOutputDir, resultRecordExtra))
             {
                 emit pmGuard->atProgressFinished(false);
                 return;
@@ -1606,9 +1520,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             {
                 QJsonObject report;
                 report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
-                report[QStringLiteral("mode")] = rpcAerialTriangulation
-                    ? QStringLiteral("rpc")
-                    : QStringLiteral("sfm");
+                report[QStringLiteral("mode")] = rpcAerialTriangulation ? QStringLiteral("rpc") : QStringLiteral("sfm");
                 report[QStringLiteral("source")] = QStringLiteral("workflow_aerial_triangulation");
                 report[QStringLiteral("timestamp")] =
                     QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
@@ -1628,25 +1540,18 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
                 report[QStringLiteral("camera_comparison")] =
                     xjw::gui::camera_calibration::buildCameraCalibrationComparison(
-                        projectMeta,
-                        result.pendingCamUpdates,
-                        result.sfmDiagnostics);
-                report[QStringLiteral("camera_calibration_semantics")] = QJsonObject{
-                    {QStringLiteral("initial"), QStringLiteral("intrinsics_at_alignment_start")},
-                    {QStringLiteral("adjusted"), QStringLiteral("intrinsics_after_bundle_adjustment")},
-                    {QStringLiteral("principal_point"), QStringLiteral("offset_from_image_center")},
-                    {QStringLiteral("excludes_extrinsics"), true}};
+                        projectMeta, result.pendingCamUpdates, result.sfmDiagnostics);
+                report[QStringLiteral("camera_calibration_semantics")] =
+                    QJsonObject{{QStringLiteral("initial"), QStringLiteral("intrinsics_at_alignment_start")},
+                                {QStringLiteral("adjusted"), QStringLiteral("intrinsics_after_bundle_adjustment")},
+                                {QStringLiteral("principal_point"), QStringLiteral("offset_from_image_center")},
+                                {QStringLiteral("excludes_extrinsics"), true}};
                 report[QStringLiteral("resolved_settings")] = workflowResult.config.resolvedSettings;
-                report[QStringLiteral("tie_point_preparation_executed")] =
-                    workflowResult.tiePointPreparationExecuted;
-                report[QStringLiteral("tie_point_track_count")] =
-                    workflowResult.tiePointResult.trackCount;
+                report[QStringLiteral("tie_point_preparation_executed")] = workflowResult.tiePointPreparationExecuted;
+                report[QStringLiteral("tie_point_track_count")] = workflowResult.tiePointResult.trackCount;
                 const QString reportsDir = QDir(assetsDir).filePath(QStringLiteral("reports"));
                 xjw::gui::project::writeLatestAndAppendHistoryReport(
-                    reportsDir,
-                    QStringLiteral("at_report.json"),
-                    QStringLiteral("at_report_history.json"),
-                    report);
+                    reportsDir, QStringLiteral("at_report.json"), QStringLiteral("at_report_history.json"), report);
                 xjw::gui::project::writeLatestAndAppendHistoryReport(
                     reportsDir,
                     QStringLiteral("aerial_triangulation_sfm_report.json"),
@@ -1655,14 +1560,15 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             }
 
             emit pmGuard->atProgressFinished(true);
-            QMessageBox::information(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     (rpcAerialTriangulation
-                                          ? QStringLiteral("RPC 空三稀疏云已生成。\n注册影像: %1\n地面点: %2\n路径: %3")
-                                          : QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3"))
-                                         .arg(registeredImageCount)
-                                         .arg(result.numPoints3D)
-                                         .arg(result.sparseCloudPath));
+            QMessageBox::information(
+                controller->_mainWindow,
+                QStringLiteral("空中三角测量"),
+                (rpcAerialTriangulation
+                     ? QStringLiteral("RPC 空三稀疏云已生成。\n注册影像: %1\n地面点: %2\n路径: %3")
+                     : QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3"))
+                    .arg(registeredImageCount)
+                    .arg(result.numPoints3D)
+                    .arg(result.sparseCloudPath));
         });
 }
 
@@ -1673,7 +1579,7 @@ void MenuWorkflowController::openOverlapAnalysisDialog()
         return;
     }
 
-    auto *dlg = new OverlapAnalysisDialog(_projectManager, _mainWindow);
+    auto* dlg = new OverlapAnalysisDialog(_projectManager, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
@@ -1698,9 +1604,9 @@ void MenuWorkflowController::openCreateDemDialog()
         return;
     }
 
-    for (QWidget *widget : QApplication::topLevelWidgets())
+    for (QWidget* widget : QApplication::topLevelWidgets())
     {
-        auto *existing_dialog = qobject_cast<CreateDemDialog *>(widget);
+        auto* existing_dialog = qobject_cast<CreateDemDialog*>(widget);
         if (!existing_dialog || existing_dialog->parentWidget() != _mainWindow)
         {
             continue;
@@ -1712,36 +1618,37 @@ void MenuWorkflowController::openCreateDemDialog()
         return;
     }
 
-    auto *dlg = new CreateDemDialog(_mainWindow);
+    auto* dlg = new CreateDemDialog(_mainWindow);
     dlg->setAvailableImages(getProjectImages());
     _createDemDialog = dlg;
     dlg->setAttribute(Qt::WA_DeleteOnClose);
-    connect(dlg, &QObject::destroyed, this,
-            [this]()
-            {
-                _createDemDialog = nullptr;
-            });
+    connect(dlg, &QObject::destroyed, this, [this]() { _createDemDialog = nullptr; });
 
-    connect(dlg, &CreateDemDialog::requestRun, this,
-        [this](const xjw::gui::project::DemGenerationRequest &request)
-    {
-        if (!_projectManager)
-        {
-            return;
-        }
-        QPointer<ProjectManager> pmGuard(_projectManager);
-        const auto session = pmGuard->currentSessionContext();
-        QTimer::singleShot(0, pmGuard.data(),
-            [pmGuard, session, request]()
+    connect(dlg,
+            &CreateDemDialog::requestRun,
+            this,
+            [this](const xjw::gui::project::DemGenerationRequest& request)
             {
-                if (!pmGuard || !pmGuard->isCurrentSession(session))
+                if (!_projectManager)
                 {
                     return;
                 }
-                pmGuard->startDemFromPointCloudAsync(request);
+                QPointer<ProjectManager> pmGuard(_projectManager);
+                const auto session = pmGuard->currentSessionContext();
+                QTimer::singleShot(0,
+                                   pmGuard.data(),
+                                   [pmGuard, session, request]()
+                                   {
+                                       if (!pmGuard || !pmGuard->isCurrentSession(session))
+                                       {
+                                           return;
+                                       }
+                                       pmGuard->startDemFromPointCloudAsync(request);
+                                   });
             });
-    });
-    connect(dlg, &CreateDemDialog::requestCancel, this,
+    connect(dlg,
+            &CreateDemDialog::requestCancel,
+            this,
             [this]()
             {
                 if (_projectManager)
@@ -1753,12 +1660,10 @@ void MenuWorkflowController::openCreateDemDialog()
     // 进度反馈 → 对话框内显示
     if (_projectManager)
     {
-        connect(_projectManager, &ProjectManager::projectSessionChanged,
-                dlg, &QObject::deleteLater);
-        connect(_projectManager, &ProjectManager::demPipelineProgressChanged,
-                dlg, &CreateDemDialog::onPipelineProgress);
-        connect(_projectManager, &ProjectManager::demPipelineFinished,
-                dlg, &CreateDemDialog::onPipelineFinished);
+        connect(_projectManager, &ProjectManager::projectSessionChanged, dlg, &QObject::deleteLater);
+        connect(
+            _projectManager, &ProjectManager::demPipelineProgressChanged, dlg, &CreateDemDialog::onPipelineProgress);
+        connect(_projectManager, &ProjectManager::demPipelineFinished, dlg, &CreateDemDialog::onPipelineFinished);
     }
 
     dlg->show();
@@ -1771,7 +1676,7 @@ void MenuWorkflowController::openMapProjectDialog()
         return;
     }
 
-    auto *dlg = new MapProjectDialog(_mainWindow);
+    auto* dlg = new MapProjectDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     if (_projectManager)
@@ -1783,17 +1688,15 @@ void MenuWorkflowController::openMapProjectDialog()
         }
 
         const QString projectPath = _projectManager->currentProjectPath();
-        const QString projectRoot =
-            xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath);
+        const QString projectRoot = xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath);
         if (!projectRoot.isEmpty())
         {
             dlg->setProjectRoot(projectRoot);
         }
 
-        const QMap<QString, xjw::FramePinholeCamera> cameraMap =
-            _projectManager->getCamerasForImages(images);
+        const QMap<QString, xjw::FramePinholeCamera> cameraMap = _projectManager->getCamerasForImages(images);
         int maskReadyCount = 0;
-        for (const QString &imagePath : images)
+        for (const QString& imagePath : images)
         {
             if (!xjw::common::project::ProjectIO::findMaskForImage(projectPath, imagePath).isEmpty())
             {
@@ -1810,15 +1713,12 @@ void MenuWorkflowController::openMapProjectDialog()
         for (int index = demResults.size() - 1; index >= 0; --index)
         {
             const QJsonObject record = demResults.at(index).toObject();
-            if (record.value(QStringLiteral("terrain_mode")).toString()
-                == QLatin1String("small_body_global"))
+            if (record.value(QStringLiteral("terrain_mode")).toString() == QLatin1String("small_body_global"))
             {
                 continue;
             }
-            const QString candidate =
-                xjw::common::project::ProjectIO::resolveProjectResourcePath(
-                    projectPath,
-                    record.value(QStringLiteral("dem_tif")).toString());
+            const QString candidate = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                projectPath, record.value(QStringLiteral("dem_tif")).toString());
             const QFileInfo candidateInfo(candidate);
             if (candidate.isEmpty() || !candidateInfo.exists() || !candidateInfo.isFile())
             {
@@ -1828,15 +1728,13 @@ void MenuWorkflowController::openMapProjectDialog()
             {
                 latestAnyDem = candidate;
             }
-            if (latestRpcDem.isEmpty()
-                && record.value(QStringLiteral("terrain_mode")).toString()
-                    == QLatin1String("rpc_stereo"))
+            if (latestRpcDem.isEmpty() &&
+                record.value(QStringLiteral("terrain_mode")).toString() == QLatin1String("rpc_stereo"))
             {
                 latestRpcDem = candidate;
             }
-            if (latestRelativeDem.isEmpty()
-                && record.value(QStringLiteral("dem_reference")).toString()
-                    == QStringLiteral("relative"))
+            if (latestRelativeDem.isEmpty() &&
+                record.value(QStringLiteral("dem_reference")).toString() == QStringLiteral("relative"))
             {
                 latestRelativeDem = candidate;
             }
@@ -1848,11 +1746,8 @@ void MenuWorkflowController::openMapProjectDialog()
             _projectManager->currentMeta().value(QStringLiteral("dense_cloud_results")).toArray();
         for (int index = denseResults.size() - 1; index >= 0; --index)
         {
-            const QString candidate =
-                xjw::common::project::ProjectIO::resolveProjectResourcePath(
-                    projectPath,
-                    denseResults.at(index).toObject()
-                        .value(QStringLiteral("dense_cloud_xyz")).toString());
+            const QString candidate = xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                projectPath, denseResults.at(index).toObject().value(QStringLiteral("dense_cloud_xyz")).toString());
             const QFileInfo candidateInfo(candidate);
             if (!candidate.isEmpty() && candidateInfo.exists() && candidateInfo.isFile())
             {
@@ -1874,57 +1769,61 @@ void MenuWorkflowController::openMapProjectDialog()
         }
     }
 
-    connect(dlg, &MapProjectDialog::settingsChanged, this, [this](const QJsonObject &s)
-    {
-        if (_mapSetting)
-        {
-            _mapSetting->save(s);
-        }
-    });
-
-    connect(dlg, &MapProjectDialog::requestRunMapProject, dlg,
-        [this, dialog = QPointer<MapProjectDialog>(dlg)](const QJsonObject &settings)
-        {
-        if (!_projectManager)
-        {
-            LOG_WARN(QStringLiteral("MapProject: 未找到 ProjectManager"));
-            if (dialog)
+    connect(dlg,
+            &MapProjectDialog::settingsChanged,
+            this,
+            [this](const QJsonObject& s)
             {
-                dialog->onPipelineFinished(
-                    false, QStringLiteral("项目管理器不可用，无法启动正射影像任务"));
-            }
-            return;
-        }
-        xjw::gui::project::OrthoGenerationRequest request;
-        QString requestError;
-        if (!xjw::gui::project::OrthoGenerationRequest::fromJson(
-                settings, &request, &requestError))
-        {
-            if (dialog)
-            {
-                dialog->onPipelineFinished(false, requestError);
-            }
-            return;
-        }
-        _projectManager->startMapProjectAsync(request);
-    });
+                if (_mapSetting)
+                {
+                    _mapSetting->save(s);
+                }
+            });
 
-    connect(dlg, &MapProjectDialog::requestCancelMapProject, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelMapProject();
-        }
-    });
+    connect(dlg,
+            &MapProjectDialog::requestRunMapProject,
+            dlg,
+            [this, dialog = QPointer<MapProjectDialog>(dlg)](const QJsonObject& settings)
+            {
+                if (!_projectManager)
+                {
+                    LOG_WARN(QStringLiteral("MapProject: 未找到 ProjectManager"));
+                    if (dialog)
+                    {
+                        dialog->onPipelineFinished(false, QStringLiteral("项目管理器不可用，无法启动正射影像任务"));
+                    }
+                    return;
+                }
+                xjw::gui::project::OrthoGenerationRequest request;
+                QString requestError;
+                if (!xjw::gui::project::OrthoGenerationRequest::fromJson(settings, &request, &requestError))
+                {
+                    if (dialog)
+                    {
+                        dialog->onPipelineFinished(false, requestError);
+                    }
+                    return;
+                }
+                _projectManager->startMapProjectAsync(request);
+            });
+
+    connect(dlg,
+            &MapProjectDialog::requestCancelMapProject,
+            this,
+            [this]()
+            {
+                if (_projectManager)
+                {
+                    _projectManager->cancelMapProject();
+                }
+            });
 
     if (_projectManager)
     {
-        connect(_projectManager, &ProjectManager::orthoPipelineStarted,
-                dlg, &MapProjectDialog::onPipelineStarted);
-        connect(_projectManager, &ProjectManager::orthoPipelineProgressChanged,
-                dlg, &MapProjectDialog::onPipelineProgress);
-        connect(_projectManager, &ProjectManager::orthoPipelineFinished,
-                dlg, &MapProjectDialog::onPipelineFinished);
+        connect(_projectManager, &ProjectManager::orthoPipelineStarted, dlg, &MapProjectDialog::onPipelineStarted);
+        connect(
+            _projectManager, &ProjectManager::orthoPipelineProgressChanged, dlg, &MapProjectDialog::onPipelineProgress);
+        connect(_projectManager, &ProjectManager::orthoPipelineFinished, dlg, &MapProjectDialog::onPipelineFinished);
     }
 
     dlg->exec();
@@ -1943,16 +1842,16 @@ void MenuWorkflowController::openWorkflowReportDialog()
         assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
     }
 
-    const QJsonObject metadata = _projectManager
-        ? _projectManager->currentMeta() : QJsonObject();
-    auto *dlg = new WorkflowReportDialog(assetsDir, metadata, _mainWindow);
+    const QJsonObject metadata = _projectManager ? _projectManager->currentMeta() : QJsonObject();
+    auto* dlg = new WorkflowReportDialog(assetsDir, metadata, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     if (_projectManager)
     {
-        connect(_projectManager, &ProjectManager::projectSessionChanged,
-                dlg, &QObject::deleteLater);
-        connect(_projectManager, &ProjectManager::projectMetadataChanged, dlg,
-                [dlg](const QJsonObject &updatedMetadata)
+        connect(_projectManager, &ProjectManager::projectSessionChanged, dlg, &QObject::deleteLater);
+        connect(_projectManager,
+                &ProjectManager::projectMetadataChanged,
+                dlg,
+                [dlg](const QJsonObject& updatedMetadata)
                 {
                     dlg->setProjectMetadata(updatedMetadata);
                     dlg->refresh();
@@ -1968,7 +1867,7 @@ void MenuWorkflowController::openCameraConvertDialog()
         return;
     }
 
-    auto *dlg = new CameraConvertDialog(_mainWindow);
+    auto* dlg = new CameraConvertDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
@@ -1980,29 +1879,19 @@ void MenuWorkflowController::openCameraCalibrationDialog()
         return;
     }
 
-    const auto session = _projectManager
-        ? _projectManager->currentSessionContext()
-        : xjw::gui::project::ProjectSessionContext{};
-    const QJsonObject metadata = _projectManager
-        ? _projectManager->currentMeta()
-        : QJsonObject();
-    const QString assetsDir = _projectManager
-        ? xjw::common::project::ProjectIO::projectAssetsDir(
-              _projectManager->currentProjectPath())
-        : QString();
-    auto *dialog = new CameraCalibrationDialog(metadata, assetsDir, _mainWindow);
+    const auto session =
+        _projectManager ? _projectManager->currentSessionContext() : xjw::gui::project::ProjectSessionContext{};
+    const QJsonObject metadata = _projectManager ? _projectManager->currentMeta() : QJsonObject();
+    const QString assetsDir =
+        _projectManager ? xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath())
+                        : QString();
+    auto* dialog = new CameraCalibrationDialog(metadata, assetsDir, _mainWindow);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     if (_projectManager)
     {
-        connect(_projectManager,
-                &ProjectManager::projectSessionChanged,
-                dialog,
-                &QDialog::close);
+        connect(_projectManager, &ProjectManager::projectSessionChanged, dialog, &QDialog::close);
     }
-    auto sessionIsCurrent = [this, session]()
-    {
-        return _projectManager && _projectManager->isCurrentSession(session);
-    };
+    auto sessionIsCurrent = [this, session]() { return _projectManager && _projectManager->isCurrentSession(session); };
     auto reopenAfterChange = [this, dialog, sessionIsCurrent](bool changed)
     {
         if (!changed || !sessionIsCurrent())
@@ -2015,51 +1904,50 @@ void MenuWorkflowController::openCameraCalibrationDialog()
     connect(dialog,
             &CameraCalibrationDialog::importCameraForImageRequested,
             this,
-            [this, reopenAfterChange, sessionIsCurrent](const QString &imagePath)
-    {
-        if (sessionIsCurrent())
-        {
-            reopenAfterChange(_projectManager->importCameraForImage(imagePath));
-        }
-    });
+            [this, reopenAfterChange, sessionIsCurrent](const QString& imagePath)
+            {
+                if (sessionIsCurrent())
+                {
+                    reopenAfterChange(_projectManager->importCameraForImage(imagePath));
+                }
+            });
     connect(dialog,
             &CameraCalibrationDialog::batchImportRequested,
             this,
             [this, reopenAfterChange, sessionIsCurrent]()
-    {
-        if (sessionIsCurrent())
-        {
-            reopenAfterChange(_projectManager->importCamerasByFilenameBatch());
-        }
-    });
+            {
+                if (sessionIsCurrent())
+                {
+                    reopenAfterChange(_projectManager->importCamerasByFilenameBatch());
+                }
+            });
     connect(dialog,
             &CameraCalibrationDialog::initializeIntrinsicsRequested,
             this,
-            [this, reopenAfterChange, sessionIsCurrent](const QJsonObject &settings)
-    {
-        if (sessionIsCurrent())
-        {
-            reopenAfterChange(_projectManager->initializeCamerasFromIntrinsics(settings));
-        }
-    });
+            [this, reopenAfterChange, sessionIsCurrent](const QJsonObject& settings)
+            {
+                if (sessionIsCurrent())
+                {
+                    reopenAfterChange(_projectManager->initializeCamerasFromIntrinsics(settings));
+                }
+            });
     connect(dialog,
             &CameraCalibrationDialog::clearCamerasRequested,
             this,
-            [this, reopenAfterChange, sessionIsCurrent](const QStringList &imagePaths)
-    {
-        if (!sessionIsCurrent())
-        {
-            return;
-        }
-        int clearedCount = 0;
-        QString error;
-        const bool changed = _projectManager->clearImageCameras(
-            imagePaths, &clearedCount, &error);
-        if (!changed && !error.isEmpty())
-        {
-            QMessageBox::warning(_mainWindow, tr("清除相机"), error);
-        }
-        reopenAfterChange(changed && clearedCount > 0);
-    });
+            [this, reopenAfterChange, sessionIsCurrent](const QStringList& imagePaths)
+            {
+                if (!sessionIsCurrent())
+                {
+                    return;
+                }
+                int clearedCount = 0;
+                QString error;
+                const bool changed = _projectManager->clearImageCameras(imagePaths, &clearedCount, &error);
+                if (!changed && !error.isEmpty())
+                {
+                    QMessageBox::warning(_mainWindow, tr("清除相机"), error);
+                }
+                reopenAfterChange(changed && clearedCount > 0);
+            });
     dialog->show();
 }

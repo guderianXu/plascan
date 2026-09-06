@@ -38,7 +38,9 @@ plamatrix::SchurComplementLinearBackend linearBackend(BABackend backend)
     {
         return plamatrix::SchurComplementLinearBackend::OpenCl;
     }
-    return plamatrix::SchurComplementLinearBackend::Cpu;
+    return plamatrix::hasSparseDirectSchurSolver()
+        ? plamatrix::SchurComplementLinearBackend::SparseCpu
+        : plamatrix::SchurComplementLinearBackend::Cpu;
 }
 
 const char *linearBackendName(plamatrix::SchurComplementLinearBackend backend)
@@ -49,6 +51,8 @@ const char *linearBackendName(plamatrix::SchurComplementLinearBackend backend)
         return "block_jacobi_pcg_cpu";
     case plamatrix::SchurComplementLinearBackend::DenseCpu:
         return "dense_cholesky_cpu";
+    case plamatrix::SchurComplementLinearBackend::SparseCpu:
+        return "sparse_cholesky_native_cpu";
     case plamatrix::SchurComplementLinearBackend::Cuda:
         return "block_jacobi_pcg_cuda";
     case plamatrix::SchurComplementLinearBackend::OpenCl:
@@ -133,7 +137,8 @@ bool solvePlanetaryLineScanBundleAdjustPlaMatrix(
                 solverOptions.deviceIndex = options.plaMatrixDevice;
                 solverOptions.maxIterations =
                     (backend == plamatrix::SchurComplementLinearBackend::Cpu ||
-                     backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
+                     backend == plamatrix::SchurComplementLinearBackend::DenseCpu ||
+                     backend == plamatrix::SchurComplementLinearBackend::SparseCpu)
                     ? std::max(100, static_cast<int>(
                           workingSet->cameraParameters.size()) * 24)
                     : std::max(200, static_cast<int>(
@@ -152,7 +157,8 @@ bool solvePlanetaryLineScanBundleAdjustPlaMatrix(
                     equations, lm.damping(), solverOptions, workspace,
                     &primaryStep, &eliminatedStep);
                 if (!report.converged &&
-                    backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
+                    (backend == plamatrix::SchurComplementLinearBackend::DenseCpu ||
+                     backend == plamatrix::SchurComplementLinearBackend::SparseCpu))
                 {
                     backend = plamatrix::SchurComplementLinearBackend::Cpu;
                     result->linearSolverName = linearBackendName(backend);

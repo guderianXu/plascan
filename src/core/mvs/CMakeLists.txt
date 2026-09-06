@@ -3,6 +3,13 @@ project(mvs LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
 
+if(NOT TARGET recovered_depth)
+    add_subdirectory(
+        "${CMAKE_SOURCE_DIR}/3rdparty/recovered_depth"
+        "${CMAKE_BINARY_DIR}/3rdparty/recovered_depth"
+        EXCLUDE_FROM_ALL)
+endif()
+
 # ── CUDA（可选）──────────────────────────────────────────────────────────────
 # CUDA 已在根 CMakeLists 中全局启用, 直接判断即可
 if(PLASCAN_ENABLE_CUDA AND DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
@@ -210,6 +217,7 @@ endif()
 target_link_libraries(mvs
     PUBLIC
         camera
+        recovered_depth
         plascan_common_log
         plascan_common_io
         plapoint::plapoint

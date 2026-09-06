@@ -1,0 +1,37 @@
+{
+  "name": "about-dialog-smoke",
+  "default_timeout": 10,
+  "steps": [
+    {
+      "wait": {
+        "object_name": "actionAbout",
+        "exists": true,
+        "visible": true,
+        "enabled": true
+      }
+    },
+    {
+      "action": {
+        "object_name": "actionAbout",
+        "operation": "activate"
+      }
+    },
+    {
+      "wait": {
+        "modal_present": true,
+        "modal_title_contains": "PlaScan"
+      }
+    },
+    {
+      "capture": {}
+    },
+    {
+      "close_dialog": {}
+    },
+    {
+      "wait": {
+        "modal_present": false
+      }
+    }
+  ]
+}

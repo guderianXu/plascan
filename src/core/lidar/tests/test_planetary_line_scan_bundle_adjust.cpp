@@ -248,18 +248,19 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
         EXPECT_EQ(accelerated.usedBackend, backend);
         EXPECT_TRUE(accelerated.usedGpu);
         EXPECT_FALSE(accelerated.deviceName.empty());
-        EXPECT_NEAR(accelerated.refinedImageRmsPixels,
-                    withLaser.refinedImageRmsPixels, 1.0e-6);
-        EXPECT_NEAR(accelerated.refinedLaserRangeRmsMeters,
-                    withLaser.refinedLaserRangeRmsMeters, 1.0e-6);
+        EXPECT_NEAR(accelerated.refinedImageRmsPixels, withLaser.refinedImageRmsPixels, 1.0e-6);
+        EXPECT_NEAR(accelerated.refinedLaserRangeRmsMeters, withLaser.refinedLaserRangeRmsMeters, 1.0e-6);
     }
 
     options.backend = xjw::BABackend::Auto;
-    options.minPlaMatrixGpuCameras = 1000;
-    options.minPlaMatrixGpuObservations = 1000000;
+    options.minPlaMatrixCudaCameras = 1000;
+    options.minPlaMatrixCudaObservations = 1000000;
+    options.minPlaMatrixOpenClCameras = 1000;
+    options.minPlaMatrixOpenClObservations = 1000000;
+    options.minPlaMatrixDenseCameras = 1000;
     xjw::lidar::PlanetaryLineScanBaResult automatic;
-    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(
-        cameras, network, &laser, options, &automatic, &error)) << error;
+    ASSERT_TRUE(xjw::lidar::runPlanetaryLineScanBundleAdjust(cameras, network, &laser, options, &automatic, &error))
+        << error;
     EXPECT_EQ(automatic.requestedBackend, xjw::BABackend::Auto);
     EXPECT_EQ(automatic.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_FALSE(automatic.backendFallback);

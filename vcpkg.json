@@ -17,6 +17,7 @@
     },
     "gtest",
     "libzip",
+    "openexr",
     "opencl",
     {
       "name": "qtbase",

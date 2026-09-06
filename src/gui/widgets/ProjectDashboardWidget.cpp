@@ -57,21 +57,6 @@ bool isVisibleTaskSnapshot(const QJsonObject &record)
         || record.value(QStringLiteral("cancelling")).toBool(false);
 }
 
-QString taskProgressText(const QJsonObject &record)
-{
-    const int value = record.value(QStringLiteral("progress_value")).toInt(-1);
-    const int maximum = record.value(QStringLiteral("progress_maximum")).toInt(-1);
-    if (value >= 0 && maximum > 0)
-    {
-        return QStringLiteral("%1/%2").arg(value).arg(maximum);
-    }
-    if (value >= 0)
-    {
-        return QString::number(value);
-    }
-    return QString();
-}
-
 bool hasNumber(const QJsonObject &record, const QString &key)
 {
     const QJsonValue value = record.value(key);
@@ -212,16 +197,6 @@ void ProjectDashboardWidget::setupUi()
     _taskLabel->setWordWrap(true);
     layout->addWidget(_taskLabel);
 
-    _taskTable = new QTableWidget(this);
-    _taskTable->setObjectName(QStringLiteral("dashboardTaskTable"));
-    _taskTable->setColumnCount(3);
-    _taskTable->setHorizontalHeaderLabels({tr("任务"), tr("状态"), tr("进度")});
-    configureReadOnlyTable(_taskTable);
-    _taskTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    _taskTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    _taskTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    layout->addWidget(_taskTable, 1);
-
     _referenceTable = new QTableWidget(this);
     _referenceTable->setObjectName(QStringLiteral("dashboardReferenceTable"));
     _referenceTable->setColumnCount(3);
@@ -279,7 +254,7 @@ void ProjectDashboardWidget::loadFromJson(const QJsonObject &meta)
 void ProjectDashboardWidget::setTaskSnapshots(const QJsonArray &tasks)
 {
     _taskSnapshots = tasks;
-    updateTaskTable();
+    updateTaskSummary();
     emit taskSnapshotsChanged(_taskSnapshots);
 }
 
@@ -287,11 +262,11 @@ void ProjectDashboardWidget::clear()
 {
     _taskSnapshots = QJsonArray();
     updateTables(QJsonObject());
-    updateTaskTable();
+    updateTaskSummary();
     emit taskSnapshotsChanged(_taskSnapshots);
 }
 
-void ProjectDashboardWidget::updateTaskTable()
+void ProjectDashboardWidget::updateTaskSummary()
 {
     QVector<QJsonObject> visibleTasks;
     for (const QJsonValue &value : _taskSnapshots)
@@ -310,36 +285,9 @@ void ProjectDashboardWidget::updateTaskTable()
     if (_taskLabel)
     {
         _taskLabel->setText(visibleTasks.isEmpty()
-            ? tr("主任务空闲，概览页仅只读展示已有项目数据。")
-            : tr("当前运行任务 %1；概览页只读旁听状态，不会触发处理流程。").arg(visibleTasks.size()));
+                                ? tr("当前无运行任务；处理详情在底部“工作”面板中查看。")
+                                : tr("当前运行任务 %1；详细进度请查看底部“工作”面板。").arg(visibleTasks.size()));
     }
-
-    if (!_taskTable)
-    {
-        return;
-    }
-
-    _taskTable->setRowCount(visibleTasks.size());
-    for (int row = 0; row < visibleTasks.size(); ++row)
-    {
-        const QJsonObject record = visibleTasks.at(row);
-        QString statusText = record.value(QStringLiteral("status_text")).toString();
-        if (record.value(QStringLiteral("cancelling")).toBool(false)
-            && !statusText.contains(QStringLiteral("取消")))
-        {
-            statusText = QStringLiteral("正在取消：%1").arg(statusText);
-        }
-        _taskTable->setItem(row,
-                             0,
-                             makeReadOnlyItem(record.value(QStringLiteral("name")).toString()));
-        _taskTable->setItem(row,
-                             1,
-                             makeReadOnlyItem(statusText));
-        _taskTable->setItem(row,
-                             2,
-                             makeReadOnlyItem(taskProgressText(record)));
-    }
-    updateTableVisibility(_taskTable);
 }
 
 void ProjectDashboardWidget::updateTables(const QJsonObject &meta)

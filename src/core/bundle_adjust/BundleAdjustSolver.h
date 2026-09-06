@@ -39,11 +39,15 @@ namespace xjw
         /// 根据问题规模与配置选择实际执行后端。
         static BABackend selectBackendForProblem(const BAProblemStats& stats, const BAOptions& options);
 
+        /// 只判断问题规模是否达到指定设备后端的 Auto 门槛，不检查设备运行时可用性。
+        static bool
+        autoBackendMeetsScaleThreshold(BABackend backend, const BAProblemStats& stats, const BAOptions& options);
+
         /// 返回自动后端及机器可读原因，供日志解释 CPU/CUDA 选择。
         static BABackendDecision decideBackendForProblem(const BAProblemStats& stats, const BAOptions& options);
 
         /**
-         * @brief 执行光束法平差优化（交替优化点位置和相机位姿）。
+         * @brief 在同一 Schur 问题中联合优化点、相机位姿和可选共享内参。
          *
          * @param cameras  初始相机列表（优化过程中将作副本修改）
          * @param tracks   轨迹列表，每条轨迹包含初始三维点和多相机观测

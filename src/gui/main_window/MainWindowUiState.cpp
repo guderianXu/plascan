@@ -20,7 +20,7 @@
 
 namespace
 {
-constexpr int ProjectDockLayoutVersion = 4;
+    constexpr int ProjectDockLayoutVersion = 5;
 }
 
 QJsonObject MainWindow::currentProjectMeta() const
@@ -260,17 +260,15 @@ void MainWindow::restoreDefaultProjectDockLayout()
     else
     {
         _workspaceDock->setVisible(true);
-        _propertiesDock->setVisible(true);
-        _workDock->setVisible(true);
-        _photosDock->setVisible(true);
-        _logDock->setVisible(true);
+        _propertiesDock->setVisible(false);
+        _workDock->setVisible(false);
+        _photosDock->setVisible(false);
+        _logDock->setVisible(false);
         _workspaceDock->raise();
-        _propertiesDock->raise();
-        _photosDock->raise();
     }
 
     resizeDocks({_workspaceDock}, {320}, Qt::Horizontal);
-    resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical);
+    resizeDocks({_workspaceDock, _propertiesDock}, {640, 160}, Qt::Vertical);
     resizeDocks({_photosDock}, {120}, Qt::Vertical);
 }
 

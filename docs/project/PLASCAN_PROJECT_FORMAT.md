@@ -135,7 +135,7 @@ owner/peer 身份和算法变体为准。
   "settings": {
     "storage_format": "pimatch",
     "format_version": 1,
-    "algorithm_id": "auto_sift",
+    "algorithm_id": "plamatch_hct",
     "algorithm_version": 1
   }
 }
@@ -143,6 +143,9 @@ owner/peer 身份和算法变体为准。
 
 `.pimatch` 自身按算法变体隔离关键点观测，并包含相邻影像、置信度、残差、几何状态和缓存指纹。工程不登记独立
 特征文件，也不接受旧 `.match + JSON sidecar` 作为当前结果。
+`settings` 不再重复嵌入 `image0/image1/owner_image/neighbor_images` 路径；顶层 `image/neighbors`
+已是统一关系索引。`report_results[]` 同样只保存报告 URI 和少量状态摘要，完整报告作为 Chunk 文件存储，
+避免在 `chunk.zip` 中再复制一份包含数千路径的大 JSON。保存事务对同一外部源文件只暂存一次。
 
 `bundle_adjust/` 保存每次 BA 的可复现运行产物，按运行时间或运行模式建立子目录，例如
 `ba_run_summary.json`、点/相机误差 CSV、评估图和可选的精化相机文件。CLI 与 GUI 均写入

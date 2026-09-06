@@ -11,108 +11,100 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double focal)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(focal, focal, 512.0, 384.0);
-    camera.setPose({{1.0, 0.0, 0.0,
-                     0.0, 1.0, 0.0,
-                     0.0, 0.0, 1.0}},
-                   {{cx, cy, cz}});
-    return camera;
-}
-
-xjw::FramePinholeCamera makeCameraWithIntrinsics(double cameraX,
-                                     double cameraY,
-                                     double cameraZ,
-                                     double focalX,
-                                     double focalY,
-                                     double principalX,
-                                     double principalY)
-{
-    xjw::FramePinholeCamera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
-    camera.setIntrinsics(focalX, focalY, principalX, principalY);
-    return camera;
-}
-
-bool projectPoint(const xjw::FramePinholeCamera &camera,
-                  const std::array<double, 3> &point,
-                  double *u,
-                  double *v)
-{
-    const double world[3] = {point[0], point[1], point[2]};
-    double pixel[2] = {0.0, 0.0};
-    if (!camera.projectWorldPoint(world, pixel))
+    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double focal)
     {
-        return false;
+        xjw::FramePinholeCamera camera;
+        camera.setIntrinsics(focal, focal, 512.0, 384.0);
+        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{cx, cy, cz}});
+        return camera;
     }
-    *u = pixel[0];
-    *v = pixel[1];
-    return true;
-}
 
-xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera> &truthCameras,
-                       const std::array<double, 3> &truth)
-{
-    xjw::BATrack track;
-    track.initialPoint = truth;
-    track.controlPointConstraints.push_back({truth, 0.01, 1.0, 0});
-    for (size_t i = 0; i < truthCameras.size(); ++i)
+    xjw::FramePinholeCamera makeCameraWithIntrinsics(double cameraX,
+                                                     double cameraY,
+                                                     double cameraZ,
+                                                     double focalX,
+                                                     double focalY,
+                                                     double principalX,
+                                                     double principalY)
     {
-        double u = 0.0;
-        double v = 0.0;
-        if (projectPoint(truthCameras[i], truth, &u, &v))
+        xjw::FramePinholeCamera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
+        camera.setIntrinsics(focalX, focalY, principalX, principalY);
+        return camera;
+    }
+
+    bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& point, double* u, double* v)
+    {
+        const double world[3] = {point[0], point[1], point[2]};
+        double pixel[2] = {0.0, 0.0};
+        if (!camera.projectWorldPoint(world, pixel))
         {
-            track.observations.push_back({static_cast<int>(i), u, v, 1.0});
+            return false;
         }
+        *u = pixel[0];
+        *v = pixel[1];
+        return true;
     }
-    return track;
-}
 
-std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::FramePinholeCamera> &truthCameras)
-{
-    std::vector<xjw::BATrack> tracks;
-    for (int y = 0; y < 5; ++y)
+    xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera>& truthCameras, const std::array<double, 3>& truth)
     {
-        for (int x = 0; x < 5; ++x)
+        xjw::BATrack track;
+        track.initialPoint = truth;
+        track.controlPointConstraints.push_back({truth, 0.01, 1.0, 0});
+        for (size_t i = 0; i < truthCameras.size(); ++i)
         {
-            const std::array<double, 3> truth{{
-                (static_cast<double>(x) - 2.0) * 0.35,
-                (static_cast<double>(y) - 2.0) * 0.25,
-                8.0 + static_cast<double>((x + y) % 4) * 0.7,
-            }};
-            xjw::BATrack track = makeTrack(truthCameras, truth);
-            if (track.observations.size() >= 3)
+            double u = 0.0;
+            double v = 0.0;
+            if (projectPoint(truthCameras[i], truth, &u, &v))
             {
-                tracks.push_back(std::move(track));
+                track.observations.push_back({static_cast<int>(i), u, v, 1.0});
             }
         }
+        return track;
     }
-    return tracks;
-}
 
-std::vector<xjw::BATrack> makeWideCalibrationTracks(
-    const std::vector<xjw::FramePinholeCamera> &truthCameras)
-{
-    std::vector<xjw::BATrack> tracks;
-    for (int y = -6; y <= 6; ++y)
+    std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::FramePinholeCamera>& truthCameras)
     {
-        for (int x = -6; x <= 6; ++x)
+        std::vector<xjw::BATrack> tracks;
+        for (int y = 0; y < 5; ++y)
         {
-            const std::array<double, 3> truth{{
-                static_cast<double>(x) * 0.45,
-                static_cast<double>(y) * 0.35,
-                7.0 + static_cast<double>((x - y + 24) % 5) * 0.55,
-            }};
-            xjw::BATrack track = makeTrack(truthCameras, truth);
-            if (track.observations.size() >= 3)
+            for (int x = 0; x < 5; ++x)
             {
-                tracks.push_back(std::move(track));
+                const std::array<double, 3> truth{{
+                    (static_cast<double>(x) - 2.0) * 0.35,
+                    (static_cast<double>(y) - 2.0) * 0.25,
+                    8.0 + static_cast<double>((x + y) % 4) * 0.7,
+                }};
+                xjw::BATrack track = makeTrack(truthCameras, truth);
+                if (track.observations.size() >= 3)
+                {
+                    tracks.push_back(std::move(track));
+                }
             }
         }
+        return tracks;
     }
-    return tracks;
-}
+
+    std::vector<xjw::BATrack> makeWideCalibrationTracks(const std::vector<xjw::FramePinholeCamera>& truthCameras)
+    {
+        std::vector<xjw::BATrack> tracks;
+        for (int y = -6; y <= 6; ++y)
+        {
+            for (int x = -6; x <= 6; ++x)
+            {
+                const std::array<double, 3> truth{{
+                    static_cast<double>(x) * 0.45,
+                    static_cast<double>(y) * 0.35,
+                    7.0 + static_cast<double>((x - y + 24) % 5) * 0.55,
+                }};
+                xjw::BATrack track = makeTrack(truthCameras, truth);
+                if (track.observations.size() >= 3)
+                {
+                    tracks.push_back(std::move(track));
+                }
+            }
+        }
+        return tracks;
+    }
 
 } // namespace
 
@@ -190,8 +182,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixJointlyRefinesSharedFocalAndPoints)
     options.enablePointFilter = false;
     options.maxIterations = 30;
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
 
     ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     ASSERT_TRUE(result.solutionUsable);
@@ -235,8 +226,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixUsesOneAbsoluteFocalForHeterogeneousI
     options.enablePointFilter = false;
     options.maxIterations = 30;
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
 
     ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     ASSERT_TRUE(result.solutionUsable);
@@ -245,7 +235,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixUsesOneAbsoluteFocalForHeterogeneousI
     const double refinedFocal = result.refinedCameras.front().focalX();
     EXPECT_GT(refinedFocal, 1200.0);
     EXPECT_LT(refinedFocal, 1700.0);
-    for (const xjw::FramePinholeCamera &camera : result.refinedCameras)
+    for (const xjw::FramePinholeCamera& camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), refinedFocal, 1e-6);
     }
@@ -262,11 +252,10 @@ TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesAvailablePlaMatrixGpu
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
     options.refineSharedFocalLength = true;
-    options.minPlaMatrixGpuCameras = 1;
-    options.minPlaMatrixGpuObservations = 1;
+    options.minPlaMatrixCudaCameras = 1;
+    options.minPlaMatrixCudaObservations = 1;
 
-    const xjw::BABackendDecision decision =
-        xjw::BundleAdjust::decideBackendForProblem(stats, options);
+    const xjw::BABackendDecision decision = xjw::BundleAdjust::decideBackendForProblem(stats, options);
     if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCuda))
     {
         EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixCuda);
@@ -275,7 +264,7 @@ TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesAvailablePlaMatrixGpu
     else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixOpenCl))
     {
         EXPECT_EQ(decision.backend, xjw::BABackend::PlaMatrixOpenCl);
-        EXPECT_EQ(decision.reason, "large_joint_problem_uses_plamatrix_opencl");
+        EXPECT_EQ(decision.reason, "dense_joint_problem_uses_plamatrix_opencl");
     }
     else
     {
@@ -318,23 +307,16 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRefinesIndependentCalibrationGroups)
     options.enablePointFilter = false;
     options.maxIterations = 40;
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
 
     ASSERT_TRUE(result.solutionUsable);
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
     EXPECT_EQ(result.refinedCalibrationGroupCount, 2);
-    EXPECT_NEAR(result.refinedCameras[0].focalX(),
-                result.refinedCameras[1].focalX(),
-                1e-6);
-    EXPECT_NEAR(result.refinedCameras[2].focalX(),
-                result.refinedCameras[3].focalX(),
-                1e-6);
+    EXPECT_NEAR(result.refinedCameras[0].focalX(), result.refinedCameras[1].focalX(), 1e-6);
+    EXPECT_NEAR(result.refinedCameras[2].focalX(), result.refinedCameras[3].focalX(), 1e-6);
     EXPECT_NEAR(result.refinedCameras[0].focalX(), 1200.0, 30.0);
     EXPECT_NEAR(result.refinedCameras[2].focalX(), 1800.0, 30.0);
-    EXPECT_GT(result.refinedCameras[2].focalX() -
-                  result.refinedCameras[0].focalX(),
-              400.0);
+    EXPECT_GT(result.refinedCameras[2].focalX() - result.refinedCameras[0].focalX(), 400.0);
 }
 
 TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
@@ -361,20 +343,16 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
     options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
-    options.stageSharedFocalRefinement = true;
     options.enableControlPointConstraints = true;
     options.controlPointWeight = 100.0;
     options.enablePointFilter = false;
     options.maxIterations = 12;
 
     const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(
-            initialCameras,
-            makeSharedFocalTracks(truthCameras),
-            options);
+        xjw::BundleAdjust::optimizePoints(initialCameras, makeSharedFocalTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable);
-    EXPECT_EQ(result.selfCalibrationStagesRun, 2);
+    EXPECT_EQ(result.selfCalibrationStagesRun, 1);
 }
 
 TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
@@ -388,11 +366,7 @@ TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
     options.refineSharedFocalLength = true;
     options.cameraCalibrationGroupIds = {0};
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(
-            cameras,
-            makeSharedFocalTracks(cameras),
-            options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
@@ -439,14 +413,11 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedPinholeIntrinsic
     options.maxIterations = 60;
 
     const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(
-            initialCameras,
-            makeSharedFocalTracks(truthCameras),
-            options);
+        xjw::BundleAdjust::optimizePoints(initialCameras, makeSharedFocalTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
-    const xjw::FramePinholeCamera &camera = result.refinedCameras.front();
+    const xjw::FramePinholeCamera& camera = result.refinedCameras.front();
     EXPECT_NEAR(camera.focalX(), 1500.0, 15.0);
     EXPECT_NEAR(camera.focalY(), 1530.0, 20.0);
     EXPECT_NEAR(camera.principalX(), 485.0, 8.0);
@@ -466,11 +437,7 @@ TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFo
     options.refineCameraPose = false;
     options.refineSharedPrincipalPoint = true;
 
-    const xjw::BAResult result =
-        xjw::BundleAdjust::optimizePoints(
-            cameras,
-            makeSharedFocalTracks(cameras),
-            options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
@@ -490,7 +457,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedBrownConradyDist
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera &camera : truthCameras)
+    for (xjw::FramePinholeCamera& camera : truthCameras)
     {
         camera.setDistortion(-0.12, 0.035, 0.08, 0.003, -0.002);
     }
@@ -524,15 +491,14 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedBrownConradyDist
     options.enablePointFilter = false;
     options.maxIterations = 60;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        initialCameras, makeWideCalibrationTracks(truthCameras), options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, makeWideCalibrationTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu) << result.backendMessage;
-    EXPECT_EQ(result.selfCalibrationStagesRun, 3);
+    EXPECT_EQ(result.selfCalibrationStagesRun, 1);
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::FramePinholeCamera::Distortion distortion =
-        result.refinedCameras.front().distortion();
+    const xjw::FramePinholeCamera::Distortion distortion = result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.12, 0.02);
     EXPECT_NEAR(distortion.radialK2, 0.035, 0.03);
     EXPECT_NEAR(distortion.radialK3, 0.08, 0.04);
@@ -557,7 +523,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera &camera : truthCameras)
+    for (xjw::FramePinholeCamera& camera : truthCameras)
     {
         camera.setDistortion(-0.10, 0.0, 0.0, 0.0, 0.0);
     }
@@ -567,7 +533,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera &camera : initialCameras)
+    for (xjw::FramePinholeCamera& camera : initialCameras)
     {
         camera.setDistortion(0.0, 0.012, -0.018, 0.001, -0.002);
     }
@@ -587,19 +553,18 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
     options.enablePointFilter = false;
     options.maxIterations = 40;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        initialCameras, makeWideCalibrationTracks(truthCameras), options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, makeWideCalibrationTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::FramePinholeCamera::Distortion distortion =
-        result.refinedCameras.front().distortion();
+    const xjw::FramePinholeCamera::Distortion distortion = result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.10, 0.02);
     EXPECT_DOUBLE_EQ(distortion.radialK2, 0.012);
     EXPECT_DOUBLE_EQ(distortion.radialK3, -0.018);
     EXPECT_DOUBLE_EQ(distortion.tangentialP1, 0.001);
     EXPECT_DOUBLE_EQ(distortion.tangentialP2, -0.002);
-    EXPECT_EQ(result.selfCalibrationStagesRun, 2);
+    EXPECT_EQ(result.selfCalibrationStagesRun, 1);
 }
 
 TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
@@ -628,20 +593,16 @@ TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
     options.enablePointFilter = false;
     options.maxIterations = 8;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        initialCameras, makeSharedFocalTracks(truthCameras), options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, makeSharedFocalTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
     EXPECT_EQ(result.refinedIntrinsicCount, 0);
     for (std::size_t index = 0; index < initialCameras.size(); ++index)
     {
-        EXPECT_DOUBLE_EQ(
-            result.refinedCameras[index].focalX(),
-            initialCameras[index].focalX());
-        EXPECT_DOUBLE_EQ(
-            result.refinedCameras[index].focalY(),
-            initialCameras[index].focalY());
+        EXPECT_DOUBLE_EQ(result.refinedCameras[index].focalX(), initialCameras[index].focalX());
+        EXPECT_DOUBLE_EQ(result.refinedCameras[index].focalY(), initialCameras[index].focalY());
     }
 }
 
@@ -654,7 +615,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
         makeCamera(0.0, 2.0, 0.0, 1000.0),
     };
     std::vector<xjw::FramePinholeCamera> warmCameras = referenceCameras;
-    for (xjw::FramePinholeCamera &camera : warmCameras)
+    for (xjw::FramePinholeCamera& camera : warmCameras)
     {
         camera.setIntrinsics(1200.0, 900.0, 512.0, 384.0);
     }
@@ -671,20 +632,20 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
     options.enablePointFilter = false;
     options.maxIterations = 2;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        warmCameras, makeSharedFocalTracks(warmCameras), options);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(warmCameras, makeSharedFocalTracks(warmCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), warmCameras.size());
     EXPECT_NEAR(result.refinedSharedFocalScale, 1.05, 1.0e-12);
-    for (const xjw::FramePinholeCamera &camera : result.refinedCameras)
+    for (const xjw::FramePinholeCamera& camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), 1050.0, 1.0e-8);
         EXPECT_NEAR(camera.focalY(), 787.5, 1.0e-8);
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, LegacyRejectsMultipleCalibrationGroups)
+TEST(BundleAdjustSharedFocalTest, LegacyNameMapsToReferenceCpuWithMultipleCalibrationGroups)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
@@ -698,20 +659,15 @@ TEST(BundleAdjustSharedFocalTest, LegacyRejectsMultipleCalibrationGroups)
     options.refineSharedFocalLength = true;
     options.cameraCalibrationGroupIds = {0, 0, 1, 1};
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        cameras, makeSharedFocalTracks(cameras), options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, makeSharedFocalTracks(cameras), options);
 
-    EXPECT_FALSE(result.solutionUsable);
-    EXPECT_EQ(
-        result.solveStatus,
-        xjw::BASolveStatus::UnsupportedConfiguration);
-    EXPECT_NE(
-        result.backendMessage.find("多标定组"),
-        std::string::npos);
+    EXPECT_TRUE(result.solutionUsable) << result.backendMessage;
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_EQ(result.refinedCalibrationGroupCount, 2);
+    EXPECT_NE(result.backendMessage.find("旧 CPU 名称已映射"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest,
-     AutoDoesNotQualityFallbackMultipleGroupsToLegacy)
+TEST(BundleAdjustSharedFocalTest, AutoDoesNotQualityFallbackMultipleGroupsToLegacy)
 {
     if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
@@ -732,21 +688,17 @@ TEST(BundleAdjustSharedFocalTest,
     options.enableBackendQualityGate = true;
     options.minAcceptedValidTrackRatio = 1.1;
     options.enablePointFilter = false;
-    options.stageSharedFocalRefinement = false;
     options.maxIterations = 2;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        cameras, makeSharedFocalTracks(cameras), options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
-    EXPECT_NE(
-        result.backendMessage.find("没有兼容的 legacy 回退"),
-        std::string::npos);
+    EXPECT_TRUE(result.qualityGateRejected);
+    EXPECT_NE(result.backendMessage.find("没有其它 CPU 回退"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest,
-     AutoDoesNotQualityFallbackFocalPriorToLegacy)
+TEST(BundleAdjustSharedFocalTest, AutoDoesNotQualityFallbackFocalPriorToLegacy)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
@@ -761,15 +713,12 @@ TEST(BundleAdjustSharedFocalTest,
     options.enableBackendQualityGate = true;
     options.minAcceptedValidTrackRatio = 1.1;
     options.enablePointFilter = false;
-    options.stageSharedFocalRefinement = false;
     options.maxIterations = 2;
 
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        cameras, makeSharedFocalTracks(cameras), options);
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, makeSharedFocalTracks(cameras), options);
 
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
-    EXPECT_NE(
-        result.backendMessage.find("稳定参考先验"),
-        std::string::npos);
+    EXPECT_TRUE(result.qualityGateRejected);
+    EXPECT_NE(result.backendMessage.find("没有其它 CPU 回退"), std::string::npos);
 }

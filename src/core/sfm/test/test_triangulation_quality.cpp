@@ -77,3 +77,35 @@ TEST(TriangulationQualityTest, ProjectionAccuracyAveragesEveryObservationScale)
     incomplete.back().measurementScale = std::numeric_limits<double>::quiet_NaN();
     EXPECT_TRUE(std::isnan(xjw::projectionAccuracy(incomplete)));
 }
+
+TEST(TriangulationQualityTest, CleanTiePointQualityMatchesReferenceContract)
+{
+    std::vector<xjw::FramePinholeCamera> cameras(3);
+    const std::array<double, 3> camera_x{-1.0, 0.0, 1.0};
+    const std::array<double, 3> scales{1.0, 2.0, 3.0};
+    const std::array<double, 3> point{0.0, 0.0, 5.0};
+    std::vector<xjw::TiePointQualityObservation> observations;
+    for (std::size_t index = 0; index < cameras.size(); ++index)
+    {
+        xjw::FramePinholeCamera& camera = cameras[index];
+        camera.setIntrinsics(1000.0, 1000.0, 0.0, 0.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {camera_x[index], 0.0, 0.0});
+        double projected[2]{};
+        ASSERT_TRUE(camera.projectWorldPoint(point.data(), projected));
+        observations.push_back({&camera, scales[index], {projected[0] + (index == 0 ? 2.0 : 0.0), projected[1]}});
+    }
+
+    const xjw::CleanTiePointQuality quality = xjw::evaluateCleanTiePointQuality(observations, point);
+
+    EXPECT_DOUBLE_EQ(quality.reprojectionError, 2.0);
+    EXPECT_EQ(quality.imageCount, 3U);
+    EXPECT_DOUBLE_EQ(quality.projectionAccuracy, 2.0);
+    ASSERT_TRUE(quality.hasProjectionGeometry);
+    EXPECT_NEAR(quality.reconstructionUncertainty, std::sqrt(37.5), 1.0e-9);
+
+    observations.front().measurementScale = 0.0;
+    const xjw::CleanTiePointQuality zeroScale = xjw::evaluateCleanTiePointQuality(observations, point);
+    EXPECT_DOUBLE_EQ(zeroScale.reprojectionError, 2.0);
+    EXPECT_DOUBLE_EQ(zeroScale.projectionAccuracy, 5.0 / 3.0);
+    EXPECT_NEAR(zeroScale.reconstructionUncertainty, quality.reconstructionUncertainty, 1.0e-12);
+}

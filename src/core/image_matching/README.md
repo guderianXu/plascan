@@ -1,7 +1,7 @@
 # image_matching 统一影像匹配模块
 
 `image_matching` 是 PlaScan 唯一的局部特征提取、学习型匹配、两视几何验证和匹配结果持久化模块。
-默认生产算法是无需外部模型的 **Auto SIFT**，可选算法包括 **ORB 二进制兼容基线**、
+默认生产算法是无需外部模型的 **PlaMatch-HCT**，可选算法包括 **Auto SIFT**、
 **CUDA SIFT + TensorRT LightGlue** 与 **TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
 CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 TensorRT 数据布局。
 
@@ -16,9 +16,10 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
   `cudaMalloc/cudaFree`；影像级流水线使受保护的 GPU 提取段与另一影像的 CPU 后处理重叠。
   CUDA 描述子匹配为每个 worker 建立非阻塞 stream 和可增长复用缓冲，一次上传完成双向最近邻匹配；
   已完成 RootSIFT/L2 归一化的描述子不会在每个像对内重复克隆和归一化。
-- `orb_binary/` 注册 `orb_binary`，作为当前 OpenCV 5 依赖可用的 clean-room 二进制 benchmark
-  通道。它使用 Hamming 双向 top-2、ratio 和 mutual gate，不代表 Metashape 的私有 LoG/DoG
-  detector、MLDB 采样对或阈值，也不替换默认 Auto SIFT。
+- `plamatch_hct/` 注册 `plamatch_hct`，实现 LoG、36-bin 主方向、64-byte MLDB、CPU HCTree、
+  CUDA/OpenCL 16×16 tiled Hamming、双向 0.8 ratio、目标唯一性、方向行合并和局部空间一致性。
+  full/coarse 特征随 `IFeaturePayload` 进入任务缓存；CPU 每幅影像只建树一次，GPU 正式匹配和 coarse
+  预选按任务批量上传，使同一幅影像在多个像对间复用设备驻留数据。
 - `lightglue/` 负责本机 TensorRT engine 执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
 - `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
 - `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。
@@ -37,6 +38,15 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 TensorRT 与 CUDA Toolkit 可用。没有 CUDA 编译器的 CPU-only 构建默认关闭该选项，只构建统一数据契约、
 `.pimatch` 读写、完整 Auto SIFT CPU 能力和两视几何验证，用于跨平台生产运行与测试；算法注册表不会伪造
 可运行的 TensorRT 后端。四种 SIFT 计算后端共享 `auto_sift` 算法身份，不增加平台专用算法标识。
+`plamatch_hct` 同样不需要模型，`Auto` 按 CUDA、OpenCL、CPU 选择；显式 CUDA/OpenCL 请求要求对应
+构建能力、设备和索引真实可用，否则直接失败。Metal 当前不受支持。任务报告和匹配记录保存实际后端与设备名。
+GPU 正式匹配按任务批量复用设备端描述子，并在设备子批次之间响应协作式取消；匹配缓存键包含实际 backend
+和设备身份，因此 CPU、CUDA、OpenCL 结果不会跨后端误命中。
+
+五档对齐精度统一使用 `downscale=0/1/2/4/8`。PlaMatch-HCT 的 CPU、CUDA、OpenCL 路径原生构造相同首层：
+最高档使用 `(2W-1)×(2H-1)` 半步插值格点，高档保持原尺寸，其余三档按 2/4/8 整数步长抽样；
+Auto SIFT、SIFT + LightGlue 和 LoMa-R 由任务层先应用同一采样，再把关键点尺度还原到原始影像坐标。
+精度和实际 downscale 均进入算法计划、运行记录与缓存指纹，跨档结果不会误复用。
 
 ## 为什么不保存独立特征文件
 

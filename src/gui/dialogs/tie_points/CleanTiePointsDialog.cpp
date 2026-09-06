@@ -246,8 +246,7 @@ void CleanTiePointsDialog::initializeCriterionConfigurations()
                                         2,
                                         QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::ImageCount),
-                                    CriterionConfiguration{
-                                        true, 2.0, 100.0, 3.0, 1.0, 0, QString()});
+                                    CriterionConfiguration{true, 0.0, 100.0, 2.0, 1.0, 0, QString()});
     _criterionConfigurations.insert(static_cast<int>(Criterion::ProjectionAccuracy),
                                     CriterionConfiguration{
                                         true,

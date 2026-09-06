@@ -100,11 +100,13 @@ int filterByMaxReconstructionUncertainty(
         return 0;
     }
     const int before = static_cast<int>(points->size());
-    points->erase(std::remove_if(points->begin(), points->end(), [maximum](const SparsePointCloudPoint &point)
-    {
-        return std::isfinite(point.reconstructionUncertainty)
-            && point.reconstructionUncertainty > maximum;
-    }), points->end());
+    points->erase(std::remove_if(points->begin(),
+                                 points->end(),
+                                 [maximum](const SparsePointCloudPoint& point) {
+                                     return !std::isnan(point.reconstructionUncertainty) &&
+                                            point.reconstructionUncertainty > maximum;
+                                 }),
+                  points->end());
     return before - static_cast<int>(points->size());
 }
 

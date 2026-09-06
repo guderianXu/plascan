@@ -9,20 +9,26 @@ set(SFM_CORE_SOURCES
     graph/CorrespondenceGraph.cpp
     graph/CovisibilityPartitioner.cpp
     graph/ObservationNetworkBuilder.cpp
+    graph/ReferenceCameraGroupPartitioner.cpp
     tracks/CorrespondenceTrackThinner.cpp
-    tracks/MultiViewTrackBuilder.cpp
+    tracks/ReferenceTrackBuilder.cpp
+    tracks/ReferenceTrackSpatialSelector.cpp
     reconstruction/SfmReconstruction.cpp
     pose/PnpSolver.cpp
+    pose/ReferenceP3p.cpp
+    pose/ReferencePoseRefiner.cpp
+    pose/ReferenceResectionSolver.cpp
     triangulation/Triangulator.cpp
     triangulation/InitialSparsePointFilter.cpp
     pipeline/IncrementalSfm.cpp
     pipeline/IncrementalSfmDetail.cpp
+    pipeline/ReferenceModelQuality.cpp
     pipeline/InitialPairInitializer.cpp
     pipeline/ImageRegistrationEngine.cpp
+    pipeline/IndependentBlockReconstructor.cpp
     pipeline/HierarchicalBaBlockSolver.cpp
     pipeline/HierarchicalBundleAdjuster.cpp
     pipeline/KnownPoseReconstructor.cpp
-    pipeline/SfmCalibrationPreviewSampler.cpp
     pipeline/SfmBundleAdjustCoordinator.cpp
     ReferenceTerrainPrior.cpp
 )
@@ -37,20 +43,26 @@ set(SFM_CORE_HEADERS
     graph/CorrespondenceGraph.h
     graph/CovisibilityPartitioner.h
     graph/ObservationNetworkBuilder.h
+    graph/ReferenceCameraGroupPartitioner.h
     tracks/CorrespondenceTrackThinner.h
-    tracks/MultiViewTrackBuilder.h
+    tracks/ReferenceTrackBuilder.h
+    tracks/ReferenceTrackSpatialSelector.h
     reconstruction/SfmReconstruction.h
     pose/PnpSolver.h
+    pose/ReferenceP3p.h
+    pose/ReferencePoseRefiner.h
+    pose/ReferenceResectionSolver.h
     triangulation/Triangulator.h
     triangulation/InitialSparsePointFilter.h
     pipeline/IncrementalSfm.h
     pipeline/IncrementalSfmDetail.h
+    pipeline/ReferenceModelQuality.h
     pipeline/InitialPairInitializer.h
     pipeline/ImageRegistrationEngine.h
+    pipeline/IndependentBlockReconstructor.h
     pipeline/HierarchicalBaBlockSolver.h
     pipeline/HierarchicalBundleAdjuster.h
     pipeline/KnownPoseReconstructor.h
-    pipeline/SfmCalibrationPreviewSampler.h
     pipeline/SfmBundleAdjustCoordinator.h
     ReferenceTerrainPrior.h
 )

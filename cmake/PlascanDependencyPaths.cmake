@@ -30,7 +30,7 @@ function(plascan_configure_dependency_paths)
     set(_plascan_dependency_provider "vcpkg(manifest,${VCPKG_TARGET_TRIPLET})")
     if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
         string(APPEND _plascan_dependency_provider
-            "+source(Qt/OpenCV/GDAL/AprilTag:${PLASCAN_SOURCE_DEPENDENCY_PREFIX})")
+            "+source(Qt/OpenCV/GDAL/AprilTag/OpenEXR:${PLASCAN_SOURCE_DEPENDENCY_PREFIX})")
     endif()
     set(PLASCAN_DEPENDENCY_PROVIDER_SUMMARY
         "${_plascan_dependency_provider}" PARENT_SCOPE)

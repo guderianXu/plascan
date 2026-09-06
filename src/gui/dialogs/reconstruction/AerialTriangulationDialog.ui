@@ -188,61 +188,35 @@
       <item row="2" column="1">
        <widget class="QComboBox" name="m_maskApplyCombo"/>
       </item>
-      <item row="3" column="0">
-       <widget class="QLabel" name="siftRatioLabel">
-        <property name="text">
-         <string>SIFT 歧义比上限:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_siftRatioSpin</cstring>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="1">
-       <widget class="QDoubleSpinBox" name="m_siftRatioSpin">
-        <property name="decimals"><number>3</number></property>
-        <property name="minimum"><double>0.500000000000000</double></property>
-        <property name="maximum"><double>0.999000000000000</double></property>
-        <property name="singleStep"><double>0.010000000000000</double></property>
-        <property name="value"><double>0.980000000000000</double></property>
-       </widget>
-      </item>
-      <item row="4" column="0" colspan="2">
-       <widget class="QCheckBox" name="m_adaptiveSiftRatioCheck">
-        <property name="text">
-         <string>按当前像对自适应收紧 SIFT 歧义比</string>
-        </property>
-       </widget>
-      </item>
-      <item row="5" column="0" colspan="2">
+      <item row="3" column="0" colspan="2">
        <widget class="QCheckBox" name="m_excludeFixedTiePointsCheck">
         <property name="text">
          <string>不包括固定的连接点</string>
         </property>
        </widget>
       </item>
-      <item row="6" column="0" colspan="2">
+      <item row="4" column="0" colspan="2">
        <widget class="QCheckBox" name="m_guidedImageMatchingCheck">
         <property name="text">
          <string>指导图像匹配</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="0" colspan="2">
+      <item row="5" column="0" colspan="2">
        <widget class="QCheckBox" name="m_adaptiveCameraModelCheck">
         <property name="text">
          <string>自适应相机模型拟合</string>
         </property>
        </widget>
       </item>
-      <item row="8" column="0" colspan="2">
+      <item row="6" column="0" colspan="2">
        <widget class="QCheckBox" name="m_reuseExistingMatchesCheck">
         <property name="text">
          <string>复用兼容匹配（无则自动生成）</string>
         </property>
        </widget>
       </item>
-      <item row="9" column="0" colspan="2">
+      <item row="7" column="0" colspan="2">
        <widget class="QCheckBox" name="m_lockInputCameraPosesCheck">
         <property name="text">
          <string>锁定已导入相机位姿</string>

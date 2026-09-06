@@ -15,12 +15,16 @@ PlaScan 目前已经具备一个完整、可运行的“对齐照片”工作流
 
 ```mermaid
 flowchart LR
-  input["多视角影像与可选参考位姿"] --> pair_select["通用/参考/序列预选"]
-  pair_select --> feature_mode{"局部特征算法"}
-  feature_mode -- "默认" --> sift["Auto SIFT / RootSIFT"]
-  feature_mode -- "实验兼容" --> orb["ORB binary"]
-  sift --> match["top-2 / ratio / mutual"]
-  orb --> match
+  input["多视角影像与可选参考位姿"] --> feature_mode{"局部特征算法"}
+  feature_mode -- "默认" --> plamatch["PlaMatch-HCT / MLDB"]
+  feature_mode -- "可选" --> sift["Auto SIFT / LightGlue / LoMa-R"]
+  plamatch --> coarse_native["原生 coarse MLDB"]
+  sift --> coarse_adapted["复用正式描述子的 coarse 视图"]
+  coarse_native --> pair_select["统一 HCT/局部一致性/参考预选"]
+  coarse_adapted --> pair_select
+  pair_select --> match["正式描述子像对匹配"]
+  plamatch --> match
+  sift --> match
   match --> geometry["USAC/MAGSAC 两视几何"]
   geometry --> tracks["多视图连接点轨迹"]
   tracks --> seed["初始像对评分与有限前瞻"]
@@ -34,59 +38,26 @@ flowchart LR
 | 对齐阶段 | PlaScan 实现 | 当前状态 | 等价边界 |
 |---|---|---|---|
 | 质量档与关键点预算 | `MatchPhotosAlgorithmSelector` | 已实现 | 采用 PlaScan 可解释预设，不声称数值等于 Metashape |
-| 通用预选 | 词汇检索、候选上限和图邻接 | 已实现 | 算法作用和缩减漏斗一致，词汇训练细节不同 |
+| 通用预选 | HCT 候选、局部一致性、骨架森林 | 已实现 | PlaMatch 使用原生 coarse；浮点算法复用正式描述子生成 coarse 视图 |
 | 参考预选 | 参考位姿/序列约束 | 已实现 | 支持 source/estimated/sequence 语义 |
-| 浮点局部特征 | Auto SIFT / RootSIFT，多 CPU/GPU 后端 | 已实现、默认 | 与逆向中的 DoG/LoG 谱系相容，不等于私有 detector |
-| 二进制局部特征 | `orb_binary` | 本次新增、可选 | 复刻二进制通道接口与匹配门控；不是私有 MLDB 位布局 |
+| PlaMatch-HCT 局部特征 | LoG / MLDB、CPU HCTree、CUDA/OpenCL | 已实现、默认 | 使用用户自有且已验证的算法实现 |
+| 浮点局部特征 | Auto SIFT / RootSIFT，多 CPU/GPU 后端 | 已实现、可选 | 与逆向中的 DoG/LoG 谱系相容，不等于私有 detector |
 | 描述子候选过滤 | top-2、ratio、双向 mutual | 已实现 | 阈值由 PlaScan 参数控制 |
 | 两视几何 | USAC/MAGSAC、F/H 模型与退化判断 | 已实现 | 求解器不宣称与目标内部实现相同 |
-| 引导重匹配 | 基础矩阵引导和二次过滤 | 已实现（Auto SIFT） | `orb_binary` 暂不进入 SIFT 专用 guided rematch |
+| 引导重匹配 | 基础矩阵引导和二次过滤 | 已实现（Auto SIFT） | 仅对算法声明支持的浮点特征启用 |
 | 连接点轨迹 | 多视图 track 合并、筛选和统计 | 已实现 | 轨迹约束可观测，内部排序可能不同 |
 | 初始像对 | 候选评分与有限前瞻 | 已实现 | 已保留诊断；私有评分常数未知 |
 | 增量注册 | resection、失败重试、模型增长 | 已实现 | PnP 最小解/采样顺序未知 |
-| 三角化与 BA | 双视/三视三角化、异常轨迹修复、局部/全局 BA | 已实现 | 鲁棒核、线性求解器和精确调度未知 |
+| 三角化与 BA | 双视/三视三角化、阶段化全局 BA | 已实现 | 已恢复 20/10 次预算、五轮刷新和净增量/3σ 条件；私有稀疏库实现不作为产品依赖 |
 | 匹配漏斗诊断 | pair/match/inlier/guided/track 结构化统计 | 已实现 | 用于与授权基准结果逐阶段标定 |
 
-## 本次新增的二进制兼容通道
+## 当前算法范围
 
-算法 ID 为 `orb_binary`，由统一 `ImageMatchingRegistry` 注册，因此 GUI 的“匹配算法”列表会自动显示，
-`feature_match_cli`、`match_photos_cli`、`aerial_triangulation_cli` 和重建工作流 CLI 也可以选择。
+生产默认算法为 `plamatch_hct`，可选算法为 `auto_sift`、`sift_lightglue` 和 `loma_r`。此前的
+`orb_binary` 仅是 2026-08-27 加入的实验兼容基线；在用户确认没有保留必要后，现已从实现、注册表、
+GUI、CLI 和当前文档中移除。历史实施报告保留当时事实，并已标注后续状态。
 
-实现行为：
-
-1. 使用当前项目 OpenCV 5 依赖提供的 ORB 生成 `CV_8U` 二进制描述子。
-2. 按响应稳定排序并应用统一关键点上限，坐标映射回原始影像尺度。
-3. 对两个方向分别执行 Hamming top-2 搜索。
-4. 依次应用 ratio 和 mutual gate，再输出统一 `MatchResult`。
-5. 最终像对仍进入现有几何验证、轨迹构建和增量 SfM。
-6. 通用预选仅为词汇粗检索把字节描述子临时映射到 `[0,1]` 浮点向量；最终匹配不改变 Hamming 度量。
-7. 算法 ID、版本、参数指纹和内置实现指纹参与 `.pimatch` 缓存隔离，不会复用 Auto SIFT 的旧结果。
-
-当前依赖没有提供 AKAZE/KAZE 类，因此没有使用“AKAZE/M-LDB”这一容易误导的名称。逆向证据已经明确
-目标前端包含 Gaussian/DoG/LoG 与 MLDB 类通道，但这不足以证明它等于标准 AKAZE。
-
-## 使用方式
-
-GUI：在工作流设置的“匹配算法”中选择“ORB（二进制兼容基线）”。
-
-双影像验证示例：
-
-```powershell
-build\windows-source-release\bin\feature_match_cli.exe `
-  --left <left-image> --right <right-image> `
-  --output-dir <match-output> `
-  --algorithm-id orb_binary --device cpu
-```
-
-批量匹配或空三使用相同的算法 ID：
-
-```text
-match_photos_cli --algorithm-id orb_binary --device cpu ...
-aerial_triangulation_cli --algorithm-id orb_binary --device cpu ...
-```
-
-`orb_binary` 是实验兼容基线；生产默认值仍为 `auto_sift`。
-
+## 已验证内容
 ## 已验证内容
 
 - MSVC Release 构建：`image_matching`、`matchphototask`、三个匹配/空三 CLI、`plascan_gui`。

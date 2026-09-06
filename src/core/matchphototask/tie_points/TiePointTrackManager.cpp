@@ -1,7 +1,7 @@
 ﻿#include "TiePointTrackManager.h"
 
 #include "MatchPhotosRuntime.h"
-#include "tracks/MultiViewTrackBuilder.h"
+#include "tracks/ReferenceTrackBuilder.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -34,20 +34,21 @@ namespace xjw
                 return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
             }
 
-            QJsonObject makeTrackSummary(const MultiViewTrackBuildResult& buildResult)
+            QJsonObject makeTrackSummary(const ReferenceTrackBuildResult& buildResult, int tiePointLimit)
             {
                 QJsonObject summary;
+                summary[QStringLiteral("strategy")] = QStringLiteral("align_photos_reference");
                 summary[QStringLiteral("tracks")] = static_cast<int>(buildResult.tracks.size());
-                summary[QStringLiteral("total_components")] = buildResult.totalComponents;
-                summary[QStringLiteral("accepted_components")] = buildResult.acceptedComponents;
-                summary[QStringLiteral("rejected_conflict_components")] = buildResult.rejectedConflictComponents;
-                summary[QStringLiteral("rejected_conflict_edges")] = buildResult.rejectedConflictEdges;
-                summary[QStringLiteral("rejected_inconsistent_bridge_edges")] =
-                    buildResult.rejectedInconsistentBridgeEdges;
-                summary[QStringLiteral("accepted_supported_bridge_edges")] = buildResult.acceptedSupportedBridgeEdges;
-                summary[QStringLiteral("pruned_by_quality_thinning")] = buildResult.prunedByQualityThinning;
+                summary[QStringLiteral("generated_tracks")] = buildResult.generatedTrackCount;
+                summary[QStringLiteral("invalid_matches")] = buildResult.invalidMatchCount;
+                summary[QStringLiteral("removed_duplicate_observations")] = buildResult.removedDuplicateObservations;
+                summary[QStringLiteral("removed_short_tracks")] = buildResult.removedShortTracks;
                 summary[QStringLiteral("pruned_stationary_tracks")] = buildResult.prunedStationaryTracks;
-                summary[QStringLiteral("mean_track_confidence")] = buildResult.meanTrackConfidence;
+                summary[QStringLiteral("tracks_before_spatial_selection")] = buildResult.tracksBeforeSpatialSelection;
+                summary[QStringLiteral("pruned_by_spatial_selection")] = buildResult.prunedBySpatialSelection;
+                summary[QStringLiteral("tiepoint_limit")] = tiePointLimit;
+                summary[QStringLiteral("spatial_selection")] = QStringLiteral("per_image_water_fill_up_to_16x16");
+                summary[QStringLiteral("stationary_filter")] = QStringLiteral("four_times_mean_feature_scale");
 
                 QJsonObject histogram;
                 for (const auto& entry : buildResult.trackLengthHistogram)
@@ -64,16 +65,19 @@ namespace xjw
                 settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
                 settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
                 settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
-                settings[QStringLiteral("tiepoint_grid_columns")] = options.tiePointGridColumns;
-                settings[QStringLiteral("tiepoint_grid_rows")] = options.tiePointGridRows;
+                settings[QStringLiteral("track_builder")] = QStringLiteral("align_photos_reference");
+                settings[QStringLiteral("tiepoint_spatial_selection")] =
+                    QStringLiteral("per_image_water_fill_up_to_16x16");
                 settings[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
-                settings[QStringLiteral("stationary_tie_point_max_pixel_motion")] =
-                    static_cast<double>(options.stationaryTiePointMaxPixelMotion);
+                settings[QStringLiteral("stationary_tie_point_rule")] = QStringLiteral("four_times_mean_feature_scale");
                 settings[QStringLiteral("guided_image_matching_mode")] =
                     guidedMatchingModeName(options.guidedMatchingMode);
                 settings[QStringLiteral("guided_image_matching")] = guidedMatchingEnabled(options.guidedMatchingMode);
                 settings[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
                 settings[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
+                settings[QStringLiteral("reference_preselection_mode")] =
+                    referencePreselectionModeName(options.referencePreselectionMode);
+                settings[QStringLiteral("reference_preselection_neighbors")] = options.referencePreselectionNeighbors;
                 return settings;
             }
 
@@ -164,28 +168,22 @@ namespace xjw
                                        const MatchPhotosContext& context,
                                        const std::map<ImageId, std::vector<FeatureKeypoint>>& keypointsByImage)
             {
-                QByteArray object =
-                    QByteArrayLiteral("{\"image_id\":") + QByteArray::number(static_cast<int>(element.imageId)) +
-                    QByteArrayLiteral(",\"feature_idx\":") + QByteArray::number(static_cast<int>(element.featureIdx));
-
-                if (element.imageId < static_cast<ImageId>(context.pairInput.images.size()))
-                {
-                    object += QByteArrayLiteral(",\"image_path\":") +
-                              jsonString(canonicalPath(context.pairInput.images.at(static_cast<int>(element.imageId))));
-                }
+                QByteArray observation =
+                    QByteArrayLiteral("[") + QByteArray::number(static_cast<int>(element.imageId)) +
+                    QByteArrayLiteral(",") + QByteArray::number(static_cast<int>(element.featureIdx));
 
                 const auto keypointsIt = keypointsByImage.find(element.imageId);
                 if (keypointsIt != keypointsByImage.end() &&
                     element.featureIdx < static_cast<FeatureIdx>(keypointsIt->second.size()))
                 {
                     const FeatureKeypoint& keypoint = keypointsIt->second[static_cast<std::size_t>(element.featureIdx)];
-                    object += QByteArrayLiteral(",\"xy\":[") + jsonNumber(keypoint.x) + QByteArrayLiteral(",") +
-                              jsonNumber(keypoint.y) + QByteArrayLiteral("]") + QByteArrayLiteral(",\"scale\":") +
-                              jsonNumber(keypoint.scale);
+                    observation += QByteArrayLiteral(",") + jsonNumber(keypoint.x) + QByteArrayLiteral(",") +
+                                   jsonNumber(keypoint.y) + QByteArrayLiteral(",") + jsonNumber(keypoint.scale);
                 }
 
-                object += QByteArrayLiteral("}");
-                return object;
+                observation += QByteArrayLiteral("]");
+                (void)context;
+                return observation;
             }
 
             bool writeTrack(QSaveFile* file,
@@ -320,7 +318,7 @@ namespace xjw
                                 true,
                                 errorMessage) ||
                     !writeField(
-                        &file, QByteArrayLiteral("format_version"), QByteArrayLiteral("2"), true, errorMessage) ||
+                        &file, QByteArrayLiteral("format_version"), QByteArrayLiteral("3"), true, errorMessage) ||
                     !writeField(&file,
                                 QByteArrayLiteral("created_at"),
                                 jsonString(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)),
@@ -348,6 +346,11 @@ namespace xjw
                                 compactJson(makePersistedSettings(options)),
                                 true,
                                 errorMessage) ||
+                    !writeField(&file,
+                                QByteArrayLiteral("observation_fields"),
+                                QByteArrayLiteral("[\"image_id\",\"feature_idx\",\"x\",\"y\",\"scale\"]"),
+                                true,
+                                errorMessage) ||
                     !writeImages(&file, context, errorMessage) ||
                     !writeTracks(&file, context, result, keypointsByImage, errorMessage) ||
                     !writeRaw(&file, QByteArrayLiteral("}\n"), errorMessage))
@@ -366,24 +369,17 @@ namespace xjw
                 return true;
             }
 
-            MultiViewTrackBuilder::BuildOptions
-            makeBuildOptions(const MatchPhotosOptions& options, float imageWidth, float imageHeight)
+            ReferenceTrackBuildOptions makeBuildOptions(const MatchPhotosOptions& options)
             {
-                MultiViewTrackBuilder::BuildOptions buildOptions;
-                buildOptions.enableQualityThinning = options.maxTiePointsPerImage > 0;
-                buildOptions.maxTracksPerImage = options.maxTiePointsPerImage;
-                buildOptions.maxTracksPerGridCell =
-                    options.maxTiePointsPerImage > 0 ? options.maxTiePointsPerGridCell : 0;
-                buildOptions.gridColumns = options.tiePointGridColumns;
-                buildOptions.gridRows = options.tiePointGridRows;
-                buildOptions.imageWidth = imageWidth;
-                buildOptions.imageHeight = imageHeight;
+                ReferenceTrackBuildOptions buildOptions;
+                buildOptions.tiePointLimit = static_cast<std::size_t>(std::max(0, options.maxTiePointsPerImage));
                 buildOptions.excludeStationaryTracks = options.excludeStationaryTiePoints;
-                buildOptions.stationaryTrackMaxPixelMotion = options.stationaryTiePointMaxPixelMotion;
                 return buildOptions;
             }
 
-            void copyBuildResult(const MultiViewTrackBuildResult& buildResult, TiePointTrackBuildResult* result)
+            void copyBuildResult(const ReferenceTrackBuildResult& buildResult,
+                                 int tiePointLimit,
+                                 TiePointTrackBuildResult* result)
             {
                 if (!result)
                 {
@@ -391,16 +387,13 @@ namespace xjw
                 }
 
                 result->tracks = buildResult.tracks;
-                result->totalComponents = buildResult.totalComponents;
-                result->acceptedComponents = buildResult.acceptedComponents;
-                result->rejectedConflictComponents = buildResult.rejectedConflictComponents;
-                result->rejectedConflictEdges = buildResult.rejectedConflictEdges;
-                result->rejectedInconsistentBridgeEdges = buildResult.rejectedInconsistentBridgeEdges;
-                result->acceptedSupportedBridgeEdges = buildResult.acceptedSupportedBridgeEdges;
-                result->prunedByQualityThinning = buildResult.prunedByQualityThinning;
+                result->totalComponents = buildResult.generatedTrackCount;
+                result->acceptedComponents = static_cast<int>(buildResult.tracks.size());
+                result->removedDuplicateObservations = buildResult.removedDuplicateObservations;
+                result->removedShortTracks = buildResult.removedShortTracks;
+                result->prunedBySpatialSelection = buildResult.prunedBySpatialSelection;
                 result->prunedStationaryTracks = buildResult.prunedStationaryTracks;
-                result->meanTrackConfidence = buildResult.meanTrackConfidence;
-                result->trackSummary = makeTrackSummary(buildResult);
+                result->trackSummary = makeTrackSummary(buildResult, tiePointLimit);
             }
 
             using ObservationKey = std::pair<ImageId, FeatureIdx>;
@@ -581,11 +574,10 @@ namespace xjw
                 imageIdByPath[canonicalPath(context.pairInput.images.at(index))] = static_cast<ImageId>(index);
             }
 
-            MultiViewTrackBuilder builder;
+            ReferenceTrackBuilder builder;
             std::map<ImageId, std::map<FeatureIdx, FeatureKeypoint>> sparseKeypoints;
             std::map<ImageId, std::vector<FeatureKeypoint>> keypointsByImage;
-            float imageWidth = 0.0f;
-            float imageHeight = 0.0f;
+            std::map<ImageId, std::pair<float, float>> imageSizes;
 
             // 第一遍只整理匹配真正引用的观测。featureId 保留原始 SIFT 索引，因此数组
             // 可能稀疏；先用 map 收集，再一次性展开，避免对每条边反复扩容。
@@ -629,22 +621,26 @@ namespace xjw
                     rememberKeypoint(image0Id, correspondence.observation0, &sparseKeypoints);
                     rememberKeypoint(image1Id, correspondence.observation1, &sparseKeypoints);
                 }
-                imageWidth = std::max(
-                    imageWidth,
-                    static_cast<float>(std::max(record.pairData->image0.width, record.pairData->image1.width)));
-                imageHeight = std::max(
-                    imageHeight,
-                    static_cast<float>(std::max(record.pairData->image0.height, record.pairData->image1.height)));
+                auto& image0Size = imageSizes[image0Id];
+                image0Size.first = std::max(image0Size.first, static_cast<float>(record.pairData->image0.width));
+                image0Size.second = std::max(image0Size.second, static_cast<float>(record.pairData->image0.height));
+                auto& image1Size = imageSizes[image1Id];
+                image1Size.first = std::max(image1Size.first, static_cast<float>(record.pairData->image1.width));
+                image1Size.second = std::max(image1Size.second, static_cast<float>(record.pairData->image1.height));
             }
 
             for (const auto& [imageId, sparse] : sparseKeypoints)
             {
                 keypointsByImage[imageId] = denseKeypointVector(sparse);
-                builder.setImageKeypoints(imageId, keypointsByImage[imageId]);
+                const auto size = imageSizes.find(imageId);
+                builder.setImageKeypoints(imageId,
+                                          keypointsByImage[imageId],
+                                          size == imageSizes.end() ? 0.0f : size->second.first,
+                                          size == imageSizes.end() ? 0.0f : size->second.second);
             }
 
-            // 第二遍添加经过几何验证的边。置信度来自 LightGlue，供冲突消解和质量抽稀
-            // 使用；不再从单独的 `.match` 文件恢复索引。
+            // 第二遍按稳定像对/匹配顺序添加几何内点。参考构建不读取算法专属
+            // confidence，避免 SIFT、LightGlue 与 PlaMatch 分数尺度差异改变轨迹身份。
             for (const MatchPhotosMatchRecord& record : *matchRecords)
             {
                 if (!record.pairData || (options.enableGeometryVerification && !record.passedGeometry))
@@ -658,7 +654,7 @@ namespace xjw
                     continue;
                 }
 
-                std::vector<MultiViewTrackBuilder::MatchIndexPair> indexedMatches;
+                std::vector<ReferenceTrackBuilder::MatchIndexPair> indexedMatches;
                 indexedMatches.reserve(record.pairData->correspondences.size());
                 for (const image_matching::PairCorrespondence& correspondence : record.pairData->correspondences)
                 {
@@ -667,9 +663,8 @@ namespace xjw
                     {
                         continue;
                     }
-                    indexedMatches.emplace_back(static_cast<FeatureIdx>(correspondence.observation0.featureId),
-                                                static_cast<FeatureIdx>(correspondence.observation1.featureId),
-                                                correspondence.confidence);
+                    indexedMatches.push_back({static_cast<FeatureIdx>(correspondence.observation0.featureId),
+                                              static_cast<FeatureIdx>(correspondence.observation1.featureId)});
                 }
                 if (indexedMatches.empty())
                 {
@@ -680,9 +675,8 @@ namespace xjw
                 ++result.consumedPairCount;
             }
 
-            const MultiViewTrackBuildResult buildResult =
-                builder.build(makeBuildOptions(options, imageWidth, imageHeight));
-            copyBuildResult(buildResult, &result);
+            const ReferenceTrackBuildResult buildResult = builder.build(makeBuildOptions(options));
+            copyBuildResult(buildResult, options.maxTiePointsPerImage, &result);
             result.directEdgesByTrack = collectDirectTrackEdges(result.tracks, imageIdByPath, options, *matchRecords);
             markTrackMembership(result.tracks, imageIdByPath, matchRecords);
             if (result.consumedPairCount <= 0)

@@ -23,6 +23,14 @@ struct SparsePointCloudPoint
     double reconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
     double projectionAccuracy = std::numeric_limits<double>::quiet_NaN();
     int trackLen = 0;
+    double cleanTiePointReprojectionError = std::numeric_limits<double>::quiet_NaN();
+    double cleanTiePointReconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
+    double cleanTiePointProjectionAccuracy = std::numeric_limits<double>::quiet_NaN();
+    int cleanTiePointImageCount = -1;
+    bool hasCleanTiePointReprojectionError = false;
+    bool hasCleanTiePointReconstructionUncertainty = false;
+    bool hasCleanTiePointProjectionAccuracy = false;
+    bool hasCleanTiePointImageCount = false;
     bool hasColor = false;
     std::uint8_t red = 255;
     std::uint8_t green = 255;

@@ -53,9 +53,16 @@ namespace xjw::detail::plamatrix_ba
 
     double maximumStepNorm(const std::vector<double>& primary_step, const std::vector<double>& eliminated_step);
 
+    BAIntrinsicParameterMask committedReferenceIntrinsicParameters(const BAOptions& options,
+                                                                   const ActiveProblem& active,
+                                                                   const OptimizationState& state,
+                                                                   double final_cost);
+
     void applyStep(const ActiveProblem& active,
                    const std::vector<double>& primary_step,
                    const std::vector<double>& eliminated_step,
-                   OptimizationState* state);
+                   OptimizationState* state,
+                   const BAOptions& options,
+                   double step_scale = 1.0);
 
 } // namespace xjw::detail::plamatrix_ba

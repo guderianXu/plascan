@@ -49,7 +49,6 @@ struct BaInputBuildResult
     // 自动匹配轨迹统计。
     int indexedObservationCount = 0; ///< `.pimatch` 中带稳定特征索引的观测数。
     int multiViewTrackCount = 0;
-    int rejectedConflictTrackCount = 0;
     ProjectMatchInputDiagnostics matchDiagnostics;
 
     // 旧 survey_control 输入统计。

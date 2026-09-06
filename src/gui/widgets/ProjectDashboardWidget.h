@@ -25,12 +25,11 @@ signals:
 private:
     void setupUi();
     void updateTables(const QJsonObject &meta);
-    void updateTaskTable();
+    void updateTaskSummary();
 
     QLabel *_summaryLabel = nullptr;
     QLabel *_referenceLabel = nullptr;
-    QLabel *_taskLabel = nullptr;
-    QTableWidget *_taskTable = nullptr;
+    QLabel* _taskLabel = nullptr;
     QTableWidget *_referenceTable = nullptr;
     QTableWidget *_workflowTable = nullptr;
     QTableWidget *_qualityTable = nullptr;

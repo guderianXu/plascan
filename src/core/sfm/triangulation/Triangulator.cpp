@@ -1,17 +1,14 @@
 #include "Triangulator.h"
-#include "geometry/OpenCvCameraAdapter.h"
 #include "concurrency/SafeWorkerGroup.h"
 
 #include "log/Logger.h"
 
-#include <opencv2/core.hpp>
-
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <limits>
-#include <optional>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -84,7 +81,10 @@ namespace xjw
 
                     // 检查重投影误差
                     const auto& pt = _reconstruction.point3D(p3dId);
-                    double reprErr = computeReprojError(pt.xyz, imageId, fi);
+                    double reprErr = normalizedReprojError(computeReprojError(pt.xyz, imageId, fi),
+                                                           imageId,
+                                                           fi,
+                                                           options.normalizeReprojectionByFeatureScale);
                     if (reprErr <= options.continueMaxReprojError)
                     {
                         // 追加观测到轨迹
@@ -165,602 +165,334 @@ namespace xjw
     TriangulationStats Triangulator::triangulateTracks(const std::vector<Track>& tracks,
                                                        const TriangulatorOptions& options)
     {
-        TriangulationStats stats;
-        std::vector<Point3DId> createdTwoViewPointIds;
-
-        for (const Track& track : tracks)
+        enum class Decision : std::uint8_t
         {
-            ++stats.inputTracks;
-            if (track.length() >= 3)
-            {
-                ++stats.inputLongTracks;
-            }
+            Skipped,
+            Unusable,
+            Deferred,
+            GeometryRejected,
+            DepthRejected,
+            ReprojectionRejected,
+            Accepted
+        };
+        struct Candidate
+        {
+            std::array<double, 3> xyz{{0.0, 0.0, 0.0}};
+            std::vector<TrackElement> registeredElements;
+            bool usesCompleteInputTrack = true;
+            double meanError = 0.0;
+            Decision decision = Decision::Skipped;
+        };
+        struct Scratch
+        {
+            std::vector<TrackElement> registeredElements;
+        };
 
-            if (track.length() < 2)
+        TriangulationStats stats;
+        stats.inputTracks = static_cast<int>(tracks.size());
+        stats.inputLongTracks = static_cast<int>(
+            std::count_if(tracks.begin(), tracks.end(), [](const Track& track) { return track.length() >= 3; }));
+
+        std::vector<std::size_t> availableTrackIndices;
+        std::vector<Point3DId> availablePointSlots;
+        availableTrackIndices.reserve(tracks.size());
+        availablePointSlots.reserve(tracks.size());
+        for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+        {
+            const Track& track = tracks[trackIndex];
+            Point3DId pointSlot = kInvalidPoint3DId;
+            if (options.bindCompleteInputTrack && !track.elements.empty())
+            {
+                for (const TrackElement& element : track.elements)
+                {
+                    if (!_reconstruction.hasImage(element.imageId))
+                    {
+                        continue;
+                    }
+                    const ImageData& image = _reconstruction.image(element.imageId);
+                    if (element.featureIdx >= image.point3DIds.size())
+                    {
+                        continue;
+                    }
+                    const Point3DId pointId = image.point3DIds[element.featureIdx];
+                    if (pointId == kInvalidPoint3DId)
+                    {
+                        continue;
+                    }
+                    pointSlot = pointId;
+                    break;
+                }
+                if (pointSlot != kInvalidPoint3DId && _reconstruction.hasPoint3D(pointSlot))
+                {
+                    continue;
+                }
+                if (pointSlot != kInvalidPoint3DId && !_reconstruction.hasInactivePoint3D(pointSlot))
+                {
+                    pointSlot = kInvalidPoint3DId;
+                }
+            }
+            availableTrackIndices.push_back(trackIndex);
+            availablePointSlots.push_back(pointSlot);
+        }
+
+        if (availableTrackIndices.empty())
+        {
+            return stats;
+        }
+
+        std::unordered_map<ImageId, double> sensorThresholds;
+        for (const ImageId imageId : _reconstruction.registeredImageIds())
+        {
+            if (!_reconstruction.hasCamera(imageId) || !_reconstruction.hasImage(imageId))
             {
                 continue;
             }
-
-            bool usable = true;
-            for (const TrackElement& element : track.elements)
+            const FramePinholeCamera& camera = _reconstruction.camera(imageId);
+            double width = 0.0;
+            double height = 0.0;
+            if (camera.imageSize() && camera.imageSize()->samples > 0 && camera.imageSize()->lines > 0)
             {
-                if (!_reconstruction.isRegistered(element.imageId) || !_reconstruction.hasCamera(element.imageId) ||
-                    !_reconstruction.hasImage(element.imageId))
+                width = static_cast<double>(camera.imageSize()->samples);
+                height = static_cast<double>(camera.imageSize()->lines);
+            }
+            else
+            {
+                const ImageData& image = _reconstruction.image(imageId);
+                for (const FeatureKeypoint& keypoint : image.keypoints)
                 {
-                    usable = false;
-                    break;
-                }
-
-                const ImageData& image = _reconstruction.image(element.imageId);
-                if (element.featureIdx >= image.keypoints.size() || element.featureIdx >= image.point3DIds.size() ||
-                    image.point3DIds[element.featureIdx] != kInvalidPoint3DId)
-                {
-                    usable = false;
-                    break;
+                    width = std::max(width, static_cast<double>(keypoint.x) + 1.0);
+                    height = std::max(height, static_cast<double>(keypoint.y) + 1.0);
                 }
             }
-            if (!usable)
+            sensorThresholds.emplace(imageId, 0.002 * 0.5 * (std::max(1.0, width) + std::max(1.0, height)));
+        }
+
+        std::vector<Candidate> candidates(availableTrackIndices.size());
+        const auto triangulateTrack = [&](std::size_t candidateIndex, Scratch& scratch)
+        {
+            const std::size_t trackIndex = availableTrackIndices[candidateIndex];
+            const Point3DId pointSlot = availablePointSlots[candidateIndex];
+            const Track& inputTrack = tracks[trackIndex];
+            Candidate& candidate = candidates[candidateIndex];
+            if (inputTrack.length() < 2)
+            {
+                return;
+            }
+
+            scratch.registeredElements.clear();
+            scratch.registeredElements.reserve(inputTrack.elements.size());
+            for (const TrackElement& element : inputTrack.elements)
+            {
+                if (!_reconstruction.isRegistered(element.imageId))
+                {
+                    continue;
+                }
+                if (!_reconstruction.hasCamera(element.imageId) || !_reconstruction.hasImage(element.imageId))
+                {
+                    candidate.decision = Decision::Unusable;
+                    return;
+                }
+                const ImageData& image = _reconstruction.image(element.imageId);
+                if (element.featureIdx >= image.keypoints.size() || element.featureIdx >= image.point3DIds.size())
+                {
+                    candidate.decision = Decision::Unusable;
+                    return;
+                }
+                const Point3DId observationPoint = image.point3DIds[element.featureIdx];
+                if (observationPoint != kInvalidPoint3DId && observationPoint != pointSlot)
+                {
+                    candidate.decision = Decision::Unusable;
+                    return;
+                }
+                scratch.registeredElements.push_back(element);
+            }
+            if (scratch.registeredElements.size() < 2)
+            {
+                candidate.decision = Decision::Skipped;
+                return;
+            }
+
+            const bool allElementsRegistered = scratch.registeredElements.size() == inputTrack.elements.size();
+            candidate.usesCompleteInputTrack = options.bindCompleteInputTrack || allElementsRegistered;
+            const std::vector<TrackElement>& registeredElements =
+                allElementsRegistered ? inputTrack.elements : scratch.registeredElements;
+            const bool bootstrapPair = _reconstruction.numRegisteredImages() <= 2;
+            Track registeredTrack;
+            if (!allElementsRegistered)
+            {
+                registeredTrack.source = inputTrack.source;
+                registeredTrack.sourceId = inputTrack.sourceId;
+                registeredTrack.elements = registeredElements;
+            }
+            const Track& activeTrack = allElementsRegistered ? inputTrack : registeredTrack;
+            if (options.deferPureTwoViewTracks && !bootstrapPair && isPureTwoViewComponent(activeTrack))
+            {
+                candidate.decision = Decision::Deferred;
+                return;
+            }
+
+            if (!triangulateMultiView(registeredElements, candidate.xyz))
+            {
+                candidate.decision = Decision::GeometryRejected;
+                return;
+            }
+
+            double errorSum = 0.0;
+            for (const TrackElement& element : registeredElements)
+            {
+                if (!hasPositiveDepth(candidate.xyz, element.imageId))
+                {
+                    candidate.decision = Decision::DepthRejected;
+                    return;
+                }
+                const double error = computeReprojError(candidate.xyz, element.imageId, element.featureIdx);
+                const double normalizedError = normalizedReprojError(error, element.imageId, element.featureIdx, true);
+                const auto thresholdIt = sensorThresholds.find(element.imageId);
+                const double sensorThreshold =
+                    thresholdIt != sensorThresholds.end() ? thresholdIt->second : options.completeMaxReprojError;
+                const double requestedThreshold =
+                    options.normalizeReprojectionByFeatureScale && options.completeMaxReprojError > 0.0
+                        ? std::min(options.completeMaxReprojError, sensorThreshold)
+                        : sensorThreshold;
+                if (!std::isfinite(normalizedError) || normalizedError > requestedThreshold)
+                {
+                    candidate.decision = Decision::ReprojectionRejected;
+                    return;
+                }
+                errorSum += error;
+            }
+
+            candidate.meanError = errorSum / static_cast<double>(registeredElements.size());
+            if (!allElementsRegistered)
+            {
+                candidate.registeredElements = registeredElements;
+            }
+            candidate.decision = Decision::Accepted;
+        };
+
+        constexpr std::size_t kChunkSize = 100;
+        const std::size_t workerCount =
+            std::min(availableTrackIndices.size(), static_cast<std::size_t>(std::max(1, _threadCount)));
+        if (workerCount <= 1)
+        {
+            Scratch scratch;
+            for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex)
+            {
+                triangulateTrack(candidateIndex, scratch);
+            }
+        }
+        else
+        {
+            std::atomic<std::size_t> nextTrack{0};
+            common::concurrency::runWorkerGroup(
+                workerCount,
+                [&](std::stop_token stopToken)
+                {
+                    Scratch scratch;
+                    while (!stopToken.stop_requested())
+                    {
+                        const std::size_t begin = nextTrack.fetch_add(kChunkSize, std::memory_order_relaxed);
+                        if (begin >= candidates.size())
+                        {
+                            break;
+                        }
+                        const std::size_t end = std::min(candidates.size(), begin + kChunkSize);
+                        for (std::size_t candidateIndex = begin; candidateIndex < end; ++candidateIndex)
+                        {
+                            triangulateTrack(candidateIndex, scratch);
+                        }
+                    }
+                });
+        }
+
+        for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex)
+        {
+            const std::size_t trackIndex = availableTrackIndices[candidateIndex];
+            const Point3DId pointSlot = availablePointSlots[candidateIndex];
+            Candidate& candidate = candidates[candidateIndex];
+            switch (candidate.decision)
+            {
+            case Decision::Skipped:
+                continue;
+            case Decision::Unusable:
+                ++stats.unusableTracks;
+                continue;
+            case Decision::Deferred:
+                ++stats.deferredPureTwoViewTracks;
+                continue;
+            case Decision::GeometryRejected:
+                ++stats.noCandidateTracks;
+                continue;
+            case Decision::DepthRejected:
+                ++stats.noCandidateTracks;
+                ++stats.depthObservationRejected;
+                continue;
+            case Decision::ReprojectionRejected:
+                ++stats.noCandidateTracks;
+                ++stats.reprojObservationRejected;
+                continue;
+            case Decision::Accepted:
+                break;
+            }
+
+            Track partialTrack;
+            if (!candidate.usesCompleteInputTrack)
+            {
+                partialTrack.source = tracks[trackIndex].source;
+                partialTrack.sourceId = tracks[trackIndex].sourceId;
+                partialTrack.elements = std::move(candidate.registeredElements);
+            }
+            const Track& acceptedTrack = candidate.usesCompleteInputTrack ? tracks[trackIndex] : partialTrack;
+            const bool observationsStillAvailable =
+                std::all_of(acceptedTrack.elements.begin(),
+                            acceptedTrack.elements.end(),
+                            [this, pointSlot](const TrackElement& element)
+                            {
+                                if (!_reconstruction.hasImage(element.imageId))
+                                {
+                                    return false;
+                                }
+                                const ImageData& image = _reconstruction.image(element.imageId);
+                                if (element.featureIdx >= image.point3DIds.size())
+                                {
+                                    return false;
+                                }
+                                const Point3DId observationPoint = image.point3DIds[element.featureIdx];
+                                return observationPoint == kInvalidPoint3DId || observationPoint == pointSlot;
+                            });
+            if (!observationsStillAvailable)
             {
                 ++stats.unusableTracks;
                 continue;
             }
 
-            const bool bootstrapPair = _reconstruction.numRegisteredImages() <= 2;
-            if (options.deferPureTwoViewTracks && !bootstrapPair && isPureTwoViewComponent(track))
+            Point3DId pointId = pointSlot;
+            if (pointSlot != kInvalidPoint3DId && _reconstruction.hasInactivePoint3D(pointSlot))
             {
-                ++stats.deferredPureTwoViewTracks;
-                continue;
-            }
-
-            std::vector<TrackElement> remainingElements = track.elements;
-            bool createdAnyPointForTrack = false;
-            struct Candidate
-            {
-                std::array<double, 3> xyz{{0.0, 0.0, 0.0}};
-                Track inlierTrack;
-                double rmsError = std::numeric_limits<double>::infinity();
-                double triangulationAngle = 0.0;
-                double relativeDepthUncertainty = std::numeric_limits<double>::infinity();
-                double nearestRejectedReprojError = std::numeric_limits<double>::infinity();
-                bool valid = false;
-            };
-            const auto hasDirectCorrespondence = [this](const TrackElement& first, const TrackElement& second)
-            {
-                const auto correspondences = _correspondenceGraph.findCorrespondences(first.imageId, first.featureIdx);
-                return std::any_of(correspondences.begin(),
-                                   correspondences.end(),
-                                   [&second](const CorrespondenceGraph::Correspondence& correspondence)
-                                   {
-                                       return correspondence.imageId == second.imageId &&
-                                              correspondence.featureIdx == second.featureIdx;
-                                   });
-            };
-            const auto estimateTwoViewRelativeDepthUncertainty =
-                [this, &options](double triangulationAngle, const std::vector<TrackElement>& observations)
-            {
-                if (observations.size() != 2 || triangulationAngle <= 0.0 || !std::isfinite(triangulationAngle) ||
-                    options.twoViewFragmentPixelSigma <= 0.0)
+                if (!_reconstruction.restorePoint3DWithTrack(
+                        pointSlot, candidate.xyz, acceptedTrack, candidate.meanError))
                 {
-                    return std::numeric_limits<double>::infinity();
-                }
-
-                double effectiveFocal = std::numeric_limits<double>::infinity();
-                for (const TrackElement& observation : observations)
-                {
-                    if (!_reconstruction.hasCamera(observation.imageId))
-                    {
-                        return std::numeric_limits<double>::infinity();
-                    }
-                    const FramePinholeCamera& camera = _reconstruction.camera(observation.imageId);
-                    const double focal = std::sqrt(std::abs(camera.focalX() * camera.focalY()));
-                    if (!std::isfinite(focal) || focal <= 0.0)
-                    {
-                        return std::numeric_limits<double>::infinity();
-                    }
-                    effectiveFocal = std::min(effectiveFocal, focal);
-                }
-
-                const double angleRadians = triangulationAngle * M_PI / 180.0;
-                const double geometricStrength = effectiveFocal * std::sin(angleRadians);
-                if (!std::isfinite(geometricStrength) || geometricStrength <= 1e-12)
-                {
-                    return std::numeric_limits<double>::infinity();
-                }
-                return std::sqrt(2.0) * options.twoViewFragmentPixelSigma / geometricStrength;
-            };
-            auto collectCandidateFromPoint = [&](const std::array<double, 3>& xyz, bool countRejects) -> Candidate
-            {
-                Candidate candidate;
-                double squaredErrorSum = 0.0;
-                for (const TrackElement& element : remainingElements)
-                {
-                    if (!hasPositiveDepth(xyz, element.imageId))
-                    {
-                        if (countRejects)
-                        {
-                            ++stats.depthObservationRejected;
-                        }
-                        continue;
-                    }
-
-                    const double error = computeReprojError(xyz, element.imageId, element.featureIdx);
-                    if (!std::isfinite(error) || error > options.completeMaxReprojError)
-                    {
-                        if (std::isfinite(error))
-                        {
-                            candidate.nearestRejectedReprojError =
-                                std::min(candidate.nearestRejectedReprojError, error);
-                        }
-                        if (countRejects)
-                        {
-                            ++stats.reprojObservationRejected;
-                        }
-                        continue;
-                    }
-
-                    candidate.inlierTrack.elements.push_back(element);
-                    squaredErrorSum += error * error;
-                }
-
-                if (candidate.inlierTrack.length() < 2)
-                {
-                    return Candidate{};
-                }
-                candidate.triangulationAngle = computeMaxTriangulationAngle(xyz, candidate.inlierTrack.elements);
-                if (candidate.triangulationAngle < options.minTriAngle)
-                {
-                    return Candidate{};
-                }
-
-                // 多视轨迹由直接匹配边的传递闭包构成。若一个候选最终只剩两个观测，
-                // 两者必须确实存在上游几何验证过的匹配边，不能把 A-B-C 的传递关系
-                // 当成未经验证的 A-C 匹配。原生双影像轨迹仍会正常通过此检查。
-                if (track.source == TrackSource::FeatureMatch && candidate.inlierTrack.length() == 2 &&
-                    !hasDirectCorrespondence(candidate.inlierTrack.elements[0], candidate.inlierTrack.elements[1]))
-                {
-                    return Candidate{};
-                }
-
-                // 内点重建不能丢失人工标记的来源，否则后续控制点/检查点角色无法传入 BA。
-                candidate.inlierTrack.confidence = track.confidence;
-                candidate.inlierTrack.source = track.source;
-                candidate.inlierTrack.sourceId = track.sourceId;
-                candidate.xyz = xyz;
-                candidate.rmsError = std::sqrt(squaredErrorSum / static_cast<double>(candidate.inlierTrack.length()));
-                if (track.source == TrackSource::FeatureMatch && track.length() >= 3 &&
-                    candidate.inlierTrack.length() == 2)
-                {
-                    candidate.relativeDepthUncertainty = estimateTwoViewRelativeDepthUncertainty(
-                        candidate.triangulationAngle, candidate.inlierTrack.elements);
-                    const double fragmentMaxReprojError =
-                        options.twoViewFragmentMaxReprojError > 0.0
-                            ? std::min(options.maxReprojError, options.twoViewFragmentMaxReprojError)
-                            : options.maxReprojError;
-                    const bool unstableReprojection =
-                        !std::isfinite(candidate.rmsError) || candidate.rmsError > fragmentMaxReprojError;
-                    const bool unstableDepth =
-                        options.twoViewFragmentMaxRelativeDepthUncertainty > 0.0 &&
-                        (!std::isfinite(candidate.relativeDepthUncertainty) ||
-                         candidate.relativeDepthUncertainty > options.twoViewFragmentMaxRelativeDepthUncertainty);
-                    if (unstableReprojection || unstableDepth)
-                    {
-                        if (countRejects)
-                        {
-                            ++stats.unstableTwoViewCandidates;
-                        }
-                        return Candidate{};
-                    }
-                }
-                candidate.valid = true;
-                return candidate;
-            };
-            auto betterCandidate = [](const Candidate& candidate, const Candidate& best)
-            {
-                return candidate.valid && (!best.valid || candidate.inlierTrack.length() > best.inlierTrack.length() ||
-                                           (candidate.inlierTrack.length() == best.inlierTrack.length() &&
-                                            candidate.rmsError < best.rmsError));
-            };
-            auto refineCandidate = [&](Candidate candidate) -> Candidate
-            {
-                if (!candidate.valid || candidate.inlierTrack.length() < 3)
-                {
-                    return candidate;
-                }
-
-                std::array<double, 3> refinedXyz;
-                if (!triangulateMultiView(candidate.inlierTrack.elements, refinedXyz))
-                {
-                    return candidate;
-                }
-
-                Candidate refined = collectCandidateFromPoint(refinedXyz, false);
-                if (betterCandidate(refined, candidate))
-                {
-                    return refined;
-                }
-                return candidate;
-            };
-
-            std::vector<Candidate> candidates;
-            while (remainingElements.size() >= 2)
-            {
-                Candidate best;
-                double nearestRejectedExtraForTrack = std::numeric_limits<double>::infinity();
-
-                // 先用完整组件做一次多视 DLT。几何一致的正常轨迹通常一次即可得到
-                // 最长内点集，避免为每个二元/三元组合重复求解。
-                std::array<double, 3> allViewXyz;
-                if (triangulateMultiView(remainingElements, allViewXyz))
-                {
-                    best = refineCandidate(collectCandidateFromPoint(allViewXyz, false));
-                }
-
-                // 对坏桥或含离群观测的组件仍需双视种子。小轨迹穷举全部像对；
-                // 长轨迹只取相邻、跨距和均匀采样的确定性代表像对，限制最坏复杂度。
-                constexpr std::size_t kMaximumSeedPairs = 96;
-                std::vector<std::pair<std::size_t, std::size_t>> seedPairs;
-                seedPairs.reserve(
-                    std::min(kMaximumSeedPairs, remainingElements.size() * (remainingElements.size() - 1) / 2));
-                const auto addSeedPair = [&seedPairs](std::size_t left, std::size_t right)
-                {
-                    if (left == right || seedPairs.size() >= kMaximumSeedPairs)
-                    {
-                        return;
-                    }
-                    if (left > right)
-                    {
-                        std::swap(left, right);
-                    }
-                    const std::pair<std::size_t, std::size_t> pair{left, right};
-                    if (std::find(seedPairs.begin(), seedPairs.end(), pair) == seedPairs.end())
-                    {
-                        seedPairs.push_back(pair);
-                    }
-                };
-
-                const std::size_t elementCount = remainingElements.size();
-                const std::size_t allPairCount = elementCount * (elementCount - 1) / 2;
-                const bool allViewCandidateUsesEveryObservation =
-                    best.valid && best.inlierTrack.length() == elementCount;
-                if (!allViewCandidateUsesEveryObservation && allPairCount <= kMaximumSeedPairs)
-                {
-                    for (std::size_t left = 0; left < elementCount; ++left)
-                    {
-                        for (std::size_t right = left + 1; right < elementCount; ++right)
-                        {
-                            addSeedPair(left, right);
-                        }
-                    }
-                }
-                else if (!allViewCandidateUsesEveryObservation)
-                {
-                    for (std::size_t index = 0; index + 1 < elementCount; ++index)
-                    {
-                        addSeedPair(index, index + 1);
-                    }
-                    for (std::size_t index = 0; index < elementCount / 2; ++index)
-                    {
-                        addSeedPair(index, elementCount - 1 - index);
-                    }
-
-                    const std::size_t sampleStride = std::max<std::size_t>(1, allPairCount / kMaximumSeedPairs);
-                    std::size_t flatPairIndex = 0;
-                    for (std::size_t left = 0; left < elementCount && seedPairs.size() < kMaximumSeedPairs; ++left)
-                    {
-                        for (std::size_t right = left + 1; right < elementCount && seedPairs.size() < kMaximumSeedPairs;
-                             ++right, ++flatPairIndex)
-                        {
-                            if (flatPairIndex % sampleStride == 0)
-                            {
-                                addSeedPair(left, right);
-                            }
-                        }
-                    }
-                }
-
-                for (const auto& [left, right] : seedPairs)
-                {
-                    std::array<double, 3> seedXyz;
-                    const TrackElement& leftElement = remainingElements[left];
-                    const TrackElement& rightElement = remainingElements[right];
-                    if (track.source == TrackSource::FeatureMatch &&
-                        !hasDirectCorrespondence(leftElement, rightElement))
-                    {
-                        ++stats.indirectTwoViewCandidates;
-                        continue;
-                    }
-                    ++stats.seedPairTests;
-                    if (!triangulatePair(leftElement.imageId,
-                                         leftElement.featureIdx,
-                                         rightElement.imageId,
-                                         rightElement.featureIdx,
-                                         options,
-                                         seedXyz))
-                    {
-                        ++stats.seedPairRejected;
-                        continue;
-                    }
-
-                    Candidate seedCandidate = refineCandidate(collectCandidateFromPoint(seedXyz, true));
-                    if (betterCandidate(seedCandidate, best))
-                    {
-                        best = seedCandidate;
-                    }
-                    if (track.length() >= 3 && seedCandidate.valid && seedCandidate.inlierTrack.length() == 2 &&
-                        std::isfinite(seedCandidate.nearestRejectedReprojError))
-                    {
-                        nearestRejectedExtraForTrack =
-                            std::min(nearestRejectedExtraForTrack, seedCandidate.nearestRejectedReprojError);
-                    }
-                }
-
-                if (!best.valid)
-                {
-                    break;
-                }
-                best.nearestRejectedReprojError =
-                    std::min(best.nearestRejectedReprojError, nearestRejectedExtraForTrack);
-                candidates.push_back(best);
-
-                remainingElements.erase(std::remove_if(remainingElements.begin(),
-                                                       remainingElements.end(),
-                                                       [&best](const TrackElement& element)
-                                                       {
-                                                           return std::any_of(
-                                                               best.inlierTrack.elements.begin(),
-                                                               best.inlierTrack.elements.end(),
-                                                               [&element](const TrackElement& used)
-                                                               {
-                                                                   return used.imageId == element.imageId &&
-                                                                          used.featureIdx == element.featureIdx;
-                                                               });
-                                                       }),
-                                        remainingElements.end());
-            }
-
-            const bool hasLongCandidate =
-                std::any_of(candidates.begin(),
-                            candidates.end(),
-                            [](const Candidate& candidate) { return candidate.inlierTrack.length() >= 3; });
-            for (const Candidate& candidate : candidates)
-            {
-                // 一条输入轨迹表达一个物理特征。它已经形成多视共识点时，剩余的
-                // 两观测候选通常是离群观测被再次配对产生的飞点。只抑制这种残片；
-                // 原生双视轨迹，以及完全无法形成三视共识的稀疏区域仍保留二视结果。
-                if (track.length() >= 3 && hasLongCandidate && candidate.inlierTrack.length() == 2)
-                {
-                    ++stats.suppressedTwoViewFragments;
+                    ++stats.unusableTracks;
                     continue;
                 }
-
-                const Point3DId pointId = _reconstruction.addPoint3DWithTrack(candidate.xyz, candidate.inlierTrack);
-                if (_reconstruction.hasPoint3D(pointId))
-                {
-                    _reconstruction.point3D(pointId).error = candidate.rmsError;
-                }
-                ++stats.numCreated;
-                stats.numContinued += static_cast<int>(std::max<std::size_t>(0, candidate.inlierTrack.length() - 2));
-                createdAnyPointForTrack = true;
-                if (candidate.inlierTrack.length() >= 3)
-                {
-                    ++stats.createdLongTracks;
-                    continue;
-                }
-
+                ++stats.numRestored;
+            }
+            else
+            {
+                pointId = _reconstruction.addPoint3DWithTrack(candidate.xyz, acceptedTrack);
+                _reconstruction.point3D(pointId).error = candidate.meanError;
+            }
+            ++stats.numCreated;
+            stats.numContinued += static_cast<int>(acceptedTrack.length() - 2);
+            if (acceptedTrack.length() >= 3)
+            {
+                ++stats.createdLongTracks;
+            }
+            else
+            {
                 ++stats.createdTwoViewTracks;
-                createdTwoViewPointIds.push_back(pointId);
-                if (track.length() < 3)
-                {
-                    continue;
-                }
-
-                ++stats.longTrackTwoViewOnly;
-                if (!std::isfinite(candidate.nearestRejectedReprojError))
-                {
-                    continue;
-                }
-
-                const double rejectedError = candidate.nearestRejectedReprojError;
-                ++stats.longTrackRejectedExtraSamples;
-                stats.longTrackRejectedExtraErrorSum += rejectedError;
-                stats.longTrackRejectedExtraErrorMax = std::max(stats.longTrackRejectedExtraErrorMax, rejectedError);
-                if (rejectedError <= 5.0)
-                {
-                    ++stats.longTrackRejectedExtraLe5;
-                }
-                else if (rejectedError <= 10.0)
-                {
-                    ++stats.longTrackRejectedExtraLe10;
-                }
-                else if (rejectedError <= 25.0)
-                {
-                    ++stats.longTrackRejectedExtraLe25;
-                }
-                else
-                {
-                    ++stats.longTrackRejectedExtraGt25;
-                }
-            }
-
-            if (!createdAnyPointForTrack)
-            {
-                ++stats.noCandidateTracks;
             }
         }
-
-        if (options.enableTwoViewLocalDepthConsistency && _reconstruction.numRegisteredImages() > 2 &&
-            options.twoViewLocalDepthRadiusPixels > 0.0 && options.twoViewLocalDepthMinReferences > 0 &&
-            options.twoViewLocalDepthMaxDeviation > 0.0 && !createdTwoViewPointIds.empty())
-        {
-            struct DepthReference
-            {
-                double x = 0.0;
-                double y = 0.0;
-                double depth = 0.0;
-            };
-            using CellReferences = std::unordered_map<std::uint64_t, std::vector<DepthReference>>;
-            std::unordered_map<ImageId, CellReferences> referencesByImage;
-            const double cellSize = options.twoViewLocalDepthRadiusPixels;
-            const auto cellKey = [cellSize](double x, double y)
-            {
-                const auto column = static_cast<std::int32_t>(std::floor(x / cellSize));
-                const auto row = static_cast<std::int32_t>(std::floor(y / cellSize));
-                return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(column)) << 32U) |
-                       static_cast<std::uint32_t>(row);
-            };
-            const auto median = [](std::vector<double> values)
-            {
-                if (values.empty())
-                {
-                    return std::numeric_limits<double>::quiet_NaN();
-                }
-                const std::size_t middle = values.size() / 2;
-                std::nth_element(values.begin(), values.begin() + middle, values.end());
-                const double upper = values[middle];
-                if (values.size() % 2 != 0)
-                {
-                    return upper;
-                }
-                std::nth_element(values.begin(), values.begin() + middle - 1, values.begin() + middle);
-                return 0.5 * (values[middle - 1] + upper);
-            };
-
-            for (const auto& [pointId, point] : _reconstruction.points3D())
-            {
-                (void)pointId;
-                if (point.track.source != TrackSource::FeatureMatch || point.track.length() < 3)
-                {
-                    continue;
-                }
-                for (const TrackElement& element : point.track.elements)
-                {
-                    if (!_reconstruction.hasCamera(element.imageId) || !_reconstruction.hasImage(element.imageId))
-                    {
-                        continue;
-                    }
-                    const ImageData& image = _reconstruction.image(element.imageId);
-                    if (element.featureIdx >= image.keypoints.size())
-                    {
-                        continue;
-                    }
-                    double projected[2]{};
-                    double depth = 0.0;
-                    if (!_reconstruction.camera(element.imageId)
-                             .projectWorldPointWithDepth(point.xyz.data(), projected, depth) ||
-                        !std::isfinite(depth) || depth <= 0.0)
-                    {
-                        continue;
-                    }
-                    const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-                    referencesByImage[element.imageId][cellKey(keypoint.x, keypoint.y)].push_back(
-                        {keypoint.x, keypoint.y, depth});
-                }
-            }
-
-            const double radiusSquared = options.twoViewLocalDepthRadiusPixels * options.twoViewLocalDepthRadiusPixels;
-            const auto localDepthAssessment = [&](const TrackElement& element,
-                                                  const std::array<double, 3>& xyz) -> std::optional<double>
-            {
-                const auto imageReferences = referencesByImage.find(element.imageId);
-                if (imageReferences == referencesByImage.end() || !_reconstruction.hasCamera(element.imageId) ||
-                    !_reconstruction.hasImage(element.imageId))
-                {
-                    return std::nullopt;
-                }
-                const ImageData& image = _reconstruction.image(element.imageId);
-                if (element.featureIdx >= image.keypoints.size())
-                {
-                    return std::nullopt;
-                }
-
-                double projected[2]{};
-                double candidateDepth = 0.0;
-                if (!_reconstruction.camera(element.imageId)
-                         .projectWorldPointWithDepth(xyz.data(), projected, candidateDepth) ||
-                    !std::isfinite(candidateDepth) || candidateDepth <= 0.0)
-                {
-                    return std::nullopt;
-                }
-
-                const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-                const int centerColumn = static_cast<int>(std::floor(keypoint.x / cellSize));
-                const int centerRow = static_cast<int>(std::floor(keypoint.y / cellSize));
-                std::vector<double> localDepths;
-                for (int columnOffset = -1; columnOffset <= 1; ++columnOffset)
-                {
-                    for (int rowOffset = -1; rowOffset <= 1; ++rowOffset)
-                    {
-                        const std::uint64_t key =
-                            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(centerColumn + columnOffset))
-                             << 32U) |
-                            static_cast<std::uint32_t>(centerRow + rowOffset);
-                        const auto cell = imageReferences->second.find(key);
-                        if (cell == imageReferences->second.end())
-                        {
-                            continue;
-                        }
-                        for (const DepthReference& reference : cell->second)
-                        {
-                            const double dx = reference.x - keypoint.x;
-                            const double dy = reference.y - keypoint.y;
-                            if (dx * dx + dy * dy <= radiusSquared)
-                            {
-                                localDepths.push_back(reference.depth);
-                            }
-                        }
-                    }
-                }
-                if (static_cast<int>(localDepths.size()) < options.twoViewLocalDepthMinReferences)
-                {
-                    return std::nullopt;
-                }
-
-                const double localMedian = median(localDepths);
-                if (!std::isfinite(localMedian) || localMedian <= 0.0)
-                {
-                    return std::nullopt;
-                }
-                std::vector<double> absoluteDeviations;
-                absoluteDeviations.reserve(localDepths.size());
-                for (const double depth : localDepths)
-                {
-                    absoluteDeviations.push_back(std::abs(depth - localMedian));
-                }
-                const double madFraction = median(std::move(absoluteDeviations)) / localMedian;
-                if (!std::isfinite(madFraction) || madFraction > options.twoViewLocalDepthMaxMadFraction)
-                {
-                    return std::nullopt;
-                }
-                return std::abs(candidateDepth - localMedian) / localMedian;
-            };
-
-            for (const Point3DId pointId : createdTwoViewPointIds)
-            {
-                if (!_reconstruction.hasPoint3D(pointId))
-                {
-                    continue;
-                }
-                const ScenePoint3D& point = _reconstruction.point3D(pointId);
-                if (point.track.source != TrackSource::FeatureMatch || point.track.length() != 2)
-                {
-                    continue;
-                }
-                const std::optional<double> first = localDepthAssessment(point.track.elements[0], point.xyz);
-                const std::optional<double> second = localDepthAssessment(point.track.elements[1], point.xyz);
-                if (!first || !second || *first <= options.twoViewLocalDepthMaxDeviation ||
-                    *second <= options.twoViewLocalDepthMaxDeviation)
-                {
-                    continue;
-                }
-
-                _reconstruction.deletePoint3D(pointId);
-                ++stats.localDepthInconsistentTwoViewPoints;
-                ++stats.numFiltered;
-                --stats.numCreated;
-                --stats.createdTwoViewTracks;
-            }
-        }
-
         return stats;
     }
 
@@ -805,7 +537,16 @@ namespace xjw
         {
             return false;
         }
-        if (!std::isfinite(result.reproj_error_rms) || result.reproj_error_rms > options.maxReprojError)
+        double threshold_error = result.reproj_error_rms;
+        if (options.normalizeReprojectionByFeatureScale && result.valid)
+        {
+            const double first_error =
+                normalizedReprojError(computeReprojError(result.point, imgId1, featIdx1), imgId1, featIdx1, true);
+            const double second_error =
+                normalizedReprojError(computeReprojError(result.point, imgId2, featIdx2), imgId2, featIdx2, true);
+            threshold_error = std::sqrt(0.5 * (first_error * first_error + second_error * second_error));
+        }
+        if (!std::isfinite(threshold_error) || threshold_error > options.maxReprojError)
             return false;
 
         outXyz = result.point;
@@ -841,6 +582,26 @@ namespace xjw
         return std::sqrt(du * du + dv * dv);
     }
 
+    double Triangulator::normalizedReprojError(double error,
+                                               ImageId imageId,
+                                               FeatureIdx featureIdx,
+                                               bool normalizeByFeatureScale) const
+    {
+        if (!normalizeByFeatureScale || !std::isfinite(error) || !_reconstruction.hasImage(imageId))
+        {
+            return error;
+        }
+        const ImageData& image = _reconstruction.image(imageId);
+        if (featureIdx >= image.keypoints.size())
+        {
+            return error;
+        }
+        const float stored_scale = image.keypoints[featureIdx].scale;
+        const double scale =
+            std::isfinite(stored_scale) && stored_scale > 0.0F ? static_cast<double>(stored_scale) : 1.0;
+        return error / scale;
+    }
+
     bool Triangulator::isPureTwoViewComponent(const Track& track) const
     {
         if (track.source != TrackSource::FeatureMatch || track.length() != 2)
@@ -863,7 +624,7 @@ namespace xjw
 
     // ---- 过滤低质量三维点 ----
 
-    int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
+    int Triangulator::filterPoints(double maxReprojError, double minTriAngle, bool normalizeByFeatureScale)
     {
         auto allIds = _reconstruction.allPoint3DIds();
         struct FilterDecision
@@ -891,7 +652,11 @@ namespace xjw
                 double squaredErrorSum = 0.0;
                 for (const TrackElement& element : pt.track.elements)
                 {
-                    const double error = computeReprojError(pt.xyz, element.imageId, element.featureIdx);
+                    const double error =
+                        normalizedReprojError(computeReprojError(pt.xyz, element.imageId, element.featureIdx),
+                                              element.imageId,
+                                              element.featureIdx,
+                                              normalizeByFeatureScale);
                     if (!std::isfinite(error) || error > maxReprojError)
                     {
                         decision.observationsToRemove.push_back(element);
@@ -1056,7 +821,8 @@ namespace xjw
                     }
 
                     // 检查重投影误差
-                    double reprErr = computeReprojError(pt.xyz, imgId, fi);
+                    double reprErr = normalizedReprojError(
+                        computeReprojError(pt.xyz, imgId, fi), imgId, fi, options.normalizeReprojectionByFeatureScale);
                     if (reprErr > options.completeMaxReprojError)
                     {
                         continue;
@@ -1139,69 +905,109 @@ namespace xjw
         return maxAngle;
     }
 
-    // ---- 多视图 DLT 三角化 ----
+    // ---- 多视图最近射线三角化 ----
 
     bool Triangulator::triangulateMultiView(const std::vector<TrackElement>& observations,
                                             std::array<double, 3>& outXyz) const
     {
-        // 收集有效观测的投影矩阵和像点坐标
-        // 投影矩阵 P = K * [R | -R*C]，其中 R 是 camera-to-world 的逆
-        std::vector<cv::Mat> projMats;
-        std::vector<cv::Point2d> pts;
+        double a = 0.0;
+        double b = 0.0;
+        double c = 0.0;
+        double d = 0.0;
+        double e = 0.0;
+        double f = 0.0;
+        double g = 0.0;
+        double h = 0.0;
+        double i = 0.0;
+        double rhsX = 0.0;
+        double rhsY = 0.0;
+        double rhsZ = 0.0;
+        std::size_t rayCount = 0;
 
-        for (const auto& elem : observations)
+        for (const TrackElement& element : observations)
         {
-            if (!_reconstruction.isRegistered(elem.imageId))
-                continue;
-            if (!_reconstruction.hasCamera(elem.imageId))
-                continue;
-            const FramePinholeCamera& cam = _reconstruction.camera(elem.imageId);
-            const ImageData& img = _reconstruction.image(elem.imageId);
-            if (elem.featureIdx >= img.keypoints.size())
-                continue;
-
-            projMats.push_back(openCvProjectionMatrix(cam));
-            pts.emplace_back(img.keypoints[elem.featureIdx].x, img.keypoints[elem.featureIdx].y);
-        }
-
-        if (projMats.size() < 2)
-            return false;
-
-        // 构造 DLT 线性系统: 对每个观测 (P, x)，添加两行到 A
-        //   x * P[2,:] - P[0,:]
-        //   y * P[2,:] - P[1,:]
-        const int nObs = static_cast<int>(projMats.size());
-        cv::Mat A(2 * nObs, 4, CV_64F);
-
-        for (int i = 0; i < nObs; ++i)
-        {
-            const cv::Mat& P = projMats[i];
-            double x = pts[i].x, y = pts[i].y;
-            for (int j = 0; j < 4; ++j)
+            if (!_reconstruction.isRegistered(element.imageId) || !_reconstruction.hasCamera(element.imageId) ||
+                !_reconstruction.hasImage(element.imageId))
             {
-                A.at<double>(2 * i, j) = x * P.at<double>(2, j) - P.at<double>(0, j);
-                A.at<double>(2 * i + 1, j) = y * P.at<double>(2, j) - P.at<double>(1, j);
+                continue;
             }
+            const ImageData& image = _reconstruction.image(element.imageId);
+            if (element.featureIdx >= image.keypoints.size())
+            {
+                continue;
+            }
+
+            const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
+            CameraImagingRay ray;
+            if (!_reconstruction.camera(element.imageId)
+                     .rayForPixel(CameraImageCoordinate{keypoint.x, keypoint.y}, &ray))
+            {
+                continue;
+            }
+            const double squaredLength = ray.direction[0] * ray.direction[0] + ray.direction[1] * ray.direction[1] +
+                                         ray.direction[2] * ray.direction[2];
+            const double length = std::sqrt(squaredLength);
+            if (!std::isfinite(length) || length < std::numeric_limits<double>::epsilon())
+            {
+                continue;
+            }
+            const double x = ray.direction[0] / length;
+            const double y = ray.direction[1] / length;
+            const double z = ray.direction[2] / length;
+            const double xx = x * x;
+            const double xy = x * y;
+            const double xz = x * z;
+            const double yy = y * y;
+            const double yz = y * z;
+            const double zz = z * z;
+            const double oneMinusXx = 1.0 - xx;
+            const double oneMinusYy = 1.0 - yy;
+            const double oneMinusZz = 1.0 - zz;
+
+            a += oneMinusXx;
+            b -= xy;
+            c -= xz;
+            d -= xy;
+            e += oneMinusYy;
+            f -= yz;
+            g -= xz;
+            h -= yz;
+            i += oneMinusZz;
+            rhsX += (oneMinusXx * ray.originMeters[0] - xy * ray.originMeters[1]) - xz * ray.originMeters[2];
+            rhsY += (-xy * ray.originMeters[0] + oneMinusYy * ray.originMeters[1]) - yz * ray.originMeters[2];
+            rhsZ += (-xz * ray.originMeters[0] - yz * ray.originMeters[1]) + oneMinusZz * ray.originMeters[2];
+            ++rayCount;
         }
 
-        // SVD 求解: X 对应最小奇异值的右奇异向量
-        cv::Mat W, U, Vt;
-        cv::SVD::compute(A, W, U, Vt, cv::SVD::FULL_UV);
-        cv::Mat X4 = Vt.row(3).t();
-
-        if (std::fabs(X4.at<double>(3)) < 1e-10)
+        if (rayCount < 2)
+        {
             return false;
+        }
 
-        outXyz[0] = X4.at<double>(0) / X4.at<double>(3);
-        outXyz[1] = X4.at<double>(1) / X4.at<double>(3);
-        outXyz[2] = X4.at<double>(2) / X4.at<double>(3);
+        const double cofactor00 = e * i - f * h;
+        const double cofactor10 = d * i - f * g;
+        const double cofactor20 = d * h - e * g;
+        const double determinant = (a * cofactor00 - b * cofactor10) + c * cofactor20;
+        if (!std::isfinite(determinant) || determinant == 0.0)
+        {
+            return false;
+        }
+        const double inverseDeterminant = 1.0 / determinant;
+        outXyz = {{
+            (cofactor00 * inverseDeterminant) * rhsX + ((c * h - b * i) * inverseDeterminant) * rhsY +
+                ((b * f - c * e) * inverseDeterminant) * rhsZ,
+            ((f * g - d * i) * inverseDeterminant) * rhsX + ((a * i - c * g) * inverseDeterminant) * rhsY +
+                ((c * d - a * f) * inverseDeterminant) * rhsZ,
+            (cofactor20 * inverseDeterminant) * rhsX + ((b * g - a * h) * inverseDeterminant) * rhsY +
+                ((a * e - b * d) * inverseDeterminant) * rhsZ,
+        }};
 
         return std::isfinite(outXyz[0]) && std::isfinite(outXyz[1]) && std::isfinite(outXyz[2]);
     }
 
     // ---- 重三角化所有点 ----
 
-    int Triangulator::retriangulatePoints(double maxReprojError)
+    int Triangulator::retriangulatePoints(double maxReprojError, bool normalizeByFeatureScale)
     {
         const auto started = std::chrono::steady_clock::now();
         auto allIds = _reconstruction.allPoint3DIds();
@@ -1213,80 +1019,85 @@ namespace xjw
         };
         std::vector<RetriangulationUpdate> updates(allIds.size());
 
-        common::concurrency::parallelForIndices(allIds.size(),
-                                                static_cast<std::size_t>(_threadCount),
-                                                [&](std::size_t pointIndex)
-                                                {
-                                                    const Point3DId pid = allIds[pointIndex];
-                                                    if (!_reconstruction.hasPoint3D(pid))
-                                                        return;
-                                                    const auto& pt = _reconstruction.point3D(pid);
+        common::concurrency::parallelForIndices(
+            allIds.size(),
+            static_cast<std::size_t>(_threadCount),
+            [&](std::size_t pointIndex)
+            {
+                const Point3DId pid = allIds[pointIndex];
+                if (!_reconstruction.hasPoint3D(pid))
+                    return;
+                const auto& pt = _reconstruction.point3D(pid);
 
-                                                    if (pt.track.length() < 2)
-                                                        return;
+                if (pt.track.length() < 2)
+                    return;
 
-                                                    // 计算原始平均重投影误差
-                                                    double oldAvgErr = 0.0;
-                                                    int oldValidObs = 0;
-                                                    for (const auto& elem : pt.track.elements)
-                                                    {
-                                                        double err =
-                                                            computeReprojError(pt.xyz, elem.imageId, elem.featureIdx);
-                                                        if (err < 1e8)
-                                                        {
-                                                            oldAvgErr += err;
-                                                            ++oldValidObs;
-                                                        }
-                                                    }
-                                                    if (oldValidObs > 0)
-                                                        oldAvgErr /= oldValidObs;
-                                                    else
-                                                        oldAvgErr = 1e9; // 无有效投影说明旧点极差（如在相机后方）
+                // 计算原始平均重投影误差
+                double oldAvgErr = 0.0;
+                int oldValidObs = 0;
+                for (const auto& elem : pt.track.elements)
+                {
+                    double err = normalizedReprojError(computeReprojError(pt.xyz, elem.imageId, elem.featureIdx),
+                                                       elem.imageId,
+                                                       elem.featureIdx,
+                                                       normalizeByFeatureScale);
+                    if (err < 1e8)
+                    {
+                        oldAvgErr += err;
+                        ++oldValidObs;
+                    }
+                }
+                if (oldValidObs > 0)
+                    oldAvgErr /= oldValidObs;
+                else
+                    oldAvgErr = 1e9; // 无有效投影说明旧点极差（如在相机后方）
 
-                                                    // 多视图重三角化
-                                                    std::array<double, 3> newXyz;
-                                                    if (!triangulateMultiView(pt.track.elements, newXyz))
-                                                        return;
+                // 多视图重三角化
+                std::array<double, 3> newXyz;
+                if (!triangulateMultiView(pt.track.elements, newXyz))
+                    return;
 
-                                                    // 检查新坐标在所有观测相机中深度为正
-                                                    bool allPositive = true;
-                                                    for (const auto& elem : pt.track.elements)
-                                                    {
-                                                        if (!hasPositiveDepth(newXyz, elem.imageId))
-                                                        {
-                                                            allPositive = false;
-                                                            break;
-                                                        }
-                                                    }
-                                                    if (!allPositive)
-                                                        return;
+                // 检查新坐标在所有观测相机中深度为正
+                bool allPositive = true;
+                for (const auto& elem : pt.track.elements)
+                {
+                    if (!hasPositiveDepth(newXyz, elem.imageId))
+                    {
+                        allPositive = false;
+                        break;
+                    }
+                }
+                if (!allPositive)
+                    return;
 
-                                                    // 计算新的平均重投影误差
-                                                    double newAvgErr = 0.0;
-                                                    int newValidObs = 0;
-                                                    for (const auto& elem : pt.track.elements)
-                                                    {
-                                                        double err =
-                                                            computeReprojError(newXyz, elem.imageId, elem.featureIdx);
-                                                        if (err < 1e8)
-                                                        {
-                                                            newAvgErr += err;
-                                                            ++newValidObs;
-                                                        }
-                                                    }
-                                                    if (newValidObs > 0)
-                                                        newAvgErr /= newValidObs;
+                // 计算新的平均重投影误差
+                double newAvgErr = 0.0;
+                int newValidObs = 0;
+                for (const auto& elem : pt.track.elements)
+                {
+                    double err = normalizedReprojError(computeReprojError(newXyz, elem.imageId, elem.featureIdx),
+                                                       elem.imageId,
+                                                       elem.featureIdx,
+                                                       normalizeByFeatureScale);
+                    if (err < 1e8)
+                    {
+                        newAvgErr += err;
+                        ++newValidObs;
+                    }
+                }
+                if (newValidObs > 0)
+                    newAvgErr /= newValidObs;
 
-                                                    // 如果新误差超过阈值，或者比旧误差更差且旧误差本身已经不错，跳过
-                                                    if (newAvgErr > maxReprojError && newAvgErr >= oldAvgErr)
-                                                        return;
+                // 如果新误差超过阈值，或者比旧误差更差且旧误差本身已经不错，跳过
+                if (newAvgErr > maxReprojError && newAvgErr >= oldAvgErr)
+                    return;
 
-                                                    // 只在新结果更好时更新
-                                                    if (newAvgErr < oldAvgErr || oldAvgErr > maxReprojError)
-                                                    {
-                                                        updates[pointIndex] = {true, newXyz, newAvgErr};
-                                                    }
-                                                });
+                // 只在新结果更好时更新
+                if (newAvgErr < oldAvgErr || oldAvgErr > maxReprojError)
+                {
+                    updates[pointIndex] = {true, newXyz, newAvgErr};
+                }
+            });
 
         int improved = 0;
         for (std::size_t pointIndex = 0; pointIndex < allIds.size(); ++pointIndex)

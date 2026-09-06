@@ -185,6 +185,59 @@ std::vector<xjw::SparsePointCloudPoint> sparsePointsFromJson(const QJsonArray &p
         point.projectionAccuracy = pointObj.value(QStringLiteral("projection_accuracy"))
             .toDouble(std::numeric_limits<double>::quiet_NaN());
         point.trackLen = pointObj.value(QStringLiteral("track_len")).toInt(0);
+        const QJsonValue cleanValue = pointObj.value(QStringLiteral("clean_tie_points"));
+        const QJsonObject clean = cleanValue.toObject();
+        const QJsonValue hasGeometryValue = clean.value(QStringLiteral("has_projection_geometry"));
+        const QJsonValue imageCountValue = clean.value(QStringLiteral("image_count"));
+        const double cleanReprojectionError =
+            clean.value(QStringLiteral("reprojection_error")).toDouble(std::numeric_limits<double>::quiet_NaN());
+        const double cleanProjectionAccuracy =
+            clean.value(QStringLiteral("projection_accuracy")).toDouble(std::numeric_limits<double>::quiet_NaN());
+        const double cleanImageCountValue = imageCountValue.toDouble(std::numeric_limits<double>::quiet_NaN());
+        const int cleanImageCount = std::isfinite(cleanImageCountValue) &&
+                                            cleanImageCountValue <= static_cast<double>(std::numeric_limits<int>::max())
+                                        ? static_cast<int>(cleanImageCountValue)
+                                        : -1;
+        double cleanReconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
+        bool validCleanReconstructionUncertainty = hasGeometryValue.isBool();
+        if (validCleanReconstructionUncertainty && hasGeometryValue.toBool())
+        {
+            if (clean.value(QStringLiteral("reconstruction_uncertainty_infinite")).toBool(false))
+            {
+                cleanReconstructionUncertainty = std::numeric_limits<double>::infinity();
+            }
+            else
+            {
+                cleanReconstructionUncertainty = clean.value(QStringLiteral("reconstruction_uncertainty"))
+                                                     .toDouble(std::numeric_limits<double>::quiet_NaN());
+                validCleanReconstructionUncertainty =
+                    std::isfinite(cleanReconstructionUncertainty) && cleanReconstructionUncertainty > 0.0;
+            }
+        }
+        point.hasCleanTiePointReprojectionError =
+            cleanValue.isObject() && std::isfinite(cleanReprojectionError) && cleanReprojectionError >= 0.0;
+        point.hasCleanTiePointReconstructionUncertainty = cleanValue.isObject() && validCleanReconstructionUncertainty;
+        point.hasCleanTiePointImageCount = cleanValue.isObject() && imageCountValue.isDouble() &&
+                                           cleanImageCount >= 0 &&
+                                           std::trunc(cleanImageCountValue) == cleanImageCountValue;
+        point.hasCleanTiePointProjectionAccuracy =
+            cleanValue.isObject() && std::isfinite(cleanProjectionAccuracy) && cleanProjectionAccuracy >= 0.0;
+        if (point.hasCleanTiePointReprojectionError)
+        {
+            point.cleanTiePointReprojectionError = cleanReprojectionError;
+        }
+        if (point.hasCleanTiePointReconstructionUncertainty)
+        {
+            point.cleanTiePointReconstructionUncertainty = cleanReconstructionUncertainty;
+        }
+        if (point.hasCleanTiePointImageCount)
+        {
+            point.cleanTiePointImageCount = cleanImageCount;
+        }
+        if (point.hasCleanTiePointProjectionAccuracy)
+        {
+            point.cleanTiePointProjectionAccuracy = cleanProjectionAccuracy;
+        }
         point.sourceIndex = static_cast<std::size_t>(source_index);
         if (!applyColorArray(pointObj.value(QStringLiteral("color_rgb")).toArray(), &point))
         {
@@ -830,6 +883,68 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     options.filterByDensity = settings.value(QStringLiteral("filterByDensity")).toBool(false);
     options.densityRadius = settings.value(QStringLiteral("densityRadius")).toDouble(0.5);
     options.densityMinNeighbors = settings.value(QStringLiteral("densityMinNeighbors")).toInt(5);
+
+    const bool referenceCleanTiePoints =
+        settings.value(QStringLiteral("cleanTiePointsReferenceSemantics")).toBool(false);
+    const bool usesReferenceCleanTiePointMetric = options.filterByReprojError || options.filterByTrackLen ||
+                                                  options.filterByReconstructionUncertainty ||
+                                                  options.filterByProjectionAccuracy;
+    if (referenceCleanTiePoints && usesReferenceCleanTiePointMetric)
+    {
+        if (!qualityMetricsAvailable)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("当前成果没有 Clean Tie Points 参考算法所需的逐点质量数据");
+            }
+            return false;
+        }
+        if (options.filterByTrackLen)
+        {
+            const int imageCountLevel =
+                settings.value(QStringLiteral("imageCountLevel")).toInt(std::max(0, options.minTrackLen - 1));
+            if (imageCountLevel < 0 || imageCountLevel == std::numeric_limits<int>::max())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("Clean Tie Points 图像计数阈值无效");
+                }
+                return false;
+            }
+            options.minTrackLen = imageCountLevel + 1;
+        }
+        for (xjw::SparsePointCloudPoint& point : points)
+        {
+            if ((options.filterByReprojError && !point.hasCleanTiePointReprojectionError) ||
+                (options.filterByReconstructionUncertainty && !point.hasCleanTiePointReconstructionUncertainty) ||
+                (options.filterByTrackLen && !point.hasCleanTiePointImageCount) ||
+                (options.filterByProjectionAccuracy && !point.hasCleanTiePointProjectionAccuracy))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage =
+                        QStringLiteral("当前成果缺少 Clean Tie Points 参考算法指标，请重新运行空中三角测量");
+                }
+                return false;
+            }
+            if (options.filterByReprojError)
+            {
+                point.rmsReprojPx = point.cleanTiePointReprojectionError;
+            }
+            if (options.filterByReconstructionUncertainty)
+            {
+                point.reconstructionUncertainty = point.cleanTiePointReconstructionUncertainty;
+            }
+            if (options.filterByTrackLen)
+            {
+                point.trackLen = point.cleanTiePointImageCount;
+            }
+            if (options.filterByProjectionAccuracy)
+            {
+                point.projectionAccuracy = point.cleanTiePointProjectionAccuracy;
+            }
+        }
+    }
 
     xjw::SparsePointCloudOptimizeOptions optimizeOptions;
     optimizeOptions.filterOptions = options;

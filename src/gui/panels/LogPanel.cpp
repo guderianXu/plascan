@@ -1,123 +1,227 @@
-/**
- * @file LogPanel.cpp
- * @brief LogPanel 的实现文件。
- *
- * 包含 UI 布局初始化、Logger 回调注册、完整输出显示、清空和保存等实现逻辑。
- */
 #include "LogPanel.h"
+
+#include "LogEntryModel.h"
 #include "ui_LogPanel.h"
 
-#include <QFile>
-#include <QFontDatabase>
-#include <QTextStream>
-#include <QFileDialog>
+#include <QAbstractItemView>
+#include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QComboBox>
+#include <QDesktopServices>
 #include <QDir>
-#include <QEvent>
-#include <QHBoxLayout>
-#include <QIODevice>
+#include <QFile>
+#include <QFileDialog>
+#include <QHeaderView>
+#include <QLabel>
+#include <QLineEdit>
+#include <QKeySequence>
+#include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
-#include <QTextCursor>
-#include <QTextEdit>
-#include <QPushButton>
+#include <QScrollBar>
+#include <QShowEvent>
 #include <QStyle>
-#include <QTextDocument>
+#include <QTableView>
+#include <QTextStream>
+#include <QToolButton>
+#include <QUrl>
 
 #include <algorithm>
 
-/**
- * @brief 构造函数：创建 UI 布局，初始化所有子控件，并注册 Logger sink。
- *
- * 布局结构：
- * ┌──────────────────────────────────────────┐
- * │                                          │
- * │           只读日志文本区（_text） [按钮]  │  ← 按钮悬浮，不占布局高度
- * │                                          │
- * └──────────────────────────────────────────┘
- *
- * 关键连接：
- * - Logger sink → LogPanel::appendLog（invokeMethod 排队到 UI 线程）
- * - _clearBtn::clicked → LogPanel::clearLogs
- * - _saveBtn::clicked → 打开文件保存对话框 → saveLogsToFile
- *
- * @param parent 父 Widget 指针。
- */
-LogPanel::LogPanel(QWidget *parent)
-    : QWidget(parent)
+LogPanel::LogPanel(QWidget* parent) : QWidget(parent), _pendingQueue(std::make_shared<PendingQueue>())
 {
     Ui::LogPanel ui;
     ui.setupUi(this);
 
-    _text = ui.m_text;
+    _table = ui.logTable;
+    _sessionCombo = ui.sessionCombo;
+    _levelCombo = ui.levelCombo;
+    _searchEdit = ui.searchEdit;
+    _countLabel = ui.countLabel;
+    _followButton = ui.followButton;
+    _clearButton = ui.clearButton;
+    _saveButton = ui.saveButton;
+    _openDirectoryButton = ui.openDirectoryButton;
 
-    _toolOverlay = new QWidget(_text->viewport());
-    _toolOverlay->setObjectName(QStringLiteral("consoleToolOverlay"));
-    _toolOverlay->setAttribute(Qt::WA_TranslucentBackground);
-    auto *tool_layout = new QHBoxLayout(_toolOverlay);
-    tool_layout->setContentsMargins(0, 0, 0, 0);
-    tool_layout->setSpacing(2);
+    _model = new LogEntryModel(this);
+    _proxy = new LogFilterProxyModel(this);
+    _proxy->setSourceModel(_model);
+    _table->setModel(_proxy);
+    _table->setObjectName(QStringLiteral("consoleLogTable"));
+    _table->setAlternatingRowColors(true);
+    _table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    _table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    _table->setShowGrid(false);
+    _table->setWordWrap(false);
+    _table->verticalHeader()->setVisible(false);
+    _table->verticalHeader()->setDefaultSectionSize(24);
+    _table->horizontalHeader()->setStretchLastSection(true);
+    _table->horizontalHeader()->setSectionResizeMode(LogEntryModel::TimeColumn, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(LogEntryModel::LevelColumn, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(LogEntryModel::ContextColumn, QHeaderView::ResizeToContents);
 
-    _clearBtn = new QPushButton(_toolOverlay);
-    _clearBtn->setObjectName(QStringLiteral("clearConsoleButton"));
-    _saveBtn = new QPushButton(_toolOverlay);
-    _saveBtn->setObjectName(QStringLiteral("saveConsoleButton"));
-    tool_layout->addWidget(_clearBtn);
-    tool_layout->addWidget(_saveBtn);
+    auto* copy_action = new QAction(tr("复制选中日志"), _table);
+    copy_action->setObjectName(QStringLiteral("copyConsoleSelectionAction"));
+    copy_action->setShortcut(QKeySequence::Copy);
+    copy_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    _table->addAction(copy_action);
+    connect(copy_action,
+            &QAction::triggered,
+            this,
+            [this]()
+            {
+                QModelIndexList rows = _table->selectionModel()->selectedRows();
+                std::sort(rows.begin(),
+                          rows.end(),
+                          [](const QModelIndex& left, const QModelIndex& right) { return left.row() < right.row(); });
+                QString text;
+                for (const QModelIndex& row : rows)
+                {
+                    text += row.data(LogEntryModel::FormattedRole).toString();
+                }
+                if (!text.isEmpty())
+                {
+                    QApplication::clipboard()->setText(text);
+                }
+            });
 
-    _clearBtn->setText(QString());
-    _clearBtn->setFixedSize(24, 24);
-    _clearBtn->setFlat(true);
-    _clearBtn->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
-    _clearBtn->setToolTip(tr("清空控制台"));
-    _saveBtn->setText(QString());
-    _saveBtn->setFixedSize(24, 24);
-    _saveBtn->setFlat(true);
-    _saveBtn->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
-    _saveBtn->setToolTip(tr("保存控制台输出"));
-    _text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    _text->setLineWrapMode(QTextEdit::NoWrap);
-    _text->setFrameShape(QFrame::NoFrame);
-    _text->setUndoRedoEnabled(false);
-    _text->document()->setMaximumBlockCount(20000);
-    _text->setPlaceholderText(tr("处理信息和诊断输出将显示在这里"));
-    _text->viewport()->installEventFilter(this);
-    _toolOverlay->setFixedSize(_toolOverlay->sizeHint());
-    updateToolOverlayGeometry();
+    const QString current_session = QString::fromStdString(Logger::instance()->sessionId());
+    _sessionCombo->setObjectName(QStringLiteral("consoleSessionCombo"));
+    _sessionCombo->addItem(tr("当前会话"), current_session);
+    _sessionCombo->addItem(tr("全部会话"), QString());
+    _sessionCombo->setToolTip(tr("选择要显示的运行会话"));
+    _proxy->setSessionId(current_session);
 
-    connect(_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
+    _levelCombo->setObjectName(QStringLiteral("consoleLevelCombo"));
+    _levelCombo->addItem(tr("常规"), static_cast<int>(Logger::Info));
+    _levelCombo->addItem(tr("警告及以上"), static_cast<int>(Logger::Warn));
+    _levelCombo->addItem(tr("仅错误"), static_cast<int>(Logger::Error));
+    _levelCombo->addItem(tr("全部（含调试）"), static_cast<int>(Logger::Debug));
+    _levelCombo->setToolTip(tr("最低显示级别"));
 
-    connect(_saveBtn, &QPushButton::clicked, this, [this]() {
-        QString p = QFileDialog::getSaveFileName(
-            this, tr("保存控制台输出"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
-        if (!p.isEmpty()) saveLogsToFile(p);
-    });
+    _searchEdit->setObjectName(QStringLiteral("consoleSearchEdit"));
+    _searchEdit->setClearButtonEnabled(true);
+    _searchEdit->setPlaceholderText(tr("搜索消息或上下文"));
+    _searchEdit->setMinimumWidth(160);
+
+    _followButton->setObjectName(QStringLiteral("consoleFollowButton"));
+    _followButton->setCheckable(true);
+    _followButton->setChecked(true);
+    _followButton->setText(tr("跟随"));
+    _followButton->setToolTip(tr("自动滚动到最新日志"));
+
+    _clearButton->setObjectName(QStringLiteral("clearConsoleButton"));
+    _clearButton->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
+    _clearButton->setToolTip(tr("清空当前视图（不删除日志文件）"));
+    _clearButton->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* clear_menu = new QMenu(_clearButton);
+    clear_menu->addAction(tr("删除磁盘日志…"), this, &LogPanel::deleteDiskHistory);
+    _clearButton->setMenu(clear_menu);
+
+    _saveButton->setObjectName(QStringLiteral("saveConsoleButton"));
+    _saveButton->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    _saveButton->setToolTip(tr("导出当前筛选结果"));
+    _openDirectoryButton->setObjectName(QStringLiteral("openLogDirectoryButton"));
+    _openDirectoryButton->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+    _openDirectoryButton->setToolTip(tr("打开日志目录"));
+
+    connect(_sessionCombo,
+            &QComboBox::currentIndexChanged,
+            this,
+            [this](int index)
+            {
+                _proxy->clearTaskRange();
+                _proxy->setSessionId(_sessionCombo->itemData(index).toString());
+                updateCountLabel();
+            });
+    connect(_levelCombo,
+            &QComboBox::currentIndexChanged,
+            this,
+            [this](int index)
+            {
+                _proxy->setMinimumLevel(static_cast<Logger::Level>(_levelCombo->itemData(index).toInt()));
+                updateCountLabel();
+            });
+    connect(_searchEdit, &QLineEdit::textChanged, _proxy, &LogFilterProxyModel::setSearchText);
+    connect(_searchEdit, &QLineEdit::textChanged, this, &LogPanel::updateCountLabel);
+    connect(_followButton,
+            &QToolButton::toggled,
+            this,
+            [this](bool enabled)
+            {
+                if (enabled)
+                {
+                    scrollToLatest();
+                    markRead();
+                }
+            });
+    connect(_table->verticalScrollBar(),
+            &QScrollBar::valueChanged,
+            this,
+            [this](int value)
+            {
+                if (value < _table->verticalScrollBar()->maximum() && _followButton->isChecked())
+                {
+                    _followButton->setChecked(false);
+                }
+            });
+    connect(_clearButton, &QToolButton::clicked, this, &LogPanel::clearLogs);
+    connect(_saveButton,
+            &QToolButton::clicked,
+            this,
+            [this]()
+            {
+                const QString path = QFileDialog::getSaveFileName(
+                    this, tr("导出控制台筛选结果"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
+                if (!path.isEmpty())
+                {
+                    saveLogsToFile(path);
+                }
+            });
+    connect(_openDirectoryButton,
+            &QToolButton::clicked,
+            this,
+            []() {
+                QDesktopServices::openUrl(
+                    QUrl::fromLocalFile(QString::fromStdString(Logger::instance()->logDirectory())));
+            });
 
     QPointer<LogPanel> self(this);
+    const std::shared_ptr<PendingQueue> pending = _pendingQueue;
     _sinkId = Logger::instance()->registerSink(
-        [self](const Logger::Entry &entry)
+        [self, pending](const Logger::Entry& entry)
         {
-            if (!self)
+            bool schedule_drain = false;
             {
-                return;
-            }
-
-            const QString formatted =
-                QString::fromUtf8(entry.formatted.c_str(), static_cast<int>(entry.formatted.size()));
-            const int level = static_cast<int>(entry.level);
-            QMetaObject::invokeMethod(
-                self,
-                [self, formatted, level]()
+                std::lock_guard<std::mutex> lock(pending->mutex);
+                pending->entries.push_back(entry);
+                if (!pending->drainScheduled)
                 {
-                    if (self)
+                    pending->drainScheduled = true;
+                    schedule_drain = true;
+                }
+            }
+            if (schedule_drain && self)
+            {
+                QMetaObject::invokeMethod(
+                    self,
+                    [self]()
                     {
-                        self->appendLog(formatted, level);
-                    }
-                },
-                Qt::QueuedConnection);
+                        if (self)
+                        {
+                            self->drainPendingEntries();
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }
         });
+
+    appendEntries(Logger::instance()->recentEntries());
 }
 
-/** @brief 析构函数，无特殊资源需要释放。 */
 LogPanel::~LogPanel()
 {
     if (_sinkId != 0)
@@ -128,139 +232,187 @@ LogPanel::~LogPanel()
 
 QSize LogPanel::minimumSizeHint() const
 {
-    return QSize(220, 90);
+    return QSize(360, 110);
 }
 
 QSize LogPanel::sizeHint() const
 {
-    return QSize(720, 180);
+    return QSize(760, 220);
 }
 
-bool LogPanel::eventFilter(QObject *watched, QEvent *event)
+void LogPanel::append(const QString& text)
 {
-    if (_text && watched == _text->viewport() && event->type() == QEvent::Resize)
+    appendLog(text + QLatin1Char('\n'), static_cast<int>(Logger::Info));
+}
+
+void LogPanel::appendLog(const QString& formatted, int level)
+{
+    Logger::Entry entry;
+    entry.level =
+        static_cast<Logger::Level>(std::clamp(level, static_cast<int>(Logger::Debug), static_cast<int>(Logger::Error)));
+    entry.timestamp = QStringLiteral("manual").toStdString();
+    entry.sessionId = Logger::instance()->sessionId();
+    entry.message = formatted.trimmed().toStdString();
+    entry.formatted = formatted.toStdString();
+    appendEntries({entry});
+}
+
+void LogPanel::clearLogs()
+{
+    _model->clear();
+    markRead();
+    updateCountLabel();
+}
+
+bool LogPanel::saveLogsToFile(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
     {
-        updateToolOverlayGeometry();
+        return false;
     }
-    return QWidget::eventFilter(watched, event);
+    QTextStream stream(&file);
+    for (int row = 0; row < _proxy->rowCount(); ++row)
+    {
+        stream << _proxy->index(row, 0).data(LogEntryModel::FormattedRole).toString();
+    }
+    return stream.status() == QTextStream::Ok;
 }
 
-void LogPanel::updateToolOverlayGeometry()
+void LogPanel::focusLogRange(qulonglong firstSequence, qulonglong lastSequence, const QString& taskId)
 {
-    if (!_text || !_toolOverlay)
+    _sessionCombo->setCurrentIndex(0);
+    _levelCombo->setCurrentIndex(3);
+    _searchEdit->clear();
+    _proxy->setSessionId(QString::fromStdString(Logger::instance()->sessionId()));
+    _proxy->setTaskRange(firstSequence, lastSequence, taskId);
+    updateCountLabel();
+    if (_proxy->rowCount() > 0)
+    {
+        _table->scrollTo(_proxy->index(0, 0), QAbstractItemView::PositionAtTop);
+        _table->selectRow(0);
+    }
+}
+
+void LogPanel::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (_followButton->isChecked())
+    {
+        scrollToLatest();
+        markRead();
+    }
+}
+
+void LogPanel::drainPendingEntries()
+{
+    std::vector<Logger::Entry> entries;
+    {
+        std::lock_guard<std::mutex> lock(_pendingQueue->mutex);
+        entries.swap(_pendingQueue->entries);
+        _pendingQueue->drainScheduled = false;
+    }
+    appendEntries(entries);
+}
+
+void LogPanel::appendEntries(const std::vector<Logger::Entry>& entries)
+{
+    if (entries.empty())
     {
         return;
     }
-    constexpr int margin = 2;
-    _toolOverlay->move(
-        std::max(0, _text->viewport()->width() - _toolOverlay->width() - margin),
-        margin);
-    _toolOverlay->raise();
+    _model->appendEntries(entries);
+    if (!isVisible() || !_followButton->isChecked())
+    {
+        for (const Logger::Entry& entry : entries)
+        {
+            _unreadWarnings += entry.level == Logger::Warn ? 1 : 0;
+            _unreadErrors += entry.level == Logger::Error ? 1 : 0;
+        }
+        emit unreadCountsChanged(_unreadWarnings, _unreadErrors);
+    }
+    else
+    {
+        scrollToLatest();
+    }
+    updateCountLabel();
 }
 
-/**
- * @brief 便捷方法：将一行未格式化文本以 Info 级别追加到面板。
- * @param text 要追加的文本内容。
- */
-void LogPanel::append(const QString &text)
+void LogPanel::updateCountLabel()
 {
-    appendLog(text + "\n", static_cast<int>(Logger::Info));
+    _countLabel->setText(tr("%1 / %2").arg(_proxy->rowCount()).arg(_model->rowCount()));
+    _countLabel->setToolTip(tr("当前筛选结果 / 已加载记录"));
 }
 
-/**
- * @brief 追加一行已格式化日志到文本区（Logger 回调的 UI 线程处理槽）。
- *
- * 追加方式：
- * - moveCursor(End) + insertPlainText 比 append() 更高效（不触发段落格式化）；
- * - ensureCursorVisible 保证新日志自动滚动到可视区域底部。
- *
- * @param formatted 格式化后的完整日志行。
- * @param level     日志级别整数值。
- */
-void LogPanel::appendLog(const QString &formatted, int level)
+void LogPanel::scrollToLatest()
 {
-    Q_UNUSED(level);
-
-    _text->moveCursor(QTextCursor::End);    // 将光标移到末尾
-    _text->insertPlainText(formatted);       // 追加文本
-    _text->ensureCursorVisible();           // 自动滚动到最新一行
+    if (_proxy->rowCount() > 0)
+    {
+        _table->scrollToBottom();
+    }
 }
 
-/**
- * @brief 清空面板文本区内容，并尝试截断磁盘日志文件。
- *
- * 截断磁盘文件的目的：防止调用 loadFromLogFile 时将旧日志重新读回，
- * 使清空操作在视觉上和文件层面保持一致。
- * 若截断失败（权限不足等），UI 清空仍会成功，磁盘文件保持不变（静默忽略）。
- */
-void LogPanel::clearLogs()
+void LogPanel::markRead()
 {
-    // 清空 UI 文本区
-    if (_text) _text->clear();
-
-    Logger::instance()->clearLogFile();
+    if (_unreadWarnings == 0 && _unreadErrors == 0)
+    {
+        return;
+    }
+    _unreadWarnings = 0;
+    _unreadErrors = 0;
+    emit unreadCountsChanged(0, 0);
 }
 
-/**
- * @brief 将面板当前显示的全部日志内容另存为指定路径的文本文件。
- *
- * @param filePath 目标文件的绝对路径。
- * @return         文件打开并写入成功返回 true；否则返回 false。
- */
-bool LogPanel::saveLogsToFile(const QString &filePath)
+void LogPanel::deleteDiskHistory()
 {
-    QFile f(filePath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
-    QTextStream ts(&f);
-    ts << _text->toPlainText();
-    f.close();
-    return true;
+    const QMessageBox::StandardButton result =
+        QMessageBox::warning(this,
+                             tr("删除磁盘日志"),
+                             tr("这会永久清空当前日志文件，但不会清空正在显示的记录。"
+                                "是否继续？"),
+                             QMessageBox::Yes | QMessageBox::No,
+                             QMessageBox::No);
+    if (result == QMessageBox::Yes)
+    {
+        Logger::instance()->clearLogFile();
+    }
 }
 
-/**
- * @brief 从磁盘日志文件加载历史记录并填充到面板中。
- *
- * 读取策略：
- * 1. 如果日志文件大小 ≤ 2 MB，则完整读取；
- * 2. 如果超过 2 MB，则 seek 到末尾前 2 MB 处，跳过第一行（可能是不完整行），
- *    再读取剩余内容，避免首行数据残缺。
- *
- * 读取结果会批量插入文本区，减少 UI 重绘次数。
- *
- * 使用场景：打开已有项目时，将上次运行留下的历史日志回填到面板。
- */
 void LogPanel::loadFromLogFile()
 {
-    const QString logPath = QString::fromStdString(Logger::instance()->logFilePath());
-
-    QFile f(logPath);
-    if (!f.exists()) return;
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    if (_text)
+    QFile file(QString::fromStdString(Logger::instance()->logFilePath()));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
     {
-        _text->clear();
+        return;
     }
 
-    // 限制读取大小：超过 2 MB 时只读末尾部分，避免 UI 卡顿
-    const qint64 limit = 2 * 1024 * 1024; // 2 MB
-    qint64 size = f.size();
+    constexpr qint64 limit = 2 * 1024 * 1024;
     QByteArray data;
-    if (size <= limit) {
-        // 文件较小，完整读取
-        data = f.readAll();
-    } else {
-        // 文件过大，跳转到 (size - limit) 处，丢弃首个不完整行后读取剩余
-        f.seek(size - limit);
-        // 读取并丢弃当前位置到第一个换行符之间的内容（可能是半截行）
-        QByteArray prefix = f.readLine(); Q_UNUSED(prefix);
-        data = f.readAll();
-    }
-    f.close();
-
-    if (!data.isEmpty())
+    if (file.size() <= limit)
     {
-        _text->moveCursor(QTextCursor::End);
-        _text->insertPlainText(QString::fromUtf8(data));
-        _text->ensureCursorVisible();
+        data = file.readAll();
     }
+    else
+    {
+        file.seek(file.size() - limit);
+        file.readLine();
+        data = file.readAll();
+    }
+
+    const std::string current_session = Logger::instance()->sessionId();
+    std::vector<Logger::Entry> history = LogEntryModel::parseLegacyText(data, current_session);
+    const std::vector<Logger::Entry> recent = Logger::instance()->recentEntries();
+    if (!recent.empty())
+    {
+        history.erase(std::remove_if(history.begin(),
+                                     history.end(),
+                                     [&current_session](const Logger::Entry& entry)
+                                     { return entry.sessionId == current_session; }),
+                      history.end());
+    }
+    _model->clear();
+    _model->appendEntries(history);
+    _model->appendEntries(recent);
+    updateCountLabel();
+    scrollToLatest();
 }

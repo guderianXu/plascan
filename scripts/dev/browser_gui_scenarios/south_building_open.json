@@ -1,0 +1,44 @@
+{
+  "name": "south-building-project-open",
+  "default_timeout": 60,
+  "steps": [
+    {
+      "wait": {
+        "project_open": true,
+        "image_count": 123
+      }
+    },
+    {
+      "assert": {
+        "project_dirty": false,
+        "task_count": 0
+      }
+    },
+    {
+      "capture": {}
+    },
+    {
+      "action": {
+        "object_name": "actionWorkflowAerialTriangulation",
+        "operation": "activate"
+      }
+    },
+    {
+      "wait": {
+        "modal_present": true,
+        "modal_title_contains": "空中三角测量"
+      }
+    },
+    {
+      "capture": {}
+    },
+    {
+      "close_dialog": {}
+    },
+    {
+      "wait": {
+        "modal_present": false
+      }
+    }
+  ]
+}

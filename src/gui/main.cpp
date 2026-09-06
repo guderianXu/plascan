@@ -30,6 +30,7 @@
 #include "runtime/PythonRuntimeManager.h"
 #include "runtime/PythonRuntimeLocator.h"
 #include "runtime/GeospatialRuntimePaths.h"
+#include "runtime/BrowserDebugBridge.h"
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
@@ -262,6 +263,20 @@ int main(int argc, char *argv[])
         // 创建并展示主窗口
         MainWindow mainWindow;
         mainWindow.show();
+        xjw::gui::runtime::BrowserDebugBridge browser_debug_bridge(&mainWindow);
+        if (qEnvironmentVariable("PLASCAN_BROWSER_TEST") == QStringLiteral("1"))
+        {
+            QString debug_error;
+            if (!browser_debug_bridge.start(&debug_error))
+            {
+                LOG_ERROR("PlaScan browser debug bridge failed to start: %s",
+                          debug_error.toUtf8().constData());
+            }
+            else
+            {
+                LOG_INFO("PlaScan browser debug bridge listening on local IPC");
+            }
+        }
         QTimer::singleShot(0, &mainWindow, [&mainWindow, startup_project, python_runtime_available]()
         {
             if (!python_runtime_available && !PythonRuntimeManager::startupPromptSuppressed())

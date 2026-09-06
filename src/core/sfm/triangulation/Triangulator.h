@@ -42,33 +42,16 @@ namespace xjw
         /// 完成/合并轨迹时的最大重投影误差（像素）
         double completeMaxReprojError = 2.5;
 
+        /// 参考流程按特征尺度归一化重投影误差后再与阈值比较。
+        bool normalizeReprojectionByFeatureScale = false;
+
+        /// 几何估计仍只使用已注册观测，但新点绑定完整输入轨迹。
+        /// 参考增量流程用此保持 track -> point 身份，使后续注册相机无需全图补轨。
+        bool bindCompleteInputTrack = false;
+
         /// 多影像重建中延迟创建对应图里只有两个观测的纯两视点。
         /// 初始影像对、真正的双影像任务、人工标记以及具有潜在第三视图支持的轨迹自动豁免。
         bool deferPureTwoViewTracks = true;
-
-        /// 从长轨迹退化出的两视候选允许的最大 RMS（像素）；原生两视轨迹不受影响
-        double twoViewFragmentMaxReprojError = 1.5;
-
-        /// 两视残片的假设单点定位标准差（像素），用于估计相对深度不确定度
-        double twoViewFragmentPixelSigma = 1.0;
-
-        /// 从长轨迹退化出的两视候选允许的最大相对深度不确定度；<= 0 表示禁用
-        double twoViewFragmentMaxRelativeDepthUncertainty = 0.01;
-
-        /// 多影像场景中启用局部多视深度一致性；双影像重建始终豁免
-        bool enableTwoViewLocalDepthConsistency = true;
-
-        /// 搜索同影像多视参考点的像素半径
-        double twoViewLocalDepthRadiusPixels = 64.0;
-
-        /// 每幅影像至少需要的局部多视参考点数；不足时保留两视点
-        int twoViewLocalDepthMinReferences = 5;
-
-        /// 局部参考深度 MAD/中位深度的最大值；多层或起伏区域不执行拒绝
-        double twoViewLocalDepthMaxMadFraction = 0.10;
-
-        /// 两视点相对局部参考深度的最大允许偏差
-        double twoViewLocalDepthMaxDeviation = 0.25;
     };
 
     /**
@@ -76,33 +59,20 @@ namespace xjw
      */
     struct TriangulationStats
     {
-        int numCreated = 0;   ///< 新创建的三维点数
+        int numCreated = 0;   ///< 本轮新增有效三维点数（包含原槽恢复）
+        int numRestored = 0;  ///< 在稳定 point slot 上原位恢复的三维点数
         int numContinued = 0; ///< 延续现有轨迹的观测数
         int numFiltered = 0;  ///< 被过滤的三维点数
 
-        int inputTracks = 0;                         ///< 输入轨迹数
-        int inputLongTracks = 0;                     ///< 输入观测数 >= 3 的轨迹数
-        int unusableTracks = 0;                      ///< 因影像/特征/已占用观测不可用而跳过的轨迹数
-        int noCandidateTracks = 0;                   ///< 未找到任何可三角化候选的轨迹数
-        int createdTwoViewTracks = 0;                ///< 最终只生成两视点的数量
-        int createdLongTracks = 0;                   ///< 最终生成 >=3 观测点的数量
-        int deferredPureTwoViewTracks = 0;           ///< 多影像场景中延迟创建的纯两视图组件数
-        int suppressedTwoViewFragments = 0;          ///< 同轨迹已有多视点时抑制的两视残片数
-        int indirectTwoViewCandidates = 0;           ///< 因两观测间没有原始匹配边而拒绝的候选数
-        int unstableTwoViewCandidates = 0;           ///< 因重投影或相对深度不确定度拒绝的两视残片数
-        int localDepthInconsistentTwoViewPoints = 0; ///< 与双侧局部多视深度均冲突而拒绝的两视点数
-        int seedPairTests = 0;                       ///< 尝试作为种子的观测对数量
-        int seedPairRejected = 0;                    ///< 双视种子三角化失败数量
-        int reprojObservationRejected = 0;           ///< 候选点补观测时因重投影误差被拒数量
-        int depthObservationRejected = 0;            ///< 候选点补观测时因深度被拒数量
-        int longTrackTwoViewOnly = 0;                ///< 输入长轨迹最终只产生两视点的数量
-        int longTrackRejectedExtraSamples = 0;       ///< 两视化长轨迹中可量化最近被拒观测的数量
-        int longTrackRejectedExtraLe5 = 0;           ///< 最近被拒观测误差 <= 5px
-        int longTrackRejectedExtraLe10 = 0;          ///< 最近被拒观测误差 <= 10px
-        int longTrackRejectedExtraLe25 = 0;          ///< 最近被拒观测误差 <= 25px
-        int longTrackRejectedExtraGt25 = 0;          ///< 最近被拒观测误差 > 25px
-        double longTrackRejectedExtraErrorSum = 0.0; ///< 最近被拒观测误差求和
-        double longTrackRejectedExtraErrorMax = 0.0; ///< 最近被拒观测误差最大值
+        int inputTracks = 0;               ///< 输入轨迹数
+        int inputLongTracks = 0;           ///< 输入观测数 >= 3 的轨迹数
+        int unusableTracks = 0;            ///< 因影像/特征/已占用观测不可用而跳过的轨迹数
+        int noCandidateTracks = 0;         ///< 未找到任何可三角化候选的轨迹数
+        int createdTwoViewTracks = 0;      ///< 最终只生成两视点的数量
+        int createdLongTracks = 0;         ///< 最终生成 >=3 观测点的数量
+        int deferredPureTwoViewTracks = 0; ///< 多影像场景中延迟创建的纯两视图组件数
+        int reprojObservationRejected = 0; ///< 候选点补观测时因重投影误差被拒数量
+        int depthObservationRejected = 0;  ///< 候选点补观测时因深度被拒数量
     };
 
     /**
@@ -139,7 +109,8 @@ namespace xjw
          * @brief 基于已经合并好的多视图轨迹批量创建三维点。
          *
          * 适用于已知相机位姿路径：先把 pairwise matches 合并为一致的多视观测，
-         * 再直接对每条轨迹做多视 DLT 三角化，避免生成大量仅两视观测的预览点。
+         * 再按参考流程对每条轨迹做一次最近射线最小二乘三角化。候选并行计算、
+         * 按输入顺序提交；任一已注册观测深度或重投影超限时拒绝整条轨迹。
          *
          * @param tracks   已经去除同图像冲突的轨迹
          * @param options  三角化选项
@@ -158,7 +129,7 @@ namespace xjw
          * @param minTriAngle     最小允许三角化角（度）
          * @return 被删除的三维点数量
          */
-        int filterPoints(double maxReprojError = 2.0, double minTriAngle = 2.0);
+        int filterPoints(double maxReprojError = 2.0, double minTriAngle = 2.0, bool normalizeByFeatureScale = false);
 
         /**
          * @brief 过滤轨迹长度过短的三维点。
@@ -186,7 +157,7 @@ namespace xjw
          * @brief 利用当前相机位姿重新三角化所有三维点。
          *
          * BA 优化相机位姿后，原来的 3D 点坐标基于旧位姿，精度较差。
-         * 此方法对每个三维点的所有观测执行多视图 DLT 三角化，
+         * 此方法对每个三维点的所有观测执行参考版 closest-rays 多视三角化，
          * 更新坐标并重算重投影误差。如果重三角化结果更差则保留原值。
          *
          * 参考 COLMAP 的 Retriangulate 策略。
@@ -194,7 +165,7 @@ namespace xjw
          * @param maxReprojError  重三角化后允许的最大重投影误差
          * @return 成功重三角化的点数
          */
-        int retriangulatePoints(double maxReprojError = 2.0);
+        int retriangulatePoints(double maxReprojError = 2.0, bool normalizeByFeatureScale = false);
 
         /**
          * @brief 用当前相机位姿重新计算所有三维点的重投影误差。
@@ -233,6 +204,9 @@ namespace xjw
          */
         double computeReprojError(const std::array<double, 3>& xyz, ImageId imageId, FeatureIdx featureIdx) const;
 
+        double
+        normalizedReprojError(double error, ImageId imageId, FeatureIdx featureIdx, bool normalizeByFeatureScale) const;
+
         /// 两观测在完整对应图中是否构成没有潜在第三视图支持的孤立组件。
         bool isPureTwoViewComponent(const Track& track) const;
 
@@ -249,7 +223,7 @@ namespace xjw
                                             const std::vector<TrackElement>& observations) const;
 
         /**
-         * @brief 多视图 DLT 三角化：利用 >= 2 个观测求解最优三维点。
+         * @brief 多视图最近射线三角化：求解 sum(I-dd^T)X=sum(I-dd^T)C。
          * @param observations  (imageId, featureIdx) 列表
          * @param outXyz        输出三维坐标
          * @return 成功返回 true

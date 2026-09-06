@@ -147,28 +147,34 @@ bool usedLaserTime(const PlanetaryLineScanBaCamera &camera,
 
 bool isSupportedLineScanBackend(BABackend backend)
 {
-    return backend == BABackend::Auto ||
-           backend == BABackend::PlaMatrixCpu ||
-           backend == BABackend::PlaMatrixCuda ||
+    return backend == BABackend::Auto || backend == BABackend::PlaMatrixCpu || backend == BABackend::PlaMatrixCuda ||
            backend == BABackend::PlaMatrixOpenCl;
 }
 
-BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions &options,
-                                int cameraCount,
-                                int observationCount)
+BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions& options, int cameraCount, int observationCount)
 {
     if (options.backend != BABackend::Auto)
     {
         return options.backend;
     }
-    const bool useGpu = cameraCount >= std::max(1, options.minPlaMatrixGpuCameras) &&
-                        observationCount >=
-                            std::max(1, options.minPlaMatrixGpuObservations);
-    if (useGpu && BundleAdjust::isBackendAvailable(BABackend::PlaMatrixCuda))
+    BAOptions auto_options;
+    auto_options.minPlaMatrixCudaCameras = options.minPlaMatrixCudaCameras;
+    auto_options.minPlaMatrixCudaObservations = options.minPlaMatrixCudaObservations;
+    auto_options.minPlaMatrixOpenClCameras = options.minPlaMatrixOpenClCameras;
+    auto_options.minPlaMatrixOpenClObservations = options.minPlaMatrixOpenClObservations;
+    auto_options.minPlaMatrixDenseCameras = options.minPlaMatrixDenseCameras;
+    auto_options.minPlaMatrixCudaDenseObservations = options.minPlaMatrixCudaDenseObservations;
+    auto_options.minPlaMatrixOpenClDenseObservations = options.minPlaMatrixOpenClDenseObservations;
+    BAProblemStats stats;
+    stats.cameraCount = cameraCount;
+    stats.observationCount = observationCount;
+    if (BundleAdjust::autoBackendMeetsScaleThreshold(BABackend::PlaMatrixCuda, stats, auto_options) &&
+        BundleAdjust::isBackendAvailable(BABackend::PlaMatrixCuda))
     {
         return BABackend::PlaMatrixCuda;
     }
-    if (useGpu && BundleAdjust::isBackendAvailable(BABackend::PlaMatrixOpenCl))
+    if (BundleAdjust::autoBackendMeetsScaleThreshold(BABackend::PlaMatrixOpenCl, stats, auto_options) &&
+        BundleAdjust::isBackendAvailable(BABackend::PlaMatrixOpenCl))
     {
         return BABackend::PlaMatrixOpenCl;
     }
@@ -177,11 +183,10 @@ BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions &options,
 
 } // namespace
 
-bool triangulatePlanetaryLineScanRays(
-    const PlanetaryLineScanCamera::ImagingRay &first,
-    const PlanetaryLineScanCamera::ImagingRay &second,
-    std::array<double, 3> *pointBodyFixedMeters,
-    double *raySeparationMeters)
+bool triangulatePlanetaryLineScanRays(const PlanetaryLineScanCamera::ImagingRay& first,
+                                      const PlanetaryLineScanCamera::ImagingRay& second,
+                                      std::array<double, 3>* pointBodyFixedMeters,
+                                      double* raySeparationMeters)
 {
     if (!pointBodyFixedMeters)
     {
@@ -259,26 +264,19 @@ bool runPlanetaryLineScanBundleAdjust(
     {
         return std::isfinite(value) && value > 0.0;
     };
-    const auto finiteNonNegative = [](double value)
-    {
-        return std::isfinite(value) && value >= 0.0;
-    };
-    if (!finitePositive(options.imageSigmaPixels) ||
-        !finitePositive(options.cameraPositionSigmaMeters) ||
-        !finitePositive(options.cameraAngleSigmaDegrees) ||
-        !finitePositive(options.laserRangeWeight) ||
+    const auto finiteNonNegative = [](double value) { return std::isfinite(value) && value >= 0.0; };
+    if (!finitePositive(options.imageSigmaPixels) || !finitePositive(options.cameraPositionSigmaMeters) ||
+        !finitePositive(options.cameraAngleSigmaDegrees) || !finitePositive(options.laserRangeWeight) ||
         !finitePositive(options.finiteDifferencePointStepMeters) ||
         !finitePositive(options.finiteDifferencePositionStepMeters) ||
         !finitePositive(options.finiteDifferenceAngleStepRadians) ||
-        !finitePositive(options.maximumCameraTranslationMeters) ||
-        !finitePositive(options.maximumCameraAngleDegrees) ||
-        !finiteNonNegative(options.imageHuberDeltaPixels) ||
-        !finiteNonNegative(options.laserRangeHuberDeltaSigma) ||
-        options.maximumIterations <= 0 || options.threadCount < 0 ||
-        options.plaMatrixDevice < 0 ||
-        options.minPlaMatrixGpuCameras <= 0 ||
-        options.minPlaMatrixGpuObservations <= 0 ||
-        !isSupportedLineScanBackend(options.backend))
+        !finitePositive(options.maximumCameraTranslationMeters) || !finitePositive(options.maximumCameraAngleDegrees) ||
+        !finiteNonNegative(options.imageHuberDeltaPixels) || !finiteNonNegative(options.laserRangeHuberDeltaSigma) ||
+        options.maximumIterations <= 0 || options.threadCount < 0 || options.plaMatrixDevice < 0 ||
+        options.minPlaMatrixCudaCameras <= 0 || options.minPlaMatrixCudaObservations <= 0 ||
+        options.minPlaMatrixOpenClCameras <= 0 || options.minPlaMatrixOpenClObservations <= 0 ||
+        options.minPlaMatrixDenseCameras <= 0 || options.minPlaMatrixCudaDenseObservations <= 0 ||
+        options.minPlaMatrixOpenClDenseObservations <= 0 || !isSupportedLineScanBackend(options.backend))
     {
         setError(errorMessage, "planetary line-scan BA options contain invalid sigma or iteration values");
         return false;

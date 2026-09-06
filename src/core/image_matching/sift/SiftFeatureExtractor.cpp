@@ -411,6 +411,8 @@ namespace xjw::image_matching
                                           keypoint.pt *= scale;
                                           keypoint.size *= scale;
                                       }
+                                      keypoint.pt.x += static_cast<float>(input.coordinateOffsetX);
+                                      keypoint.pt.y += static_cast<float>(input.coordinateOffsetY);
                                       features.keypoints[static_cast<std::size_t>(outputIndex)] = keypoint;
                                       features.scores[static_cast<std::size_t>(outputIndex)] = keypoint.response;
                                       if (!features.descriptors.empty())

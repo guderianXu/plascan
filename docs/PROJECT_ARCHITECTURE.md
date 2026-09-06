@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-08-10。
+行星表面摄影测量处理系统。最后更新: 2026-09-04。
 
 ## 顶层目录
 
@@ -11,7 +11,7 @@ plascan/
 │   ├── core/       # 核心算法库 (相机, 特征, 匹配, 标记控制网, SfM, MVS, LiDAR, 蒙版, 网格, 地形)
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找、源码依赖 superbuild、运行时部署)
-├── 3rdparty/       # git submodule：PlaMatrix、PlaPoint、Qt、OpenCV、GDAL 与算法依赖
+├── 3rdparty/       # git submodule：PlaMatrix、PlaPoint、Qt、OpenCV、GDAL、OpenEXR/Imath 与算法依赖
 ├── resources/      # 静态资源 (深度学习模型权重, 图标)
 ├── scripts/        # 按 models/workflows/bench/env/validation 分类的辅助脚本
 ├── tools/          # 独立工具 (匹配转 CSV)
@@ -102,6 +102,12 @@ common/
 core/
 ├── CMakeLists.txt              # 注册所有子模块
 │
+├── task_runtime/               # Qt-free 任务状态机、依赖/资源队列、协作控制与版本化 journal
+│   ├── TaskTypes.h/cpp         # Task/Run/Attempt、能力、状态、进度、检查点、结果和事件契约
+│   ├── TaskControl.h/cpp       # 可被取消唤醒的协作式 pause/cancel token
+│   ├── TaskScheduler.h/cpp     # priority+FIFO、DAG、资源 lease、revision 命令与 executor 注册表
+│   └── TaskJournal.h/cpp       # 项目 sidecar 队列/检查点/结果/错误持久化和 Interrupted 恢复
+│
 ├── camera/                     # 相机模型
 │   ├── CameraModel.h/cpp       # 面阵/线阵/RPC 共享的只读像点、射线和空间点投影抽象
 │   ├── FramePinholeCamera*.h/cpp # CameraModel 面阵实现及 Tsai/Brown-Conrady 状态、投影和文件 IO
@@ -137,8 +143,8 @@ core/
 │
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
-│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；auto_sift / sift_lightglue / loma_r
-│   ├── FeatureSet.h/cpp        # 任务内关键点与描述子；描述子不持久化
+│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；含 auto_sift / plamatch_hct / 学习型算法
+│   ├── FeatureSet.h/cpp        # 任务内关键点、描述子及只读算法 payload；描述子不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
 │   ├── ImageFeaturePointFile.h/cpp # 逐影像 `.pifeature` 特征点几何目录，不含描述子
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
@@ -155,6 +161,7 @@ core/
 │   │   ├── SiftMetalBackend.mm      # Apple Metal 命令编码、资源和结果读取
 │   │   ├── SiftMetalKernels.h       # Metal 高斯/DoG/方向/描述子/匹配内核
 │   │   └── SiftGuidedMatcher.h/cpp  # 基础矩阵约束的补充匹配
+│   ├── plamatch_hct/           # LoG/MLDB、CPU HCTree、CUDA/OpenCL batch 与 full/coarse payload
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
 │   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
 │   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
@@ -166,25 +173,22 @@ core/
 │
 ├── overlap/                    # 重叠度分析
 │   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
-│   ├── OverlapPairGraphPlanner.h/cpp # 无相机词汇召回后的连通影像对图规划
-│   ├── HierarchicalVocabularyTree.h/cpp # 层次 K-means 视觉词汇树训练与根到叶量化
-│   ├── VocabularyOverlapRetriever.h/cpp  # 基于已提取特征描述子的词汇重叠对检索
 │   └── GroundBackProjector.h/cpp  # 地面投影
 │
 ├── matchphototask/             # Metashape-like 匹配照片编排层
 │   ├── algorithm/
-│   │   ├── MatchPhotosAlgorithmPlan.h/cpp # 算法计划：默认 Auto SIFT，可选学习型匹配
+│   │   ├── MatchPhotosAlgorithmPlan.h/cpp # 算法计划：默认 PlaMatch-HCT，可选 SIFT/学习型匹配
 │   │   └── MatchPhotosAlgorithmSelector.h/cpp # 类 Metashape 预设到算法计划的映射
 │   ├── task/
 │   │   ├── MatchPhotosTask.h/cpp    # 统一任务入口，完成算法选择、候选对、匹配和轨迹阶段
-│   │   ├── MatchPhotosOptions.h     # 自动/快速/高精度/CPU/CUDA 等任务选项
+│   │   ├── MatchPhotosOptions.h     # 最高/高/中/低/最低精度及预选、设备等任务选项
 │   │   ├── MatchPhotosContext.h     # 项目路径、输出目录、影像输入、取消和进度上下文
 │   │   └── MatchPhotosResult.h      # 阶段报告、逐影像分片记录、像对诊断和错误信息
 │   ├── pair_selection/
 │   │   ├── PairTypes.h/cpp          # PairCandidate、PairSource、pair key 规范
 │   │   ├── PairSelectionPolicy.h/cpp # 自动/全量/序列/手动等候选策略
-│   │   ├── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
-│   │   └── SparseSceneOverlapAnalyzer.h/cpp # 由已有 SfM 稀疏点共视和相机视锥补充候选对
+│   │   ├── PairSelector.h/cpp       # 显式手动、全量和序列候选
+│   │   └── PlaMatchHctPairPreselector.h/cpp # 公共 coarse HCTree/局部一致性/森林候选削减
 │   ├── runtime/
 │   │   ├── MatchPhotosRuntime.h/cpp # ONNX/manifest 解析、本机 engine 准备和配置指纹
 │   │   ├── MatchPhotosFeatureCache.h/cpp # 一次任务内的有界 SIFT 特征缓存
@@ -222,12 +226,13 @@ core/
 │   ├── BundleAdjustSolver.h + BundleAdjust.cpp # BA 求解器门面、自动后端选择和统一质量门控
 │   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
 │   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeCamera 一致的模板投影模型和共享相机快照转换
-│   ├── BundleAdjustPlaMatrix.h/cpp # PlaMatrix 联合相机/点/内参 Schur-LM 后端
+│   ├── BundleAdjustPlaMatrix.h/cpp # PlaMatrix 联合相机/点/内参参考 Armijo 驱动
 │   ├── BundleAdjustPlaMatrixProblem.h/cpp # 活动轨迹、标定组、固定块和工作集映射
 │   ├── BundleAdjustPlaMatrixModel.cpp # 分组 Brown 内参初始化、边界、阶段与结果发布
 │   ├── BundleAdjustPlaMatrixProjection.h/cpp # Brown-Conrady 残差及解析相机/点/内参雅可比
 │   ├── BundleAdjustPlaMatrixConstraints.h/cpp # GCP、LiDAR、比例尺、姿态和平面约束
 │   ├── BundleAdjustPlaMatrixAssembly*.h/cpp # 完整目标、重投影/测量约束与多块法方程装配
+│   ├── BundleAdjustPlaMatrixReferenceSchur.h/cpp # 参考在线点 Schur、四槽归约与重线性化回代
 │   ├── BundleAdjustPlaMatrixRuntime.h/cpp # CUDA/OpenCL 设备可用性和显式设备索引校验
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
 │   ├── BundleAdjustQuality.h/cpp # 跨后端正深度、离群点统计和物方约束质量门控
@@ -273,20 +278,26 @@ core/
 │   ├── graph/
 │   │   ├── CorrespondenceGraph.h/cpp      # 对应关系图
 │   │   ├── CovisibilityPartitioner.h/cpp  # 确定性加权共视图重叠分块
+│   │   ├── ReferenceCameraGroupPartitioner.h/cpp # 独立重建的参考 50/50 相机分组
 │   │   └── ObservationNetworkBuilder.h/cpp # PlaPoint KDTree 观测网络构建
 │   ├── tracks/
-│   │   ├── MultiViewTrackBuilder.h/cpp     # 多视轨迹合并、冲突消解和长轨迹优先筛选
-│   │   └── CorrespondenceTrackThinner.h/cpp # 按每影像/网格限额筛选 SfM 输入匹配图
-│   ├── pose/PnpSolver.h/cpp    # PnP 位姿解算
+│   │   ├── ReferenceTrackBuilder.h/cpp     # 所有多视入口统一使用的参考轨迹合并、冲突清理和尺度过滤
+│   │   ├── ReferenceTrackSpatialSelector.h/cpp # 逐影像、逆尺度加权的网格水位空间选择
+│   │   └── CorrespondenceTrackThinner.h/cpp # 原始 SfM 输入图的参考兼容轨迹选择适配器
+│   ├── pose/PnpSolver.h/cpp    # 通用 PnP 位姿解算与参考后方交会选路
+│   ├── pose/ReferenceP3p.h/cpp # 参考三点 P3P 四次方程与绝对定向
+│   ├── pose/ReferencePoseRefiner.h/cpp # 解析 Brown 投影位姿精化
+│   ├── pose/ReferenceResectionSolver.h/cpp # 固定采样、十级阈值和重分类状态机
 │   ├── triangulation/
 │   │   ├── Triangulator.h/cpp  # 基础三角化
 │   │   └── InitialSparsePointFilter.h/cpp  # 已有相机/轨迹的初始稀疏点过滤
 │   ├── reconstruction/SfmReconstruction.h/cpp  # SfM 重建器
 │   ├── pipeline/               # IncrementalSfm 编排及初始对/注册/已知位姿/BA 组件
+│   │   ├── IndependentBlockReconstructor.h/cpp # 核心块独立 SfM、全相机生产者、Sim(3) 合并与全局重三角化
+│   │   ├── ReferenceModelQuality.h/cpp # 初始模型分层评分及 far/inaccurate/weak 三级整点过滤
 │   │   ├── HierarchicalBaBlockSolver.h/cpp # 块问题装配与跨块固定轨迹约束
 │   │   ├── HierarchicalBundleAdjuster.h/cpp # 共视分块并行求解、唯一写回与全局门控
-│   │   ├── SfmCalibrationPreviewSampler.h/cpp # 自标定候选的相机/像面半径均衡抽样
-│   │   └── SfmBundleAdjustCoordinator.h/cpp # 局部/全局 BA 调度、镜头种子与结果写回
+│   │   └── SfmBundleAdjustCoordinator.h/cpp # 参考兼容的局部/全局 BA、自标定过渡与结果写回
 │   ├── quality/                # 无 Qt 的稀疏重建质量指标
 │   ├── filtering/              # PlaPoint 稀疏点云工作区和后处理
 │   ├── project/                # Qt JSON、控制点/标记和 BA 输入适配
@@ -507,6 +518,10 @@ SfM 位姿和稀疏重建状态；默认仍复用影像身份、算法版本、�
 变体及连接点。只有用户取消“重用现有匹配”或缓存缺失/不兼容时，workflow 才调用
 `MatchPhotosTask` 按工作流设置执行 SIFT + LightGlue 或 LoMa-R，并整理多视连接点。GUI 与
 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取旧成对缓存。
+`latest_tie_points.json` 新写入 v3 紧凑观测行，影像路径只在顶层保存一次；读取器继续兼容 v1/v2，
+避免大型工程因每个观测重复字段名和绝对路径而产生数量级更大的缓存与单核 JSON 解析开销。
+“精度”统一为 `highest/high/medium/low/lowest`，对应首层特征采样 downscale `0/1/2/4/8`；它只影响
+特征检测和匹配输入，不再联动关键点配额、预选策略、SfM 质量门或 BA 迭代。空三与“创建连接点”默认均为“高”。
 
 正式 Pipeline 在焦距搜索前检查本次全部相机模型。全 RPC00B 批次由
 `RpcAerialTriangulationRunner` 保持厂商 RPC 固定，恢复多视连接点轨迹并使用非线性 RPC 前方交会
@@ -578,38 +593,66 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 `sfm/pipeline/SfmBundleAdjustCoordinator` 是空三调用 `bundle_adjust` 的正式入口。它构造局部或全局
 相机/轨迹问题、固定边界相机、转发进度，并只回写 `solutionUsable=true` 的结果。无绝对控制时，
 `SimilarityGaugeNormalizer` 在全局 BA 后恢复确定性锚点和初始基线尺度；有控制点或比例尺时由绝对约束接管规范。
+无已知位姿且影像达到 101 张时，`ReferenceCameraGroupPartitioner` 按共视轨迹权重、跨组 top-11 边和最大生成森林
+执行参考 50/50 分组。`IndependentBlockReconstructor` 对各核心块独立运行 SfM，再从每个已解核心块向全部影像执行
+最多两轮无 BA 的冻结模型 PnP producer 注册扩展；producer 清空局部核心结构，并按已注册相机可见的全局持久轨迹重建三维点。
+块间优先直接估计 producer→锚块 Sim(3)；无直接重叠时沿 producer 重叠图逐块连接到任一已对齐块，再组合变换到锚坐标系，
+每个待合并块只接受一条确定性 robust Sim(3) 边。合并只提交互斥核心相机，并按“独立块 + 原 sensorKey”建立标定组，
+既保留块内既有 sensor 分组，也避免相同 EXIF key 把不同独立块提前耦合，
+三维结构在全部持久轨迹上重新三角化，然后统一进入全局 BA。
+小工程和无法分成多个核心块的工程保持单块增量路径。
+自动初始对先按相对位姿 2° 视差支持数保留最强候选 50% 内的前 40 对，再执行 3 相机试算；评分依次比较注册数、100 点层、
+0.0025 几何精度层、逐相机尺度归一 RMS、几何精度和点数。不稳定时枚举确定性五点姿态假设并逐一扩展到 5 相机，
+中间逐相机 RMS 超过 2 的模型直接淘汰。正式增量注册使用固定 500 次三点 P3P、十级递减阈值和解析一致集精化，
+并对全体原始对应重新分类；通用/已知位姿分支保留 OpenCV AP3P；
+同轮候选先在冻结模型上评估，再依参考支持分段门槛批量注册、统一三角化和 BA。参考增长不使用额外内点比例、
+小样本或永久失败门控；显式序列恢复仍作为独立扩展保留。
 注册相机达到大型问题阈值后，`CovisibilityPartitioner` 按已验证匹配数划分唯一核心和重叠边界，
 `HierarchicalBundleAdjuster` 在总线程预算内并行执行块内 BA。重叠相机固定在同一进入坐标系，核心相机和
 三维点按唯一所有权写回；同时被块外已注册相机观测的跨块轨迹保持三维坐标固定，但仍以
 重投影残差约束块内相机，避免独立改点造成合并接缝。`HierarchicalBaBlockSolver` 负责单块问题装配、gauge 固定与质量门控。
-无论上次分块是否通过全局门控，都要等模型增长达到半个目标块后才再试，避免在相邻周期重复支付失败成本。
-周期完整全局 BA 由该块级稳定化替代，最终只执行一次共享内参与块间接缝精化。
-该调度只依赖共视网络和计算规模，不按航测、转台、相机编号或轨迹形状推断场景。
+参考 BA 路径不再用分块 BA 替代全局求解，而是按阶段执行“BA → 恢复/重三角化轨迹 → 结构过滤”：
+初始像对试算使用单次 20 次、最多五轮和有效点净增量 100 的退出门；正式增量在初始二视图及每批后方交会后
+使用单次 10 次、最多五轮，并在新增点不多于删除点时退出；最终方差精化固定执行五轮单次 10 次 BA，
+每轮使用点残差 `3σ` 刷新点网。粗焦距候选仍使用独立的轻量调度，最终 BA 后补注册作为非参考扩展默认关闭。
+普通初始/增量刷新传入零显式阈值，实际按每台相机 `0.002 * mean(width,height)` 的传感器尺度门槛筛选；只有最终方差轮
+改用 `3σ`。`SfmReconstruction` 以 active/inactive 双表表达参考 `Track::point + SparsePoint::valid` 生命周期：far、
+inaccurate、weak 过滤只把点移入 inactive 表并保留 point ID/二维绑定，`Triangulator` 在原槽位恢复重新可用的完整轨迹；
+仅 producer 明确重建结构时同时硬清两张表。BA、导出和公开点数接口只看到 active 点。
+参考点网刷新按 far → inaccurate → weak 执行：任一有效观测出现非正深度、非有限投影或超过传感器/请求阈值即使整点失效；
+随后以投影信息矩阵最小特征值的自适应阈值剔除低精度点，并删除缺少三视连接支撑的双视点。三层分类均使用参考的
+100 点动态并行块并顺序提交，双视种子阶段暂不执行 weak 层。
+非自适应参考 BA 在初始/增量阶段固定释放 `f+k1+k2`，最终阶段释放除宽高比外的 `f+cx+cy+k1+k2+k3+p1+p2`。
 最终共享内参 BA 同样不硬分类“对地/环拍”：`BundleAdjustAdaptiveCameraModel` 在粗解上对
 `f/aspect/cx/cy/k1/k2/k3/p1/p2` 分别计算结构消元后的增量信息评分、典型扰动敏感度和几何/像面覆盖证据，
 再生成 PlaMatrix 参数掩码。弱平行块保留低阶模型，汇聚、多高度且外围覆盖充分时才逐项扩展；
 请求、调度、有效和实际写回状态连同逐参数可靠度、门控证据均进入 SfM 诊断。完整已知位姿路径固定
-输入标定；多轮重三角化/BA 对已应用状态做累计，后续 no-op 不会把前轮有效自标定误判成失败。多起点与
-迭代轮次可沿用上一轮内参作为数值初值，但所有相对边界和弱先验都锚定到 `IncrementalSfm::run()`
-生命周期内按影像 ID 保存的首次有效标定参考，周期性、最终和重试全局 BA 不会逐调用复合漂移；单次迭代的多起点
-只在首轮执行，并通过 `SfmCalibrationPreviewSampler` 限制为确定性的相机/像面半径均衡子集；第一轮保留
-60 次上限，后续已有可复用镜头种子时恢复配置迭代数。局部/分块固定内参子问题不携带全局位置式参考，
-且不允许 Legacy 做不等价模型回退。
+输入标定；多轮重三角化/BA 对已应用状态做累计，后续 no-op 不会把前轮有效自标定误判成失败。
+参考 BA 的普通增量和最终调用最多 10 次，初始像对 evaluator 使用 20 次；不再执行旧的多起点预览和 60 次首轮预算。它按传感器组、影像尺寸和焦距
+构造参数释放过渡先验，并只持久提交通过归一化变化门限的参数。所有相对边界仍锚定到
+`IncrementalSfm::run()` 生命周期内按影像 ID 保存的首次有效标定参考。
 
 `bundle_adjust` 由 PlaMatrix 在同一非线性问题中联合优化相机、三维点、分组完整 Brown 内参和物方约束。
-Legacy CPU 保留 point-only 固定相机问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
+旧 Legacy CPU 实现已删除，兼容枚举统一映射到参考 PlaMatrix CPU。所有后端统一返回状态、可用性、取消、回退原因和耗时，
 正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
 `plamatrix_cpu`、`plamatrix_cuda` 和 `plamatrix_opencl` 是正式联合 BA 路径：PlaScan
-负责完整 Brown-Conrady 投影、解析相机/点/内参雅可比、物方约束、gauge、取消与统一质量复核，PlaMatrix 负责通用 Huber
-权重、二分块法方程、Schur 消元、CPU 稠密 Cholesky/块 Jacobi-PCG、CUDA/OpenCL CSR 块 Jacobi-PCG 和 LM 阻尼。
-外层 LM 对拒绝步复用法方程，CPU 按问题规模自动选择直接或迭代解法；track 和推扫观测以固定连续分片并行装配，
-再按线程序确定性合并。设备路径复用经过完整邻接签名校验的 CSR 拓扑、装配缓冲和求解工作区；CUDA Schur
+负责完整 Brown-Conrady 投影、关键点尺度白化、解析相机/点/内参雅可比、物方约束、gauge、取消与统一质量复核。
+三后端统一使用尺度白化普通最小二乘、参考点/旋转局部参数化、定长基线规范、零阻尼起步和 Armijo 回溯。
+标准 FullRefinement BA 在观测并行阶段完成点 3×3 局部阻尼和 Schur 消元：worker 私有块对角/RHS，
+4 个共享原子非对角槽，求解后按当前状态重线性化点回代。这样 CPU/CUDA/OpenCL 接收的是同一预归约
+primary 系统，在线 Armijo 已接受的结果不再被 SfM 外层像素 RMS 二次否决；物方扩展约束继续走通用路径。
+CPU 使用 PlaMatrix 原生块稀疏 Schur Cholesky，并复用最小度排列、填充图和输入映射；CUDA/OpenCL
+仅以 CSR 块 Jacobi-PCG 加速同一 Schur 线性系统。
+拒绝步复用法方程并增加阻尼；标准摄影测量 track 以连续 eliminated-block 分片并行装配，每个 worker 只保存
+自己的点块，相机/内参 primary blocks 再按线程序和点块全局偏移确定性合并；扩展物方约束保留完整通用布局。
+设备路径复用经过完整邻接签名校验的 CSR 拓扑、装配缓冲和求解工作区；CUDA Schur
 装配输出通过设备内复制直接交给 PCG。OpenCL 因 NVIDIA 595.84 跨队列 buffer handoff 会触发驱动崩溃，
 当前保留数值主机 handoff，但固定拓扑和装配缓冲仍常驻复用。
 CPU 稠密路径直接按固定 slot 顺序装配 Schur 下三角，不再经过 CSR；常见 3×3/9×3 块使用固定尺寸内核，
 128 阶以上用自动 block size 的 POTRF/TRSM/SYRK 分块 Cholesky。报告分别记录小块求逆、Schur 累加、
 CSR 转换、Cholesky、三角求解、残差检查和点块回代，以便把装配与线性求解回归分开定位。
-三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按规模选择 PlaMatrix CPU/CUDA/OpenCL，
+三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按 CUDA 128 相机/30000 观测、
+OpenCL 160/50000 的常规门槛，以及 120 相机以上分别 150000/200000 观测的高密度门槛选择后端，
 GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有跨 PlaMatrix 后端一致性回归。
 行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU 静默忽略
 该约束。结果单独返回参与求解的 shot 数、优化前后 range RMS 和逐 shot 落点/残差，不污染普通影像
@@ -625,8 +668,12 @@ PnP 初值，未经 3D-2D 几何验证的相机不会计入正式注册覆盖率
 它不复用旧外参，并将修正数量、焦距中位值和影像列表写入 SfM 诊断。
 
 `aerial_triangulation/reporting/QualityReportWriter.cpp` 在内存中构造稀疏点、逐相机残差、BA 摘要和
-SfM 诊断；`AerialTriangulationResultWriter.cpp` 再把 `sfm_sparse.ply` 与 `sfm_sparse_points.json`
-原子写入本次显式输出目录。连接点候选图、实际匹配图和 pair 状态仍由 `matchphototask` 的报告负责。
+SfM 诊断；`AerialTriangulationResultWriter.cpp` 原子写入保留全部可用算法点的 `sfm_sparse.ply`、
+仅用于可视化的 `sfm_sparse_display.ply` 和全量 `sfm_sparse_points.json`。工程中主稀疏云仍是后续
+MVS/重算输入，显示清理云作为独立派生文件。质量文件使用 `plascan.sfm_sparse_points.v2`：影像路径在
+顶层表中去重，逐点观测保存为固定数值行；GUI 读取器同时兼容旧对象格式。连接点候选图、实际匹配图和
+pair 状态仍由 `matchphototask` 的报告负责。PlaMatch-HCT 完整特征由 `matchphototask` 以 `.pihctcache`
+原子持久化，影像身份和生产参数一致时在影像解码前直接复用；CPU HCT 索引只在 CPU 匹配真正请求时构建。
 
 ---
 
@@ -638,6 +685,9 @@ SfM 诊断；`AerialTriangulationResultWriter.cpp` 再把 `sfm_sparse.ply` 与 `
 gui/
 ├── main.cpp                    # 应用入口 (QApplication, 全局字体, 异常处理)
 ├── CMakeLists.txt              # gui_runtime 复用库与轻量应用入口；测试不再重复编译生产 GUI 源
+├── runtime/
+│   ├── BrowserDebugBridge.h/cpp # 显式测试模式下的令牌化 QLocalServer 调试桥；结构化快照与允许列表交互
+│   └── TaskRuntimeService.h/cpp # task_runtime 的 Qt/project generation、journal、Work Pane 与 Agent 适配层
 │
 ├── main_window/                # 主窗口层
 │   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
@@ -692,7 +742,7 @@ gui/
 │   ├── DualImageViewer.h/cpp           # 双图并列匹配查看器，协调左右影像与稀疏连线
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
 │   ├── PhotoStripWidget.h/cpp          # 可视区缩略图、有界预取队列与 LRU 缓存
-│   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中任务、实时用时和进度
+│   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中/历史任务、最终状态、用时、进度和日志关联
 │   ├── MatchPointBatchItem.h/cpp       # 匹配查看器单图元批量端点绘制，避免逐点 QGraphicsItem
 │   ├── MatchSpatialIndex.h/cpp         # 匹配点二维网格索引与可视区域候选查询
 │   ├── MatchGpuRenderer.h/cpp          # 基于 QRhi 的匹配线与端点 GPU 批量渲染器
@@ -773,7 +823,8 @@ gui/
 │       └── RecentProjectsManager.h/cpp # 最近项目管理
 │
 ├── panels/
-│   └── LogPanel.h/cpp          # 下方控制台；日志级别过滤、清空、保存和有界等宽输出
+│   ├── LogEntryModel.h/cpp     # 有界结构化日志表格模型及会话/级别/搜索/任务范围代理筛选
+│   └── LogPanel.h/cpp          # 下方控制台；批量消费、跟随/未读、筛选、导出和安全清理
 │
 ├── platform/
 │   ├── ProjectFileIntegration.h/cpp # 启动工程参数解析与 Windows 当前用户文件关联
@@ -1424,10 +1475,10 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 ## 六、构建系统
 
-- **根**: `CMakeLists.txt` — 强制使用 vcpkg manifest toolchain；也可切换到 Qt/OpenCV/GDAL/AprilTag 源码依赖 superbuild
+- **根**: `CMakeLists.txt` — 强制使用 vcpkg manifest toolchain；也可切换到 Qt/OpenCV/GDAL/AprilTag/OpenEXR 源码依赖 superbuild
 - **依赖**: `cmake/PlascanPackages.cmake` (统一 find_package)
 - **源码依赖**: `cmake/PlascanSourceDependencies.cmake` 固定 Qt 6.11.2、OpenCV 5.0.0、
-  GDAL 3.12.4 和 AprilTag 3.4.5，只初始化 Qt 的 `qtbase` 与 `qtshadertools`，并安装到 source-deps preset
+  GDAL 3.12.4、AprilTag 3.4.5、OpenEXR 3.2.2 和 Imath 3.1.9，只初始化 Qt 的 `qtbase` 与 `qtshadertools`，并安装到 source-deps preset
   的共享前缀；PoissonRecon 从固定 submodule 直接提供头文件；`cmake/source-deps/vcpkg.json` 仅提供
   PROJ、带 RTree 的 SQLite、libgeotiff、libtiff、zlib 和图像编解码等底层依赖。GDAL 的 HDF5 与
   NetCDF 等可选驱动默认关闭，并显式启用 GTiff、HFA、JPEG、PNG、VRT、PDS/ISIS 和 JP2OpenJPEG；
@@ -1460,6 +1511,10 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。资源清理按
   `ProjectResourceCleanup{Plan,Artifacts,Transaction,TransactionManifest,Purge,Recovery}` 拆分计划、产物边界、
   WAL 事务、不可逆清除态和启动恢复职责，worker 仅消费不可变计划，不访问 GUI 或 `ProjectData` QObject。
+- `src/core/task_runtime` 提供不依赖 Qt 的任务定义、状态机、协作控制、依赖/资源调度和 sidecar journal。
+  `TaskRuntimeService` 把当前项目 path、Chunk 和 generation 适配给 scheduler，并向 Work Pane 与 Browser Agent 暴露
+  同一份 revision/capabilities snapshot 和命令入口。现有摄影测量工作流仍按
+  `docs/TASK_RUNTIME.md` 的迁移矩阵逐项接入；未迁移任务不会宣称可暂停或可恢复。
 - `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
   控制器；其对 `ProjectData` 的 UI 设置、元数据/影像查询、相机替换和交会结果兼容调用统一经过
   `ProjectSessionFacade`。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController`
@@ -1469,5 +1524,11 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   `FeatureVisualizationController` 管理。任务栏图标进度由 `ProjectTaskStatusController` 聚合项目打开、保存、
   DEM、正射和后台重建任务，再通过平台适配器显示；非 Windows 平台保持无副作用。
   `DataTreeWidget` 按模型、填充、上下文菜单、资源元数据和相机对齐判定拆分实现。
+- `runtime/BrowserDebugBridge` 只在 `PLASCAN_BROWSER_TEST=1` 且本机套接字与一次性令牌均有效时启动，
+  向 `scripts/dev/browser_gui.py` 提供窗口/控件、工程、任务、日志和截图快照。它只允许操作唯一命名且类型受限的
+  Qt 对象；HTTP Debug Hub、noVNC、隔离 X display 和声明式场景运行器均位于开发脚本层，不进入生产业务模块。
+  `scripts/dev/browser_agent.py` 与 `browser_agent_protocol.py` 在桥上提供 Agent-first 低 token 协议：稳定 revision、
+  分页查询、语义动作、复合等待/断言、JSONL watch、批量表单和诊断包。命名夹具由 `browser_fixtures.py` 解析；
+  South Building 默认复制工程元数据与共享影像，并用稀疏文件隔离大型派生产物，禁止 Agent 启动写工程工作流。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。

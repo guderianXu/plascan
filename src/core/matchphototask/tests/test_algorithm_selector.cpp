@@ -2,9 +2,30 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <utility>
 
-TEST(MatchPhotosAlgorithmSelectorTest, DefaultUsesRegisteredAutoSift)
+TEST(AlignmentAccuracyTest, MapsNamesAndApiValuesExactly)
+{
+    using xjw::matchphotos::AlignmentAccuracy;
+    using xjw::matchphotos::alignmentAccuracyDownscale;
+    using xjw::matchphotos::alignmentAccuracyFromName;
+    using xjw::matchphotos::alignmentAccuracyName;
+
+    const std::array<std::pair<const char*, int>, 5> expected{
+        {{"highest", 0}, {"high", 1}, {"medium", 2}, {"low", 4}, {"lowest", 8}}};
+    for (const auto& [name, downscale] : expected)
+    {
+        const AlignmentAccuracy accuracy = alignmentAccuracyFromName(QString::fromLatin1(name));
+        EXPECT_EQ(alignmentAccuracyName(accuracy), QString::fromLatin1(name));
+        EXPECT_EQ(alignmentAccuracyDownscale(accuracy), downscale);
+    }
+    EXPECT_EQ(alignmentAccuracyFromName(QStringLiteral("standard")), AlignmentAccuracy::Medium);
+    EXPECT_EQ(alignmentAccuracyFromName(QStringLiteral("fast")), AlignmentAccuracy::Lowest);
+    EXPECT_EQ(alignmentAccuracyFromName(QStringLiteral("unknown")), AlignmentAccuracy::High);
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, DefaultUsesRegisteredPlaMatchHct)
 {
     xjw::matchphotos::MatchPhotosOptions options;
 
@@ -12,20 +33,23 @@ TEST(MatchPhotosAlgorithmSelectorTest, DefaultUsesRegisteredAutoSift)
         xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
-    EXPECT_EQ(plan.algorithmId, QStringLiteral("auto_sift"));
+    EXPECT_EQ(plan.algorithmId, QStringLiteral("plamatch_hct"));
     EXPECT_GT(plan.algorithmVersion, 0u);
-    EXPECT_EQ(plan.displayName, QStringLiteral("Auto SIFT（CUDA / Metal / OpenCL / CPU）"));
+    EXPECT_EQ(plan.displayName, QStringLiteral("PlaMatch-HCT（空间一致性二进制匹配）"));
     EXPECT_TRUE(plan.extractsFeaturesInMemory);
     EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.rotationRobust);
-    EXPECT_TRUE(plan.preferCuda);
-    EXPECT_TRUE(plan.lowTextureRecovery);
+    EXPECT_TRUE(plan.requiresColorInput);
+    EXPECT_TRUE(plan.suppliesCoarsePairPreselection);
+    EXPECT_TRUE(plan.supportsBatchFeatureMatching);
+    EXPECT_FALSE(plan.lowTextureRecovery);
     EXPECT_TRUE(plan.reason.contains(QStringLiteral(".pimatch")));
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, FastAutoSiftDisablesLowTextureRecovery)
 {
     xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("auto_sift");
     options.profile = xjw::matchphotos::MatchPhotosProfile::Fast;
 
     const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
@@ -73,6 +97,54 @@ TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredAutoSift)
     EXPECT_TRUE(plan.extractsFeaturesInMemory);
     EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.rotationRobust);
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredPlaMatchHct)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("plamatch_hct");
+    options.device = xjw::matchphotos::ComputeDevice::Cpu;
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.algorithmId, QStringLiteral("plamatch_hct"));
+    EXPECT_EQ(plan.displayName, QStringLiteral("PlaMatch-HCT（空间一致性二进制匹配）"));
+    EXPECT_TRUE(plan.extractsFeaturesInMemory);
+    EXPECT_FALSE(plan.requiresCuda);
+    EXPECT_TRUE(plan.requiresColorInput);
+    EXPECT_EQ(plan.featureSchemaVersion, 2);
+    EXPECT_EQ(plan.alignmentDownscale, 1);
+    EXPECT_TRUE(plan.suppliesCoarsePairPreselection);
+    EXPECT_TRUE(plan.supportsBatchFeatureMatching);
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Cpu);
+    EXPECT_FALSE(plan.preferCuda);
+    EXPECT_TRUE(plan.backendReason.contains(QStringLiteral("CPU HCTree")));
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, CpuCompatibleProfileKeepsDefaultPlaMatchHctOnCpu)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.profile = xjw::matchphotos::MatchPhotosProfile::CpuCompatible;
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    ASSERT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.algorithmId, QStringLiteral("plamatch_hct"));
+    EXPECT_EQ(plan.executionBackend, xjw::image_matching::SiftComputeBackend::Cpu);
+    EXPECT_EQ(plan.computeDeviceDisplayName, QStringLiteral("CPU HCTree"));
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, RejectsUnsupportedMetalPlaMatchHctDevice)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("plamatch_hct");
+    options.device = xjw::matchphotos::ComputeDevice::Metal;
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_FALSE(plan.valid);
+    EXPECT_TRUE(plan.validationError.contains(QStringLiteral("不提供 Metal")));
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, AutoUsesResolvedCpuBackend)

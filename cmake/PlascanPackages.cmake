@@ -3,9 +3,9 @@ include_guard(GLOBAL)
 include(${CMAKE_CURRENT_LIST_DIR}/PlascanSourceDependencyVersions.cmake)
 
 option(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES
-  "Require the pinned source-built Qt, OpenCV, GDAL, and AprilTag packages" OFF)
+  "Require the pinned source-built Qt, OpenCV, GDAL, AprilTag, and OpenEXR packages" OFF)
 set(PLASCAN_SOURCE_DEPENDENCY_PREFIX "" CACHE PATH
-  "Install prefix containing source-built Qt, OpenCV, GDAL, and AprilTag packages")
+  "Install prefix containing source-built Qt, OpenCV, GDAL, AprilTag, and OpenEXR packages")
 
 function(plascan_assert_source_package package_name package_dir actual_version expected_version)
   if(NOT PLASCAN_SOURCE_DEPENDENCY_PREFIX)
@@ -54,6 +54,25 @@ if(NOT TARGET ZLIB::ZLIB)
     INTERFACE_LINK_LIBRARIES "${ZLIB_LIBRARIES}"
   )
 endif()
+
+# ── OpenEXR ──────────────────────────────────────────────
+# The recommended source-dependency build installs the pinned 3rdparty checkout.
+# Advanced vcpkg builds may use a newer ABI-compatible 3.x package.
+if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
+  find_package(Imath ${PLASCAN_SOURCE_IMATH_VERSION} EXACT CONFIG REQUIRED)
+  plascan_assert_source_package(
+    "Imath" "${Imath_DIR}" "${Imath_VERSION}"
+    "${PLASCAN_SOURCE_IMATH_VERSION}")
+  find_package(OpenEXR ${PLASCAN_SOURCE_OPENEXR_VERSION} EXACT CONFIG REQUIRED)
+  plascan_assert_source_package(
+    "OpenEXR" "${OpenEXR_DIR}" "${OpenEXR_VERSION}"
+    "${PLASCAN_SOURCE_OPENEXR_VERSION}")
+else()
+  find_package(OpenEXR ${PLASCAN_SOURCE_OPENEXR_VERSION} CONFIG REQUIRED)
+endif()
+set(PLASCAN_IMATH_TARGET Imath::Imath CACHE INTERNAL "Imath CMake target")
+set(PLASCAN_OPENEXR_TARGET OpenEXR::OpenEXR CACHE INTERNAL "OpenEXR CMake target")
+message(STATUS "plascan: found OpenEXR ${OpenEXR_VERSION} with Imath ${Imath_VERSION}")
 
 # 核心库和 CLI 只依赖公开 Qt 组件；GUI 关闭时不触发 Widgets、
 # ShaderTools 或私有 Gui 模块的发现。

@@ -28,6 +28,7 @@ namespace
         int maxDenseSchurCameras = 200;
         bool refinePose = false;
         bool isolatedBackend = false;
+        bool referenceOnlineSchur = false;
         double loadSeconds = 0.0;
         std::string cameraModel = "fixed";
     };
@@ -130,7 +131,7 @@ namespace
     {
         if (name == "legacy_cpu")
         {
-            *backend = xjw::BABackend::LegacyCpu;
+            *backend = xjw::BABackend::PlaMatrixCpu;
         }
         else if (name == "plamatrix_cpu")
         {
@@ -246,9 +247,19 @@ namespace
             options.enableBackendQualityGate = !settings.isolatedBackend;
             options.compareAutoBackendWithLegacy = !settings.isolatedBackend;
             options.logIterationProgress = !settings.isolatedBackend;
+            options.useReferenceOnlineSchur = settings.referenceOnlineSchur;
             if (settings.refinePose)
             {
                 options.fixedCameraIndices.push_back(0);
+                const int scale_camera_index = static_cast<int>(cameras.size()) - 1;
+                const auto anchor = cameras.front().cameraCenter();
+                const auto scale = cameras.back().cameraCenter();
+                const double dx = scale[0] - anchor[0];
+                const double dy = scale[1] - anchor[1];
+                const double dz = scale[2] - anchor[2];
+                options.referenceGaugeAnchorCameraIndex = 0;
+                options.referenceGaugeScaleCameraIndex = scale_camera_index;
+                options.referenceGaugeBaseline = std::sqrt(dx * dx + dy * dy + dz * dz);
             }
 
             const CameraModelRunInfo cameraModelInfo = configureCameraModel(settings, cameras, tracks, &options);
@@ -276,6 +287,8 @@ namespace
                       << ",plamatrix_linearizations=" << result.plaMatrixLinearizations
                       << ",plamatrix_objective_evaluations=" << result.plaMatrixObjectiveEvaluations
                       << ",plamatrix_rejected_initial_tracks=" << result.plaMatrixRejectedInitialTracks
+                      << ",plamatrix_reference_online_schur_used="
+                      << (result.plaMatrixReferenceOnlineSchurUsed ? "true" : "false")
                       << ",plamatrix_linear_solver=" << sanitizeField(result.plaMatrixLinearSolverName)
                       << ",plamatrix_preconditioner=" << sanitizeField(result.plaMatrixPreconditionerName)
                       << ",plamatrix_device=" << sanitizeField(result.plaMatrixDeviceName)
@@ -285,9 +298,7 @@ namespace
                       << ",plamatrix_assembly_seconds=" << result.plaMatrixAssemblySeconds
                       << ",plamatrix_objective_seconds=" << result.plaMatrixObjectiveSeconds
                       << ",plamatrix_trial_state_seconds=" << result.plaMatrixTrialStateSeconds
-                      << ",plamatrix_inexact_linear_solve="
-                      << (options.enableInexactPlaMatrixLinearSolve ? 1 : 0)
-                      << ",plamatrix_tolerance_config_max=" << options.maxPlaMatrixLinearTolerance
+                      << ",plamatrix_linear_tolerance_policy=strict_reference"
                       << ",plamatrix_linear_tolerance_min=" << result.plaMatrixLinearToleranceMinimum
                       << ",plamatrix_linear_tolerance_max=" << result.plaMatrixLinearToleranceMaximum
                       << ",plamatrix_schur_pattern_builds=" << result.plaMatrixSchurPatternBuilds
@@ -300,6 +311,8 @@ namespace
                       << ",plamatrix_schur_assembly_seconds=" << result.plaMatrixSchurAssemblySeconds
                       << ",plamatrix_cholesky_factorization_seconds=" << result.plaMatrixCholeskyFactorizationSeconds
                       << ",plamatrix_triangular_solve_seconds=" << result.plaMatrixTriangularSolveSeconds
+                      << ",plamatrix_symbolic_analysis_seconds=" << result.plaMatrixSymbolicAnalysisSeconds
+                      << ",plamatrix_symbolic_analysis_reuses=" << result.plaMatrixSymbolicAnalysisReuses
                       << ",plamatrix_residual_check_seconds=" << result.plaMatrixResidualCheckSeconds
                       << ",plamatrix_linear_solve_seconds=" << result.plaMatrixLinearSolveSeconds
                       << ",plamatrix_back_substitution_seconds=" << result.plaMatrixBackSubstitutionSeconds
@@ -328,7 +341,7 @@ namespace
         std::cout << "用法:\n"
                   << "  " << program
                   << " [camera_count track_count views_per_track iterations threads refine_pose backends"
-                     " max_dense_schur_cameras]\n"
+                     " max_dense_schur_cameras reference_online_schur]\n"
                   << "  " << program << " --dataset-json PATH --camera-list PATH [选项]\n\n"
                   << "真实数据选项:\n"
                   << "  --backend NAME[,NAME...]              默认 plamatrix_cpu\n"
@@ -336,6 +349,7 @@ namespace
                   << "  --threads N                           默认 32\n"
                   << "  --repetitions N                       默认 1；第 1 轮标记为冷启动\n"
                   << "  --refine-pose                         联合优化相机位姿\n"
+                  << "  --reference-online-schur              使用参考在线点 Schur 装配与回代\n"
                   << "  --camera-model fixed|full|adaptive    默认 fixed；控制共享内参自标定模型\n"
                   << "  --max-dense-schur-cameras N           默认 200\n";
     }
@@ -396,6 +410,10 @@ namespace
             {
                 options.settings.refinePose = true;
             }
+            else if (option == "--reference-online-schur")
+            {
+                options.settings.referenceOnlineSchur = true;
+            }
             else if (option != "--help" && option != "-h")
             {
                 throw std::runtime_error("未知选项: " + option);
@@ -452,6 +470,7 @@ int main(int argc, char** argv)
                       << ",observations=" << dataset.observations << ",iterations=" << options.settings.iterations
                       << ",threads=" << options.settings.threads
                       << ",refine_pose=" << (options.settings.refinePose ? "true" : "false")
+                      << ",reference_online_schur=" << (options.settings.referenceOnlineSchur ? "true" : "false")
                       << ",camera_model=" << options.settings.cameraModel
                       << ",max_dense_schur_cameras=" << options.settings.maxDenseSchurCameras
                       << ",repetitions=" << options.settings.repetitions
@@ -467,9 +486,9 @@ int main(int argc, char** argv)
         settings.iterations = argc > 4 ? std::max(1, std::atoi(argv[4])) : 8;
         settings.threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
         settings.refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
-        const std::string backends =
-            argc > 7 ? argv[7] : "legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto";
+        const std::string backends = argc > 7 ? argv[7] : "plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto";
         settings.maxDenseSchurCameras = argc > 8 ? std::max(0, std::atoi(argv[8])) : settings.maxDenseSchurCameras;
+        settings.referenceOnlineSchur = argc > 9 ? std::atoi(argv[9]) != 0 : false;
 
         const auto started = std::chrono::steady_clock::now();
         xjw::ba_benchmark::BenchmarkDataset dataset;
@@ -484,6 +503,7 @@ int main(int argc, char** argv)
                   << ",observations=" << dataset.observations << ",views_per_track=" << viewsPerTrack
                   << ",iterations=" << settings.iterations << ",threads=" << settings.threads
                   << ",refine_pose=" << (settings.refinePose ? "true" : "false")
+                  << ",reference_online_schur=" << (settings.referenceOnlineSchur ? "true" : "false")
                   << ",camera_model=" << settings.cameraModel
                   << ",max_dense_schur_cameras=" << settings.maxDenseSchurCameras
                   << ",load_seconds=" << settings.loadSeconds << "\n";

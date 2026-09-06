@@ -127,9 +127,14 @@ bool exportFinalBaCameras(const QStringList &images,
     const QString targetDir = QDir::cleanPath(QFileInfo(outputDir).absoluteFilePath());
     if (QFileInfo::exists(targetDir))
     {
-        return fail(
-            QStringLiteral("最终 BA 相机导出目录已存在，拒绝覆盖: %1").arg(targetDir),
-            errorMessage);
+        const QFileInfo existingTarget(targetDir);
+        if (!existingTarget.isDir() ||
+            !QDir(targetDir).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+        {
+            return fail(
+                QStringLiteral("最终 BA 相机导出目录已存在且非空，拒绝覆盖: %1").arg(targetDir),
+                errorMessage);
+        }
     }
 
     QMap<QString, QJsonObject> metadataByPath;
@@ -244,6 +249,14 @@ bool exportFinalBaCameras(const QStringList &images,
     const QString stagingName = QFileInfo(staging.path()).fileName();
     const QString targetName = targetInfo.fileName();
     staging.setAutoRemove(false);
+    if (QFileInfo::exists(targetDir) &&
+        (!QDir(targetDir).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty() ||
+         !parentDir.rmdir(targetName)))
+    {
+        staging.setAutoRemove(true);
+        return fail(QStringLiteral("最终 BA 相机导出目录在提交前已非空或无法替换: %1").arg(targetDir),
+                    errorMessage);
+    }
     if (!parentDir.rename(stagingName, targetName))
     {
         staging.setAutoRemove(true);

@@ -10,34 +10,27 @@
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 
-#include <QPushButton>
-#include <QStackedWidget>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <QtConcurrent/QtConcurrentRun>
 
 namespace {
 
-QString displayNameForPath(const QString &path)
-{
-    const QFileInfo info(path);
-    const QString base = info.completeBaseName();
-    return base.isEmpty() ? info.fileName() : base;
-}
+    constexpr int ModelTabIndex = 0;
+    constexpr int ImageTabIndex = 1;
+    constexpr int CompareTabIndex = 2;
+    constexpr int ObservationNetworkTabIndex = 3;
 
-void setViewButtonText(QPushButton *button, const QString &text, const QString &tooltip)
-{
-    if (!button)
+    QString displayNameForPath(const QString& path)
     {
-        return;
-    }
-
-    const QString cleanText = text.trimmed().isEmpty() ? QStringLiteral("-") : text.trimmed();
-    button->setText(button->fontMetrics().elidedText(cleanText, Qt::ElideMiddle, 190));
-    button->setToolTip(tooltip.trimmed().isEmpty() ? cleanText : tooltip);
+        const QFileInfo info(path);
+        const QString base = info.completeBaseName();
+        return base.isEmpty() ? info.fileName() : base;
 }
 
 QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &images)
@@ -124,66 +117,55 @@ WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
 {
     _ui->setupUi(this);
 
-    _modelBtn = _ui->m_modelBtn;
-    _imageBtn = _ui->m_imageBtn;
-    _compareBtn = _ui->m_compareBtn;
-    _obsNetBtn = _ui->m_obsNetBtn;
+    _documentTabs = _ui->m_documentTabs;
     _stack = _ui->m_stack;
     _modelView = _ui->m_modelView;
     _canvas = _ui->m_canvas;
     _dualImageViewer = _ui->m_dualImageViewer;
     _obsNetView = _ui->m_obsNetView;
 
-    connect(_stack, &QStackedWidget::currentChanged, this, [this](int)
-    {
-        emit viewModeChanged(currentViewMode());
-    });
+    _documentTabs->addTab(tr("模型"));
+    _documentTabs->addTab(tr("影像"));
+    _documentTabs->addTab(tr("对比"));
+    _documentTabs->addTab(tr("观测网络"));
+    _documentTabs->setTabVisible(ImageTabIndex, false);
+    _documentTabs->setTabVisible(CompareTabIndex, false);
+    _documentTabs->setTabVisible(ObservationNetworkTabIndex, false);
+    _documentTabs->setTabButton(ModelTabIndex, QTabBar::RightSide, nullptr);
 
-    connect(_modelBtn, &QPushButton::clicked, this, &WorkspaceCenterWidget::showModelView);
-    connect(_imageBtn, &QPushButton::clicked, this, [this]()
-    {
-        _stack->setCurrentWidget(_canvas);
-        _modelBtn->setChecked(false);
-        _imageBtn->setChecked(true);
-        if (_compareBtn) _compareBtn->setChecked(false);
-        if (_obsNetBtn) _obsNetBtn->setChecked(false);
-    });
-    connect(_compareBtn, &QPushButton::clicked, this, [this]()
-    {
-        if (!_stack || !_dualImageViewer)
-        {
-            return;
-        }
-        _stack->setCurrentWidget(_dualImageViewer);
-        if (_modelBtn) _modelBtn->setChecked(false);
-        if (_imageBtn) _imageBtn->setChecked(false);
-        if (_compareBtn) _compareBtn->setChecked(true);
-        if (_obsNetBtn) _obsNetBtn->setChecked(false);
-    });
-    connect(_obsNetBtn, &QPushButton::clicked, this, [this]()
-    {
-        if (!_stack || !_obsNetView)
-        {
-            return;
-        }
-        _stack->setCurrentWidget(_obsNetView);
-        if (_modelBtn)
-        {
-            _modelBtn->setChecked(false);
-        }
-        if (_imageBtn)
-        {
-            _imageBtn->setChecked(false);
-        }
-        if (_compareBtn)
-        {
-            _compareBtn->setChecked(false);
-        }
-        if (_obsNetBtn)
-        {
-            _obsNetBtn->setChecked(true);
-        }
-    });
+    connect(_documentTabs,
+            &QTabBar::currentChanged,
+            this,
+            [this](int index)
+            {
+                if (_stack && index >= 0 && index < _stack->count())
+                {
+                    _stack->setCurrentIndex(index);
+                }
+            });
+    connect(_documentTabs,
+            &QTabBar::tabCloseRequested,
+            this,
+            [this](int index)
+            {
+                if (!_documentTabs || index <= ModelTabIndex || index >= _documentTabs->count())
+                {
+                    return;
+                }
+                _documentTabs->setTabVisible(index, false);
+                showModelView();
+            });
+    connect(_stack,
+            &QStackedWidget::currentChanged,
+            this,
+            [this](int index)
+            {
+                if (_documentTabs && index >= 0 && index < _documentTabs->count() && _documentTabs->isTabVisible(index))
+                {
+                    _documentTabs->setCurrentIndex(index);
+                }
+                emit viewModeChanged(currentViewMode());
+            });
 
     showModelView();
 }
@@ -238,29 +220,36 @@ WorkspaceCenterWidget::ViewMode WorkspaceCenterWidget::currentViewMode() const
     return ViewMode::None;
 }
 
+void WorkspaceCenterWidget::activateView(int index)
+{
+    if (!_stack || !_documentTabs || index < 0 || index >= _stack->count())
+    {
+        return;
+    }
+    _documentTabs->setTabVisible(index, true);
+    _documentTabs->setCurrentIndex(index);
+    _stack->setCurrentIndex(index);
+}
+
+void WorkspaceCenterWidget::setDocumentTab(int index, const QString& text, const QString& tooltip, bool visible)
+{
+    if (!_documentTabs || index < 0 || index >= _documentTabs->count())
+    {
+        return;
+    }
+    const QString cleanText = text.trimmed().isEmpty() ? tr("未命名") : text.trimmed();
+    _documentTabs->setTabText(index, cleanText);
+    _documentTabs->setTabToolTip(index, tooltip.trimmed().isEmpty() ? cleanText : tooltip);
+    _documentTabs->setTabVisible(index, visible);
+}
+
 void WorkspaceCenterWidget::showModelView()
 {
     if (!_stack || !_modelView)
     {
         return;
     }
-    _stack->setCurrentWidget(_modelView);
-    if (_modelBtn)
-    {
-        _modelBtn->setChecked(true);
-    }
-    if (_imageBtn)
-    {
-        _imageBtn->setChecked(false);
-    }
-    if (_compareBtn)
-    {
-        _compareBtn->setChecked(false);
-    }
-    if (_obsNetBtn)
-    {
-        _obsNetBtn->setChecked(false);
-    }
+    activateView(ModelTabIndex);
 }
 
 void WorkspaceCenterWidget::showImageView(const QString &imagePath)
@@ -271,16 +260,11 @@ void WorkspaceCenterWidget::showImageView(const QString &imagePath)
     }
 
     // 先切换到 canvas（确保 fitInView 使用正确的视口尺寸），再加载影像
-    _stack->setCurrentWidget(_canvas);
-    _modelBtn->setChecked(false);
-    _imageBtn->setChecked(true);
-    if (_compareBtn) _compareBtn->setChecked(false);
-    if (_obsNetBtn) _obsNetBtn->setChecked(false);
+    activateView(ImageTabIndex);
 
     if (!imagePath.trimmed().isEmpty())
     {
-        setViewButtonText(_imageBtn, displayNameForPath(imagePath), imagePath);
-        _imageBtn->setVisible(true);
+        setDocumentTab(ImageTabIndex, displayNameForPath(imagePath), imagePath);
         _canvas->showImage(imagePath);
     }
 }
@@ -301,21 +285,13 @@ void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath
                                      QVector<QPointF>(),
                                      QVector<QPointF>());
     _dualImageViewer->fitBothViews();
-    _stack->setCurrentWidget(_dualImageViewer);
+    activateView(CompareTabIndex);
 
     const QString primaryName = displayNameForPath(primaryImagePath);
     const QString sideName = displayNameForPath(sideImagePath);
-    if (_compareBtn)
-    {
-        setViewButtonText(_compareBtn,
-                          QStringLiteral("对比: %1 | %2").arg(primaryName, sideName),
-                          QStringLiteral("%1\n%2").arg(primaryImagePath, sideImagePath));
-        _compareBtn->setVisible(true);
-        _compareBtn->setChecked(true);
-    }
-    if (_modelBtn) _modelBtn->setChecked(false);
-    if (_imageBtn) _imageBtn->setChecked(false);
-    if (_obsNetBtn) _obsNetBtn->setChecked(false);
+    setDocumentTab(CompareTabIndex,
+                   tr("对比：%1 | %2").arg(primaryName, sideName),
+                   QStringLiteral("%1\n%2").arg(primaryImagePath, sideImagePath));
 }
 
 void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
@@ -339,10 +315,7 @@ void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
         _modelView->loadPointCloudFromXyz(modelPath);
     }
 
-    if (_modelBtn)
-    {
-        setViewButtonText(_modelBtn, displayNameForPath(modelPath), modelPath);
-    }
+    setDocumentTab(ModelTabIndex, displayNameForPath(modelPath), modelPath);
     showModelView();
 }
 
@@ -366,10 +339,7 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
         _modelView->loadPointCloudFromXyz(pointCloudPath);
     }
 
-    if (_modelBtn)
-    {
-        setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
-    }
+    setDocumentTab(ModelTabIndex, displayNameForPath(pointCloudPath), pointCloudPath);
     showModelView();
 }
 
@@ -382,10 +352,7 @@ void WorkspaceCenterWidget::showTiePointCloudFile(const QString &pointCloudPath,
     }
 
     _modelView->loadTiePointCloudFromFile(pointCloudPath, sidecarPath);
-    if (_modelBtn)
-    {
-        setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
-    }
+    setDocumentTab(ModelTabIndex, displayNameForPath(pointCloudPath), pointCloudPath);
     showModelView();
 }
 
@@ -459,52 +426,25 @@ void WorkspaceCenterWidget::clearProjectView()
         _modelView->clearProjectScene();
     }
 
-    if (_modelBtn)
-    {
-        setViewButtonText(_modelBtn, tr("模型"), tr("模型"));
-    }
-    if (_imageBtn)
-    {
-        setViewButtonText(_imageBtn, tr("影像"), tr("影像"));
-    }
-    if (_compareBtn)
-    {
-        setViewButtonText(_compareBtn, tr("对比"), tr("对比"));
-    }
-    if (_obsNetBtn)
-    {
-        setViewButtonText(_obsNetBtn, tr("观测网络"), tr("观测网络"));
-    }
+    setDocumentTab(ModelTabIndex, tr("模型"), tr("模型"));
+    setDocumentTab(ImageTabIndex, tr("影像"), tr("影像"), false);
+    setDocumentTab(CompareTabIndex, tr("对比"), tr("对比"), false);
+    setDocumentTab(ObservationNetworkTabIndex, tr("观测网络"), tr("观测网络"), false);
     showModelView();
 }
 
 void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)
 {
-    if (!_stack || !_obsNetView || !_obsNetBtn)
+    if (!_stack || !_obsNetView || !_documentTabs)
     {
         return;
     }
 
-    const QString buttonText = title.trimmed().isEmpty() ? tr("观测网络") : title.trimmed();
-    setViewButtonText(_obsNetBtn, buttonText, buttonText);
-    _obsNetBtn->setVisible(true);
+    const QString tabText = title.trimmed().isEmpty() ? tr("观测网络") : title.trimmed();
+    setDocumentTab(ObservationNetworkTabIndex, tabText, tabText);
 
     _obsNetView->setNetwork(net);
-    _stack->setCurrentWidget(_obsNetView);
-
-    if (_modelBtn)
-    {
-        _modelBtn->setChecked(false);
-    }
-    if (_imageBtn)
-    {
-        _imageBtn->setChecked(false);
-    }
-    if (_compareBtn)
-    {
-        _compareBtn->setChecked(false);
-    }
-    _obsNetBtn->setChecked(true);
+    activateView(ObservationNetworkTabIndex);
 }
 
 void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)

@@ -90,7 +90,8 @@ CUDA Schur 装配累计时间由约 `0.06898 s` 降到 `0.03004 s`，OpenCL 由�
 降到 `0.08663 s`。混合精度在 RTX 4060 实测变慢，因此实现保留为显式实验开关，默认关闭。
 
 规模扫描显示 80 相机时 CPU 稠密直接解仍优于 GPU，而 150 相机/40000 观测时 CUDA 已快于 CPU；
-Auto 默认交叉阈值据此调整为 128 相机且 30000 观测。OpenCL 跨队列零拷贝在 NVIDIA 595.84
+后续完整三后端复测已把 Auto 更新为后端独立的常规/高密度两层策略，具体阈值见
+`2026-09-04-reference-ba-backend-efficiency.md`。OpenCL 跨队列零拷贝在 NVIDIA 595.84
 驱动触发异步事件线程崩溃，生产路径保留稳定主机 handoff；CUDA 已完全移除 Schur 数值 D2H/H2D 往返。
 
 ## 2026-08-20 PlaMatrix 原生 CPU 线性代数复测

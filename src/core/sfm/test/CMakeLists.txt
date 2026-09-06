@@ -88,9 +88,9 @@ target_include_directories(test_reference_terrain_prior PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 
-add_sfm_test(test_multiview_track_builder sfm_core)
+add_sfm_test(test_track_processing sfm_core)
+add_sfm_test(test_reference_track_builder sfm_core)
 add_sfm_test(test_covisibility_partitioner sfm_core)
-add_sfm_test(test_sfm_calibration_preview_sampler sfm_core)
 add_sfm_test(test_observation_network_builder sfm_core)
 add_sfm_test(test_projection_geometry sfm_core)
 add_sfm_test(test_similarity_gauge_normalizer sfm_core)

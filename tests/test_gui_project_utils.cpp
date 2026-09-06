@@ -60,12 +60,16 @@
 #include "FeatureResidualLoader.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
+#include "LogEntryModel.h"
+#include "LogPanel.h"
 #include "WorkPanelWidget.h"
 #include "ProjectManager.h"
 #include "ProjectMaskWorkflowController.h"
 #include "ProjectPointCloudWorkflowController.h"
 #include "ProjectTaskStatusController.h"
+#include "ReferencePanelWidget.h"
 #include "SelectionPropertiesWidget.h"
+#include "WorkspaceCenterWidget.h"
 #include "MainMenu.h"
 #include "ProjectUiHydrator.h"
 #include "GuiTaskRunner.h"
@@ -96,6 +100,7 @@
 #include <QDockWidget>
 #include <QDir>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -130,6 +135,8 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QStyleOptionButton>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
@@ -144,6 +151,7 @@
 #include <QStandardItemModel>
 #include <QSignalSpy>
 #include <QTableWidget>
+#include <QTableView>
 #include <QThread>
 #include <QtTest/QTest>
 #include <QtEndian>
@@ -732,674 +740,677 @@ TEST(CanvasDepthOverlayTest, ShowsCurrentFrameAsSoonAsItsDepthRecordArrives)
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
-{
-    xjw::FramePinholeCamera cam;
-    cam.setIntrinsics(fu, fv, 512.0, 384.0);
-    const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    const std::array<double, 3> center = {cx, cy, cz};
-    cam.setPose(rotation, center);
-    return cam;
-}
-
-bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& xyz, double* u, double* v)
-{
-    if (!u || !v)
+    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
     {
-        return false;
+        xjw::FramePinholeCamera cam;
+        cam.setIntrinsics(fu, fv, 512.0, 384.0);
+        const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+        const std::array<double, 3> center = {cx, cy, cz};
+        cam.setPose(rotation, center);
+        return cam;
     }
 
-    const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
-    double uv[2] = {0.0, 0.0};
-    if (!camera.projectWorldPoint(worldPoint, uv))
+    bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& xyz, double* u, double* v)
     {
-        return false;
-    }
-
-    *u = uv[0];
-    *v = uv[1];
-    return true;
-}
-
-QMenu* findTopLevelMenuByTitle(QMenuBar* menuBar, const QString& title)
-{
-    if (!menuBar)
-    {
-        return nullptr;
-    }
-
-    for (QAction* action : menuBar->actions())
-    {
-        if (action && action->menu() && action->menu()->title() == title)
-        {
-            return action->menu();
-        }
-    }
-
-    return nullptr;
-}
-
-QMenu* findSubMenuByTitle(QMenu* menu, const QString& title)
-{
-    if (!menu)
-    {
-        return nullptr;
-    }
-
-    for (QAction* action : menu->actions())
-    {
-        if (action && action->menu() && action->menu()->title() == title)
-        {
-            return action->menu();
-        }
-    }
-
-    return nullptr;
-}
-
-QStringList directActionTexts(QMenu* menu)
-{
-    QStringList texts;
-    if (!menu)
-    {
-        return texts;
-    }
-
-    for (QAction* action : menu->actions())
-    {
-        if (action && !action->isSeparator() && !action->menu())
-        {
-            texts.push_back(action->text());
-        }
-    }
-
-    return texts;
-}
-
-QString runtimePythonRelativePath()
-{
-#ifdef Q_OS_WIN
-    return QStringLiteral(".venv/Scripts/python.exe");
-#else
-    return QStringLiteral(".venv/bin/python");
-#endif
-}
-
-QString createFakeRuntimePython(const QString& sourceRoot)
-{
-    const QString pythonPath = QDir(sourceRoot).filePath(runtimePythonRelativePath());
-    QDir().mkpath(QFileInfo(pythonPath).absolutePath());
-    QFile file(pythonPath);
-    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    file.write("python");
-    file.close();
-    return pythonPath;
-}
-
-class ScopedEnvVar
-{
-public:
-    explicit ScopedEnvVar(const char* name)
-        : _name(name), _hadPrevious(qEnvironmentVariableIsSet(name)), _previous(qgetenv(name))
-    {
-        qunsetenv(_name);
-    }
-
-    ScopedEnvVar(const char* name, const QString& value)
-        : _name(name), _hadPrevious(qEnvironmentVariableIsSet(name)), _previous(qgetenv(name))
-    {
-        qputenv(_name, value.toUtf8());
-    }
-
-    ~ScopedEnvVar()
-    {
-        if (_hadPrevious)
-        {
-            qputenv(_name, _previous);
-        }
-        else
-        {
-            qunsetenv(_name);
-        }
-    }
-
-private:
-    const char* _name;
-    bool _hadPrevious = false;
-    QByteArray _previous;
-};
-
-void writeMinimalTsai(const QString& path, double fu, double cx)
-{
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    QTextStream out(&file);
-    out << "VERSION_3\n";
-    out << "PINHOLE\n";
-    out << "TSAI\n";
-    out << "fu = " << QString::number(fu, 'f', 8) << "\n";
-    out << "fv = " << QString::number(fu, 'f', 8) << "\n";
-    out << "cu = " << QString::number(cx, 'f', 8) << "\n";
-    out << "cv = 500\n";
-    out << "u_direction = 1 0 0\n";
-    out << "v_direction = 0 1 0\n";
-    out << "w_direction = 0 0 1\n";
-    out << "pitch = 1\n";
-    out << "k1 = -0.01\n";
-    out << "k2 = 0.02\n";
-    out << "k3 = -0.03\n";
-    out << "p1 = 0.0001\n";
-    out << "p2 = -0.0002\n";
-    out << "C = 1 2 3\n";
-    out << "R = 1 0 0 0 1 0 0 0 1\n";
-}
-
-void writeMinimalPointCloudPly(const QString& path, const std::vector<std::array<double, 3>>& points)
-{
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    QTextStream out(&file);
-    out << "ply\n"
-        << "format ascii 1.0\n"
-        << "element vertex " << points.size() << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "end_header\n";
-    for (const auto& point : points)
-    {
-        out << QString::number(point[0], 'f', 6) << ' ' << QString::number(point[1], 'f', 6) << ' '
-            << QString::number(point[2], 'f', 6) << '\n';
-    }
-}
-
-void putU16Le(QByteArray* bytes, qsizetype offset, quint16 value)
-{
-    ASSERT_TRUE(bytes);
-    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
-    qToLittleEndian<quint16>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
-}
-
-void putU32Le(QByteArray* bytes, qsizetype offset, quint32 value)
-{
-    ASSERT_TRUE(bytes);
-    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
-    qToLittleEndian<quint32>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
-}
-
-void putI32Le(QByteArray* bytes, qsizetype offset, qint32 value)
-{
-    ASSERT_TRUE(bytes);
-    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
-    qToLittleEndian<qint32>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
-}
-
-void putF64Le(QByteArray* bytes, qsizetype offset, double value)
-{
-    ASSERT_TRUE(bytes);
-    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
-    quint64 raw = 0;
-    std::memcpy(&raw, &value, sizeof(value));
-    qToLittleEndian<quint64>(raw, reinterpret_cast<uchar*>(bytes->data() + offset));
-}
-
-void writeMinimalPointCloudLas(const QString& path, const std::vector<std::array<double, 3>>& points)
-{
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
-
-    constexpr qsizetype headerSize = 227;
-    constexpr qsizetype pointRecordLength = 20;
-    constexpr double scale = 0.001;
-
-    QByteArray bytes(headerSize, '\0');
-    bytes[0] = 'L';
-    bytes[1] = 'A';
-    bytes[2] = 'S';
-    bytes[3] = 'F';
-    bytes[24] = 1;
-    bytes[25] = 2;
-    putU16Le(&bytes, 94, static_cast<quint16>(headerSize));
-    putU32Le(&bytes, 96, static_cast<quint32>(headerSize));
-    putU32Le(&bytes, 100, 0);
-    bytes[104] = 0;
-    putU16Le(&bytes, 105, static_cast<quint16>(pointRecordLength));
-    putU32Le(&bytes, 107, static_cast<quint32>(points.size()));
-    putF64Le(&bytes, 131, scale);
-    putF64Le(&bytes, 139, scale);
-    putF64Le(&bytes, 147, scale);
-    putF64Le(&bytes, 155, 0.0);
-    putF64Le(&bytes, 163, 0.0);
-    putF64Le(&bytes, 171, 0.0);
-
-    for (const auto& point : points)
-    {
-        QByteArray record(pointRecordLength, '\0');
-        putI32Le(&record, 0, static_cast<qint32>(std::llround(point[0] / scale)));
-        putI32Le(&record, 4, static_cast<qint32>(std::llround(point[1] / scale)));
-        putI32Le(&record, 8, static_cast<qint32>(std::llround(point[2] / scale)));
-        bytes.append(record);
-    }
-
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-    ASSERT_EQ(file.write(bytes), bytes.size());
-}
-
-void writeMinimalColoredPointCloudPly(const QString& path,
-                                      const std::vector<std::array<double, 3>>& points,
-                                      const std::vector<std::array<int, 3>>& colors)
-{
-    ASSERT_EQ(points.size(), colors.size());
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    QTextStream out(&file);
-    out << "ply\n"
-        << "format ascii 1.0\n"
-        << "element vertex " << points.size() << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "property uchar red\n"
-        << "property uchar green\n"
-        << "property uchar blue\n"
-        << "end_header\n";
-    for (std::size_t i = 0; i < points.size(); ++i)
-    {
-        const auto& point = points[i];
-        const auto& color = colors[i];
-        out << QString::number(point[0], 'f', 6) << ' ' << QString::number(point[1], 'f', 6) << ' '
-            << QString::number(point[2], 'f', 6) << ' ' << color[0] << ' ' << color[1] << ' ' << color[2] << '\n';
-    }
-}
-
-void writeMinimalSparseSidecar(const QString& path, const std::vector<int>& trackLens)
-{
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
-
-    QJsonArray points;
-    for (int i = 0; i < static_cast<int>(trackLens.size()); ++i)
-    {
-        QJsonArray xyz;
-        xyz.append(static_cast<double>(i));
-        xyz.append(0.0);
-        xyz.append(0.0);
-
-        QJsonObject point;
-        point[QStringLiteral("point_xyz")] = xyz;
-        point[QStringLiteral("rms_reproj_px")] = 0.5;
-        point[QStringLiteral("min_tri_angle_deg")] = 3.0;
-        point[QStringLiteral("track_len")] = trackLens[static_cast<std::size_t>(i)];
-        points.append(point);
-    }
-
-    QJsonObject root;
-    root[QStringLiteral("quality_metrics_available")] = true;
-    root[QStringLiteral("point_count")] = static_cast<int>(trackLens.size());
-    root[QStringLiteral("points")] = points;
-
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    file.write(QJsonDocument(root).toJson());
-    file.close();
-}
-
-TEST(ProjectCameraImportServiceTest, BatchImportRecordsActualTsaiSourceFileInCameraMeta)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.JPG"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("jpg");
-    imageFile.close();
-
-    const QString tsaiPath = QDir(tempDir.path()).filePath(QStringLiteral("cameras/IMG_001.tsai"));
-    writeMinimalTsai(tsaiPath, 1234.0, 640.0);
-
-    xjw::gui::project::BatchCameraImportResult result;
-    const auto status =
-        xjw::gui::project::buildBatchCameraImport(QFileInfo(tsaiPath).absolutePath(), QStringList{imagePath}, &result);
-
-    ASSERT_EQ(status, xjw::gui::project::BatchCameraImportStatus::Ok);
-    ASSERT_EQ(result.cameraMetaByImage.size(), 1);
-    const QJsonObject camera = result.cameraMetaByImage.constBegin().value();
-    EXPECT_EQ(QDir::cleanPath(camera.value(QStringLiteral("source_file")).toString()),
-              QDir::cleanPath(QFileInfo(tsaiPath).absoluteFilePath()));
-    EXPECT_DOUBLE_EQ(camera.value(QStringLiteral("fu")).toDouble(), 1234.0);
-    EXPECT_NEAR(camera.value(QStringLiteral("k1")).toDouble(), -0.01, 1e-12);
-}
-
-TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFile)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("camera_meta.plascan"));
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_002.JPG"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("jpg");
-    imageFile.close();
-
-    ProjectData data;
-    ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_meta")));
-    ASSERT_TRUE(data.addImages(QStringList{imagePath}));
-
-    QJsonObject core = data.coreFilesMeta();
-    QJsonArray images = core.value(QStringLiteral("images")).toArray();
-    ASSERT_EQ(images.size(), 1);
-    QJsonObject imageObject = images.at(0).toObject();
-    const QString projectImagePath = imageObject.value(QStringLiteral("path")).toString();
-    ASSERT_FALSE(projectImagePath.isEmpty());
-    imageObject[QStringLiteral("camera_file")] = QStringLiteral("stale/old.tsai");
-    images[0] = imageObject;
-    core[QStringLiteral("images")] = images;
-    data.updateMetadata(core, false);
-
-    QJsonObject camera;
-    camera[QStringLiteral("model")] = QStringLiteral("tsai");
-    camera[QStringLiteral("source_file")] = QStringLiteral("fresh/new.tsai");
-    camera[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
-    camera[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
-    camera[QStringLiteral("pitch")] = 1.0;
-    camera[QStringLiteral("fu")] = 1111.0;
-    camera[QStringLiteral("fv")] = 1111.0;
-    camera[QStringLiteral("cu")] = 500.0;
-    camera[QStringLiteral("cv")] = 400.0;
-    camera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
-    camera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-
-    int updated = 0;
-    QString error;
-    ASSERT_TRUE(data.setImageCameras(QMap<QString, QJsonObject>{{projectImagePath, camera}}, &updated, &error))
-        << error.toStdString();
-    EXPECT_EQ(updated, 1);
-
-    const QJsonObject updatedImage = data.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
-    EXPECT_FALSE(updatedImage.contains(QStringLiteral("camera_file")));
-    EXPECT_EQ(updatedImage.value(QStringLiteral("camera")).toObject().value(QStringLiteral("source_file")).toString(),
-              QStringLiteral("fresh/new.tsai"));
-}
-
-TEST(ProjectDataCameraMetadataTest, ClearImageCamerasSkipsImagesWithoutCamera)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("camera_clear_noop.plascan"));
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_004.JPG"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    ASSERT_GT(imageFile.write("jpg"), 0);
-    imageFile.close();
-
-    ProjectData data;
-    ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_clear_noop")));
-    ASSERT_TRUE(data.addImages(QStringList{imagePath}));
-    const QJsonObject before = data.coreFilesMeta();
-    const QString storedPath =
-        before.value(QStringLiteral("images")).toArray().at(0).toObject().value(QStringLiteral("path")).toString();
-
-    int cleared = -1;
-    QString error;
-    EXPECT_FALSE(data.clearImageCameras(QStringList{storedPath}, &cleared, &error));
-    EXPECT_EQ(cleared, 0);
-    EXPECT_EQ(data.coreFilesMeta(), before);
-}
-
-TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("async_open.plascan"));
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_003.JPG"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("jpg");
-    imageFile.close();
-
-    ProjectData source;
-    ASSERT_TRUE(source.createProject(projectPath, QStringLiteral("async_open")));
-    ASSERT_TRUE(source.addImages(QStringList{imagePath}));
-    ASSERT_TRUE(
-        source.appendResultRecord(QStringLiteral("image_match_results"),
-                                  QJsonObject{{QStringLiteral("image"), imagePath},
-                                              {QStringLiteral("output"), QStringLiteral("matches/IMG_003.pimatch")},
-                                              {QStringLiteral("neighbors"), QJsonArray{}}},
-                                  true));
-    QString saveError;
-    ASSERT_TRUE(source.saveProject(&saveError)) << saveError.toStdString();
-
-    const ProjectOpenSnapshot openSnapshot = ProjectData::loadProjectOpenSnapshot(projectPath);
-    ASSERT_TRUE(openSnapshot.success) << openSnapshot.errorMessage.toStdString();
-    EXPECT_EQ(openSnapshot.projectPath, projectPath);
-    EXPECT_EQ(openSnapshot.filesMeta.value(QStringLiteral("images")).toArray().size(), 1);
-    source.closeProject();
-
-    ProjectData reopened;
-    QString error;
-    ASSERT_TRUE(reopened.openProjectFromSnapshot(openSnapshot, &error)) << error.toStdString();
-    EXPECT_EQ(reopened.currentProjectPath(), projectPath);
-    EXPECT_EQ(reopened.coreFilesMeta().value(QStringLiteral("images")).toArray().size(), 1);
-
-    const ProjectResultsSnapshot resultsSnapshot = ProjectData::loadProjectResultsSnapshot(projectPath);
-    ASSERT_TRUE(resultsSnapshot.success) << resultsSnapshot.errorMessage.toStdString();
-    ASSERT_TRUE(reopened.applyResultsSnapshot(resultsSnapshot, &error)) << error.toStdString();
-    EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
-}
-
-QJsonObject buildImageEntry(const QString& path, const xjw::FramePinholeCamera& camera)
-{
-    QJsonObject imageObject;
-    imageObject[QStringLiteral("path")] = path;
-    imageObject[QStringLiteral("camera")] = xjw::common::project::cameraToJson(camera);
-    return imageObject;
-}
-
-bool addCurrentMvsRasterContractFixture(const QString& batchDirectory, int frameIndex, QJsonObject* record)
-{
-    if (!record)
-    {
-        return false;
-    }
-
-    const QString preparedDirectory = QDir(batchDirectory).filePath(QStringLiteral("prepared_images"));
-    if (!QDir().mkpath(preparedDirectory))
-    {
-        return false;
-    }
-
-    const QString preparedImage =
-        QDir(preparedDirectory).filePath(QStringLiteral("frame_%1.png").arg(frameIndex, 6, 10, QLatin1Char('0')));
-    const QString preparedValidMask =
-        QDir(preparedDirectory).filePath(QStringLiteral("frame_%1_valid.png").arg(frameIndex, 6, 10, QLatin1Char('0')));
-    for (const QString& path : {preparedImage, preparedValidMask})
-    {
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write("prepared") <= 0)
+        if (!u || !v)
         {
             return false;
         }
-    }
 
-    (*record)[QStringLiteral("prepared_image")] = preparedImage;
-    (*record)[QStringLiteral("prepared_valid_mask_path")] = preparedValidMask;
-    (*record)[QStringLiteral("prepared_camera_model")] = QJsonObject{
-        {QStringLiteral("fx"), 900.0},
-        {QStringLiteral("fy"), 910.0},
-        {QStringLiteral("cx"), 1.0},
-        {QStringLiteral("cy"), 1.0},
-        {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
-        {QStringLiteral("camera_center"), QJsonArray{static_cast<double>(frameIndex), 0.0, 0.0}}};
-    return true;
-}
-
-xjw::image_matching::PairMatchData makeVerifiedPair(const QString& image0,
-                                                    const QString& image1,
-                                                    const QVector<QPointF>& points0,
-                                                    const QVector<QPointF>& points1,
-                                                    const QVector<int>& featureIds0,
-                                                    const QVector<int>& featureIds1)
-{
-    EXPECT_EQ(points0.size(), points1.size());
-    EXPECT_EQ(points0.size(), featureIds0.size());
-    EXPECT_EQ(points0.size(), featureIds1.size());
-
-    xjw::image_matching::PairMatchData pair;
-    pair.image0 = xjw::image_matching::ImageMatchFile::identityForImage(image0, 1000, 800);
-    pair.image1 = xjw::image_matching::ImageMatchFile::identityForImage(image1, 1000, 800);
-    pair.algorithmId = QStringLiteral("sift-lightglue");
-    pair.algorithmVersion = 1;
-    pair.rawMatchCount = static_cast<std::uint32_t>(points0.size());
-    pair.geometryInlierCount = pair.rawMatchCount;
-    pair.tiePointMatchCount = pair.rawMatchCount;
-    pair.geometryPassed = true;
-    pair.geometryModel = xjw::image_matching::GeometryModel::Fundamental;
-    for (int index = 0; index < points0.size(); ++index)
-    {
-        xjw::image_matching::PairCorrespondence correspondence;
-        correspondence.observation0.featureId = static_cast<std::uint32_t>(featureIds0.at(index));
-        correspondence.observation0.x = static_cast<float>(points0.at(index).x());
-        correspondence.observation0.y = static_cast<float>(points0.at(index).y());
-        correspondence.observation1.featureId = static_cast<std::uint32_t>(featureIds1.at(index));
-        correspondence.observation1.x = static_cast<float>(points1.at(index).x());
-        correspondence.observation1.y = static_cast<float>(points1.at(index).y());
-        correspondence.confidence = 1.0f;
-        correspondence.residualPixels = 0.0f;
-        correspondence.flags = xjw::image_matching::MatchRecordFlag::GeometryInlier |
-                               xjw::image_matching::MatchRecordFlag::InTiePointTrack;
-        pair.correspondences.push_back(correspondence);
-    }
-    return pair;
-}
-
-QJsonArray imageMatchResultRecords(const xjw::image_matching::ImageMatchRepository& repository,
-                                   const QStringList& images)
-{
-    QJsonArray records;
-    for (const QString& image : images)
-    {
-        records.append(
-            QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("output"), repository.shardPath(image)}});
-    }
-    return records;
-}
-
-QLineEdit* findLineEditByPlaceholder(QWidget* root, const QString& text)
-{
-    const QList<QLineEdit*> edits = root->findChildren<QLineEdit*>();
-    for (QLineEdit* edit : edits)
-    {
-        if (edit->placeholderText().contains(text))
+        const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
+        double uv[2] = {0.0, 0.0};
+        if (!camera.projectWorldPoint(worldPoint, uv))
         {
-            return edit;
+            return false;
         }
+
+        *u = uv[0];
+        *v = uv[1];
+        return true;
     }
-    return nullptr;
-}
 
-QLineEdit* findModelPathEdit(QWidget* root)
-{
-    return findLineEditByPlaceholder(root, QStringLiteral("模型路径"));
-}
-
-QToolButton* findToolButton(QWidget* root, const QString& text)
-{
-    const QList<QToolButton*> buttons = root->findChildren<QToolButton*>();
-    for (QToolButton* button : buttons)
+    QMenu* findTopLevelMenuByTitle(QMenuBar* menuBar, const QString& title)
     {
-        if (button->text() == text)
+        if (!menuBar)
         {
-            return button;
+            return nullptr;
         }
+
+        for (QAction* action : menuBar->actions())
+        {
+            if (action && action->menu() && action->menu()->title() == title)
+            {
+                return action->menu();
+            }
+        }
+
+        return nullptr;
     }
-    return nullptr;
-}
 
-QLabel* findLabelContaining(QWidget* root, const QString& text)
-{
-    const QList<QLabel*> labels = root->findChildren<QLabel*>();
-    for (QLabel* label : labels)
+    QMenu* findSubMenuByTitle(QMenu* menu, const QString& title)
     {
-        if (label->text().contains(text))
+        if (!menu)
         {
-            return label;
+            return nullptr;
         }
+
+        for (QAction* action : menu->actions())
+        {
+            if (action && action->menu() && action->menu()->title() == title)
+            {
+                return action->menu();
+            }
+        }
+
+        return nullptr;
     }
-    return nullptr;
-}
 
-QString readProjectSourceFile(const QString& relativePath)
-{
-    const QDir projectRoot(QFileInfo(QStringLiteral(TEST_DATA_DIR)).absoluteDir().absolutePath());
-    const auto readOne = [&projectRoot](const QString& path)
+    QStringList directActionTexts(QMenu* menu)
     {
-        QFile file(projectRoot.filePath(path));
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        QStringList texts;
+        if (!menu)
         {
-            return QString();
+            return texts;
         }
-        return QString::fromUtf8(file.readAll());
+
+        for (QAction* action : menu->actions())
+        {
+            if (action && !action->isSeparator() && !action->menu())
+            {
+                texts.push_back(action->text());
+            }
+        }
+
+        return texts;
+    }
+
+    QString runtimePythonRelativePath()
+    {
+#ifdef Q_OS_WIN
+        return QStringLiteral(".venv/Scripts/python.exe");
+#else
+        return QStringLiteral(".venv/bin/python");
+#endif
+    }
+
+    QString createFakeRuntimePython(const QString& sourceRoot)
+    {
+        const QString pythonPath = QDir(sourceRoot).filePath(runtimePythonRelativePath());
+        QDir().mkpath(QFileInfo(pythonPath).absolutePath());
+        QFile file(pythonPath);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("python");
+        file.close();
+        return pythonPath;
+    }
+
+    class ScopedEnvVar
+    {
+    public:
+        explicit ScopedEnvVar(const char* name)
+            : _name(name), _hadPrevious(qEnvironmentVariableIsSet(name)), _previous(qgetenv(name))
+        {
+            qunsetenv(_name);
+        }
+
+        ScopedEnvVar(const char* name, const QString& value)
+            : _name(name), _hadPrevious(qEnvironmentVariableIsSet(name)), _previous(qgetenv(name))
+        {
+            qputenv(_name, value.toUtf8());
+        }
+
+        ~ScopedEnvVar()
+        {
+            if (_hadPrevious)
+            {
+                qputenv(_name, _previous);
+            }
+            else
+            {
+                qunsetenv(_name);
+            }
+        }
+
+    private:
+        const char* _name;
+        bool _hadPrevious = false;
+        QByteArray _previous;
     };
 
-    QString source = readOne(relativePath);
-    if (relativePath == QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
+    void writeMinimalTsai(const QString& path, double fu, double cx)
     {
-        source += QLatin1Char('\n') + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetOverlay.cpp"));
-        source += QLatin1Char('\n') + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetLegends.cpp"));
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << "VERSION_3\n";
+        out << "PINHOLE\n";
+        out << "TSAI\n";
+        out << "fu = " << QString::number(fu, 'f', 8) << "\n";
+        out << "fv = " << QString::number(fu, 'f', 8) << "\n";
+        out << "cu = " << QString::number(cx, 'f', 8) << "\n";
+        out << "cv = 500\n";
+        out << "u_direction = 1 0 0\n";
+        out << "v_direction = 0 1 0\n";
+        out << "w_direction = 0 0 1\n";
+        out << "pitch = 1\n";
+        out << "k1 = -0.01\n";
+        out << "k2 = 0.02\n";
+        out << "k3 = -0.03\n";
+        out << "p1 = 0.0001\n";
+        out << "p2 = -0.0002\n";
+        out << "C = 1 2 3\n";
+        out << "R = 1 0 0 0 1 0 0 0 1\n";
     }
-    return source;
-}
 
-QString readIncrementalSfmProjectImplementation()
-{
-    return readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp")) +
-           readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfmDetail.cpp")) +
-           readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/InitialPairInitializer.cpp")) +
-           readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/ImageRegistrationEngine.cpp")) +
-           readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/KnownPoseReconstructor.cpp")) +
-           readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/SfmBundleAdjustCoordinator.cpp"));
-}
-
-QJsonArray productionSparsePoints()
-{
-    return QJsonArray{QJsonObject{{QStringLiteral("track_len"), 2}, {QStringLiteral("rms_reproj_px"), 0.8}},
-                      QJsonObject{{QStringLiteral("track_len"), 3}, {QStringLiteral("rms_reproj_px"), 0.6}},
-                      QJsonObject{{QStringLiteral("track_len"), 4}, {QStringLiteral("rms_reproj_px"), 0.7}}};
-}
-
-QJsonObject sparseResultRecord(int index,
-                               const QString& displayName,
-                               const QString& operation,
-                               const QString& operationDisplayName,
-                               int sparsePointCount,
-                               const QJsonObject& quality)
-{
-    QJsonObject record{{QStringLiteral("index"), index},
-                       {QStringLiteral("display_name"), displayName},
-                       {QStringLiteral("operation"), operation},
-                       {QStringLiteral("operation_display_name"), operationDisplayName},
-                       {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("E:/tmp/%1.xyz").arg(displayName)},
-                       {QStringLiteral("sparse_point_count"), sparsePointCount}};
-    return xjw::gui::project::mergeSparseQualityIntoRecord(record, quality);
-}
-
-const xjw::gui::project::ProjectDashboardStep*
-dashboardStepById(const xjw::gui::project::ProjectDashboardSummary& summary, const QString& id)
-{
-    for (const auto& step : summary.workflowSteps)
+    void writeMinimalPointCloudPly(const QString& path, const std::vector<std::array<double, 3>>& points)
     {
-        if (step.id == id)
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << "ply\n"
+            << "format ascii 1.0\n"
+            << "element vertex " << points.size() << "\n"
+            << "property float x\n"
+            << "property float y\n"
+            << "property float z\n"
+            << "end_header\n";
+        for (const auto& point : points)
         {
-            return &step;
+            out << QString::number(point[0], 'f', 6) << ' ' << QString::number(point[1], 'f', 6) << ' '
+                << QString::number(point[2], 'f', 6) << '\n';
         }
     }
-    return nullptr;
-}
+
+    void putU16Le(QByteArray* bytes, qsizetype offset, quint16 value)
+    {
+        ASSERT_TRUE(bytes);
+        ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+        qToLittleEndian<quint16>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
+    }
+
+    void putU32Le(QByteArray* bytes, qsizetype offset, quint32 value)
+    {
+        ASSERT_TRUE(bytes);
+        ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+        qToLittleEndian<quint32>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
+    }
+
+    void putI32Le(QByteArray* bytes, qsizetype offset, qint32 value)
+    {
+        ASSERT_TRUE(bytes);
+        ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+        qToLittleEndian<qint32>(value, reinterpret_cast<uchar*>(bytes->data() + offset));
+    }
+
+    void putF64Le(QByteArray* bytes, qsizetype offset, double value)
+    {
+        ASSERT_TRUE(bytes);
+        ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+        quint64 raw = 0;
+        std::memcpy(&raw, &value, sizeof(value));
+        qToLittleEndian<quint64>(raw, reinterpret_cast<uchar*>(bytes->data() + offset));
+    }
+
+    void writeMinimalPointCloudLas(const QString& path, const std::vector<std::array<double, 3>>& points)
+    {
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+        constexpr qsizetype headerSize = 227;
+        constexpr qsizetype pointRecordLength = 20;
+        constexpr double scale = 0.001;
+
+        QByteArray bytes(headerSize, '\0');
+        bytes[0] = 'L';
+        bytes[1] = 'A';
+        bytes[2] = 'S';
+        bytes[3] = 'F';
+        bytes[24] = 1;
+        bytes[25] = 2;
+        putU16Le(&bytes, 94, static_cast<quint16>(headerSize));
+        putU32Le(&bytes, 96, static_cast<quint32>(headerSize));
+        putU32Le(&bytes, 100, 0);
+        bytes[104] = 0;
+        putU16Le(&bytes, 105, static_cast<quint16>(pointRecordLength));
+        putU32Le(&bytes, 107, static_cast<quint32>(points.size()));
+        putF64Le(&bytes, 131, scale);
+        putF64Le(&bytes, 139, scale);
+        putF64Le(&bytes, 147, scale);
+        putF64Le(&bytes, 155, 0.0);
+        putF64Le(&bytes, 163, 0.0);
+        putF64Le(&bytes, 171, 0.0);
+
+        for (const auto& point : points)
+        {
+            QByteArray record(pointRecordLength, '\0');
+            putI32Le(&record, 0, static_cast<qint32>(std::llround(point[0] / scale)));
+            putI32Le(&record, 4, static_cast<qint32>(std::llround(point[1] / scale)));
+            putI32Le(&record, 8, static_cast<qint32>(std::llround(point[2] / scale)));
+            bytes.append(record);
+        }
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write(bytes), bytes.size());
+    }
+
+    void writeMinimalColoredPointCloudPly(const QString& path,
+                                          const std::vector<std::array<double, 3>>& points,
+                                          const std::vector<std::array<int, 3>>& colors)
+    {
+        ASSERT_EQ(points.size(), colors.size());
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << "ply\n"
+            << "format ascii 1.0\n"
+            << "element vertex " << points.size() << "\n"
+            << "property float x\n"
+            << "property float y\n"
+            << "property float z\n"
+            << "property uchar red\n"
+            << "property uchar green\n"
+            << "property uchar blue\n"
+            << "end_header\n";
+        for (std::size_t i = 0; i < points.size(); ++i)
+        {
+            const auto& point = points[i];
+            const auto& color = colors[i];
+            out << QString::number(point[0], 'f', 6) << ' ' << QString::number(point[1], 'f', 6) << ' '
+                << QString::number(point[2], 'f', 6) << ' ' << color[0] << ' ' << color[1] << ' ' << color[2] << '\n';
+        }
+    }
+
+    void writeMinimalSparseSidecar(const QString& path, const std::vector<int>& trackLens)
+    {
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+        QJsonArray points;
+        for (int i = 0; i < static_cast<int>(trackLens.size()); ++i)
+        {
+            QJsonArray xyz;
+            xyz.append(static_cast<double>(i));
+            xyz.append(0.0);
+            xyz.append(0.0);
+
+            QJsonObject point;
+            point[QStringLiteral("point_xyz")] = xyz;
+            point[QStringLiteral("rms_reproj_px")] = 0.5;
+            point[QStringLiteral("min_tri_angle_deg")] = 3.0;
+            point[QStringLiteral("track_len")] = trackLens[static_cast<std::size_t>(i)];
+            points.append(point);
+        }
+
+        QJsonObject root;
+        root[QStringLiteral("quality_metrics_available")] = true;
+        root[QStringLiteral("point_count")] = static_cast<int>(trackLens.size());
+        root[QStringLiteral("points")] = points;
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    TEST(ProjectCameraImportServiceTest, BatchImportRecordsActualTsaiSourceFileInCameraMeta)
+    {
+        QTemporaryDir tempDir;
+        ASSERT_TRUE(tempDir.isValid());
+
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.JPG"));
+        QFile imageFile(imagePath);
+        ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+        imageFile.write("jpg");
+        imageFile.close();
+
+        const QString tsaiPath = QDir(tempDir.path()).filePath(QStringLiteral("cameras/IMG_001.tsai"));
+        writeMinimalTsai(tsaiPath, 1234.0, 640.0);
+
+        xjw::gui::project::BatchCameraImportResult result;
+        const auto status = xjw::gui::project::buildBatchCameraImport(
+            QFileInfo(tsaiPath).absolutePath(), QStringList{imagePath}, &result);
+
+        ASSERT_EQ(status, xjw::gui::project::BatchCameraImportStatus::Ok);
+        ASSERT_EQ(result.cameraMetaByImage.size(), 1);
+        const QJsonObject camera = result.cameraMetaByImage.constBegin().value();
+        EXPECT_EQ(QDir::cleanPath(camera.value(QStringLiteral("source_file")).toString()),
+                  QDir::cleanPath(QFileInfo(tsaiPath).absoluteFilePath()));
+        EXPECT_DOUBLE_EQ(camera.value(QStringLiteral("fu")).toDouble(), 1234.0);
+        EXPECT_NEAR(camera.value(QStringLiteral("k1")).toDouble(), -0.01, 1e-12);
+    }
+
+    TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFile)
+    {
+        QTemporaryDir tempDir;
+        ASSERT_TRUE(tempDir.isValid());
+
+        const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("camera_meta.plascan"));
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_002.JPG"));
+        QFile imageFile(imagePath);
+        ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+        imageFile.write("jpg");
+        imageFile.close();
+
+        ProjectData data;
+        ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_meta")));
+        ASSERT_TRUE(data.addImages(QStringList{imagePath}));
+
+        QJsonObject core = data.coreFilesMeta();
+        QJsonArray images = core.value(QStringLiteral("images")).toArray();
+        ASSERT_EQ(images.size(), 1);
+        QJsonObject imageObject = images.at(0).toObject();
+        const QString projectImagePath = imageObject.value(QStringLiteral("path")).toString();
+        ASSERT_FALSE(projectImagePath.isEmpty());
+        imageObject[QStringLiteral("camera_file")] = QStringLiteral("stale/old.tsai");
+        images[0] = imageObject;
+        core[QStringLiteral("images")] = images;
+        data.updateMetadata(core, false);
+
+        QJsonObject camera;
+        camera[QStringLiteral("model")] = QStringLiteral("tsai");
+        camera[QStringLiteral("source_file")] = QStringLiteral("fresh/new.tsai");
+        camera[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
+        camera[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
+        camera[QStringLiteral("pitch")] = 1.0;
+        camera[QStringLiteral("fu")] = 1111.0;
+        camera[QStringLiteral("fv")] = 1111.0;
+        camera[QStringLiteral("cu")] = 500.0;
+        camera[QStringLiteral("cv")] = 400.0;
+        camera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
+        camera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+
+        int updated = 0;
+        QString error;
+        ASSERT_TRUE(data.setImageCameras(QMap<QString, QJsonObject>{{projectImagePath, camera}}, &updated, &error))
+            << error.toStdString();
+        EXPECT_EQ(updated, 1);
+
+        const QJsonObject updatedImage =
+            data.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
+        EXPECT_FALSE(updatedImage.contains(QStringLiteral("camera_file")));
+        EXPECT_EQ(
+            updatedImage.value(QStringLiteral("camera")).toObject().value(QStringLiteral("source_file")).toString(),
+            QStringLiteral("fresh/new.tsai"));
+    }
+
+    TEST(ProjectDataCameraMetadataTest, ClearImageCamerasSkipsImagesWithoutCamera)
+    {
+        QTemporaryDir tempDir;
+        ASSERT_TRUE(tempDir.isValid());
+        const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("camera_clear_noop.plascan"));
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_004.JPG"));
+        QFile imageFile(imagePath);
+        ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+        ASSERT_GT(imageFile.write("jpg"), 0);
+        imageFile.close();
+
+        ProjectData data;
+        ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_clear_noop")));
+        ASSERT_TRUE(data.addImages(QStringList{imagePath}));
+        const QJsonObject before = data.coreFilesMeta();
+        const QString storedPath =
+            before.value(QStringLiteral("images")).toArray().at(0).toObject().value(QStringLiteral("path")).toString();
+
+        int cleared = -1;
+        QString error;
+        EXPECT_FALSE(data.clearImageCameras(QStringList{storedPath}, &cleared, &error));
+        EXPECT_EQ(cleared, 0);
+        EXPECT_EQ(data.coreFilesMeta(), before);
+    }
+
+    TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
+    {
+        QTemporaryDir tempDir;
+        ASSERT_TRUE(tempDir.isValid());
+
+        const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("async_open.plascan"));
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_003.JPG"));
+        QFile imageFile(imagePath);
+        ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+        imageFile.write("jpg");
+        imageFile.close();
+
+        ProjectData source;
+        ASSERT_TRUE(source.createProject(projectPath, QStringLiteral("async_open")));
+        ASSERT_TRUE(source.addImages(QStringList{imagePath}));
+        ASSERT_TRUE(
+            source.appendResultRecord(QStringLiteral("image_match_results"),
+                                      QJsonObject{{QStringLiteral("image"), imagePath},
+                                                  {QStringLiteral("output"), QStringLiteral("matches/IMG_003.pimatch")},
+                                                  {QStringLiteral("neighbors"), QJsonArray{}}},
+                                      true));
+        QString saveError;
+        ASSERT_TRUE(source.saveProject(&saveError)) << saveError.toStdString();
+
+        const ProjectOpenSnapshot openSnapshot = ProjectData::loadProjectOpenSnapshot(projectPath);
+        ASSERT_TRUE(openSnapshot.success) << openSnapshot.errorMessage.toStdString();
+        EXPECT_EQ(openSnapshot.projectPath, projectPath);
+        EXPECT_EQ(openSnapshot.filesMeta.value(QStringLiteral("images")).toArray().size(), 1);
+        source.closeProject();
+
+        ProjectData reopened;
+        QString error;
+        ASSERT_TRUE(reopened.openProjectFromSnapshot(openSnapshot, &error)) << error.toStdString();
+        EXPECT_EQ(reopened.currentProjectPath(), projectPath);
+        EXPECT_EQ(reopened.coreFilesMeta().value(QStringLiteral("images")).toArray().size(), 1);
+
+        const ProjectResultsSnapshot resultsSnapshot = ProjectData::loadProjectResultsSnapshot(projectPath);
+        ASSERT_TRUE(resultsSnapshot.success) << resultsSnapshot.errorMessage.toStdString();
+        ASSERT_TRUE(reopened.applyResultsSnapshot(resultsSnapshot, &error)) << error.toStdString();
+        EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
+    }
+
+    QJsonObject buildImageEntry(const QString& path, const xjw::FramePinholeCamera& camera)
+    {
+        QJsonObject imageObject;
+        imageObject[QStringLiteral("path")] = path;
+        imageObject[QStringLiteral("camera")] = xjw::common::project::cameraToJson(camera);
+        return imageObject;
+    }
+
+    bool addCurrentMvsRasterContractFixture(const QString& batchDirectory, int frameIndex, QJsonObject* record)
+    {
+        if (!record)
+        {
+            return false;
+        }
+
+        const QString preparedDirectory = QDir(batchDirectory).filePath(QStringLiteral("prepared_images"));
+        if (!QDir().mkpath(preparedDirectory))
+        {
+            return false;
+        }
+
+        const QString preparedImage =
+            QDir(preparedDirectory).filePath(QStringLiteral("frame_%1.png").arg(frameIndex, 6, 10, QLatin1Char('0')));
+        const QString preparedValidMask =
+            QDir(preparedDirectory)
+                .filePath(QStringLiteral("frame_%1_valid.png").arg(frameIndex, 6, 10, QLatin1Char('0')));
+        for (const QString& path : {preparedImage, preparedValidMask})
+        {
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write("prepared") <= 0)
+            {
+                return false;
+            }
+        }
+
+        (*record)[QStringLiteral("prepared_image")] = preparedImage;
+        (*record)[QStringLiteral("prepared_valid_mask_path")] = preparedValidMask;
+        (*record)[QStringLiteral("prepared_camera_model")] = QJsonObject{
+            {QStringLiteral("fx"), 900.0},
+            {QStringLiteral("fy"), 910.0},
+            {QStringLiteral("cx"), 1.0},
+            {QStringLiteral("cy"), 1.0},
+            {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
+            {QStringLiteral("camera_center"), QJsonArray{static_cast<double>(frameIndex), 0.0, 0.0}}};
+        return true;
+    }
+
+    xjw::image_matching::PairMatchData makeVerifiedPair(const QString& image0,
+                                                        const QString& image1,
+                                                        const QVector<QPointF>& points0,
+                                                        const QVector<QPointF>& points1,
+                                                        const QVector<int>& featureIds0,
+                                                        const QVector<int>& featureIds1)
+    {
+        EXPECT_EQ(points0.size(), points1.size());
+        EXPECT_EQ(points0.size(), featureIds0.size());
+        EXPECT_EQ(points0.size(), featureIds1.size());
+
+        xjw::image_matching::PairMatchData pair;
+        pair.image0 = xjw::image_matching::ImageMatchFile::identityForImage(image0, 1000, 800);
+        pair.image1 = xjw::image_matching::ImageMatchFile::identityForImage(image1, 1000, 800);
+        pair.algorithmId = QStringLiteral("sift-lightglue");
+        pair.algorithmVersion = 1;
+        pair.rawMatchCount = static_cast<std::uint32_t>(points0.size());
+        pair.geometryInlierCount = pair.rawMatchCount;
+        pair.tiePointMatchCount = pair.rawMatchCount;
+        pair.geometryPassed = true;
+        pair.geometryModel = xjw::image_matching::GeometryModel::Fundamental;
+        for (int index = 0; index < points0.size(); ++index)
+        {
+            xjw::image_matching::PairCorrespondence correspondence;
+            correspondence.observation0.featureId = static_cast<std::uint32_t>(featureIds0.at(index));
+            correspondence.observation0.x = static_cast<float>(points0.at(index).x());
+            correspondence.observation0.y = static_cast<float>(points0.at(index).y());
+            correspondence.observation1.featureId = static_cast<std::uint32_t>(featureIds1.at(index));
+            correspondence.observation1.x = static_cast<float>(points1.at(index).x());
+            correspondence.observation1.y = static_cast<float>(points1.at(index).y());
+            correspondence.confidence = 1.0f;
+            correspondence.residualPixels = 0.0f;
+            correspondence.flags = xjw::image_matching::MatchRecordFlag::GeometryInlier |
+                                   xjw::image_matching::MatchRecordFlag::InTiePointTrack;
+            pair.correspondences.push_back(correspondence);
+        }
+        return pair;
+    }
+
+    QJsonArray imageMatchResultRecords(const xjw::image_matching::ImageMatchRepository& repository,
+                                       const QStringList& images)
+    {
+        QJsonArray records;
+        for (const QString& image : images)
+        {
+            records.append(
+                QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("output"), repository.shardPath(image)}});
+        }
+        return records;
+    }
+
+    QLineEdit* findLineEditByPlaceholder(QWidget* root, const QString& text)
+    {
+        const QList<QLineEdit*> edits = root->findChildren<QLineEdit*>();
+        for (QLineEdit* edit : edits)
+        {
+            if (edit->placeholderText().contains(text))
+            {
+                return edit;
+            }
+        }
+        return nullptr;
+    }
+
+    QLineEdit* findModelPathEdit(QWidget* root)
+    {
+        return findLineEditByPlaceholder(root, QStringLiteral("模型路径"));
+    }
+
+    QToolButton* findToolButton(QWidget* root, const QString& text)
+    {
+        const QList<QToolButton*> buttons = root->findChildren<QToolButton*>();
+        for (QToolButton* button : buttons)
+        {
+            if (button->text() == text)
+            {
+                return button;
+            }
+        }
+        return nullptr;
+    }
+
+    QLabel* findLabelContaining(QWidget* root, const QString& text)
+    {
+        const QList<QLabel*> labels = root->findChildren<QLabel*>();
+        for (QLabel* label : labels)
+        {
+            if (label->text().contains(text))
+            {
+                return label;
+            }
+        }
+        return nullptr;
+    }
+
+    QString readProjectSourceFile(const QString& relativePath)
+    {
+        const QDir projectRoot(QFileInfo(QStringLiteral(TEST_DATA_DIR)).absoluteDir().absolutePath());
+        const auto readOne = [&projectRoot](const QString& path)
+        {
+            QFile file(projectRoot.filePath(path));
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            {
+                return QString();
+            }
+            return QString::fromUtf8(file.readAll());
+        };
+
+        QString source = readOne(relativePath);
+        if (relativePath == QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
+        {
+            source += QLatin1Char('\n') + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetOverlay.cpp"));
+            source += QLatin1Char('\n') + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetLegends.cpp"));
+        }
+        return source;
+    }
+
+    QString readIncrementalSfmProjectImplementation()
+    {
+        return readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp")) +
+               readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfmDetail.cpp")) +
+               readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/InitialPairInitializer.cpp")) +
+               readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/ImageRegistrationEngine.cpp")) +
+               readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/KnownPoseReconstructor.cpp")) +
+               readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/SfmBundleAdjustCoordinator.cpp"));
+    }
+
+    QJsonArray productionSparsePoints()
+    {
+        return QJsonArray{QJsonObject{{QStringLiteral("track_len"), 2}, {QStringLiteral("rms_reproj_px"), 0.8}},
+                          QJsonObject{{QStringLiteral("track_len"), 3}, {QStringLiteral("rms_reproj_px"), 0.6}},
+                          QJsonObject{{QStringLiteral("track_len"), 4}, {QStringLiteral("rms_reproj_px"), 0.7}}};
+    }
+
+    QJsonObject sparseResultRecord(int index,
+                                   const QString& displayName,
+                                   const QString& operation,
+                                   const QString& operationDisplayName,
+                                   int sparsePointCount,
+                                   const QJsonObject& quality)
+    {
+        QJsonObject record{{QStringLiteral("index"), index},
+                           {QStringLiteral("display_name"), displayName},
+                           {QStringLiteral("operation"), operation},
+                           {QStringLiteral("operation_display_name"), operationDisplayName},
+                           {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("E:/tmp/%1.xyz").arg(displayName)},
+                           {QStringLiteral("sparse_point_count"), sparsePointCount}};
+        return xjw::gui::project::mergeSparseQualityIntoRecord(record, quality);
+    }
+
+    const xjw::gui::project::ProjectDashboardStep*
+    dashboardStepById(const xjw::gui::project::ProjectDashboardSummary& summary, const QString& id)
+    {
+        for (const auto& step : summary.workflowSteps)
+        {
+            if (step.id == id)
+            {
+                return &step;
+            }
+        }
+        return nullptr;
+    }
 
 } // namespace
 
@@ -3238,12 +3249,38 @@ TEST(ReferencePanelWidgetTest, KeepsCameraReferenceControlsReadableInNarrowDock)
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ReferencePanelWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("referenceImportToolbar")));
-    EXPECT_TRUE(source.contains(QStringLiteral("referenceViewToolbar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceActionToolbar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceImportButton")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceMoreButton")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceModeTabs")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceDataTabs")));
     EXPECT_TRUE(source.contains(QStringLiteral("setTextElideMode(Qt::ElideMiddle)")));
     EXPECT_TRUE(source.contains(QStringLiteral("header()->resizeSection(0, 168)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraSection->setMinimumHeight(150)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("splitter->setStretchFactor(0, 2)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("setMinimumHeight(150)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("QSplitter")));
+}
+
+TEST(ReferencePanelWidgetTest, ShowsCompactTabsAtDockWidth)
+{
+    ReferencePanelWidget widget;
+    widget.resize(320, 600);
+    widget.show();
+    QApplication::processEvents();
+
+    auto* modeTabs = widget.findChild<QTabBar*>(QStringLiteral("referenceModeTabs"));
+    auto* dataTabs = widget.findChild<QTabWidget*>(QStringLiteral("referenceDataTabs"));
+    auto* actionToolbar = widget.findChild<QToolBar*>(QStringLiteral("referenceActionToolbar"));
+    ASSERT_NE(modeTabs, nullptr);
+    ASSERT_NE(dataTabs, nullptr);
+    ASSERT_NE(actionToolbar, nullptr);
+    EXPECT_EQ(modeTabs->count(), 3);
+    EXPECT_EQ(dataTabs->count(), 3);
+    EXPECT_LE(actionToolbar->sizeHint().width(), widget.width());
+    EXPECT_GT(dataTabs->height(), 300);
+
+    modeTabs->setCurrentIndex(2);
+    QApplication::processEvents();
+    EXPECT_EQ(modeTabs->currentIndex(), 2);
 }
 
 TEST(MainWindowLayoutTest, SuppressesPropertiesDockOnReferenceTab)
@@ -3570,10 +3607,7 @@ TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
 
     const QStringList expectedMembers = {
         QStringLiteral("Ui::WorkspaceCenterWidget *_ui = nullptr;"),
-        QStringLiteral("QPushButton *_modelBtn = nullptr;"),
-        QStringLiteral("QPushButton *_imageBtn = nullptr;"),
-        QStringLiteral("QPushButton *_compareBtn = nullptr;"),
-        QStringLiteral("QPushButton *_obsNetBtn = nullptr;"),
+        QStringLiteral("QTabBar* _documentTabs = nullptr;"),
         QStringLiteral("QStackedWidget *_stack = nullptr;"),
         QStringLiteral("CameraSceneWidget *_modelView = nullptr;"),
         QStringLiteral("CanvasWidget *_canvas = nullptr;"),
@@ -3610,16 +3644,39 @@ TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
     }
 
-    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_modelBtn"))) << "Qt Designer object name must stay stable";
-    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_imageBtn"))) << "Qt Designer object name must stay stable";
-    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_compareBtn"))) << "Qt Designer object name must stay stable";
-    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_obsNetBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_documentTabs")));
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_stack"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_modelView"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_canvas"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_dualImageViewer")))
         << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_obsNetView"))) << "Qt Designer object name must stay stable";
+}
+
+TEST(WorkspaceCenterWidgetTest, UsesClosableDocumentTabsForOnDemandViews)
+{
+    WorkspaceCenterWidget widget;
+    auto* tabs = widget.findChild<QTabBar*>(QStringLiteral("m_documentTabs"));
+    auto* stack = widget.findChild<QStackedWidget*>(QStringLiteral("m_stack"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_NE(stack, nullptr);
+    ASSERT_EQ(tabs->count(), 4);
+    EXPECT_TRUE(tabs->isTabVisible(0));
+    EXPECT_FALSE(tabs->isTabVisible(1));
+    EXPECT_FALSE(tabs->isTabVisible(2));
+    EXPECT_FALSE(tabs->isTabVisible(3));
+    EXPECT_EQ(widget.currentViewMode(), WorkspaceCenterWidget::ViewMode::Model);
+
+    widget.showImageView(QString());
+    EXPECT_TRUE(tabs->isTabVisible(1));
+    EXPECT_EQ(tabs->currentIndex(), 1);
+    EXPECT_EQ(stack->currentIndex(), 1);
+    EXPECT_EQ(widget.currentViewMode(), WorkspaceCenterWidget::ViewMode::Image);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(tabs, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, 1)));
+    EXPECT_FALSE(tabs->isTabVisible(1));
+    EXPECT_EQ(tabs->currentIndex(), 0);
+    EXPECT_EQ(widget.currentViewMode(), WorkspaceCenterWidget::ViewMode::Model);
 }
 
 TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
@@ -3630,10 +3687,12 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("QTextEdit *_text{nullptr};"),
-        QStringLiteral("QPushButton *_clearBtn{nullptr};"),
-        QStringLiteral("QPushButton *_saveBtn{nullptr};"),
-        QStringLiteral("QWidget *_toolOverlay{nullptr};"),
+        QStringLiteral("LogEntryModel* _model{};"),
+        QStringLiteral("LogFilterProxyModel* _proxy{};"),
+        QStringLiteral("QTableView* _table{};"),
+        QStringLiteral("QComboBox* _sessionCombo{};"),
+        QStringLiteral("QLineEdit* _searchEdit{};"),
+        QStringLiteral("QToolButton* _followButton{};"),
         QStringLiteral("int _sinkId{0};"),
     };
     for (const QString& expectedMember : expectedMembers)
@@ -3656,19 +3715,65 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
     }
 
-    EXPECT_TRUE(source.contains(QStringLiteral("consoleToolOverlay")));
-    EXPECT_TRUE(source.contains(QStringLiteral("new QPushButton(_toolOverlay)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("consoleSessionCombo")));
+    EXPECT_TRUE(source.contains(QStringLiteral("consoleSearchEdit")));
+    EXPECT_TRUE(source.contains(QStringLiteral("consoleFollowButton")));
     EXPECT_TRUE(source.contains(QStringLiteral("clearConsoleButton")));
     EXPECT_TRUE(source.contains(QStringLiteral("saveConsoleButton")));
-    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_text"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.logTable")));
 
     const QString ui = readProjectSourceFile(QStringLiteral("src/gui/panels/LogPanel.ui"));
-    EXPECT_FALSE(ui.contains(QStringLiteral("levelLabel")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("m_levelCombo")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("级别:")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("topLayout")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("m_clearBtn")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("m_saveBtn")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("consoleToolbarLayout")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("sessionCombo")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("levelCombo")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("searchEdit")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("logTable")));
+}
+
+TEST(LogEntryModelTest, ParsesLegacyTextAndFiltersWithoutDiscardingEntries)
+{
+    const QByteArray text("[2026-08-30T10:00:00] [INFO] PlaScan GUI started\n"
+                          "[2026-08-30T10:00:01] [DEBUG] [MVS] depth probe\n"
+                          "[2026-08-30T10:00:02] [ERROR] failed to load model\n");
+    const std::vector<Logger::Entry> entries = LogEntryModel::parseLegacyText(text, "current-session");
+    ASSERT_EQ(entries.size(), 3u);
+    EXPECT_EQ(entries[1].category, "MVS");
+    EXPECT_EQ(entries[2].level, Logger::Error);
+
+    LogEntryModel model;
+    LogFilterProxyModel proxy;
+    proxy.setSourceModel(&model);
+    model.appendEntries(entries);
+    EXPECT_EQ(model.rowCount(), 3);
+    proxy.setSessionId(QStringLiteral("current-session"));
+    proxy.setMinimumLevel(Logger::Info);
+    EXPECT_EQ(proxy.rowCount(), 2);
+    proxy.setSearchText(QStringLiteral("failed"));
+    EXPECT_EQ(proxy.rowCount(), 1);
+    EXPECT_EQ(model.rowCount(), 3);
+}
+
+TEST(LogPanelTest, ProvidesStructuredConsoleControlsAndNonDestructiveViewClear)
+{
+    LogPanel panel;
+    ASSERT_NE(panel.findChild<QTableView*>(QStringLiteral("consoleLogTable")), nullptr);
+    ASSERT_NE(panel.findChild<QComboBox*>(QStringLiteral("consoleSessionCombo")), nullptr);
+    ASSERT_NE(panel.findChild<QComboBox*>(QStringLiteral("consoleLevelCombo")), nullptr);
+    ASSERT_NE(panel.findChild<QLineEdit*>(QStringLiteral("consoleSearchEdit")), nullptr);
+    auto* follow = panel.findChild<QToolButton*>(QStringLiteral("consoleFollowButton"));
+    ASSERT_NE(follow, nullptr);
+    EXPECT_TRUE(follow->isChecked());
+
+    panel.appendLog(QStringLiteral("manual test\n"), static_cast<int>(Logger::Info));
+    auto* table = panel.findChild<QTableView*>(QStringLiteral("consoleLogTable"));
+    ASSERT_GT(table->model()->rowCount(), 0);
+    table->selectRow(table->model()->rowCount() - 1);
+    auto* copyAction = panel.findChild<QAction*>(QStringLiteral("copyConsoleSelectionAction"));
+    ASSERT_NE(copyAction, nullptr);
+    copyAction->trigger();
+    EXPECT_TRUE(QApplication::clipboard()->text().contains(QStringLiteral("manual test")));
+    panel.clearLogs();
+    EXPECT_EQ(table->model()->rowCount(), 0);
 }
 
 TEST(CodeStyleTest, DataTreeWidgetUsesLowerCamelPrivateMemberNames)
@@ -3874,8 +3979,6 @@ TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
     const QStringList expectedMembers = {
         QStringLiteral("QLabel *_summaryLabel = nullptr;"),
         QStringLiteral("QLabel *_referenceLabel = nullptr;"),
-        QStringLiteral("QLabel *_taskLabel = nullptr;"),
-        QStringLiteral("QTableWidget *_taskTable = nullptr;"),
         QStringLiteral("QTableWidget *_referenceTable = nullptr;"),
         QStringLiteral("QTableWidget *_workflowTable = nullptr;"),
         QStringLiteral("QTableWidget *_qualityTable = nullptr;"),
@@ -3965,27 +4068,24 @@ TEST(CodeStyleTest, StaticCameraKeepsPositiveDepthValueSemantics)
     EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeCamera FramePinholeCamera::scaledIntrinsics")));
 }
 
-TEST(CodeStyleTest, MultiViewTrackBuilderUsesLowerCamelPrivateMemberNames)
+TEST(CodeStyleTest, ReferenceTrackBuilderUsesLowerCamelPrivateMemberNames)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/MultiViewTrackBuilder.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/MultiViewTrackBuilder.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/ReferenceTrackBuilder.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/ReferenceTrackBuilder.cpp"));
     const QString disjointSetHeader = readProjectSourceFile(QStringLiteral("src/core/sfm/common/DisjointSet.h"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(disjointSetHeader.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("std::vector<Edge> _edges;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("std::map<ImageId, std::vector<FeatureKeypoint>> _keypointsByImage;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("detail::DisjointSet disjointSet;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("std::map<ObservationKey, int> indexByKey;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("std::vector<ObservationKey> keys;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::map<ImageId, detail::ReferenceTrackImageFeatures> _images;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MinimumRootDisjointSet sets")));
     EXPECT_TRUE(disjointSetHeader.contains(QStringLiteral("std::vector<int> _parent;")));
     EXPECT_TRUE(disjointSetHeader.contains(QStringLiteral("std::vector<int> _rank;")));
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_edges"),
-        QStringLiteral("m_indexByKey"),
-        QStringLiteral("m_keys"),
+        QStringLiteral("m_images"),
         QStringLiteral("m_parent"),
     };
     for (const QString& oldName : oldMemberNames)
@@ -4126,19 +4226,6 @@ TEST(CodeStyleTest, OverlapAnalyzerSourceKeepsLinesWithinStyleLimit)
     {
         EXPECT_LE(lines.at(i).size(), 120)
             << "OverlapAnalyzer.cpp:" << (i + 1) << " has " << lines.at(i).size() << " characters";
-    }
-}
-
-TEST(CodeStyleTest, VocabularyOverlapRetrieverSourceKeepsLinesWithinStyleLimit)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/overlap/VocabularyOverlapRetriever.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList lines = source.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        EXPECT_LE(lines.at(i).size(), 120)
-            << "VocabularyOverlapRetriever.cpp:" << (i + 1) << " has " << lines.at(i).size() << " characters";
     }
 }
 
@@ -5308,6 +5395,87 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalAppliesNewQualityCriteriaTogeth
     EXPECT_EQ(outputPoints.first().toObject(), sourcePoints.at(2).toObject());
 }
 
+TEST(SparsePointWorkflowUtilsTest, CleanTiePointsUsesReferenceMetricsAndInclusiveImageCount)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sparse_cloud_points.json"));
+    const auto cleanMetrics = [](double reprojectionError, int imageCount, bool infiniteUncertainty)
+    {
+        QJsonObject metrics{{QStringLiteral("reprojection_error"), reprojectionError},
+                            {QStringLiteral("has_projection_geometry"), true},
+                            {QStringLiteral("image_count"), imageCount},
+                            {QStringLiteral("projection_accuracy"), 1.0}};
+        if (infiniteUncertainty)
+        {
+            metrics[QStringLiteral("reconstruction_uncertainty_infinite")] = true;
+        }
+        else
+        {
+            metrics[QStringLiteral("reconstruction_uncertainty")] = 5.0;
+        }
+        return metrics;
+    };
+    const auto point =
+        [&cleanMetrics](double x, double cleanReprojectionError, int cleanImageCount, bool infiniteUncertainty)
+    {
+        return QJsonObject{{QStringLiteral("point_xyz"), QJsonArray{x, 0.0, 0.0}},
+                           {QStringLiteral("track_len"), 9},
+                           {QStringLiteral("rms_reproj_px"), 0.1},
+                           {QStringLiteral("min_tri_angle_deg"), 4.0},
+                           {QStringLiteral("reconstruction_uncertainty"), 1.0},
+                           {QStringLiteral("projection_accuracy"), 1.0},
+                           {QStringLiteral("clean_tie_points"),
+                            cleanMetrics(cleanReprojectionError, cleanImageCount, infiniteUncertainty)}};
+    };
+    const QJsonArray sourcePoints{
+        point(0.0, 2.0, 9, false), point(1.0, 0.5, 2, false), point(2.0, 0.5, 3, false), point(3.0, 0.5, 3, true)};
+    QString writeError;
+    ASSERT_TRUE(xjw::core::project::writeJsonObjectFile(sidecarPath,
+                                                        QJsonObject{{QStringLiteral("points"), sourcePoints},
+                                                                    {QStringLiteral("quality_metrics_available"), true},
+                                                                    {QStringLiteral("clean_tie_points_metric_contract"),
+                                                                     QStringLiteral("metashape-2.3.2-build-22956")}},
+                                                        &writeError))
+        << writeError.toStdString();
+
+    xjw::core::project::SparsePointContext context;
+    context.sidecarPath = sidecarPath;
+    const QJsonObject settings{{QStringLiteral("sourceKind"), QStringLiteral("project_result")},
+                               {QStringLiteral("cleanTiePointsReferenceSemantics"), true},
+                               {QStringLiteral("filterByReprojError"), true},
+                               {QStringLiteral("maxReprojError"), 1.0},
+                               {QStringLiteral("filterByTrackLen"), true},
+                               {QStringLiteral("imageCountLevel"), 2},
+                               {QStringLiteral("minTrackLen"), 3},
+                               {QStringLiteral("filterByTriAngle"), false},
+                               {QStringLiteral("filterByReconstructionUncertainty"), true},
+                               {QStringLiteral("maxReconstructionUncertainty"), 10.0},
+                               {QStringLiteral("filterByProjectionAccuracy"), false},
+                               {QStringLiteral("filterByStatistical"), false},
+                               {QStringLiteral("filterByDensity"), false}};
+    xjw::core::project::SparsePointOperationResult result;
+    QString errorMessage;
+    ASSERT_TRUE(xjw::core::project::runSparsePointOutlierRemoval(
+        context,
+        settings,
+        QDir(tempDir.path()).filePath(QStringLiteral("out_reference_clean")),
+        &result,
+        &errorMessage))
+        << errorMessage.toStdString();
+
+    EXPECT_EQ(result.inputCount, 4);
+    EXPECT_EQ(result.outputCount, 1);
+    QFile outputFile(result.sidecarPath);
+    ASSERT_TRUE(outputFile.open(QIODevice::ReadOnly));
+    const QJsonObject outputRoot = QJsonDocument::fromJson(outputFile.readAll()).object();
+    const QJsonArray outputPoints = outputRoot.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(outputPoints.size(), 1);
+    EXPECT_EQ(outputPoints.first().toObject(), sourcePoints.at(2).toObject());
+    EXPECT_EQ(outputRoot.value(QStringLiteral("clean_tie_points_metric_contract")).toString(),
+              QStringLiteral("metashape-2.3.2-build-22956"));
+}
+
 TEST(MainMenuTest, FileImportMenuExposesReferenceAndCameraActions)
 {
     QMainWindow window;
@@ -6390,7 +6558,7 @@ TEST(MainMenuDepthOverlayToolbarTest, MissingLevelDoesNotDisableDepthOverlayButt
 TEST(FeatureResidualVisualizationTest, ExportsAndLoadsTrueReprojectionVectorsAsynchronously)
 {
     const QString aerialSource =
-        readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/reporting/QualityReportWriter.cpp"));
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     const QString loaderHeader = readProjectSourceFile(QStringLiteral("src/gui/views/FeatureResidualLoader.h"));
     const QString loaderSource = readProjectSourceFile(QStringLiteral("src/gui/views/FeatureResidualLoader.cpp"));
     const QString canvasSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
@@ -6477,6 +6645,40 @@ TEST(FeatureResidualLoaderTest, SelectsOnlyTheCurrentImagesTrueResidualVectors)
     EXPECT_DOUBLE_EQ(residuals.first().magnitudePx, 5.0);
 }
 
+TEST(FeatureResidualLoaderTest, ReadsCompactAerialObservationRows)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sidecarPath = tempDir.filePath(QStringLiteral("compact_points.json"));
+    const QString imagePath = tempDir.filePath(QStringLiteral("frame.jpg"));
+    const QJsonArray images{QJsonObject{{QStringLiteral("image_id"), 7},
+                                        {QStringLiteral("image_path"), imagePath},
+                                        {QStringLiteral("image_name"), QStringLiteral("frame.jpg")}}};
+    const QJsonArray observation{7, 19, 10.0, 20.0, 2.5, 13.0, 24.0};
+    QFile sidecar(sidecarPath);
+    ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(
+        QJsonDocument(QJsonObject{
+                          {QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v2")},
+                          {QStringLiteral("images"), images},
+                          {QStringLiteral("points"),
+                           QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
+                                                  {QStringLiteral("observations"), QJsonArray{observation}}}}},
+                      })
+            .toJson(QJsonDocument::Compact));
+    sidecar.close();
+
+    const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, imagePath);
+    ASSERT_TRUE(diagnostics.available);
+    ASSERT_EQ(diagnostics.keypoints.size(), 1U);
+    EXPECT_EQ(diagnostics.keypoints.front().class_id, 19);
+    EXPECT_FLOAT_EQ(diagnostics.keypoints.front().size, 2.5F);
+    ASSERT_EQ(diagnostics.residuals.size(), 1);
+    EXPECT_EQ(diagnostics.residuals.first().observed, QPointF(10.0, 20.0));
+    EXPECT_EQ(diagnostics.residuals.first().projected, QPointF(13.0, 24.0));
+    EXPECT_DOUBLE_EQ(diagnostics.residuals.first().magnitudePx, 5.0);
+}
+
 TEST(FeatureResidualLoaderTest, UsesAnUnambiguousPhotoNameAfterProjectRelocation)
 {
     QTemporaryDir tempDir;
@@ -6484,22 +6686,20 @@ TEST(FeatureResidualLoaderTest, UsesAnUnambiguousPhotoNameAfterProjectRelocation
     const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
     const QString oldImagePath = QStringLiteral("/old/project/images/frame_001.jpg");
     const QString relocatedImagePath = tempDir.filePath(QStringLiteral("images/frame_001.jpg"));
-    const QJsonObject observation{
-        {QStringLiteral("image_path"), oldImagePath},
-        {QStringLiteral("image_name"), QStringLiteral("frame_001.jpg")},
-        {QStringLiteral("feature_idx"), 19},
-        {QStringLiteral("xy"), QJsonArray{12.0, 18.0}},
-        {QStringLiteral("projected_xy"), QJsonArray{12.2, 17.9}}};
+    const QJsonObject observation{{QStringLiteral("image_path"), oldImagePath},
+                                  {QStringLiteral("image_name"), QStringLiteral("frame_001.jpg")},
+                                  {QStringLiteral("feature_idx"), 19},
+                                  {QStringLiteral("xy"), QJsonArray{12.0, 18.0}},
+                                  {QStringLiteral("projected_xy"), QJsonArray{12.2, 17.9}}};
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
-    sidecar.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("points"),
-         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
-                      .toJson());
+    sidecar.write(
+        QJsonDocument(QJsonObject{{QStringLiteral("points"),
+                                   QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+            .toJson());
     sidecar.close();
 
-    const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
-        sidecarPath, relocatedImagePath);
+    const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, relocatedImagePath);
     ASSERT_TRUE(diagnostics.available);
     EXPECT_TRUE(diagnostics.usedUniqueNameFallback);
     ASSERT_EQ(diagnostics.keypoints.size(), 1U);
@@ -6512,19 +6712,17 @@ TEST(FeatureResidualLoaderTest, RejectsAmbiguousPhotoNameFallback)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
-    const QJsonObject first{
-        {QStringLiteral("image_path"), QStringLiteral("/old/a/frame.jpg")},
-        {QStringLiteral("xy"), QJsonArray{1.0, 2.0}}};
-    const QJsonObject second{
-        {QStringLiteral("image_path"), QStringLiteral("/old/b/frame.jpg")},
-        {QStringLiteral("xy"), QJsonArray{3.0, 4.0}}};
+    const QJsonObject first{{QStringLiteral("image_path"), QStringLiteral("/old/a/frame.jpg")},
+                            {QStringLiteral("xy"), QJsonArray{1.0, 2.0}}};
+    const QJsonObject second{{QStringLiteral("image_path"), QStringLiteral("/old/b/frame.jpg")},
+                             {QStringLiteral("xy"), QJsonArray{3.0, 4.0}}};
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
-    sidecar.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("points"),
-         QJsonArray{QJsonObject{
-             {QStringLiteral("observations"), QJsonArray{first, second}}}}}})
-                      .toJson());
+    sidecar.write(
+        QJsonDocument(
+            QJsonObject{{QStringLiteral("points"),
+                         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{first, second}}}}}})
+            .toJson());
     sidecar.close();
 
     const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
@@ -6540,22 +6738,19 @@ TEST(FeatureResidualLoaderTest, ReusesTheSingleParsedObservationIndex)
     ASSERT_TRUE(tempDir.isValid());
     const QString sidecarPath = tempDir.filePath(QStringLiteral("cached_points.json"));
     const QString imagePath = tempDir.filePath(QStringLiteral("frame.jpg"));
-    const QJsonObject observation{
-        {QStringLiteral("image_path"), imagePath},
-        {QStringLiteral("xy"), QJsonArray{4.0, 6.0}},
-        {QStringLiteral("projected_xy"), QJsonArray{4.2, 6.1}}};
+    const QJsonObject observation{{QStringLiteral("image_path"), imagePath},
+                                  {QStringLiteral("xy"), QJsonArray{4.0, 6.0}},
+                                  {QStringLiteral("projected_xy"), QJsonArray{4.2, 6.1}}};
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
-    sidecar.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("points"),
-         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
-                      .toJson());
+    sidecar.write(
+        QJsonDocument(QJsonObject{{QStringLiteral("points"),
+                                   QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+            .toJson());
     sidecar.close();
 
-    const auto first = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
-        sidecarPath, imagePath);
-    const auto second = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
-        sidecarPath, imagePath);
+    const auto first = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, imagePath);
+    const auto second = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, imagePath);
 
     ASSERT_TRUE(first.available);
     ASSERT_TRUE(second.available);
@@ -6567,8 +6762,7 @@ TEST(FeatureResidualLoaderTest, ReusesTheSingleParsedObservationIndex)
     ASSERT_TRUE(sidecar.open(QIODevice::Append));
     sidecar.write("\n");
     sidecar.close();
-    const auto afterChange = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(
-        sidecarPath, imagePath);
+    const auto afterChange = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, imagePath);
     ASSERT_TRUE(afterChange.available);
     EXPECT_FALSE(afterChange.loadedFromCache);
 }
@@ -6599,8 +6793,9 @@ TEST(MainMenuToolbarTemplateTest, BrandWidgetFitsCompactToolbarHeight)
     HenuBrandWidget brand;
     EXPECT_LE(brand.minimumSizeHint().height(), 40);
     EXPECT_LE(brand.sizeHint().height(), 40);
-    EXPECT_LE(brand.minimumSizeHint().width(), 180);
-    EXPECT_EQ(brand.sizePolicy().horizontalPolicy(), QSizePolicy::Preferred);
+    EXPECT_LE(brand.minimumSizeHint().width(), 40);
+    EXPECT_LE(brand.sizeHint().width(), 48);
+    EXPECT_EQ(brand.sizePolicy().horizontalPolicy(), QSizePolicy::Fixed);
 }
 
 TEST(MainMenuZoomTest, WorkflowCommandsRemainInMenusButAreRemovedFromToolbar)
@@ -7863,8 +8058,8 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area, not a modal dialog.";
 
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget *_maskStatus")));
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void updateMask(const QString &stage, int done, int total);")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget* _maskStatus")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void updateMask(const QString& stage, int done, int total);")));
     EXPECT_TRUE(mainHeader.contains(QStringLiteral("void finishMask(bool success);")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationProgressChanged")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationFinished")));
@@ -7894,7 +8089,7 @@ TEST(CanvasWidgetTest, ExposesMaskContourOverlayApi)
 TEST(TiePointsDialogTest, MetashapeStyleDefaultsAreExposed)
 {
     CreateTiePointsDialog createDialog;
-    EXPECT_EQ(createDialog.accuracy(), QStringLiteral("highest"));
+    EXPECT_EQ(createDialog.accuracy(), QStringLiteral("high"));
     EXPECT_EQ(createDialog.keypointLimit(), 40000);
     EXPECT_EQ(createDialog.keypointLimitPerMegapixel(), 1000);
     EXPECT_EQ(createDialog.tiePointLimit(), 4000);
@@ -7904,6 +8099,12 @@ TEST(TiePointsDialogTest, MetashapeStyleDefaultsAreExposed)
     EXPECT_EQ(createDialog.guidedMatchingMode(), QStringLiteral("off"));
     EXPECT_TRUE(createDialog.excludePinnedTiePoints());
     EXPECT_EQ(createDialog.maskApplyMode(), QStringLiteral("none"));
+
+    createDialog.setReferencePreselectionAvailable(false, 0, 3);
+    auto* referenceCheck = createDialog.findChild<QCheckBox*>(QStringLiteral("m_referencePreselectionCheck"));
+    ASSERT_NE(referenceCheck, nullptr);
+    EXPECT_TRUE(referenceCheck->isEnabled());
+    EXPECT_TRUE(referenceCheck->toolTip().contains(QStringLiteral("索引邻域回退")));
 
     auto* maskModeCombo = createDialog.findChild<QComboBox*>(QStringLiteral("m_maskModeCombo"));
     ASSERT_NE(maskModeCombo, nullptr);
@@ -7966,7 +8167,13 @@ TEST(TiePointsDialogTest, AdvancedSectionIsCollapsible)
     EXPECT_EQ(advancedToggle->arrowType(), Qt::DownArrow);
     EXPECT_FALSE(advancedContent->isHidden());
     EXPECT_TRUE(advancedGroup->isAncestorOf(advancedContent));
-    EXPECT_EQ(accuracyCombo->currentData().toString(), QStringLiteral("highest"));
+    ASSERT_EQ(accuracyCombo->count(), 5);
+    EXPECT_EQ(accuracyCombo->itemData(0).toString(), QStringLiteral("highest"));
+    EXPECT_EQ(accuracyCombo->itemData(1).toString(), QStringLiteral("high"));
+    EXPECT_EQ(accuracyCombo->itemData(2).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(accuracyCombo->itemData(3).toString(), QStringLiteral("low"));
+    EXPECT_EQ(accuracyCombo->itemData(4).toString(), QStringLiteral("lowest"));
+    EXPECT_EQ(accuracyCombo->currentData().toString(), QStringLiteral("high"));
 
     dialog.show();
     QApplication::processEvents();
@@ -8206,14 +8413,16 @@ TEST(WorkspacePanelControllerTest, StableDescriptorsDefinePersistenceAndRequired
     EXPECT_EQ(log.settingKey, QStringLiteral("log_visible"));
     EXPECT_EQ(toolbar.settingKey, QStringLiteral("main_toolbar_visible"));
     EXPECT_TRUE(workspace.requiredForProject);
-    EXPECT_TRUE(properties.requiredForProject);
-    EXPECT_TRUE(photos.requiredForProject);
-    EXPECT_TRUE(work.requiredForProject);
+    EXPECT_FALSE(properties.requiredForProject);
+    EXPECT_FALSE(photos.requiredForProject);
+    EXPECT_FALSE(work.requiredForProject);
     EXPECT_FALSE(log.requiredForProject);
     EXPECT_FALSE(toolbar.requiredForProject);
     EXPECT_TRUE(workspace.defaultVisible);
-    EXPECT_TRUE(work.defaultVisible);
-    EXPECT_TRUE(log.defaultVisible);
+    EXPECT_FALSE(properties.defaultVisible);
+    EXPECT_FALSE(photos.defaultVisible);
+    EXPECT_FALSE(work.defaultVisible);
+    EXPECT_FALSE(log.defaultVisible);
     EXPECT_EQ(workspace.kind, WorkspacePanelKind::Dock);
     EXPECT_EQ(log.kind, WorkspacePanelKind::Dock);
     EXPECT_EQ(toolbar.kind, WorkspacePanelKind::ToolBar);
@@ -8775,7 +8984,7 @@ TEST(MainWindowTest, KeepsOwnedWidgetsAndManagersPrivate)
     ASSERT_FALSE(header.isEmpty());
 
     const int canvasGetter = header.indexOf(QStringLiteral("CanvasWidget* canvas() const"));
-    const int brandMember = header.indexOf(QStringLiteral("HenuBrandWidget*  _henuBrandWidget"));
+    const int brandMember = header.indexOf(QStringLiteral("HenuBrandWidget* _henuBrandWidget"));
     const int privateAfterGetter = header.indexOf(QStringLiteral("private:"), canvasGetter);
     ASSERT_GE(canvasGetter, 0);
     ASSERT_GT(brandMember, canvasGetter);
@@ -9180,7 +9389,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(resetAlignmentCheck->isChecked());
     EXPECT_FALSE(saveAfterEachStepCheck->isChecked());
     EXPECT_EQ(keypointLimitSpin->value(), 40000);
-    EXPECT_EQ(tiepointLimitSpin->value(), 8000);
+    EXPECT_EQ(tiepointLimitSpin->value(), 4000);
     EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(excludeFixedTiePointsCheck->isChecked());
     EXPECT_FALSE(guidedImageMatchingCheck->isChecked());
@@ -9191,6 +9400,8 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(reuseExistingMatchesCheck->toolTip().contains(QStringLiteral("SfM/BA")));
     EXPECT_FALSE(lockInputCameraPosesCheck->isChecked());
     EXPECT_TRUE(lockInputCameraPosesCheck->toolTip().contains(QStringLiteral("Middlebury")));
+    EXPECT_EQ(dialog.findChild<QDoubleSpinBox*>(QStringLiteral("m_siftRatioSpin")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("m_adaptiveSiftRatioCheck")), nullptr);
 
     QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
@@ -9199,11 +9410,14 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(settings.value(QStringLiteral("generic_preselection")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("reference_preselection")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
-    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 8000);
+    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
+    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit_default_version")).toInt(), 2);
     EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("reuse_existing_matches")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("lock_input_camera_poses")).toBool());
+    EXPECT_FALSE(settings.contains(QStringLiteral("sift_maximum_ratio")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("adaptive_sift_ratio")));
 
     QJsonObject appliedSettings;
     appliedSettings[QStringLiteral("quality")] = QStringLiteral("highest");
@@ -9238,6 +9452,17 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_FALSE(settings.value(QStringLiteral("reuse_existing_matches")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("lock_input_camera_poses")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("reset_current_alignment")).toBool());
+
+    dialog.applySettings(QJsonObject{{QStringLiteral("tiepoint_limit"), 8000}});
+    EXPECT_EQ(tiepointLimitSpin->value(), 4000) << "旧版 8000 默认值应迁移到参考默认值";
+    dialog.applySettings(
+        QJsonObject{{QStringLiteral("tiepoint_limit"), 8000}, {QStringLiteral("tiepoint_limit_default_version"), 2}});
+    EXPECT_EQ(tiepointLimitSpin->value(), 8000) << "新版本中用户显式选择 8000 时必须保留";
+
+    dialog.setCachedTiePointLimit(true, 4000);
+    EXPECT_TRUE(statusLabel->text().contains(QStringLiteral("当前设置 8000")));
+    EXPECT_TRUE(statusLabel->text().contains(QStringLiteral("缓存实际 4000")));
+    EXPECT_TRUE(statusLabel->text().contains(QStringLiteral("重新生成连接点网络")));
 
     resetAlignmentCheck->setChecked(true);
     settings = dialog.collectSettings();
@@ -9702,8 +9927,10 @@ TEST(MvsCancellationContractTest, BoundsOpenClAndCpuCancellationLatency)
     ASSERT_FALSE(cpu_source.isEmpty());
 
     EXPECT_TRUE(opencl_source.contains(QStringLiteral("laneAvailable.wait_for(lock, std::chrono::milliseconds(25))")));
-    EXPECT_TRUE(opencl_source.contains(QStringLiteral("kOpenClCancellationTileRows = 32")));
+    EXPECT_TRUE(opencl_source.contains(QStringLiteral("kOpenClCancellationTileRows = 1")));
+    EXPECT_TRUE(opencl_source.contains(QStringLiteral("dispatch_row_offset_argument = 31")));
     EXPECT_TRUE(opencl_source.contains(QStringLiteral("wait_for_checkpoint(kernel_events.last(), name)")));
+    EXPECT_TRUE(opencl_kernels.contains(QStringLiteral("get_global_id(1) + dispatch_row_offset")));
     EXPECT_TRUE(opencl_kernels.contains(QStringLiteral("tile_origin_y = y - (int)get_local_id(1)")));
     EXPECT_TRUE(cpu_source.contains(QStringLiteral("cpuParallelForLines(W, cpuThreadCount, config.cancelFlag")));
     EXPECT_TRUE(cpu_source.contains(QStringLiteral("cpuParallelForLines(H, cpuThreadCount, config.cancelFlag")));
@@ -9741,6 +9968,10 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 0/5"));
     EXPECT_EQ(widget.progressValue(), 0);
     EXPECT_EQ(widget.progressMaximum(), 5);
+    QProgressBar* progressBar = widget.findChild<QProgressBar*>(QStringLiteral("progressBar"));
+    ASSERT_NE(progressBar, nullptr);
+    EXPECT_TRUE(progressBar->isTextVisible());
+    EXPECT_EQ(progressBar->format(), QStringLiteral("%p%"));
     QTest::qWait(20);
     EXPECT_GE(widget.elapsedMilliseconds(), 10);
 
@@ -9861,6 +10092,11 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     ProjectData projectData;
     ProjectManager projectManager(&projectData, &window);
     ProjectTaskStatusController controller(&projectManager, &dashboard, &statusBar, &window);
+    QJsonArray dashboardTasks;
+    QObject::connect(&dashboard,
+                     &ProjectDashboardWidget::taskSnapshotsChanged,
+                     &window,
+                     [&dashboardTasks](const QJsonArray& tasks) { dashboardTasks = tasks; });
 
     xjw::gui::platform::TaskbarProgressController* taskbar = nullptr;
     for (QObject* child : controller.children())
@@ -9906,14 +10142,11 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     emit projectManager.atProgressFinished(true);
     EXPECT_TRUE(aerialStatus->detailText().isEmpty());
 
-    auto* taskTable = dashboard.findChild<QTableWidget*>(QStringLiteral("dashboardTaskTable"));
-    ASSERT_NE(taskTable, nullptr);
-    const auto dashboardHasTask = [taskTable](const QString& name)
+    const auto dashboardHasTask = [&dashboardTasks](const QString& name)
     {
-        for (int row = 0; row < taskTable->rowCount(); ++row)
+        for (const QJsonValue& value : dashboardTasks)
         {
-            const QTableWidgetItem* nameItem = taskTable->item(row, 0);
-            if (nameItem && nameItem->text() == name)
+            if (value.toObject().value(QStringLiteral("name")).toString() == name)
             {
                 return true;
             }
@@ -9926,7 +10159,7 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     emit projectManager.imageImportFinished(true, QString());
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("image_import")));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
-    EXPECT_FALSE(dashboardHasTask(QStringLiteral("导入影像")));
+    EXPECT_TRUE(dashboardHasTask(QStringLiteral("导入影像")));
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
 
     controller.finishImageLoading(true);
@@ -10054,27 +10287,20 @@ TEST(ProjectDashboardWidgetTest, HidesEmptyDetailTablesAndShowsPopulatedOnes)
     ProjectDashboardWidget widget;
     widget.clear();
 
-    auto* taskTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardTaskTable"));
     auto* referenceTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardReferenceTable"));
     auto* qualityTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardQualityTable"));
     auto* reportTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardReportTable"));
     auto* workflowTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardWorkflowTable"));
-    ASSERT_NE(taskTable, nullptr);
     ASSERT_NE(referenceTable, nullptr);
     ASSERT_NE(qualityTable, nullptr);
     ASSERT_NE(reportTable, nullptr);
     ASSERT_NE(workflowTable, nullptr);
 
-    EXPECT_TRUE(taskTable->isHidden());
+    EXPECT_EQ(widget.findChild<QTableWidget*>(QStringLiteral("dashboardTaskTable")), nullptr);
     EXPECT_TRUE(referenceTable->isHidden());
     EXPECT_TRUE(qualityTable->isHidden());
     EXPECT_TRUE(reportTable->isHidden());
     EXPECT_FALSE(workflowTable->isHidden());
-
-    widget.setTaskSnapshots(QJsonArray{QJsonObject{{QStringLiteral("name"), QStringLiteral("MVS")},
-                                                   {QStringLiteral("status_text"), QStringLiteral("运行中")},
-                                                   {QStringLiteral("active"), true}}});
-    EXPECT_FALSE(taskTable->isHidden());
 
     widget.loadFromJson(
         QJsonObject{{QStringLiteral("reference_datasets"),
@@ -10248,7 +10474,7 @@ TEST(ProjectDashboardWidgetTest, ShowsReferenceQualityAlertsAndErrorMetricsReadO
     EXPECT_TRUE(foundCoverageWarning);
 }
 
-TEST(ProjectDashboardWidgetTest, ShowsReadOnlyRunningTaskSnapshots)
+TEST(ProjectDashboardWidgetTest, SummarizesRunningTasksWithoutDuplicatingWorkTable)
 {
     ProjectDashboardWidget widget;
 
@@ -10270,18 +10496,11 @@ TEST(ProjectDashboardWidgetTest, ShowsReadOnlyRunningTaskSnapshots)
     auto* taskLabel = widget.findChild<QLabel*>(QStringLiteral("dashboardTaskLabel"));
     ASSERT_NE(taskLabel, nullptr);
     EXPECT_TRUE(taskLabel->text().contains(QStringLiteral("当前运行任务 1")));
-    EXPECT_TRUE(taskLabel->text().contains(QStringLiteral("只读")));
-
-    auto* taskTable = widget.findChild<QTableWidget*>(QStringLiteral("dashboardTaskTable"));
-    ASSERT_NE(taskTable, nullptr);
-    EXPECT_EQ(taskTable->editTriggers(), QAbstractItemView::NoEditTriggers);
-    ASSERT_EQ(taskTable->rowCount(), 1);
-    EXPECT_TRUE(taskTable->item(0, 0)->text().contains(QStringLiteral("MVS")));
-    EXPECT_TRUE(taskTable->item(0, 1)->text().contains(QStringLiteral("正在估计深度图")));
-    EXPECT_TRUE(taskTable->item(0, 2)->text().contains(QStringLiteral("32/100")));
+    EXPECT_TRUE(taskLabel->text().contains(QStringLiteral("工作")));
+    EXPECT_EQ(widget.findChild<QTableWidget*>(QStringLiteral("dashboardTaskTable")), nullptr);
 }
 
-TEST(WorkPanelWidgetTest, MirrorsOnlyActiveTasksWithCompactProgress)
+TEST(WorkPanelWidgetTest, ShowsActiveAndHistoricalTasksWithLogLinks)
 {
     ProjectDashboardWidget dashboard;
     WorkPanelWidget workPanel;
@@ -10297,27 +10516,100 @@ TEST(WorkPanelWidgetTest, MirrorsOnlyActiveTasksWithCompactProgress)
                                           QJsonObject{{QStringLiteral("name"), QStringLiteral("已完成工作")},
                                                       {QStringLiteral("status_text"), QStringLiteral("完成")},
                                                       {QStringLiteral("active"), false},
-                                                      {QStringLiteral("cancelling"), false}}});
+                                                      {QStringLiteral("cancelling"), false},
+                                                      {QStringLiteral("state"), QStringLiteral("succeeded")},
+                                                      {QStringLiteral("elapsed_ms"), 12000},
+                                                      {QStringLiteral("task_id"), QStringLiteral("mesh")},
+                                                      {QStringLiteral("start_sequence"), 10},
+                                                      {QStringLiteral("end_sequence"), 20}}});
 
     auto* table = workPanel.findChild<QTableWidget*>(QStringLiteral("workPanelTaskTable"));
     ASSERT_NE(table, nullptr);
-    ASSERT_EQ(table->rowCount(), 1);
-    EXPECT_EQ(table->horizontalHeaderItem(1)->text(), QStringLiteral("用时"));
+    ASSERT_EQ(table->rowCount(), 2);
+    EXPECT_EQ(table->horizontalHeaderItem(1)->text(), QStringLiteral("状态"));
+    EXPECT_EQ(table->horizontalHeaderItem(2)->text(), QStringLiteral("用时"));
     EXPECT_EQ(table->item(0, 0)->text(), QStringLiteral("创建点云"));
-    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("01:02:03"));
-    EXPECT_FALSE(table->item(0, 1)->text().contains(QStringLiteral("正在融合")));
-    const QString initialElapsedText = table->item(0, 1)->text();
-    QTRY_VERIFY_WITH_TIMEOUT(table->item(0, 1)->text() != initialElapsedText, 1500);
-    auto* progress = qobject_cast<QProgressBar*>(table->cellWidget(0, 2));
+    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("运行中"));
+    EXPECT_EQ(table->item(0, 2)->text(), QStringLiteral("01:02:03"));
+    const QString initialElapsedText = table->item(0, 2)->text();
+    QTRY_VERIFY_WITH_TIMEOUT(table->item(0, 2)->text() != initialElapsedText, 1500);
+    auto* progress = qobject_cast<QProgressBar*>(table->cellWidget(0, 3));
     ASSERT_NE(progress, nullptr);
     EXPECT_EQ(progress->value(), 42);
     EXPECT_EQ(progress->maximum(), 100);
+
+    EXPECT_EQ(table->item(1, 1)->text(), QStringLiteral("已完成"));
+    EXPECT_EQ(table->item(1, 2)->text(), QStringLiteral("00:00:12"));
+    QSignalSpy logSpy(&workPanel, &WorkPanelWidget::logRangeRequested);
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(table, "cellDoubleClicked", Qt::DirectConnection, Q_ARG(int, 1), Q_ARG(int, 0)));
+    ASSERT_EQ(logSpy.count(), 1);
+    EXPECT_EQ(logSpy.takeFirst().at(2).toString(), QStringLiteral("mesh"));
 
     dashboard.setTaskSnapshots({});
     EXPECT_EQ(table->rowCount(), 0);
     auto* emptyLabel = workPanel.findChild<QLabel*>(QStringLiteral("workPanelEmptyLabel"));
     ASSERT_NE(emptyLabel, nullptr);
-    EXPECT_TRUE(emptyLabel->text().contains(QStringLiteral("没有正在运行")));
+    EXPECT_TRUE(emptyLabel->text().contains(QStringLiteral("暂无工作记录")));
+}
+
+TEST(WorkPanelWidgetTest, EnablesOnlyAdvertisedSchedulerCommands)
+{
+    WorkPanelWidget workPanel;
+    workPanel.setTaskSnapshots(QJsonArray{QJsonObject{{QStringLiteral("name"), QStringLiteral("深度帧 1")},
+                                                      {QStringLiteral("task_id"), QStringLiteral("depth-1")},
+                                                      {QStringLiteral("run_id"), QStringLiteral("depth-1-run-1")},
+                                                      {QStringLiteral("state"), QStringLiteral("queued")},
+                                                      {QStringLiteral("active"), true},
+                                                      {QStringLiteral("scheduler_managed"), true},
+                                                      {QStringLiteral("can_pause"), true},
+                                                      {QStringLiteral("can_resume"), false},
+                                                      {QStringLiteral("can_cancel"), true},
+                                                      {QStringLiteral("can_reorder"), true},
+                                                      {QStringLiteral("revision"), 4}},
+                                          QJsonObject{{QStringLiteral("name"), QStringLiteral("深度帧 2")},
+                                                      {QStringLiteral("task_id"), QStringLiteral("depth-2")},
+                                                      {QStringLiteral("run_id"), QStringLiteral("depth-2-run-2")},
+                                                      {QStringLiteral("state"), QStringLiteral("queued")},
+                                                      {QStringLiteral("active"), true},
+                                                      {QStringLiteral("scheduler_managed"), true},
+                                                      {QStringLiteral("can_pause"), true},
+                                                      {QStringLiteral("can_resume"), false},
+                                                      {QStringLiteral("can_cancel"), true},
+                                                      {QStringLiteral("can_reorder"), true},
+                                                      {QStringLiteral("revision"), 6}},
+                                          QJsonObject{{QStringLiteral("name"), QStringLiteral("深度帧 3")},
+                                                      {QStringLiteral("task_id"), QStringLiteral("depth-3")},
+                                                      {QStringLiteral("run_id"), QStringLiteral("depth-3-run-3")},
+                                                      {QStringLiteral("state"), QStringLiteral("paused")},
+                                                      {QStringLiteral("active"), true},
+                                                      {QStringLiteral("scheduler_managed"), true},
+                                                      {QStringLiteral("can_pause"), false},
+                                                      {QStringLiteral("can_resume"), true},
+                                                      {QStringLiteral("can_cancel"), true},
+                                                      {QStringLiteral("can_reorder"), false},
+                                                      {QStringLiteral("revision"), 7}}});
+
+    auto* table = workPanel.findChild<QTableWidget*>(QStringLiteral("workPanelTaskTable"));
+    auto* pauseResume = workPanel.findChild<QPushButton*>(QStringLiteral("workPanelPauseResumeButton"));
+    auto* moveDown = workPanel.findChild<QPushButton*>(QStringLiteral("workPanelMoveDownButton"));
+    ASSERT_NE(table, nullptr);
+    ASSERT_NE(pauseResume, nullptr);
+    ASSERT_NE(moveDown, nullptr);
+
+    table->selectRow(0);
+    EXPECT_TRUE(pauseResume->isEnabled());
+    EXPECT_EQ(pauseResume->text(), QStringLiteral("暂停"));
+    EXPECT_TRUE(moveDown->isEnabled());
+    QSignalSpy commandSpy(&workPanel, &WorkPanelWidget::taskCommandRequested);
+    pauseResume->click();
+    ASSERT_EQ(commandSpy.count(), 1);
+    EXPECT_EQ(commandSpy.takeFirst().at(0).toString(), QStringLiteral("pause"));
+
+    table->selectRow(2);
+    EXPECT_TRUE(pauseResume->isEnabled());
+    EXPECT_EQ(pauseResume->text(), QStringLiteral("恢复"));
+    EXPECT_FALSE(moveDown->isEnabled());
 }
 
 TEST(MainWindowLayoutTest, DefaultsToMetashapeStyleBottomPanels)
@@ -10333,8 +10625,18 @@ TEST(MainWindowLayoutTest, DefaultsToMetashapeStyleBottomPanels)
     EXPECT_TRUE(layout.contains(QStringLiteral("setTabPosition(Qt::BottomDockWidgetArea, QTabWidget::South)")));
     EXPECT_TRUE(state.contains(QStringLiteral("tabifyDockWidget(_workDock, _photosDock)")));
     EXPECT_TRUE(state.contains(QStringLiteral("tabifyDockWidget(_photosDock, _logDock)")));
-    EXPECT_TRUE(state.contains(QStringLiteral("constexpr int ProjectDockLayoutVersion = 4")));
+    EXPECT_TRUE(state.contains(QStringLiteral("constexpr int ProjectDockLayoutVersion = 5")));
+    EXPECT_TRUE(state.contains(QStringLiteral("_propertiesDock->setVisible(false)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("_workDock->setVisible(false)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("_photosDock->setVisible(false)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("_logDock->setVisible(false)")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("<number>1</number>")));
     EXPECT_TRUE(ui.contains(QStringLiteral("<string>控制台</string>")));
+    EXPECT_TRUE(workspacePanelDescriptor(WorkspacePanelId::Workspace).defaultVisible);
+    EXPECT_FALSE(workspacePanelDescriptor(WorkspacePanelId::Properties).defaultVisible);
+    EXPECT_FALSE(workspacePanelDescriptor(WorkspacePanelId::Work).defaultVisible);
+    EXPECT_FALSE(workspacePanelDescriptor(WorkspacePanelId::Photos).defaultVisible);
+    EXPECT_FALSE(workspacePanelDescriptor(WorkspacePanelId::Log).defaultVisible);
 }
 
 TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)
@@ -10346,7 +10648,7 @@ TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)
 
     EXPECT_TRUE(header.contains(QStringLiteral("refreshDashboard")));
     EXPECT_TRUE(source.contains(QStringLiteral("setTaskSnapshots")));
-    EXPECT_TRUE(source.contains(QStringLiteral("const TaskStatusWidget *status")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const TaskStatusWidget* status")));
     EXPECT_TRUE(source.contains(QStringLiteral("cancelRequested")));
 }
 
@@ -10433,8 +10735,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationUsesUnifiedDeviceMappin
         << "用户显式写入 cpu 时仍应保留 CPU 调试路径。";
     EXPECT_TRUE(helperBody.contains(QStringLiteral("return matchphotos::ComputeDevice::Auto")));
 
-    const int optionsStart = workflow.indexOf(
-        QStringLiteral("AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig"));
+    const int optionsStart = workflow.indexOf(QStringLiteral("AerialTriangulationWorkflow::resolveConfig"));
     ASSERT_GE(optionsStart, 0);
     const int optionsEnd =
         workflow.indexOf(QStringLiteral("AerialTriangulationResult AerialTriangulationWorkflow::run"), optionsStart);
@@ -10454,8 +10755,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(workflow.isEmpty());
 
-    const int optionsStart = workflow.indexOf(
-        QStringLiteral("AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig"));
+    const int optionsStart = workflow.indexOf(QStringLiteral("AerialTriangulationWorkflow::resolveConfig"));
     ASSERT_GE(optionsStart, 0);
     const int optionsEnd =
         workflow.indexOf(QStringLiteral("AerialTriangulationResult AerialTriangulationWorkflow::run"), optionsStart);
@@ -10486,7 +10786,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
         << "连接点准备阶段的特征提取、配对、匹配进度要映射到空三总进度条。";
 }
 
-TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedAutoSiftAlgorithm)
+TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedPlaMatchHctAlgorithm)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -10500,7 +10800,7 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedAutoSiftAlgorithm)
     const QString startBody = source.mid(startBegin, launchBegin - startBegin);
 
     EXPECT_TRUE(startBody.contains(QStringLiteral("runSettings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(startBody.contains(QStringLiteral(".toString(QStringLiteral(\"auto_sift\"))")))
+    EXPECT_TRUE(startBody.contains(QStringLiteral(".toString(QStringLiteral(\"plamatch_hct\"))")))
         << "空三前置检查必须使用统一注册算法 ID，不能再组合特征/匹配算法字符串。";
 
     const int launchEnd =
@@ -10509,7 +10809,7 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedAutoSiftAlgorithm)
     const QString launchBody = source.mid(launchBegin, launchEnd - launchBegin);
 
     EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"auto_sift\"))")))
+    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"plamatch_hct\"))")))
         << "正式 SfM 必须沿用同一个算法 ID 和 `.pimatch` 缓存契约。";
 }
 
@@ -10635,7 +10935,9 @@ TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThrea
     const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
 
     EXPECT_TRUE(startBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
-    EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images")));
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(summarizeSparsePrerequisites\s*\(\s*images)"))
+                    .match(startBody)
+                    .hasMatch());
     EXPECT_FALSE(startBody.contains(QStringLiteral("QFutureWatcher<SparsePrerequisiteSummary>")));
     const int preflightLaunch = startBody.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"));
     ASSERT_GE(preflightLaunch, 0);
@@ -10694,7 +10996,7 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedUnifiedMatchingAlgori
 
     EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.matchingAlgorithmId")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("QStringLiteral(\"auto_sift\")")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("QStringLiteral(\"plamatch_hct\")")));
     EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.featureAlgorithm")));
     EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.matchAlgorithm")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("AerialTriangulationWorkflow::resolveConfig")));
@@ -10742,7 +11044,8 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
     const QString bundleAdjustHeader =
         readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustOptions.h"));
-    const QString bundleAdjustSource = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
+    const QString bundleAdjustSource =
+        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustPlaMatrix.cpp"));
     const QString serviceSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     ASSERT_FALSE(mainWindowSource.isEmpty());
@@ -15008,6 +15311,20 @@ TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
     EXPECT_EQ(valueFor(QStringLiteral("文件大小")), QStringLiteral("2.0 MB"));
 }
 
+TEST(SelectionPropertiesWidgetTest, ReportsWhetherInspectorHasContent)
+{
+    SelectionPropertiesWidget widget;
+    QSignalSpy stateSpy(&widget, &SelectionPropertiesWidget::selectionStateChanged);
+
+    widget.showResourceProperties(QJsonObject(), QStringLiteral("连接点"), QStringLiteral("missing.xyz"));
+    ASSERT_EQ(stateSpy.count(), 1);
+    EXPECT_TRUE(stateSpy.at(0).at(0).toBool());
+
+    widget.clearSelection();
+    ASSERT_EQ(stateSpy.count(), 2);
+    EXPECT_FALSE(stateSpy.at(1).at(0).toBool());
+}
+
 TEST(SelectionPropertiesWidgetTest, ShowsDemAndDomPixelResolution)
 {
     QTemporaryDir temporary_directory;
@@ -15073,75 +15390,76 @@ TEST(GeospatialRuntimePathsTest, FindsProjDatabaseInVcpkgBuildTree)
 namespace
 {
 
-QJsonObject makeStoredDepthPolicyMetadata(const QString& batch_directory,
-                                          const std::vector<QString>& scene_profiles,
-                                          const std::vector<QString>& acceptances,
-                                          const std::vector<int>& fusion_eligibility,
-                                          bool aerial_block_detected)
-{
-    if (scene_profiles.size() != acceptances.size() || scene_profiles.size() != fusion_eligibility.size())
+    QJsonObject makeStoredDepthPolicyMetadata(const QString& batch_directory,
+                                              const std::vector<QString>& scene_profiles,
+                                              const std::vector<QString>& acceptances,
+                                              const std::vector<int>& fusion_eligibility,
+                                              bool aerial_block_detected)
     {
-        return {};
-    }
-
-    QJsonArray images;
-    QJsonArray selected_images;
-    for (int index = 0; index < static_cast<int>(scene_profiles.size()); ++index)
-    {
-        const QString image_path = QStringLiteral("E:/policy/image_%1.jpg").arg(index);
-        images.append(QJsonObject{{QStringLiteral("path"), image_path}});
-        selected_images.append(image_path);
-    }
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] = images;
-    const QJsonObject aerial_geometry{{QStringLiteral("detected"), aerial_block_detected}};
-    const QJsonObject sfm_diagnostics{{QStringLiteral("aerial_block_geometry"), aerial_geometry}};
-    const QJsonObject at_record{{QStringLiteral("run_id"), QStringLiteral("policy-at")},
-                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("policy-generation")},
-                                {QStringLiteral("selected_images"), selected_images},
-                                {QStringLiteral("sfm_diagnostics"), sfm_diagnostics}};
-    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{at_record};
-    const QString signature = xjw::gui::project::projectDepthInputSignature(metadata);
-
-    QJsonArray depth_records;
-    for (int index = 0; index < static_cast<int>(scene_profiles.size()); ++index)
-    {
-        const QString depth_png = QDir(batch_directory).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth = QDir(batch_directory).filePath(QStringLiteral("depth_%1.bin").arg(index));
-        QFile png_file(depth_png);
-        QFile raw_file(raw_depth);
-        if (!png_file.open(QIODevice::WriteOnly) || !raw_file.open(QIODevice::WriteOnly))
+        if (scene_profiles.size() != acceptances.size() || scene_profiles.size() != fusion_eligibility.size())
         {
             return {};
         }
-        png_file.write("x");
-        raw_file.write("x");
 
-        QJsonObject record{{QStringLiteral("ref_image"), QStringLiteral("E:/policy/image_%1.jpg").arg(index)},
-                           {QStringLiteral("depth_png"), depth_png},
-                           {QStringLiteral("raw_depth_path"), raw_depth},
-                           {QStringLiteral("batch_frame_count"), static_cast<int>(scene_profiles.size())},
-                           {QStringLiteral("config_hash"), QStringLiteral("policy-config")},
-                           {QStringLiteral("project_input_signature"), signature},
-                           {QStringLiteral("reconstruction_generation_id"), QStringLiteral("policy-generation")},
-                           {QStringLiteral("algorithm_revision"), xjw::mvs::kMvsDepthAlgorithmRevision},
-                           {QStringLiteral("status"), QStringLiteral("completed")},
-                           {QStringLiteral("scene_profile"), scene_profiles[index]},
-                           {QStringLiteral("acceptance"), acceptances[index]}};
-        if (fusion_eligibility[index] >= 0)
+        QJsonArray images;
+        QJsonArray selected_images;
+        for (int index = 0; index < static_cast<int>(scene_profiles.size()); ++index)
         {
-            record[QStringLiteral("fusion_eligible")] = fusion_eligibility[index] != 0;
+            const QString image_path = QStringLiteral("E:/policy/image_%1.jpg").arg(index);
+            images.append(QJsonObject{{QStringLiteral("path"), image_path}});
+            selected_images.append(image_path);
         }
-        if (!addCurrentMvsRasterContractFixture(batch_directory, index, &record))
+
+        QJsonObject metadata;
+        metadata[QStringLiteral("images")] = images;
+        const QJsonObject aerial_geometry{{QStringLiteral("detected"), aerial_block_detected}};
+        const QJsonObject sfm_diagnostics{{QStringLiteral("aerial_block_geometry"), aerial_geometry}};
+        const QJsonObject at_record{
+            {QStringLiteral("run_id"), QStringLiteral("policy-at")},
+            {QStringLiteral("reconstruction_generation_id"), QStringLiteral("policy-generation")},
+            {QStringLiteral("selected_images"), selected_images},
+            {QStringLiteral("sfm_diagnostics"), sfm_diagnostics}};
+        metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{at_record};
+        const QString signature = xjw::gui::project::projectDepthInputSignature(metadata);
+
+        QJsonArray depth_records;
+        for (int index = 0; index < static_cast<int>(scene_profiles.size()); ++index)
         {
-            return {};
+            const QString depth_png = QDir(batch_directory).filePath(QStringLiteral("depth_%1.png").arg(index));
+            const QString raw_depth = QDir(batch_directory).filePath(QStringLiteral("depth_%1.bin").arg(index));
+            QFile png_file(depth_png);
+            QFile raw_file(raw_depth);
+            if (!png_file.open(QIODevice::WriteOnly) || !raw_file.open(QIODevice::WriteOnly))
+            {
+                return {};
+            }
+            png_file.write("x");
+            raw_file.write("x");
+
+            QJsonObject record{{QStringLiteral("ref_image"), QStringLiteral("E:/policy/image_%1.jpg").arg(index)},
+                               {QStringLiteral("depth_png"), depth_png},
+                               {QStringLiteral("raw_depth_path"), raw_depth},
+                               {QStringLiteral("batch_frame_count"), static_cast<int>(scene_profiles.size())},
+                               {QStringLiteral("config_hash"), QStringLiteral("policy-config")},
+                               {QStringLiteral("project_input_signature"), signature},
+                               {QStringLiteral("reconstruction_generation_id"), QStringLiteral("policy-generation")},
+                               {QStringLiteral("algorithm_revision"), xjw::mvs::kMvsDepthAlgorithmRevision},
+                               {QStringLiteral("status"), QStringLiteral("completed")},
+                               {QStringLiteral("scene_profile"), scene_profiles[index]},
+                               {QStringLiteral("acceptance"), acceptances[index]}};
+            if (fusion_eligibility[index] >= 0)
+            {
+                record[QStringLiteral("fusion_eligible")] = fusion_eligibility[index] != 0;
+            }
+            if (!addCurrentMvsRasterContractFixture(batch_directory, index, &record))
+            {
+                return {};
+            }
+            depth_records.append(record);
         }
-        depth_records.append(record);
+        metadata[QStringLiteral("depth_map_results")] = depth_records;
+        return metadata;
     }
-    metadata[QStringLiteral("depth_map_results")] = depth_records;
-    return metadata;
-}
 
 } // namespace
 

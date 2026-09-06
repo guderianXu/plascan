@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 option(PLASCAN_SOURCE_DEPENDENCIES_ONLY
-       "Configure only the pinned Qt/OpenCV/GDAL/AprilTag source dependency superbuild" OFF)
+       "Configure only the pinned Qt/OpenCV/GDAL/AprilTag/OpenEXR source dependency superbuild" OFF)
 if(PLASCAN_SOURCE_DEPENDENCIES_ONLY)
   project(PlaScanSourceDependencies LANGUAGES C CXX)
   include(cmake/PlascanSourceDependencies.cmake)

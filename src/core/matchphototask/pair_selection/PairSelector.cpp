@@ -3,633 +3,206 @@
 #include <QSet>
 
 #include <algorithm>
-#include <cstdint>
-#include <tuple>
+#include <utility>
 
 namespace xjw
 {
-namespace matchphotos
-{
-namespace
-{
-
-int allPairCount(int imageCount)
-{
-    return imageCount > 1 ? imageCount * (imageCount - 1) / 2 : 0;
-}
-
-PairCandidate *findCandidate(std::vector<PairCandidate> *candidates, const QString &pairKey)
-{
-    if (!candidates || pairKey.isEmpty())
+    namespace matchphotos
     {
-        return nullptr;
-    }
-
-    for (PairCandidate &candidate : *candidates)
-    {
-        if (candidate.pairKey == pairKey)
+        namespace
         {
-            return &candidate;
-        }
-    }
-    return nullptr;
-}
 
-PairCandidate *addOrUpdateCandidate(PairSelectionResult *result,
-                                    const QStringList &images,
-                                    int indexA,
-                                    int indexB,
-                                    PairSource source,
-                                    double priorityScore)
-{
-    if (!result)
-    {
-        return nullptr;
-    }
-
-    const ImagePair pair{indexA, indexB};
-    if (!pair.isValid(images.size()))
-    {
-        return nullptr;
-    }
-
-    const QString pairKey = makePairKey(images, indexA, indexB);
-    if (pairKey.isEmpty())
-    {
-        return nullptr;
-    }
-
-    // 所有候选生成器最终都汇聚到这里。每个影像对只保留一条记录，
-    // 这样后续来源可以继续提升优先级并补充自己的诊断分数。
-    PairCandidate *candidate = findCandidate(&result->candidates, pairKey);
-    if (!candidate)
-    {
-        PairCandidate created;
-        created.pair = pair.normalized();
-        created.pairKey = pairKey;
-        result->candidates.push_back(created);
-        candidate = &result->candidates.back();
-    }
-
-    appendPairSource(candidate, source);
-    candidate->priorityScore += std::max(0.0, priorityScore);
-    return candidate;
-}
-
-void addManualCandidates(PairSelectionResult *result, const QStringList &pairKeys)
-{
-    if (!result)
-    {
-        return;
-    }
-
-    QSet<QString> seen;
-    for (const QString &pairKey : pairKeys)
-    {
-        const QString trimmed = pairKey.trimmed();
-        if (trimmed.isEmpty() || seen.contains(trimmed))
-        {
-            continue;
-        }
-
-        seen.insert(trimmed);
-        // 手动影像对键可能来自 GUI 状态或 .lis 文件，此时不一定有影像下标。
-        // 因此这里仅要求 pairKey 有效。
-        PairCandidate candidate;
-        candidate.pairKey = trimmed;
-        candidate.priorityScore = 1000.0;
-        candidate.detail = QStringLiteral("manual pair");
-        appendPairSource(&candidate, PairSource::Manual);
-        result->candidates.push_back(candidate);
-    }
-}
-
-void addExhaustiveCandidates(PairSelectionResult *result, const QStringList &images)
-{
-    const int imageCount = static_cast<int>(images.size());
-    for (int i = 0; i < imageCount; ++i)
-    {
-        for (int j = i + 1; j < imageCount; ++j)
-        {
-            addOrUpdateCandidate(result, images, i, j, PairSource::Exhaustive, 10.0);
-        }
-    }
-}
-
-void addSequenceCandidates(PairSelectionResult *result,
-                           const QStringList &images,
-                           int window,
-                           bool closeSequenceLoop)
-{
-    const int imageCount = static_cast<int>(images.size());
-    if (imageCount < 2)
-    {
-        return;
-    }
-
-    const int safeWindow = std::min(std::max(1, window), imageCount - 1);
-    for (int i = 0; i < imageCount; ++i)
-    {
-        for (int j = i + 1; j < imageCount; ++j)
-        {
-            const int linearDistance = j - i;
-            const int distance = closeSequenceLoop
-                ? std::min(linearDistance, imageCount - linearDistance)
-                : linearDistance;
-            if (distance > safeWindow)
+            int allPairCount(int imageCount)
             {
-                continue;
-            }
-            // 对有序航拍/巡视器序列，相邻影像更可能重叠；
-            // 环拍数据按循环距离补充首尾跨界边，距离越近的邻居给略高排序分。
-            const double sequenceScore =
-                static_cast<double>(safeWindow - distance + 1) / static_cast<double>(safeWindow);
-            PairCandidate *candidate =
-                addOrUpdateCandidate(result, images, i, j, PairSource::SequenceWindow, 40.0 + 10.0 * sequenceScore);
-            if (candidate)
-            {
-                candidate->sequenceScore = std::max(candidate->sequenceScore, sequenceScore);
-            }
-        }
-    }
-}
-
-void addKnownCameraOverlapPairs(PairSelectionResult *result,
-                                const QStringList &images,
-                                const std::vector<std::array<int, 2>> &pairs)
-{
-    for (const auto &pair : pairs)
-    {
-        // 这些影像对已经被上游相机/元数据阶段接受。
-        // 即使没有数值化 overlap score，也把它们视为强证据。
-        PairCandidate *candidate =
-            addOrUpdateCandidate(result, images, pair[0], pair[1], PairSource::CameraOverlap, 100.0);
-        if (candidate)
-        {
-            candidate->overlapScore = std::max(candidate->overlapScore, 1.0);
-        }
-    }
-}
-
-std::uint64_t indexPairKey(int indexA, int indexB)
-{
-    const std::uint32_t first = static_cast<std::uint32_t>(std::min(indexA, indexB));
-    const std::uint32_t second = static_cast<std::uint32_t>(std::max(indexA, indexB));
-    return (static_cast<std::uint64_t>(first) << 32U) | static_cast<std::uint64_t>(second);
-}
-
-QSet<quint64> topOverlapPairKeysPerImage(const std::vector<OverlapPairResult> &pairs,
-                                         int imageCount,
-                                         int topK)
-{
-    QSet<quint64> selected;
-    if (topK <= 0 || imageCount <= 0)
-    {
-        return selected;
-    }
-
-    std::vector<std::vector<const OverlapPairResult *>> incident(
-        static_cast<std::size_t>(imageCount));
-    for (const OverlapPairResult &pair : pairs)
-    {
-        const bool validIndices = pair.indexA >= 0 && pair.indexB >= 0 &&
-            pair.indexA < imageCount && pair.indexB < imageCount && pair.indexA != pair.indexB;
-        if (!validIndices)
-        {
-            continue;
-        }
-        incident[static_cast<std::size_t>(pair.indexA)].push_back(&pair);
-        incident[static_cast<std::size_t>(pair.indexB)].push_back(&pair);
-    }
-
-    for (auto &neighbors : incident)
-    {
-        std::sort(neighbors.begin(), neighbors.end(), [](const auto *lhs, const auto *rhs)
-        {
-            if (lhs->overlapScore != rhs->overlapScore)
-            {
-                return lhs->overlapScore > rhs->overlapScore;
-            }
-            return std::tie(lhs->indexA, lhs->indexB) < std::tie(rhs->indexA, rhs->indexB);
-        });
-        const int keep = std::min(topK, static_cast<int>(neighbors.size()));
-        for (int index = 0; index < keep; ++index)
-        {
-            const auto *pair = neighbors[static_cast<std::size_t>(index)];
-            selected.insert(static_cast<quint64>(indexPairKey(pair->indexA, pair->indexB)));
-        }
-    }
-    return selected;
-}
-
-void addOverlapResultPairs(PairSelectionResult *result,
-                           const QStringList &images,
-                           const OverlapAnalysisResult &overlapResult,
-                           int topKPerImage)
-{
-    const QSet<quint64> selected = topOverlapPairKeysPerImage(
-        overlapResult.pairs, images.size(), topKPerImage);
-    for (const OverlapPairResult &pair : overlapResult.pairs)
-    {
-        if (topKPerImage > 0 &&
-            !selected.contains(static_cast<quint64>(indexPairKey(pair.indexA, pair.indexB))))
-        {
-            continue;
-        }
-        PairCandidate *candidate = addOrUpdateCandidate(result,
-                                                        images,
-                                                        pair.indexA,
-                                                        pair.indexB,
-                                                        PairSource::CameraOverlap,
-                                                        100.0 + 50.0 * pair.overlapScore);
-        if (candidate)
-        {
-            candidate->overlapScore = std::max(candidate->overlapScore, pair.overlapScore);
-        }
-    }
-}
-
-QSet<quint64> topVocabularyPairKeysPerImage(
-    const std::vector<VocabularyOverlapPairResult> &pairs,
-    int imageCount,
-    int topK)
-{
-    QSet<quint64> selected;
-    if (topK <= 0 || imageCount <= 0)
-    {
-        return selected;
-    }
-
-    std::vector<std::vector<const VocabularyOverlapPairResult *>> incident(
-        static_cast<std::size_t>(imageCount));
-    for (const VocabularyOverlapPairResult &pair : pairs)
-    {
-        if (!pair.accepted || pair.indexA < 0 || pair.indexB < 0 ||
-            pair.indexA >= imageCount || pair.indexB >= imageCount || pair.indexA == pair.indexB)
-        {
-            continue;
-        }
-        incident[static_cast<std::size_t>(pair.indexA)].push_back(&pair);
-        incident[static_cast<std::size_t>(pair.indexB)].push_back(&pair);
-    }
-
-    for (auto &neighbors : incident)
-    {
-        std::sort(neighbors.begin(), neighbors.end(), [](const auto *lhs, const auto *rhs)
-        {
-            if (lhs->bowScore != rhs->bowScore)
-            {
-                return lhs->bowScore > rhs->bowScore;
-            }
-            return std::tie(lhs->indexA, lhs->indexB) < std::tie(rhs->indexA, rhs->indexB);
-        });
-        const int keep = std::min(topK, static_cast<int>(neighbors.size()));
-        for (int index = 0; index < keep; ++index)
-        {
-            const auto *pair = neighbors[static_cast<std::size_t>(index)];
-            selected.insert(static_cast<quint64>(indexPairKey(pair->indexA, pair->indexB)));
-        }
-    }
-    return selected;
-}
-
-void addVocabularyPairs(PairSelectionResult *result,
-                        const QStringList &images,
-                        const VocabularyOverlapResult &vocabularyResult,
-                        int topKPerImage)
-{
-    // 优先使用 retriever 的 acceptedPairs。
-    // 如果只有 candidates，则只保留 accepted=true 的候选，避免把被拒绝的诊断行
-    // 静默变成真正要执行的匹配任务。
-    const std::vector<VocabularyOverlapPairResult> &pairs =
-        vocabularyResult.acceptedPairs.empty() ? vocabularyResult.candidates : vocabularyResult.acceptedPairs;
-    const QSet<quint64> selected = topVocabularyPairKeysPerImage(
-        pairs, images.size(), topKPerImage);
-    for (const VocabularyOverlapPairResult &pair : pairs)
-    {
-        if (!pair.accepted)
-        {
-            continue;
-        }
-        if (topKPerImage > 0 &&
-            !selected.contains(static_cast<quint64>(indexPairKey(pair.indexA, pair.indexB))))
-        {
-            continue;
-        }
-
-        PairCandidate *candidate = addOrUpdateCandidate(result,
-                                                        images,
-                                                        pair.indexA,
-                                                        pair.indexB,
-                                                        PairSource::VocabularyOverlap,
-                                                        80.0 + 40.0 * pair.bowScore);
-        if (candidate)
-        {
-            candidate->vocabularyScore = std::max(candidate->vocabularyScore, pair.bowScore);
-            candidate->sharedWordCount = std::max(candidate->sharedWordCount, pair.sharedWordCount);
-            candidate->geometricInliers = std::max(candidate->geometricInliers, pair.geometricInliers);
-        }
-    }
-}
-
-int findComponentRoot(std::vector<int> *parents, int index)
-{
-    if (!parents || index < 0 || index >= static_cast<int>(parents->size()))
-    {
-        return index;
-    }
-
-    int root = index;
-    while ((*parents)[root] != root)
-    {
-        root = (*parents)[root];
-    }
-
-    while ((*parents)[index] != index)
-    {
-        const int parent = (*parents)[index];
-        (*parents)[index] = root;
-        index = parent;
-    }
-    return root;
-}
-
-void uniteComponents(std::vector<int> *parents, int lhs, int rhs)
-{
-    const int rootL = findComponentRoot(parents, lhs);
-    const int rootR = findComponentRoot(parents, rhs);
-    if (rootL != rootR)
-    {
-        (*parents)[rootR] = rootL;
-    }
-}
-
-int addSequenceBridgeCandidates(PairSelectionResult *result, const QStringList &images, int window)
-{
-    if (!result || result->candidates.empty() || images.size() < 2)
-    {
-        return 0;
-    }
-
-    const int imageCount = static_cast<int>(images.size());
-    std::vector<int> parents(static_cast<std::size_t>(imageCount));
-    for (int i = 0; i < imageCount; ++i)
-    {
-        parents[static_cast<std::size_t>(i)] = i;
-    }
-
-    for (const PairCandidate &candidate : result->candidates)
-    {
-        if (candidate.pair.isValid(imageCount))
-        {
-            uniteComponents(&parents, candidate.pair.indexA, candidate.pair.indexB);
-        }
-    }
-
-    auto componentCount = [&]() -> int
-    {
-        QSet<int> roots;
-        for (int i = 0; i < imageCount; ++i)
-        {
-            roots.insert(findComponentRoot(&parents, i));
-        }
-        return roots.size();
-    };
-
-    if (componentCount() <= 1)
-    {
-        return 0;
-    }
-
-    int added = 0;
-    const int safeWindow = std::max(1, window);
-    for (int distance = 1; distance <= safeWindow && componentCount() > 1; ++distance)
-    {
-        for (int i = 0; i + distance < imageCount && componentCount() > 1; ++i)
-        {
-            const int j = i + distance;
-            const int rootI = findComponentRoot(&parents, i);
-            const int rootJ = findComponentRoot(&parents, j);
-            if (rootI == rootJ)
-            {
-                continue;
+                return imageCount > 1 ? imageCount * (imageCount - 1) / 2 : 0;
             }
 
-            // 通用/词汇预选可能只在局部分量内召回影像对。这里仅补跨分量的
-            // 序列桥接边，给后续匹配和 SfM 一次把分量接起来的机会。
-            const double sequenceScore =
-                static_cast<double>(safeWindow - distance + 1) / static_cast<double>(safeWindow);
-            PairCandidate *candidate =
-                addOrUpdateCandidate(result, images, i, j, PairSource::SequenceWindow, 40.0 + 10.0 * sequenceScore);
-            if (candidate)
+            PairCandidate* findCandidate(std::vector<PairCandidate>* candidates, const QString& pairKey)
             {
-                candidate->sequenceScore = std::max(candidate->sequenceScore, sequenceScore);
-                candidate->detail = QStringLiteral("sequence bridge for disconnected preselection graph");
+                if (!candidates || pairKey.isEmpty())
+                {
+                    return nullptr;
+                }
+
+                const auto found =
+                    std::find_if(candidates->begin(),
+                                 candidates->end(),
+                                 [&](const PairCandidate& candidate) { return candidate.pairKey == pairKey; });
+                return found == candidates->end() ? nullptr : &*found;
             }
-            uniteComponents(&parents, i, j);
-            ++added;
-        }
-    }
 
-    return added;
-}
-
-void finalizePairSelection(PairSelectionResult *result, int maxPairs)
-{
-    if (!result)
-    {
-        return;
-    }
-
-    // 人工审查和调试时需要稳定输出：先按 priorityScore 决定计划顺序，
-    // 同分时用 pairKey 保证跨运行顺序确定。
-    std::sort(result->candidates.begin(), result->candidates.end(),
-              [](const PairCandidate &lhs, const PairCandidate &rhs)
-    {
-        if (lhs.priorityScore != rhs.priorityScore)
-        {
-            return lhs.priorityScore > rhs.priorityScore;
-        }
-        return lhs.pairKey < rhs.pairKey;
-    });
-
-    if (maxPairs > 0 && static_cast<int>(result->candidates.size()) > maxPairs)
-    {
-        result->candidates.resize(static_cast<std::size_t>(maxPairs));
-    }
-
-    result->allowedPairKeys.clear();
-    for (const PairCandidate &candidate : result->candidates)
-    {
-        if (!candidate.pairKey.isEmpty())
-        {
-            result->allowedPairKeys.append(candidate.pairKey);
-        }
-    }
-}
-
-bool coversAllImagePairs(const PairSelectionResult &result, const QStringList &images)
-{
-    if (result.allPairCount <= 0 || result.allowedPairKeys.size() != result.allPairCount)
-    {
-        return false;
-    }
-
-    QSet<QString> allowedKeys;
-    allowedKeys.reserve(result.allowedPairKeys.size());
-    for (const QString &pairKey : result.allowedPairKeys)
-    {
-        allowedKeys.insert(pairKey);
-    }
-
-    for (int indexA = 0; indexA < images.size(); ++indexA)
-    {
-        for (int indexB = indexA + 1; indexB < images.size(); ++indexB)
-        {
-            const QString pairKey = makePairKey(images, indexA, indexB);
-            if (pairKey.isEmpty() || !allowedKeys.contains(pairKey))
+            PairCandidate* addCandidate(PairSelectionResult* result,
+                                        const QStringList& images,
+                                        int indexA,
+                                        int indexB,
+                                        PairSource source,
+                                        double priorityScore)
             {
-                return false;
+                if (!result)
+                {
+                    return nullptr;
+                }
+
+                const ImagePair pair{indexA, indexB};
+                if (!pair.isValid(images.size()))
+                {
+                    return nullptr;
+                }
+
+                const QString pairKey = makePairKey(images, indexA, indexB);
+                PairCandidate* candidate = findCandidate(&result->candidates, pairKey);
+                if (!candidate)
+                {
+                    PairCandidate created;
+                    created.pair = pair.normalized();
+                    created.pairKey = pairKey;
+                    result->candidates.push_back(std::move(created));
+                    candidate = &result->candidates.back();
+                }
+                else if (!candidate->pair.isValid(images.size()))
+                {
+                    candidate->pair = pair.normalized();
+                }
+
+                appendPairSource(candidate, source);
+                candidate->priorityScore += std::max(0.0, priorityScore);
+                return candidate;
             }
-        }
-    }
-    return true;
-}
 
-} // namespace
+            void addManualCandidates(PairSelectionResult* result, const QStringList& pairKeys)
+            {
+                QSet<QString> seen;
+                for (const QString& pairKey : pairKeys)
+                {
+                    const QString trimmed = pairKey.trimmed();
+                    if (trimmed.isEmpty() || seen.contains(trimmed))
+                    {
+                        continue;
+                    }
 
-PairSelectionResult PairSelector::select(const PairSelectionInput &input,
-                                         const PairSelectionPolicy &policy,
-                                         QString *errorMessage)
-{
-    if (errorMessage)
-    {
-        errorMessage->clear();
-    }
+                    seen.insert(trimmed);
+                    PairCandidate candidate;
+                    candidate.pairKey = trimmed;
+                    candidate.priorityScore = 1000.0;
+                    candidate.detail = QStringLiteral("manual pair");
+                    appendPairSource(&candidate, PairSource::Manual);
+                    result->candidates.push_back(std::move(candidate));
+                }
+            }
 
-    PairSelectionResult result;
-    result.imageCount = input.images.size();
-    result.allPairCount = allPairCount(result.imageCount);
+            void addExhaustiveCandidates(PairSelectionResult* result, const QStringList& images)
+            {
+                for (int first = 0; first < images.size(); ++first)
+                {
+                    for (int second = first + 1; second < images.size(); ++second)
+                    {
+                        addCandidate(result, images, first, second, PairSource::Exhaustive, 10.0);
+                    }
+                }
+            }
 
-    if (result.imageCount < 2 && input.manualPairKeys.isEmpty())
-    {
-        result.detail = QStringLiteral("影像数量不足，未生成候选对");
-        return result;
-    }
+            void addSequenceCandidates(PairSelectionResult* result,
+                                       const QStringList& images,
+                                       int window,
+                                       bool closeSequenceLoop)
+            {
+                if (images.size() < 2)
+                {
+                    return;
+                }
 
-    const bool manualOnly = policy.mode == PairSelectionMode::ManualOnly;
-    if (!input.manualPairKeys.isEmpty())
-    {
-        addManualCandidates(&result, input.manualPairKeys);
-        result.restrictPairs = true;
-    }
+                const int imageCount = static_cast<int>(images.size());
+                const int safeWindow = std::min(std::max(1, window), imageCount - 1);
+                for (int first = 0; first < imageCount; ++first)
+                {
+                    for (int second = first + 1; second < imageCount; ++second)
+                    {
+                        const int linearDistance = second - first;
+                        const int distance =
+                            closeSequenceLoop ? std::min(linearDistance, imageCount - linearDistance) : linearDistance;
+                        if (distance > safeWindow)
+                        {
+                            continue;
+                        }
 
-    // 对小数据集，全量匹配仍然是最干净的选择：
-    // 在缺少其它证据前，不提前丢弃任何可能的影像对。
-    const bool hasExternalPreselection =
-        (policy.includeCameraOverlap &&
-         (!input.knownCameraOverlapPairs.empty() || input.cameraOverlapResult)) ||
-        (policy.includeVocabularyOverlap && input.vocabularyOverlapResult);
-    const bool useExhaustive =
-        policy.mode == PairSelectionMode::Exhaustive ||
-        (policy.mode == PairSelectionMode::Auto &&
-         result.imageCount <= std::max(2, policy.exhaustiveMaxImages) &&
-         !hasExternalPreselection &&
-         !manualOnly);
+                        const double sequenceScore =
+                            static_cast<double>(safeWindow - distance + 1) / static_cast<double>(safeWindow);
+                        PairCandidate* candidate = addCandidate(
+                            result, images, first, second, PairSource::SequenceWindow, 40.0 + 10.0 * sequenceScore);
+                        if (candidate)
+                        {
+                            candidate->sequenceScore = sequenceScore;
+                        }
+                    }
+                }
+            }
 
-    if (!manualOnly && useExhaustive)
-    {
-        addExhaustiveCandidates(&result, input.images);
-        result.restrictPairs = false;
-    }
+            void finalize(PairSelectionResult* result, int maxPairs)
+            {
+                std::sort(result->candidates.begin(),
+                          result->candidates.end(),
+                          [](const PairCandidate& left, const PairCandidate& right)
+                          {
+                              if (left.priorityScore != right.priorityScore)
+                              {
+                                  return left.priorityScore > right.priorityScore;
+                              }
+                              return left.pairKey < right.pairKey;
+                          });
 
-    if (!manualOnly && policy.includeCameraOverlap)
-    {
-        // 相机重叠和词汇召回候选是叠加信号。
-        // 它们可以提升已经由全量/手动来源加入的影像对。
-        addKnownCameraOverlapPairs(&result, input.images, input.knownCameraOverlapPairs);
-        if (input.cameraOverlapResult)
+                if (maxPairs > 0 && static_cast<int>(result->candidates.size()) > maxPairs)
+                {
+                    result->candidates.resize(static_cast<std::size_t>(maxPairs));
+                }
+
+                for (const PairCandidate& candidate : result->candidates)
+                {
+                    if (!candidate.pairKey.isEmpty())
+                    {
+                        result->allowedPairKeys.append(candidate.pairKey);
+                    }
+                }
+            }
+
+        } // namespace
+
+        PairSelectionResult
+        PairSelector::select(const PairSelectionInput& input, const PairSelectionPolicy& policy, QString* errorMessage)
         {
-            addOverlapResultPairs(&result,
-                                  input.images,
-                                  *input.cameraOverlapResult,
-                                  policy.cameraOverlapTopKPerImage);
+            if (errorMessage)
+            {
+                errorMessage->clear();
+            }
+
+            PairSelectionResult result;
+            result.imageCount = input.images.size();
+            result.allPairCount = allPairCount(result.imageCount);
+            addManualCandidates(&result, input.manualPairKeys);
+
+            const bool manualOnly = policy.mode == PairSelectionMode::ManualOnly;
+            const bool useExhaustive = policy.mode == PairSelectionMode::Exhaustive ||
+                                       (policy.mode == PairSelectionMode::Auto &&
+                                        result.imageCount <= std::max(2, policy.exhaustiveMaxImages));
+            if (!manualOnly && useExhaustive)
+            {
+                addExhaustiveCandidates(&result, input.images);
+            }
+            else if (!manualOnly && (policy.mode == PairSelectionMode::Sequence ||
+                                     (policy.mode == PairSelectionMode::Auto && policy.useSequenceFallback)))
+            {
+                addSequenceCandidates(&result, input.images, policy.sequenceWindow, policy.closeSequenceLoop);
+            }
+
+            finalize(&result, policy.maxPairs);
+            result.restrictPairs = manualOnly || policy.maxPairs > 0 ||
+                                   static_cast<int>(result.allowedPairKeys.size()) != result.allPairCount;
+            result.detail = QStringLiteral("影像 %1 张，候选对 %2/%3，%4")
+                                .arg(result.imageCount)
+                                .arg(result.allowedPairKeys.size())
+                                .arg(result.allPairCount)
+                                .arg(result.restrictPairs ? QStringLiteral("限制匹配对") : QStringLiteral("全量匹配"));
+            return result;
         }
-    }
 
-    if (!manualOnly && policy.includeVocabularyOverlap && input.vocabularyOverlapResult)
-    {
-        addVocabularyPairs(&result,
-                           input.images,
-                           *input.vocabularyOverlapResult,
-                           policy.vocabularyTopKPerImage);
-    }
-
-    if (!manualOnly &&
-        !useExhaustive &&
-        (policy.mode == PairSelectionMode::Sequence ||
-         (policy.mode == PairSelectionMode::Auto &&
-          result.candidates.empty() &&
-          !hasExternalPreselection &&
-          policy.useSequenceFallback)))
-    {
-        // 序列窗口 fallback 有意放在最后：
-        // 当 overlap 或 retrieval 已提供更强先验时，应优先使用那些结果。
-        addSequenceCandidates(&result,
-                              input.images,
-                              policy.sequenceWindow,
-                              policy.closeSequenceLoop);
-        result.restrictPairs = true;
-    }
-
-    if (!manualOnly &&
-        !useExhaustive &&
-        hasExternalPreselection &&
-        policy.useSequenceFallback &&
-        !result.candidates.empty())
-    {
-        const int bridgeCount = addSequenceBridgeCandidates(&result, input.images, policy.sequenceWindow);
-        if (bridgeCount > 0)
-        {
-            result.restrictPairs = true;
-        }
-    }
-
-    finalizePairSelection(&result, policy.maxPairs);
-    // 完整的全量列表用“非限制匹配”表示，
-    // 下游无需携带一份冗余的 N^2 白名单。
-    if (coversAllImagePairs(result, input.images))
-    {
-        result.restrictPairs = false;
-    }
-    else if (!result.allowedPairKeys.isEmpty())
-    {
-        result.restrictPairs = true;
-    }
-    else if (hasExternalPreselection)
-    {
-        result.restrictPairs = true;
-    }
-
-    const auto sourceCount = [&result](PairSource source)
-    {
-        return static_cast<int>(std::count_if(
-            result.candidates.cbegin(), result.candidates.cend(), [source](const PairCandidate &candidate)
-        {
-            return std::find(candidate.sources.cbegin(), candidate.sources.cend(), source) !=
-                candidate.sources.cend();
-        }));
-    };
-    result.detail = QStringLiteral("影像 %1 张，候选对 %2/%3，位姿 %4，词汇 %5，%6")
-                        .arg(result.imageCount)
-                        .arg(result.allowedPairKeys.size())
-                        .arg(result.allPairCount)
-                        .arg(sourceCount(PairSource::CameraOverlap))
-                        .arg(sourceCount(PairSource::VocabularyOverlap))
-                        .arg(result.restrictPairs ? QStringLiteral("限制匹配对")
-                                                  : QStringLiteral("全量匹配"));
-    return result;
-}
-
-} // namespace matchphotos
+    } // namespace matchphotos
 } // namespace xjw

@@ -18,11 +18,16 @@ TEST(MatchPhotosCliGTest, DedicatedTargetExposesCurrentMatchingWorkflowOptions)
     });
     expectContainsAll(matchSource, {
         "MatchPhotosTask task",
+        "algorithmIdArg = \"plamatch_hct\"",
         "--keypoint-limit",
         "--keypoint-limit-per-mpx",
         "--tiepoint-limit",
         "--mask-apply-mode",
+        "--reference-preselection-mode",
+        "--reference-preselection-neighbors",
         "--guided-image-matching",
+        "highest, high, medium, low, lowest",
+        "alignment_downscale",
         "match_photos_report.json",
     });
 }
@@ -65,42 +70,57 @@ TEST(MatchPhotosCliGTest, AcceptsImageOnlyListInPlanMode)
     const QJsonObject report = readJsonObject(reportMatch.captured(1).trimmed());
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
+    EXPECT_EQ(report.value(QStringLiteral("options"))
+                  .toObject()
+                  .value(QStringLiteral("reference_preselection_mode"))
+                  .toString(),
+              QStringLiteral("source"));
+    EXPECT_EQ(
+        report.value(QStringLiteral("algorithm_plan")).toObject().value(QStringLiteral("algorithm_id")).toString(),
+        QStringLiteral("plamatch_hct"));
 }
 
 TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/features/cli_feature_match.cpp"));
-    expectContainsAll(source, {
-        "--left",
-        "--right",
-        "--output-dir",
-        "--device",
-        "auto_sift",
-        "sift_lightglue",
-        "MatchPhotosTask",
-        ".pimatch",
-    });
-    expectNotContainsAll(source, {
-        "--sp1",
-        "--sp2",
-        "QStringLiteral(\"bf\")",
-        ".match.json",
-        "FeatureFileIO",
-    });
+    const QString source = readSourceFile(QStringLiteral("src/cli/features/cli_feature_match.cpp"));
+    expectContainsAll(source,
+                      {
+                          "algorithmIdArg = \"plamatch_hct\"",
+                          "--left",
+                          "--right",
+                          "--output-dir",
+                          "--device",
+                          "--quality",
+                          "highest, high, medium, low, lowest",
+                          "auto_sift",
+                          "plamatch_hct",
+                          "sift_lightglue",
+                          "MatchPhotosTask",
+                          ".pimatch",
+                      });
+    expectNotContainsAll(source,
+                         {
+                             "--sp1",
+                             "--sp2",
+                             "QStringLiteral(\"bf\")",
+                             ".match.json",
+                             "FeatureFileIO",
+                         });
 
     const QString exe = executablePath(PLASCAN_FEATURE_MATCH_CLI_PATH);
     SKIP_IF_MISSING_EXECUTABLE(exe);
 
     const CliResult result = runCli(exe, {QStringLiteral("--help")});
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
-    expectContainsAll(combinedOutput(result), {
-        "--left",
-        "--right",
-        "--output-dir",
-        "--device",
-        "auto_sift",
-        "sift_lightglue",
-    });
+    expectContainsAll(combinedOutput(result),
+                      {
+                          "--left",
+                          "--right",
+                          "--output-dir",
+                          "--device",
+                          "auto_sift",
+                          "plamatch_hct",
+                          "sift_lightglue",
+                      });
     expectNotContainsAll(combinedOutput(result), {"--sp1", "--sp2", " bf"});
 }

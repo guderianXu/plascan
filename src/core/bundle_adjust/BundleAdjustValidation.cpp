@@ -301,6 +301,13 @@ namespace xjw::detail
         return std::isfinite(observation.weight) && observation.weight > 0.0 ? observation.weight : 0.0;
     }
 
+    double sanitizedMeasurementScale(const BAObservation& observation)
+    {
+        return std::isfinite(observation.measurementScale) && observation.measurementScale > 0.0
+                   ? observation.measurementScale
+                   : 1.0;
+    }
+
     bool observationIsUsable(const BAObservation& observation, std::size_t cameraCount)
     {
         return observation.cameraIndex >= 0 && static_cast<std::size_t>(observation.cameraIndex) < cameraCount &&
@@ -482,14 +489,16 @@ namespace xjw::detail
         {
             return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 相机标定分组 ID 不能为负数");
         }
-        if (!std::isfinite(requestedOptions.sharedFocalWarmupFraction) ||
-            requestedOptions.sharedFocalWarmupFraction < 0.0 || requestedOptions.sharedFocalWarmupFraction >= 1.0)
-        {
-            return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 自标定预热比例必须位于 [0, 1)");
-        }
         if (requestedOptions.maxDenseSchurCameras <= 0)
         {
             return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 稠密 Schur 相机阈值必须为正数");
+        }
+        if (!std::isfinite(requestedOptions.referenceArmijoCoefficient) ||
+            requestedOptions.referenceArmijoCoefficient <= 0.0 || requestedOptions.referenceArmijoCoefficient >= 1.0 ||
+            requestedOptions.referenceLineSearchSteps <= 0 || requestedOptions.referenceLineSearchSteps > 64)
+        {
+            return invalid(BASolveStatus::InvalidInput,
+                           "BA 输入验证失败: 参考 BA Armijo 参数必须满足 coefficient∈(0,1)、steps∈[1,64]");
         }
         if (!std::isfinite(requestedOptions.maxInitialTrackRms) || requestedOptions.maxInitialTrackRms < 0.0)
         {
@@ -684,14 +693,18 @@ namespace xjw::detail
                 return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 固定相机索引重复");
             }
         }
-        if (!std::isfinite(requestedOptions.minPlaMatrixLinearTolerance) ||
-            !std::isfinite(requestedOptions.maxPlaMatrixLinearTolerance) ||
-            !std::isfinite(requestedOptions.plaMatrixLinearForcingScale) ||
-            requestedOptions.minPlaMatrixLinearTolerance <= 0.0 ||
-            requestedOptions.maxPlaMatrixLinearTolerance < requestedOptions.minPlaMatrixLinearTolerance ||
-            requestedOptions.maxPlaMatrixLinearTolerance > 1.0 || requestedOptions.plaMatrixLinearForcingScale <= 0.0)
+        const bool hasRequestedReferenceGauge = requestedOptions.referenceGaugeAnchorCameraIndex >= 0 ||
+                                                requestedOptions.referenceGaugeScaleCameraIndex >= 0 ||
+                                                requestedOptions.referenceGaugeBaseline > 0.0;
+        if (hasRequestedReferenceGauge &&
+            (requestedOptions.referenceGaugeAnchorCameraIndex < 0 ||
+             requestedOptions.referenceGaugeScaleCameraIndex < 0 ||
+             requestedOptions.referenceGaugeAnchorCameraIndex >= static_cast<int>(cameras.size()) ||
+             requestedOptions.referenceGaugeScaleCameraIndex >= static_cast<int>(cameras.size()) ||
+             requestedOptions.referenceGaugeAnchorCameraIndex == requestedOptions.referenceGaugeScaleCameraIndex ||
+             !std::isfinite(requestedOptions.referenceGaugeBaseline) || requestedOptions.referenceGaugeBaseline <= 0.0))
         {
-            return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: PlaMatrix 动态线性容差配置非法");
+            return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 参考 BA 定长基线 gauge 非法");
         }
         if (requestedOptions.plaMatrixPreconditionerClusterSize <= 0 ||
             requestedOptions.plaMatrixPreconditionerClusterSize > 16)
@@ -785,7 +798,14 @@ namespace xjw::detail
                 return invalid(BASolveStatus::UnsupportedConfiguration,
                                "BA gauge 自动锚定失败: 未找到具有非零基线的第二台相机");
             }
-            normalizedOptions->fixedCameraIndices.push_back(secondIndex);
+            const auto anchor = cameras[static_cast<std::size_t>(anchorIndex)].cameraCenter();
+            const auto second = cameras[static_cast<std::size_t>(secondIndex)].cameraCenter();
+            const double dx = second[0] - anchor[0];
+            const double dy = second[1] - anchor[1];
+            const double dz = second[2] - anchor[2];
+            normalizedOptions->referenceGaugeAnchorCameraIndex = anchorIndex;
+            normalizedOptions->referenceGaugeScaleCameraIndex = secondIndex;
+            normalizedOptions->referenceGaugeBaseline = std::sqrt(dx * dx + dy * dy + dz * dz);
         }
 
         return {};

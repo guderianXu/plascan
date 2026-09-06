@@ -72,7 +72,8 @@ namespace xjw::hierarchical_ba_detail
                     continue;
                 }
                 const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-                track.observations.push_back({index->second, keypoint.x, keypoint.y, point.track.confidence});
+                track.observations.push_back(
+                    {index->second, keypoint.x, keypoint.y, point.track.confidence, keypoint.scale});
                 touches_core = touches_core || core_ids.count(element.imageId) > 0;
             }
             if (touches_core && track.observations.size() >= 2)

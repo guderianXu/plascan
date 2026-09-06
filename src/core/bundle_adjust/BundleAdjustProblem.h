@@ -19,6 +19,9 @@ namespace xjw
         double u = 0.0;       ///< 相机像平面上的 u（列）坐标（像素）
         double v = 0.0;       ///< 相机像平面上的 v（行）坐标（像素）
         double weight = 1.0;  ///< 观测置信权重，通常来自特征尺度、匹配分数或 track confidence
+        /// 特征检测尺度（像素）。参考 BA 使用 `weight / measurementScale^2`
+        /// 对像方残差白化；保持独立字段，避免把描述子置信度与定位精度混为一谈。
+        double measurementScale = 1.0;
     };
 
     /**
@@ -133,9 +136,9 @@ namespace xjw
      */
     struct BATrack
     {
-        std::array<double, 3> initialPoint{{0.0, 0.0, 0.0}};           ///< 三维点的初始坐标（优化起始值）
-        std::vector<BAObservation> observations;                       ///< 所有相机中对该点的观测列表
-        std::vector<BALaserPlaneConstraint> laserPlaneConstraints;     ///< 可选 LiDAR 点到面软约束
+        std::array<double, 3> initialPoint{{0.0, 0.0, 0.0}};       ///< 三维点的初始坐标（优化起始值）
+        std::vector<BAObservation> observations;                   ///< 所有相机中对该点的观测列表
+        std::vector<BALaserPlaneConstraint> laserPlaneConstraints; ///< 可选 LiDAR 点到面软约束
         std::vector<BAControlPointConstraint> controlPointConstraints; ///< 可选 GCP/控制点软约束
     };
 

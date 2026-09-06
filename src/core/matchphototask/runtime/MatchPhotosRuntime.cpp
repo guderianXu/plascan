@@ -866,19 +866,19 @@ int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
     {
         const double megapixels = static_cast<double>(imageWidth) *
             static_cast<double>(imageHeight) / 1000000.0;
-        return std::max(1,
-                        static_cast<int>(std::round(
-                            static_cast<double>(options.keypointLimitPerMegapixel) * megapixels)));
+        return std::max(
+            1, static_cast<int>(std::round(static_cast<double>(options.keypointLimitPerMegapixel) * megapixels)));
     }
     return std::max(0, plan.maxKeypoints);
 }
 
-QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
-                                      const MatchPhotosOptions &options)
+QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan& plan, const MatchPhotosOptions& options)
 {
     QJsonObject settings;
     settings[QStringLiteral("algorithm_id")] = plan.algorithmId;
     settings[QStringLiteral("algorithm_version")] = static_cast<int>(plan.algorithmVersion);
+    settings[QStringLiteral("alignment_accuracy")] = alignmentAccuracyName(options.accuracy);
+    settings[QStringLiteral("alignment_downscale")] = plan.alignmentDownscale;
     settings[QStringLiteral("max_keypoints")] = plan.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
@@ -888,11 +888,11 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     return settings;
 }
 
-QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
-                                    const MatchPhotosOptions &options,
-                                    const ResolvedImagePair &pair,
+QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan& plan,
+                                    const MatchPhotosOptions& options,
+                                    const ResolvedImagePair& pair,
                                     int matchCount,
-                                    const QJsonObject &extraSettings)
+                                    const QJsonObject& extraSettings)
 {
     QJsonArray images;
     images.append(pair.image0Path);
@@ -906,24 +906,22 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("pair_key")] = pair.pairKey;
     settings[QStringLiteral("algorithm_id")] = plan.algorithmId;
     settings[QStringLiteral("algorithm_version")] = static_cast<int>(plan.algorithmVersion);
+    settings[QStringLiteral("alignment_accuracy")] = alignmentAccuracyName(options.accuracy);
+    settings[QStringLiteral("alignment_downscale")] = plan.alignmentDownscale;
     settings[QStringLiteral("match_threshold")] = static_cast<double>(options.matchThreshold);
     settings[QStringLiteral("sift_maximum_ratio")] = static_cast<double>(options.siftMaximumRatio);
-    settings[QStringLiteral("sift_minimum_adaptive_ratio")] =
-        static_cast<double>(options.siftMinimumAdaptiveRatio);
+    settings[QStringLiteral("sift_minimum_adaptive_ratio")] = static_cast<double>(options.siftMinimumAdaptiveRatio);
     settings[QStringLiteral("adaptive_sift_ratio")] = options.adaptiveSiftRatio;
     settings[QStringLiteral("low_texture_recovery")] = plan.lowTextureRecovery;
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("tie_point_frontend_version")] = kTiePointFrontendVersion;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
-    settings[QStringLiteral("mask_hard_exclusion_threshold")] =
-        static_cast<double>(options.maskHardExclusionThreshold);
-    settings[QStringLiteral("mask_minimum_tiepoint_weight")] =
-        static_cast<double>(options.maskMinimumTiepointWeight);
+    settings[QStringLiteral("mask_hard_exclusion_threshold")] = static_cast<double>(options.maskHardExclusionThreshold);
+    settings[QStringLiteral("mask_minimum_tiepoint_weight")] = static_cast<double>(options.maskMinimumTiepointWeight);
     settings[QStringLiteral("mask_relaxation_radius")] = options.maskRelaxationRadius;
     settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
-    settings[QStringLiteral("exclude_stationary_tie_points")] =
-        options.excludeStationaryTiePoints;
+    settings[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
     settings[QStringLiteral("num_matches")] = matchCount;
     settings[QStringLiteral("storage_format")] = QStringLiteral("pimatch");
     for (auto it = extraSettings.constBegin(); it != extraSettings.constEnd(); ++it)

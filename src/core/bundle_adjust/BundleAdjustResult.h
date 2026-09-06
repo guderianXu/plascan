@@ -19,8 +19,8 @@ namespace xjw
      */
     struct BARefinedPoint
     {
-        bool valid = false;                           ///< 优化结果是否有效（点坐标有限且 rmsAfter 有限）
-        bool converged = false;                       ///< 是否在容差内收敛
+        bool valid = false;     ///< 优化结果是否有效（点坐标有限且 rmsAfter 有限）
+        bool converged = false; ///< 是否在容差内收敛
         std::array<double, 3> point{{0.0, 0.0, 0.0}}; ///< 优化后的三维坐标
         double rmsBefore = 0.0;                       ///< 优化前重投影 RMS 误差（像素）
         double rmsAfter = 0.0;                        ///< 优化后重投影 RMS 误差（像素）
@@ -55,12 +55,12 @@ namespace xjw
      */
     struct BAResult
     {
-        BABackend requestedBackend = BABackend::LegacyCpu;  ///< 调用方请求的 BA 后端
-        BABackend usedBackend = BABackend::LegacyCpu;       ///< 实际执行的 BA 后端
-        BASolveStatus solveStatus = BASolveStatus::NotRun;  ///< 求解终止状态
-        bool solutionUsable = false;                        ///< 相机和点结果是否允许写回重建
-        bool usedGpu = false;                               ///< 本次 BA 是否实际启用了 GPU 求解
-        bool backendFallback = false;                       ///< 请求后端不可用时是否发生回退
+        BABackend requestedBackend = BABackend::PlaMatrixCpu; ///< 调用方请求的 BA 后端
+        BABackend usedBackend = BABackend::PlaMatrixCpu;      ///< 实际执行的 BA 后端
+        BASolveStatus solveStatus = BASolveStatus::NotRun;    ///< 求解终止状态
+        bool solutionUsable = false;                          ///< 相机和点结果是否允许写回重建
+        bool usedGpu = false;                                 ///< 本次 BA 是否实际启用了 GPU 求解
+        bool backendFallback = false;                         ///< 请求后端不可用时是否发生回退
         std::string backendMessage;                         ///< 后端选择/回退说明，便于 GUI 和日志展示
         std::string backendSelectionReason;                 ///< Auto 后端选择、拒绝或回退原因
         bool qualityGateRejected = false;                   ///< Auto 候选后端是否被质量门控拒绝
@@ -78,7 +78,8 @@ namespace xjw
         int plaMatrixLinearizations = 0;                    ///< 实际构建 Jacobian/法方程的次数
         int plaMatrixObjectiveEvaluations = 0;              ///< 完整目标函数遍历次数（含线性化）
         int plaMatrixRejectedInitialTracks = 0;             ///< PlaMatrix 初始 gross gate 拒绝的 track 数
-        std::string plaMatrixLinearSolverName = "none";     ///< CPU/CUDA/OpenCL Schur PCG 名称
+        bool plaMatrixReferenceOnlineSchurUsed = false;     ///< 是否实际使用参考在线点 Schur 装配/回代
+        std::string plaMatrixLinearSolverName = "none";     ///< 实际 Schur 线性求解器名称
         std::string plaMatrixPreconditionerName = "none";   ///< 实际使用的 Schur 预条件器
         std::string plaMatrixDeviceName;                    ///< 实际执行 Schur PCG 的加速设备名
         int plaMatrixLinearIterations = 0;                  ///< 所有 LM trial 累计 PCG 迭代数
@@ -97,8 +98,10 @@ namespace xjw
         double plaMatrixSchurAccumulationSeconds = 0.0;     ///< Schur 数值累加累计耗时
         double plaMatrixCsrConversionSeconds = 0.0;         ///< CSR 构建及稠密转换累计耗时
         double plaMatrixSchurAssemblySeconds = 0.0;         ///< Schur 完整装配累计耗时
-        double plaMatrixCholeskyFactorizationSeconds = 0.0; ///< 稠密 Cholesky 分解累计耗时
-        double plaMatrixTriangularSolveSeconds = 0.0;       ///< 稠密三角回代累计耗时
+        double plaMatrixCholeskyFactorizationSeconds = 0.0; ///< 稠密/稀疏 Cholesky 数值分解累计耗时
+        double plaMatrixTriangularSolveSeconds = 0.0;       ///< 稠密/稀疏三角回代累计耗时
+        double plaMatrixSymbolicAnalysisSeconds = 0.0;      ///< 稀疏符号分析累计耗时
+        int plaMatrixSymbolicAnalysisReuses = 0;            ///< 原生稀疏符号分析复用次数
         double plaMatrixResidualCheckSeconds = 0.0;         ///< 线性残差检查累计耗时
         double plaMatrixLinearSolveSeconds = 0.0;           ///< 所有 LM trial 累计线性求解耗时
         double plaMatrixBackSubstitutionSeconds = 0.0;      ///< 消元变量回代累计耗时
@@ -120,6 +123,8 @@ namespace xjw
         double refinedSharedRadialK3 = 0.0;         ///< 优化后的标定组平均 Brown-Conrady k3。
         double refinedSharedTangentialP1 = 0.0;     ///< 优化后的标定组平均 Brown-Conrady p1。
         double refinedSharedTangentialP2 = 0.0;     ///< 优化后的标定组平均 Brown-Conrady p2。
+        /// 参考 BA 过渡先验通过归一化变化检验后可写回到下一轮的内参参数。
+        BAIntrinsicParameterMask referenceCommittedIntrinsicParameterMask{};
 
         int laserConstraintCount = 0;         ///< 参与统计/优化的 LiDAR 点到面约束数量
         double laserRmsBeforeMeters = 0.0;    ///< 优化前 LiDAR 点到面 RMS（米）
@@ -141,7 +146,7 @@ namespace xjw
 
         std::vector<BARefinedPoint> points; ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
         std::vector<BARefinedLaserRangeShot> laserRangeShots; ///< 与输入独立测距 shot 一一对应
-        std::vector<FramePinholeCamera> refinedCameras;       ///< 优化后的相机列表（与输入 cameras 长度相同）
+        std::vector<FramePinholeCamera> refinedCameras; ///< 优化后的相机列表（与输入 cameras 长度相同）
     };
 
 } // namespace xjw

@@ -17,14 +17,22 @@ namespace xjw
      */
     struct BAOptions
     {
-        static constexpr int kDefaultMinPlaMatrixGpuCameras = 24;
-        static constexpr int kDefaultMinPlaMatrixGpuObservations = 30000;
+        static constexpr int kAutoBackendPolicyVersion = 2;
+        static constexpr int kDefaultMinPlaMatrixCudaCameras = 128;
+        static constexpr int kDefaultMinPlaMatrixCudaObservations = 30000;
+        static constexpr int kDefaultMinPlaMatrixOpenClCameras = 160;
+        static constexpr int kDefaultMinPlaMatrixOpenClObservations = 50000;
+        static constexpr int kDefaultMinPlaMatrixDenseCameras = 120;
+        static constexpr int kDefaultMinPlaMatrixCudaDenseObservations = 150000;
+        static constexpr int kDefaultMinPlaMatrixOpenClDenseObservations = 200000;
+        static constexpr int kLegacyMinPlaMatrixGpuCameras = 24;
+        static constexpr int kLegacyMinPlaMatrixGpuObservations = 30000;
 
-        BABackend backend = BABackend::LegacyCpu; ///< BA 求解后端，默认保持原有 CPU 行为
-        int maxIterations = 20;                   ///< 外层交替优化最大迭代轮数（点+相机各一次为一轮）
-        int maxPointIterations = 12;              ///< 每轮内点位置优化的最大迭代次数
-        int maxCameraIterations = 10;             ///< 每轮内相机位姿优化的最大迭代次数
-        bool refineCameraPose = true;             ///< 是否同时优化相机位姿（false 则仅优化三维点）
+        BABackend backend = BABackend::PlaMatrixCpu; ///< CPU 默认使用参考兼容的联合 Schur BA
+        int maxIterations = 20;      ///< 联合非线性求解最大迭代数；参考 SfM 按阶段覆盖为 20 或 10
+        int maxPointIterations = 12; ///< 每轮内点位置优化的最大迭代次数
+        int maxCameraIterations = 10; ///< 每轮内相机位姿优化的最大迭代次数
+        bool refineCameraPose = true; ///< 是否同时优化相机位姿（false 则仅优化三维点）
 
         // ── 内参自标定 ────────────────────────────────────────────────────────
         /// 是否优化所有相机共享的焦距尺度。该选项面向无相机文件/无 EXIF 的空三，
@@ -59,7 +67,7 @@ namespace xjw
         double maxSharedFocalAspectScale = 1.18;
         /// 主点最大偏移，以标定组参考焦距的比例表示。
         double maxSharedPrincipalPointOffsetFraction = 0.08;
-        /// 扩展内参自标定的弱先验标准差。焦距和宽高比按 log 比例，主点按参考焦距比例。
+        /// 扩展内参自标定的弱先验标准差。焦距按相对比例、宽高比按 log 比例，主点按参考焦距比例。
         double sharedFocalPriorSigma = 0.35;
         double sharedPrincipalPointPriorSigmaFraction = 0.04;
         double sharedFocalAspectPriorSigma = 0.08;
@@ -77,10 +85,6 @@ namespace xjw
         /// 窄视场下把 k1/p1/p2 系数换算到统一参考像场的尺度。默认 1；
         /// 自适应模型按观测半径设置，求解器在边界和先验中一次性应用，避免多轮复合。
         double sharedLowOrderDistortionScale = 1.0;
-        /// 单次 LM 试探允许的最大焦距倍率，限制内参更新步长。
-        double maxSharedFocalStepScale = 1.20;
-        /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
-        int maxSharedFocalIterations = 6;
         /// 每台相机所属的内参标定组。为空表示所有相机共享组 0；非空时长度必须
         /// 与 cameras 相同，同组相机共享一个内参参数块，不同组独立自标定。
         std::vector<int> cameraCalibrationGroupIds;
@@ -89,15 +93,30 @@ namespace xjw
         /// 更新求解初值，同时继续相对同一参考设置焦距/宽高比范围、主点偏移和弱先验；
         /// Brown-Conrady 畸变硬边界仍是绝对范围。
         std::vector<FramePinholeCamera> sharedIntrinsicReferenceCameras;
-        /// 是否先固定共享内参稳定相机/三维点，再释放各标定组内参。
-        bool stageSharedFocalRefinement = true;
-        /// 分阶段自标定中用于固定焦距预热的迭代比例。
-        double sharedFocalWarmupFraction = 0.35;
-
-        double huberDelta = 3.0;     ///< Huber 损失阈值（像素），残差>delta 则降低权重以抑制粗差
+        double huberDelta = 3.0;     ///< 兼容字段；统一参考 BA 的影像残差固定使用普通最小二乘
         double finiteDiffEps = 1e-6; ///< 有限差分步长（中央差分: ±eps），用于近似雅可比
-        double damping = 1e-3;       ///< Levenberg-Marquardt 初始阻尼因子（自适应调整）
-        double stepTolerance = 1e-8; ///< 收敛判断阈值：步长小于此值则认为已收敛
+        double damping = 1e-3;       ///< 旧 LM 工程字段；参考 BA 固定从零阻尼开始
+        double stepTolerance = 1e-8; ///< 旧 LM 工程字段；参考 BA 固定使用 1e-6 RMS 更新阈值
+
+        // ── 参考 BA 数值策略 ──────────────────────────────────────────────────
+        /// PlaMatrix CPU/CUDA/OpenCL 统一使用“对齐照片”兼容策略：尺度白化、
+        /// 普通最小二乘、参考局部参数化、零阻尼起步和 Armijo 回溯。
+        /// 自由网固定锚相机；负值表示没有参考式定长基线 gauge。
+        int referenceGaugeAnchorCameraIndex = -1;
+        /// 自由网定长基线的另一台相机；其光心更新后投影回固定半径球面。
+        int referenceGaugeScaleCameraIndex = -1;
+        /// 定长基线半径。必须有限且大于零才启用参考式 gauge。
+        double referenceGaugeBaseline = 0.0;
+        /// Armijo 充分下降系数和最大回溯次数，与参考流程一致。
+        double referenceArmijoCoefficient = 1.0e-3;
+        int referenceLineSearchSteps = 34;
+        /// 参考空三主链在并行线性化阶段完成点局部 Schur 消元，并在求解后
+        /// 重新线性化完成点回代。普通独立 BA 和带物方扩展约束的任务保持旧路径。
+        bool useReferenceOnlineSchur = false;
+        /// SfM 自标定轮次启用参考实现的参数释放过渡先验。独立 BA 默认关闭，
+        /// 由增量 SfM 调度器携带上一轮真正提交的参数掩码。
+        bool useReferenceCalibrationTransitionPrior = false;
+        BAIntrinsicParameterMask referencePreviousIntrinsicParameterMask{};
 
         // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
         bool enableLaserPlaneConstraints = false; ///< 是否启用 BATrack 上挂载的 LiDAR 点到面约束
@@ -105,9 +124,9 @@ namespace xjw
         double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
 
         // ── 行星激光测高独立测距约束 ──────────────────────────────────────────
-        bool enableLaserRangeConstraints = false;                  ///< 是否启用独立 shot 的相机-落点测距约束
-        double laserRangeWeight = 1.0;                             ///< 所有 shot 的全局统计权重
-        double laserRangeHuberDelta = 3.0;                         ///< 标准差归一化测距残差的 Huber 阈值
+        bool enableLaserRangeConstraints = false; ///< 是否启用独立 shot 的相机-落点测距约束
+        double laserRangeWeight = 1.0;            ///< 所有 shot 的全局统计权重
+        double laserRangeHuberDelta = 3.0;        ///< 标准差归一化测距残差的 Huber 阈值
         std::vector<BALaserRangeConstraint> laserRangeConstraints; ///< 不属于 BATrack 的独立测距 shot
 
         // ── 测绘控制点软约束 ────────────────────────────────────────────────
@@ -157,30 +176,28 @@ namespace xjw
         bool logIterationProgress = true;
 
         // ── 后端与 GPU ─────────────────────────────────────────────────────────
-        /// PlaMatrix CUDA/OpenCL Schur PCG 使用的稳定设备索引。
+        /// PlaMatrix CUDA/OpenCL Schur PCG 使用的稳定设备索引。CPU 后端忽略此项。
         int plaMatrixDevice = 0;
         /// 实验性混合精度：先用 FP32 PCG 生成初值，再由 FP64 PCG 校正；
         /// 默认关闭，只有目标 GPU 上基准确认收益后才启用。
         bool enablePlaMatrixMixedPrecision = false;
-        /// Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小相机数量。
-        int minPlaMatrixGpuCameras = kDefaultMinPlaMatrixGpuCameras;
-        /// Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小观测数量。
-        int minPlaMatrixGpuObservations = kDefaultMinPlaMatrixGpuObservations;
+        /// Auto 常规规模选择 PlaMatrix CUDA 所需的最小相机数和观测数。
+        int minPlaMatrixCudaCameras = kDefaultMinPlaMatrixCudaCameras;
+        int minPlaMatrixCudaObservations = kDefaultMinPlaMatrixCudaObservations;
+        /// Auto 常规规模选择 PlaMatrix OpenCL 所需的最小相机数和观测数。
+        int minPlaMatrixOpenClCameras = kDefaultMinPlaMatrixOpenClCameras;
+        int minPlaMatrixOpenClObservations = kDefaultMinPlaMatrixOpenClObservations;
+        /// 高密度覆盖规则的共同最小相机数；低于此值始终保留 CPU，避免设备启动开销主导。
+        int minPlaMatrixDenseCameras = kDefaultMinPlaMatrixDenseCameras;
+        /// 达到高密度相机门槛后，CUDA/OpenCL 各自所需的最小观测数。
+        int minPlaMatrixCudaDenseObservations = kDefaultMinPlaMatrixCudaDenseObservations;
+        int minPlaMatrixOpenClDenseObservations = kDefaultMinPlaMatrixOpenClDenseObservations;
         /// 联合问题装配前允许的初始 track 重投影 RMS 上限（像素）；<=0 表示关闭。
         /// 该门控仅剔除会让联合试探步进入硬正深度惩罚的 gross outlier。
         double maxInitialTrackRms = 100.0;
-        /// PlaMatrix CPU 自动模式使用稠密 Schur Cholesky 的最大主变量块数量；
-        /// 超过后使用矩阵自由 PCG。
+        /// 旧 CPU 自动切换阈值；保留工程兼容，参考 CPU 固定使用直接 Cholesky。
         int maxDenseSchurCameras = 200;
-        /// 启用非精确 LM：根据上一接受步的非线性下降量动态设置 Schur PCG 容差。
-        bool enableInexactPlaMatrixLinearSolve = true;
-        /// 动态 Schur PCG 相对容差下限；无需把中间 LM 线性系统过度求解到机器精度。
-        double minPlaMatrixLinearTolerance = 1.0e-6;
-        /// 动态 Schur PCG 相对容差上限。
-        double maxPlaMatrixLinearTolerance = 2.0e-3;
-        /// 非线性相对下降量平方根到线性容差的缩放系数。
-        double plaMatrixLinearForcingScale = 0.1;
-        /// CPU Schur PCG 的连续相机块 cluster-Jacobi 大小；1 使用开销更低的 block-Jacobi。
+        /// CUDA/OpenCL Schur PCG 的连续相机块 cluster-Jacobi 大小；1 使用 block-Jacobi。
         int plaMatrixPreconditionerClusterSize = 1;
         /// 请求加速后端不可用或求解失败时是否允许回退到语义等价的 CPU 后端。
         bool allowBackendFallback = true;

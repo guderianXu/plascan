@@ -85,7 +85,8 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
         context.referenceCameras = projectManager->getCamerasForImages(images, &hasAllReferenceCameras);
         if (!hasAllReferenceCameras)
         {
-            LOG_WARN(QStringLiteral("参考预选已请求，但项目相机参考不完整；任务将返回明确错误"));
+            LOG_INFO(QStringLiteral(
+                "参考预选已请求，但项目相机参考不完整；PlaMatch 将使用已有坐标或索引邻域回退"));
         }
     }
 

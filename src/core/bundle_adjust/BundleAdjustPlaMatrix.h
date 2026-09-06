@@ -15,14 +15,12 @@
 namespace xjw::detail
 {
 
-/// 检查 PlaMatrix CPU/CUDA/OpenCL 线性求解后端及所选设备是否可用。
-bool isPlaMatrixBackendAvailable(BABackend backend,
-                                 int device_index,
-                                 std::string* message = nullptr);
+    /// 检查 PlaMatrix CPU/CUDA/OpenCL 线性求解后端及所选设备是否可用。
+    bool isPlaMatrixBackendAvailable(BABackend backend, int device_index, std::string* message = nullptr);
 
-/// 使用 PlaMatrix 块法方程、Schur 消元和 LM 阻尼执行完整联合 BA。
-BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& cameras,
-                                     const std::vector<BATrack>& tracks,
-                                     const BAOptions& options);
+    /// 使用 PlaMatrix 块法方程、Schur 消元和参考 Armijo 驱动执行完整联合 BA。
+    BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& cameras,
+                                         const std::vector<BATrack>& tracks,
+                                         const BAOptions& options);
 
 } // namespace xjw::detail

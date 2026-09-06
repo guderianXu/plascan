@@ -56,7 +56,7 @@ namespace
         }
         if (value == QLatin1String("legacy_cpu"))
         {
-            return xjw::BABackend::LegacyCpu;
+            return xjw::BABackend::PlaMatrixCpu;
         }
         if (value == QLatin1String("plamatrix_cpu"))
         {
@@ -70,10 +70,10 @@ namespace
         {
             return xjw::BABackend::PlaMatrixOpenCl;
         }
-        fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / legacy_cpu / plamatrix_cpu / "
+        fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / plamatrix_cpu / "
                                "plamatrix_cuda / plamatrix_opencl")
                     .arg(raw));
-        return xjw::BABackend::LegacyCpu;
+        return xjw::BABackend::PlaMatrixCpu;
     }
 
     xjw::lidar::PlanetaryLaserSensorModel parsePlanetaryLaserSensorModel(const QString& raw)
@@ -513,8 +513,13 @@ int main(int argc, char* argv[])
     int maxCameraIterations = 10;
     int chunkSize = 20000;
     int baPlaMatrixDevice = 0;
-    int baMinCudaCameras = xjw::BAOptions::kDefaultMinPlaMatrixGpuCameras;
-    int baMinCudaObservations = xjw::BAOptions::kDefaultMinPlaMatrixGpuObservations;
+    int baMinCudaCameras = xjw::BAOptions::kDefaultMinPlaMatrixCudaCameras;
+    int baMinCudaObservations = xjw::BAOptions::kDefaultMinPlaMatrixCudaObservations;
+    int baMinOpenClCameras = xjw::BAOptions::kDefaultMinPlaMatrixOpenClCameras;
+    int baMinOpenClObservations = xjw::BAOptions::kDefaultMinPlaMatrixOpenClObservations;
+    int baMinDenseCameras = xjw::BAOptions::kDefaultMinPlaMatrixDenseCameras;
+    int baMinCudaDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixCudaDenseObservations;
+    int baMinOpenClDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixOpenClDenseObservations;
     double baMaxInitialTrackRms = 100.0;
     int baMaxDenseSchurCameras = 200;
     double huberDelta = 3.0;
@@ -561,29 +566,37 @@ int main(int argc, char* argv[])
     app.add_option("--max-point-iterations", maxPointIterations, "单点优化最大迭代次数");
     app.add_option("--max-camera-iterations", maxCameraIterations, "相机位姿优化最大迭代次数");
     app.add_option("--chunk-size", chunkSize, "BA 分块大小");
-    app.add_option("--huber-delta", huberDelta, "影像重投影残差 Huber 阈值");
-    app.add_option("--damping", damping, "LM 阻尼初值");
+    app.add_option("--huber-delta", huberDelta, "兼容字段；参考 BA 的影像残差固定使用普通最小二乘");
+    app.add_option("--damping", damping, "兼容字段；参考 BA 固定从零阻尼开始");
     app.add_option("--finite-diff-eps", finiteDiffEps, "有限差分步长");
-    app.add_option("--step-tolerance", stepTolerance, "收敛步长阈值");
+    app.add_option("--step-tolerance", stepTolerance, "兼容字段；参考 BA 固定使用 1e-6 RMS 更新阈值");
     app.add_option("--ba-backend",
                    baBackendRaw,
-                   "BA 求解后端: auto / legacy_cpu / plamatrix_cpu / plamatrix_cuda / "
+                   "BA 求解后端: auto / plamatrix_cpu / plamatrix_cuda / "
                    "plamatrix_opencl");
     app.add_option("--ba-plamatrix-device", baPlaMatrixDevice, "PlaMatrix CUDA/OpenCL Schur PCG 使用的设备索引");
-    app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小相机数");
+    app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "Auto 常规规模选择 PlaMatrix CUDA 的最小相机数");
     app.add_option(
-        "--ba-min-cuda-observations", baMinCudaObservations, "Auto 选择 PlaMatrix CUDA/OpenCL 所需的最小观测数");
+        "--ba-min-cuda-observations", baMinCudaObservations, "Auto 常规规模选择 PlaMatrix CUDA 的最小观测数");
+    app.add_option("--ba-min-opencl-cameras", baMinOpenClCameras, "Auto 常规规模选择 PlaMatrix OpenCL 的最小相机数");
+    app.add_option(
+        "--ba-min-opencl-observations", baMinOpenClObservations, "Auto 常规规模选择 PlaMatrix OpenCL 的最小观测数");
+    app.add_option("--ba-min-dense-cameras", baMinDenseCameras, "Auto 高密度覆盖规则的最小相机数");
+    app.add_option(
+        "--ba-min-cuda-dense-observations", baMinCudaDenseObservations, "Auto 高密度覆盖规则选择 CUDA 的最小观测数");
+    app.add_option("--ba-min-opencl-dense-observations",
+                   baMinOpenClDenseObservations,
+                   "Auto 高密度覆盖规则选择 OpenCL 的最小观测数");
     app.add_option("--ba-max-initial-track-rms",
                    baMaxInitialTrackRms,
                    "联合 BA 装配前初始 track RMS 粗差上限（像素），0 表示关闭");
-    app.add_option(
-        "--ba-max-dense-schur-cameras", baMaxDenseSchurCameras, "PlaMatrix CPU 使用 dense Schur 的最大可变相机数");
+    app.add_option("--ba-max-dense-schur-cameras", baMaxDenseSchurCameras, "兼容字段；参考 CPU 固定使用 dense Schur");
     app.add_flag("--ba-backend-fallback{true},--no-ba-backend-fallback{false}",
                  baBackendFallback,
                  "请求的 BA 后端不可用时是否允许回退到可用后端");
     app.add_flag("--ba-quality-gate{true},--no-ba-quality-gate{false}",
                  baEnableQualityGate,
-                 "Auto BA 是否启用质量门控，候选后端质量异常时回退 legacy_cpu");
+                 "Auto BA 是否启用质量门控，候选后端质量异常时回退参考 CPU BA");
     app.add_option("--ba-max-rms-growth", baMaxAcceptedRmsGrowth, "Auto BA 候选后端允许的最大 RMS 增长倍率");
     app.add_option(
         "--ba-max-constraint-rms-growth", baMaxConstraintRmsGrowth, "Auto BA 物方约束允许的最大 RMS 增长倍率");
@@ -591,7 +604,7 @@ int main(int argc, char* argv[])
         "--ba-min-valid-track-ratio", baMinAcceptedValidTrackRatio, "Auto BA 候选后端允许的最小有效 track 比例");
     app.add_flag("--ba-compare-legacy{true},--no-ba-compare-legacy{false}",
                  baCompareAutoWithLegacy,
-                 "Auto BA 选择加速后端时是否运行 legacy 对照用于质量门控");
+                 "兼容选项：Auto BA 选择加速后端时是否运行参考 CPU 对照用于质量门控");
     app.add_flag("--refine-pose{true},--no-refine-pose{false}", refinePose, "是否优化相机姿态");
     app.add_flag("--dry-run", dryRun, "仅检查输入并统计 tracks，不执行优化");
     app.add_flag("--force", force, "允许使用非空输出目录");
@@ -828,8 +841,13 @@ int main(int argc, char* argv[])
     baOptions.numThreads = threads;
     baOptions.backend = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
     baOptions.plaMatrixDevice = std::max(0, baPlaMatrixDevice);
-    baOptions.minPlaMatrixGpuCameras = std::max(1, baMinCudaCameras);
-    baOptions.minPlaMatrixGpuObservations = std::max(1, baMinCudaObservations);
+    baOptions.minPlaMatrixCudaCameras = std::max(1, baMinCudaCameras);
+    baOptions.minPlaMatrixCudaObservations = std::max(1, baMinCudaObservations);
+    baOptions.minPlaMatrixOpenClCameras = std::max(1, baMinOpenClCameras);
+    baOptions.minPlaMatrixOpenClObservations = std::max(1, baMinOpenClObservations);
+    baOptions.minPlaMatrixDenseCameras = std::max(1, baMinDenseCameras);
+    baOptions.minPlaMatrixCudaDenseObservations = std::max(1, baMinCudaDenseObservations);
+    baOptions.minPlaMatrixOpenClDenseObservations = std::max(1, baMinOpenClDenseObservations);
     baOptions.maxInitialTrackRms = std::max(0.0, baMaxInitialTrackRms);
     baOptions.maxDenseSchurCameras = std::max(1, baMaxDenseSchurCameras);
     baOptions.allowBackendFallback = baBackendFallback;

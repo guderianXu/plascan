@@ -7,17 +7,18 @@
 #include "MatchPhotosTask.h"
 #include "MatchingStage.h"
 #include "MatchPhotosMaskSupport.h"
-#include "SparseSceneOverlapAnalyzer.h"
+#include "PlaMatchHctPairPreselector.h"
 #include "ReferencePoseEpipolarGeometry.h"
-#include "io/PathIO.h"
+#include "plamatch_hct/PlaMatchHctAlgorithm.h"
 
 #include <gtest/gtest.h>
 
 #include <QDir>
-#include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
 #include <array>
@@ -42,6 +43,208 @@ namespace
     }
 
 } // namespace
+
+TEST(PlaMatchHctPairPreselectorTest, ReusesCoarsePayloadAndKeepsIdenticalPair)
+{
+    cv::Mat image(256, 256, CV_8UC3);
+    cv::RNG random(0x504C414D);
+    random.fill(image, cv::RNG::UNIFORM, 0, 256);
+
+    xjw::image_matching::ImageMatchingRuntimeConfig config;
+    config.maxKeypoints = 256;
+    config.siftBackend = xjw::image_matching::SiftComputeBackend::Cpu;
+    xjw::image_matching::PlaMatchHctAlgorithm algorithm(config);
+    xjw::image_matching::ImageFeatureInput input;
+    input.imagePath = QStringLiteral("synthetic.png");
+    input.colorImage = image;
+    input.originalWidth = image.cols;
+    input.originalHeight = image.rows;
+    const auto features = std::make_shared<const xjw::image_matching::FeatureSet>(algorithm.extract(input));
+
+    const QStringList images = {QStringLiteral("left.png"), QStringLiteral("right.png")};
+    xjw::matchphotos::MatchPhotosFeatureCache cache;
+    cache.insert(images[0], features);
+    cache.insert(images[1], features);
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.useGenericPreselection = true;
+    options.useReferencePreselection = false;
+    xjw::matchphotos::PairSelectionResult output;
+    xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
+    QString error;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
+        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+        << qPrintable(error);
+    ASSERT_EQ(output.candidates.size(), 1U);
+    EXPECT_EQ(output.candidates.front().pair.indexA, 0);
+    EXPECT_EQ(output.candidates.front().pair.indexB, 1);
+    EXPECT_NE(std::find(output.candidates.front().sources.cbegin(),
+                        output.candidates.front().sources.cend(),
+                        xjw::matchphotos::PairSource::PlaMatchGeneric),
+              output.candidates.front().sources.cend());
+    EXPECT_EQ(stats.coarseCandidateCount, 1);
+    EXPECT_EQ(stats.genericSelectedCount, 1);
+}
+
+TEST(PlaMatchHctPairPreselectorTest, ReusesFloatingPointDescriptorsWithoutExtractingPlaMatchFeatures)
+{
+    auto features = std::make_shared<xjw::image_matching::FeatureSet>();
+    features->sourceAlgorithm = "auto_sift";
+    features->computeBackend = "cpu";
+    features->imageWidth = 640;
+    features->imageHeight = 480;
+    features->descriptors = cv::Mat(64, 128, CV_32F);
+    cv::RNG random(0x434F4152);
+    random.fill(features->descriptors, cv::RNG::UNIFORM, -1.0f, 1.0f);
+    for (int index = 0; index < features->descriptors.rows; ++index)
+    {
+        cv::KeyPoint keypoint;
+        keypoint.pt =
+            cv::Point2f(20.0f + static_cast<float>(index % 8) * 70.0f, 20.0f + static_cast<float>(index / 8) * 50.0f);
+        keypoint.size = 4.0f;
+        keypoint.response = 1.0f - static_cast<float>(index) / 100.0f;
+        features->keypoints.push_back(keypoint);
+        features->scores.push_back(keypoint.response);
+    }
+    ASSERT_TRUE(features->isConsistent());
+
+    const QStringList images = {QStringLiteral("a.png"), QStringLiteral("b.png"), QStringLiteral("c.png")};
+    xjw::matchphotos::MatchPhotosFeatureCache cache;
+    for (const QString& image : images)
+    {
+        cache.insert(image, features);
+    }
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.useGenericPreselection = true;
+    options.useReferencePreselection = false;
+    xjw::matchphotos::PairSelectionResult output;
+    xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
+    QString error;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
+        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+        << qPrintable(error);
+    EXPECT_TRUE(stats.usedDescriptorAdapter);
+    EXPECT_GT(stats.genericSelectedCount, 0);
+    EXPECT_FALSE(output.candidates.empty());
+    EXPECT_TRUE(stats.detail.contains(QStringLiteral("复用正式算法描述子")));
+}
+
+TEST(PlaMatchHctPairPreselectorTest, MatchesReferenceModeFallbackSemantics)
+{
+    cv::Mat image(128, 128, CV_8UC3);
+    cv::RNG random(0x534F5552);
+    random.fill(image, cv::RNG::UNIFORM, 0, 256);
+
+    xjw::image_matching::ImageMatchingRuntimeConfig config;
+    config.maxKeypoints = 128;
+    config.siftBackend = xjw::image_matching::SiftComputeBackend::Cpu;
+    xjw::image_matching::PlaMatchHctAlgorithm algorithm(config);
+    xjw::image_matching::ImageFeatureInput input;
+    input.imagePath = QStringLiteral("reference.png");
+    input.colorImage = image;
+    input.originalWidth = image.cols;
+    input.originalHeight = image.rows;
+    const auto features = std::make_shared<const xjw::image_matching::FeatureSet>(algorithm.extract(input));
+
+    const QStringList images = {QStringLiteral("a.png"), QStringLiteral("b.png"), QStringLiteral("c.png")};
+    xjw::matchphotos::MatchPhotosFeatureCache cache;
+    for (const QString& path : images)
+    {
+        cache.insert(path, features);
+    }
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = true;
+    options.referencePreselectionNeighbors = 1;
+    xjw::matchphotos::PairSelectionResult output;
+    xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
+    QString error;
+
+    options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Source;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
+        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+        << qPrintable(error);
+    EXPECT_TRUE(stats.usedReferenceIndexFallback);
+    EXPECT_FALSE(stats.usedAllPairsFallback);
+    EXPECT_EQ(stats.referenceSelectedCount, 2);
+    EXPECT_EQ(output.candidates.size(), 2U);
+
+    options.pairPolicy.maxPairs = 1;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
+        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+        << qPrintable(error);
+    EXPECT_EQ(output.candidates.size(), 1U);
+    EXPECT_TRUE(output.restrictPairs);
+    options.pairPolicy.maxPairs = 0;
+
+    QMap<QString, xjw::FramePinholeCamera> estimatedCameras;
+    estimatedCameras.insert(images[0], makeGuidedTestCamera(0.0));
+    estimatedCameras.insert(images[1], makeGuidedTestCamera(10.0));
+    estimatedCameras.insert(images[2], makeGuidedTestCamera(11.0));
+    options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Estimated;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     estimatedCameras,
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
+        << qPrintable(error);
+    EXPECT_FALSE(stats.usedReferenceIndexFallback);
+    EXPECT_EQ(stats.referenceSelectedCount, 2);
+    EXPECT_EQ(output.candidates.size(), 2U);
+    EXPECT_NE(std::find(output.candidates.front().sources.cbegin(),
+                        output.candidates.front().sources.cend(),
+                        xjw::matchphotos::PairSource::PlaMatchReferenceEstimated),
+              output.candidates.front().sources.cend());
+
+    options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Sequential;
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
+        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+        << qPrintable(error);
+    EXPECT_EQ(stats.referenceSelectedCount, 0);
+    EXPECT_TRUE(stats.usedAllPairsFallback);
+    EXPECT_EQ(output.candidates.size(), 3U);
+}
+
+TEST(PlaMatchHctPairPreselectorTest, UsesPositionOnlyReferenceWithoutCoarseFeatures)
+{
+    const QStringList images = {QStringLiteral("a.png"), QStringLiteral("b.png"), QStringLiteral("c.png")};
+    xjw::matchphotos::MatchPhotosFeatureCache emptyCache;
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = true;
+    options.referencePreselectionNeighbors = 1;
+    QMap<QString, std::array<double, 3>> positions;
+    positions.insert(QStringLiteral("a"), {0.0, 0.0, 0.0});
+    positions.insert(QStringLiteral("b.png"), {100.0, 0.0, 0.0});
+    positions.insert(QStringLiteral("c.png"), {101.0, 0.0, 0.0});
+
+    xjw::matchphotos::PairSelectionResult output;
+    xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
+    QString error;
+    ASSERT_TRUE(
+        xjw::matchphotos::PlaMatchHctPairPreselector::selectWithPositions(images,
+                                                                          emptyCache,
+                                                                          options,
+                                                                          {},
+                                                                          positions,
+                                                                          xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                          0,
+                                                                          &output,
+                                                                          &stats,
+                                                                          nullptr,
+                                                                          &error))
+        << qPrintable(error);
+    EXPECT_FALSE(stats.usedReferenceIndexFallback);
+    EXPECT_EQ(stats.referenceSelectedCount, 2);
+    EXPECT_EQ(output.candidates.size(), 2U);
+}
 
 TEST(ReferencePoseEpipolarGeometryTest, BuildsHorizontalEpipolarConstraint)
 {
@@ -223,15 +426,17 @@ TEST(MatchPhotosTaskTest, PlanOnlyUsesUnifiedAlgorithmWithoutWritingIntermediate
     EXPECT_EQ(result.matchingFunnel.allPairCount, 1);
     EXPECT_EQ(result.matchingFunnel.selectedPairCount, 1);
     EXPECT_TRUE(result.trackSummary.contains(QStringLiteral("matching_funnel")));
-    EXPECT_TRUE(std::any_of(result.stages.begin(), result.stages.end(), [](const auto &stage)
-    {
-        return stage.stageId == QStringLiteral("matching_funnel") &&
-               stage.status == xjw::matchphotos::MatchPhotosStageStatus::Completed;
-    }));
+    EXPECT_TRUE(std::any_of(result.stages.begin(),
+                            result.stages.end(),
+                            [](const auto& stage)
+                            {
+                                return stage.stageId == QStringLiteral("matching_funnel") &&
+                                       stage.status == xjw::matchphotos::MatchPhotosStageStatus::Completed;
+                            }));
     EXPECT_FALSE(QDir(context.matchDirectory).exists());
 }
 
-TEST(MatchPhotosTaskTest, CpuSelectionUsesDefaultAutoSift)
+TEST(MatchPhotosTaskTest, CpuSelectionUsesDefaultPlaMatchHct)
 {
     xjw::matchphotos::MatchPhotosOptions options;
     options.device = xjw::matchphotos::ComputeDevice::Cpu;
@@ -243,10 +448,82 @@ TEST(MatchPhotosTaskTest, CpuSelectionUsesDefaultAutoSift)
     const auto result = xjw::matchphotos::MatchPhotosTask(options).run(context);
 
     EXPECT_TRUE(result.success) << qPrintable(result.errorMessage);
-    EXPECT_EQ(result.algorithmPlan.algorithmId, QStringLiteral("auto_sift"));
+    EXPECT_EQ(result.algorithmPlan.algorithmId, QStringLiteral("plamatch_hct"));
+    EXPECT_EQ(result.algorithmPlan.executionBackend, xjw::image_matching::SiftComputeBackend::Cpu);
     ASSERT_FALSE(result.stages.empty());
     EXPECT_EQ(result.stages.front().stageId, QStringLiteral("algorithm_selection"));
     EXPECT_EQ(result.stages.front().status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
+}
+
+TEST(MatchPhotosTaskTest, DisabledAutomaticPreselectionUsesAllPairsBeyondAutoThreshold)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.planOnly = true;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = false;
+    options.pairPolicy.exhaustiveMaxImages = 3;
+
+    xjw::matchphotos::MatchPhotosContext context;
+    for (int index = 0; index < 6; ++index)
+    {
+        context.pairInput.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+
+    const auto result = xjw::matchphotos::MatchPhotosTask(options).run(context);
+
+    EXPECT_TRUE(result.success) << qPrintable(result.errorMessage);
+    EXPECT_EQ(result.pairSelection.allPairCount, 15);
+    EXPECT_EQ(result.pairSelection.candidates.size(), 15U);
+    EXPECT_FALSE(result.pairSelection.restrictPairs);
+    ASSERT_FALSE(result.pairSelection.candidates.empty());
+    EXPECT_NE(std::find(result.pairSelection.candidates.front().sources.cbegin(),
+                        result.pairSelection.candidates.front().sources.cend(),
+                        xjw::matchphotos::PairSource::Exhaustive),
+              result.pairSelection.candidates.front().sources.cend());
+}
+
+TEST(MatchPhotosTaskTest, ReusesCompletePlaMatchFeaturesFromDisk)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString matchDirectory = tempDir.filePath(QStringLiteral("matches"));
+    const QString image0 = tempDir.filePath(QStringLiteral("a.png"));
+    const QString image1 = tempDir.filePath(QStringLiteral("b.png"));
+    cv::Mat image(256, 256, CV_8UC3);
+    cv::RNG random(0x504C414D);
+    random.fill(image, cv::RNG::UNIFORM, 0, 256);
+    ASSERT_TRUE(cv::imwrite(image0.toStdString(), image));
+    ASSERT_TRUE(cv::imwrite(image1.toStdString(), image));
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.planOnly = false;
+    options.device = xjw::matchphotos::ComputeDevice::Cpu;
+    options.useExplicitKeypointLimit = true;
+    options.maxKeypoints = 128;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = false;
+    options.guidedMatchingMode = xjw::matchphotos::GuidedMatchingMode::Disabled;
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.workingDirectory = tempDir.path();
+    context.matchDirectory = matchDirectory;
+    context.pairInput.images = {image0, image1};
+
+    const auto first = xjw::matchphotos::MatchPhotosTask(options).run(context);
+    ASSERT_EQ(first.features.size(), 2U);
+    EXPECT_FALSE(first.features[0].settings.value(QStringLiteral("feature_cache_reused")).toBool());
+    EXPECT_EQ(QDir(matchDirectory).entryList(QStringList{QStringLiteral("*.pihctcache")}, QDir::Files).size(), 2);
+
+    const auto second = xjw::matchphotos::MatchPhotosTask(options).run(context);
+    ASSERT_EQ(second.features.size(), 2U);
+    EXPECT_TRUE(second.features[0].settings.value(QStringLiteral("feature_cache_reused")).toBool());
+    EXPECT_TRUE(second.features[1].settings.value(QStringLiteral("feature_cache_reused")).toBool());
+    const auto featureStage = std::find_if(second.stages.cbegin(),
+                                           second.stages.cend(),
+                                           [](const xjw::matchphotos::MatchPhotosStageReport& stage)
+                                           { return stage.stageId == QLatin1String("feature"); });
+    ASSERT_NE(featureStage, second.stages.cend());
+    EXPECT_TRUE(featureStage->message.contains(QStringLiteral("磁盘缓存命中 2 张")));
 }
 
 TEST(MatchPhotosGeometryGateTest, CombinesSupportRatioCoverageAndAdjacencyWithoutInlierCliff)
@@ -303,115 +580,6 @@ TEST(MatchPhotosSoftMaskTest, KeepsUncertainAndBoundaryPointsWithWeights)
     const float weight = xjw::matchphotos::maskPointWeight(uncertain, cv::Point2f(1.0f, 1.0f), options);
     EXPECT_GT(weight, 0.45f);
     EXPECT_LT(weight, 0.55f);
-}
-
-TEST(MatchPhotosSparseSceneOverlapTest, UsesCovisibilityAndFrustumForUnobservedPairs)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    std::vector<xjw::OverlapImageInput> images;
-    for (int index = 0; index < 3; ++index)
-    {
-        xjw::FramePinholeCamera camera;
-        camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
-        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{0.5 * (index - 1), 0.0, 0.0}});
-        xjw::OverlapImageInput input;
-        input.imagePath = QStringLiteral("image_%1.png").arg(index).toStdString();
-        input.camera = camera;
-        input.width = 100;
-        input.height = 100;
-        images.push_back(input);
-    }
-
-    QJsonArray points;
-    for (int index = 0; index < 40; ++index)
-    {
-        const double x = -0.8 + 1.6 * (index % 8) / 7.0;
-        const double y = -0.6 + 1.2 * (index / 8) / 4.0;
-        QJsonArray observations;
-        observations.append(QJsonObject{{QStringLiteral("image_id"), 0}});
-        observations.append(QJsonObject{{QStringLiteral("image_id"), 1}});
-        points.append(QJsonObject{{QStringLiteral("point_xyz"), QJsonArray{x, y, 5.0}},
-                                  {QStringLiteral("observations"), observations}});
-    }
-    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
-    QString writeError;
-    ASSERT_TRUE(xjw::common::io::writeFileBytesAtomic(
-        sidecarPath,
-        QJsonDocument(QJsonObject{{QStringLiteral("points"), points}}).toJson(QJsonDocument::Compact),
-        &writeError))
-        << qPrintable(writeError);
-
-    xjw::OverlapAnalysisResult overlap;
-    xjw::matchphotos::SparseSceneOverlapStats stats;
-    QString error;
-    ASSERT_TRUE(xjw::matchphotos::SparseSceneOverlapAnalyzer::analyzeFile(
-        sidecarPath, images, xjw::matchphotos::SparseSceneOverlapOptions{}, &overlap, &stats, &error))
-        << qPrintable(error);
-
-    EXPECT_EQ(stats.validPointCount, 40);
-    EXPECT_GE(stats.covisibilityPairCount, 1);
-    EXPECT_GE(stats.frustumPairCount, 3);
-    ASSERT_EQ(overlap.pairs.size(), 3u);
-    const auto hasPair = [&](int indexA, int indexB)
-    {
-        return std::any_of(overlap.pairs.cbegin(),
-                           overlap.pairs.cend(),
-                           [&](const auto& pair) { return pair.indexA == indexA && pair.indexB == indexB; });
-    };
-    EXPECT_TRUE(hasPair(0, 1));
-    EXPECT_TRUE(hasPair(0, 2)) << "没有共同旧轨迹的相机仍应由稀疏场景视锥重叠召回";
-    EXPECT_TRUE(hasPair(1, 2));
-}
-
-TEST(MatchPhotosSparseSceneOverlapTest, RejectsOpposingFrustaWithoutCovisibility)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    std::vector<xjw::OverlapImageInput> images;
-    const std::array<std::array<double, 9>, 2> rotations{
-        {{{0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0}}, {{0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0}}}};
-    for (int index = 0; index < 2; ++index)
-    {
-        xjw::FramePinholeCamera camera;
-        camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
-        camera.setPose(rotations[static_cast<std::size_t>(index)], {{index == 0 ? 5.0 : -5.0, 0.0, 0.0}});
-        double centerPixel[2]{};
-        const std::array<double, 3> origin{{0.0, 0.0, 0.0}};
-        ASSERT_TRUE(camera.projectWorldPoint(origin.data(), centerPixel));
-        xjw::OverlapImageInput input;
-        input.imagePath = QStringLiteral("opposite_%1.png").arg(index).toStdString();
-        input.camera = camera;
-        input.width = 100;
-        input.height = 100;
-        images.push_back(input);
-    }
-
-    QJsonArray points;
-    for (int index = 0; index < 40; ++index)
-    {
-        const double y = -0.5 + (index % 8) / 7.0;
-        const double z = -0.5 + (index / 8) / 4.0;
-        points.append(QJsonObject{
-            {QStringLiteral("point_xyz"), QJsonArray{0.0, y, z}},
-            {QStringLiteral("observations"), QJsonArray{QJsonObject{{QStringLiteral("image_id"), index % 2}}}}});
-    }
-    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
-    QString writeError;
-    ASSERT_TRUE(xjw::common::io::writeFileBytesAtomic(
-        sidecarPath,
-        QJsonDocument(QJsonObject{{QStringLiteral("points"), points}}).toJson(QJsonDocument::Compact),
-        &writeError))
-        << qPrintable(writeError);
-
-    xjw::OverlapAnalysisResult overlap;
-    QString error;
-    EXPECT_FALSE(xjw::matchphotos::SparseSceneOverlapAnalyzer::analyzeFile(
-        sidecarPath, images, xjw::matchphotos::SparseSceneOverlapOptions{}, &overlap, nullptr, &error));
-    EXPECT_TRUE(error.isEmpty());
-    EXPECT_TRUE(overlap.pairs.empty());
 }
 
 TEST(MatchPhotosGeometryCacheTest, FingerprintCoversEveryGeometryOption)
@@ -482,6 +650,23 @@ TEST(MatchPhotosRawCacheTest, FingerprintCoversResolvedSiftDetectionThreshold)
         xjw::matchphotos::rawMatchConfigurationFingerprint(fast, fastPlan, 4096, 0.15f, modelFingerprint));
 }
 
+TEST(MatchPhotosRawCacheTest, FingerprintSeparatesAlignmentAccuracyLevels)
+{
+    xjw::matchphotos::MatchPhotosOptions high;
+    high.accuracy = xjw::matchphotos::AlignmentAccuracy::High;
+    xjw::matchphotos::MatchPhotosOptions medium = high;
+    medium.accuracy = xjw::matchphotos::AlignmentAccuracy::Medium;
+    const auto highPlan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(high);
+    const auto mediumPlan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(medium);
+    ASSERT_TRUE(highPlan.valid);
+    ASSERT_TRUE(mediumPlan.valid);
+    const QByteArray modelFingerprint(32, 'm');
+    EXPECT_NE(
+        xjw::matchphotos::rawMatchConfigurationFingerprint(high, highPlan, 0, high.matchThreshold, modelFingerprint),
+        xjw::matchphotos::rawMatchConfigurationFingerprint(
+            medium, mediumPlan, 0, medium.matchThreshold, modelFingerprint));
+}
+
 TEST(MatchPhotosRawCacheTest, FingerprintCoversLowTextureRecovery)
 {
     xjw::matchphotos::MatchPhotosOptions options;
@@ -495,6 +680,30 @@ TEST(MatchPhotosRawCacheTest, FingerprintCoversLowTextureRecovery)
     EXPECT_NE(
         xjw::matchphotos::rawMatchConfigurationFingerprint(options, plan, 0, options.matchThreshold, modelFingerprint),
         baseline);
+}
+
+TEST(MatchPhotosRawCacheTest, FingerprintCoversResolvedBackendAndDevice)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+    ASSERT_TRUE(plan.valid);
+    plan.executionBackend = xjw::image_matching::SiftComputeBackend::Cpu;
+    plan.computeDeviceName = QStringLiteral("CPU");
+    const QByteArray modelFingerprint(32, 'm');
+    const QByteArray baseline =
+        xjw::matchphotos::rawMatchConfigurationFingerprint(options, plan, 0, options.matchThreshold, modelFingerprint);
+
+    auto changedBackend = plan;
+    changedBackend.executionBackend = xjw::image_matching::SiftComputeBackend::Cuda;
+    EXPECT_NE(xjw::matchphotos::rawMatchConfigurationFingerprint(
+                  options, changedBackend, 0, options.matchThreshold, modelFingerprint),
+              baseline);
+
+    auto changedDevice = plan;
+    changedDevice.computeDeviceName = QStringLiteral("another-device");
+    EXPECT_NE(xjw::matchphotos::rawMatchConfigurationFingerprint(
+                  options, changedDevice, 0, options.matchThreshold, modelFingerprint),
+              baseline);
 }
 
 TEST(MatchPhotosGeometryCacheTest, ReusesCompleteVerifiedPairWithoutRunningUsac)
@@ -571,6 +780,46 @@ TEST(MatchPhotosGeometryCacheTest, DisablingGeometryClearsStaleModelAndResiduals
     EXPECT_FALSE(records.front().settings.value(QStringLiteral("geometry_verified")).toBool(true));
 }
 
+TEST(MatchPhotosGeometryReferenceParityTest, NonGuidedPlaMatchUsesLocalConsistencyMinimumEight)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.planOnly = false;
+    options.enableGeometryVerification = true;
+    options.guidedMatchingMode = xjw::matchphotos::GuidedMatchingMode::Disabled;
+
+    std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records(2);
+    for (int index = 0; index < 2; ++index)
+    {
+        auto pair = std::make_shared<xjw::image_matching::PairMatchData>();
+        pair->correspondences.resize(index == 0 ? 8U : 7U);
+        records[static_cast<std::size_t>(index)].algorithmId =
+            QString::fromLatin1(xjw::image_matching::kPlaMatchHctAlgorithmId);
+        records[static_cast<std::size_t>(index)].pairData = std::move(pair);
+    }
+
+    const xjw::matchphotos::GeometryVerifyStage stage;
+    const auto report = stage.run(xjw::matchphotos::MatchPhotosContext{}, options, &records);
+
+    EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
+    EXPECT_EQ(report.itemCount, 1);
+    EXPECT_TRUE(report.message.contains(QStringLiteral("未运行 USAC")));
+    EXPECT_TRUE(records[0].passedGeometry);
+    EXPECT_FALSE(records[1].passedGeometry);
+    for (const auto& record : records)
+    {
+        ASSERT_TRUE(record.pairData);
+        EXPECT_EQ(record.pairData->geometryModel, xjw::image_matching::GeometryModel::None);
+        EXPECT_EQ(record.pairData->geometryInlierCount, record.pairData->rawMatchCount);
+        EXPECT_EQ(record.settings.value(QStringLiteral("geometry_mode")).toString(),
+                  QStringLiteral("plamatch_local_consistency"));
+        for (const auto& correspondence : record.pairData->correspondences)
+        {
+            EXPECT_TRUE(xjw::image_matching::hasFlag(correspondence.flags,
+                                                     xjw::image_matching::MatchRecordFlag::GeometryInlier));
+        }
+    }
+}
+
 TEST(MatchPhotosFunnelDiagnosticsTest, SummarizesEveryRetentionBoundary)
 {
     xjw::matchphotos::PairSelectionResult selection;
@@ -583,15 +832,7 @@ TEST(MatchPhotosFunnelDiagnosticsTest, SummarizesEveryRetentionBoundary)
     records[1].passedGeometry = true;
     records[1].geometricInlierCount = 35;
 
-    const auto diagnostics = xjw::matchphotos::summarizeMatchPhotosFunnel(
-        selection,
-        records,
-        3,
-        200,
-        2,
-        100,
-        15,
-        40);
+    const auto diagnostics = xjw::matchphotos::summarizeMatchPhotosFunnel(selection, records, 3, 200, 2, 100, 15, 40);
 
     EXPECT_EQ(diagnostics.allPairCount, 10);
     EXPECT_EQ(diagnostics.selectedPairCount, 4);

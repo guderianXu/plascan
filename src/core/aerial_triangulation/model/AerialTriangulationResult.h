@@ -26,6 +26,7 @@ struct AerialTriangulationReconstructionResult
     double meanReprojError = 0.0; ///< 最终点平均重投影误差，像素。
     QMap<QString, QJsonObject> pendingCamUpdates; ///< 事务提交前的影像路径到相机 JSON。
     QString sparseCloudPath; ///< 正式 sfm_sparse.ply 路径。
+    QString displaySparseCloudPath; ///< 可选的清理显示云，不替代正式算法点云。
     QJsonObject qualityMetadata; ///< MVS 门控和稀疏质量摘要。
     QJsonObject resultRecordExtra; ///< 工程结果记录的扩展字段。
     QJsonObject sfmDiagnostics; ///< 候选搜索、初始对、匹配网和 BA 诊断。

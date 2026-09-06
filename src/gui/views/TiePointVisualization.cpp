@@ -73,13 +73,21 @@ bool nonNegativeInteger(const QJsonObject &object,
 
 ScalarRange rangeForValues(const QVector<double> &values)
 {
-    if (values.isEmpty())
+    bool found_finite = false;
+    double minimum = std::numeric_limits<double>::infinity();
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (const double value : values)
     {
-        return {};
+        if (!std::isfinite(value))
+        {
+            continue;
+        }
+        found_finite = true;
+        minimum = std::min(minimum, value);
+        maximum = std::max(maximum, value);
     }
-    const auto [minimum, maximum] = std::minmax_element(
-        values.cbegin(), values.cend());
-    return {*minimum, *maximum};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    return found_finite ? ScalarRange{minimum, maximum} : ScalarRange{nan, nan};
 }
 
 ScalarRange rangeForValues(const QVector<int> &values)
@@ -305,6 +313,8 @@ QualityMetadata loadQualityMetadata(
         }
         const QJsonValue point_value = points.at(index);
         const QJsonObject point = point_value.toObject();
+        const QJsonValue clean_value = point.value(QStringLiteral("clean_tie_points"));
+        const QJsonObject clean = clean_value.toObject();
         if (!point_value.isObject())
         {
             has_reprojection_errors = false;
@@ -315,33 +325,42 @@ QualityMetadata loadQualityMetadata(
         }
 
         double reprojection_error = 0.0;
-        if (!finiteNonNegativeNumber(
-                point, QStringLiteral("rms_reproj_px"), &reprojection_error))
+        if (!finiteNonNegativeNumber(clean, QStringLiteral("reprojection_error"), &reprojection_error))
         {
             has_reprojection_errors = false;
         }
         result.reprojectionErrors.push_back(reprojection_error);
 
-        double reconstruction_uncertainty = 0.0;
-        if (!finitePositiveNumber(point,
-                                  QStringLiteral("reconstruction_uncertainty"),
-                                  &reconstruction_uncertainty))
+        double reconstruction_uncertainty = std::numeric_limits<double>::quiet_NaN();
+        const QJsonValue has_geometry_value = clean.value(QStringLiteral("has_projection_geometry"));
+        if (!clean_value.isObject() || !has_geometry_value.isBool())
         {
             has_reconstruction_uncertainties = false;
+        }
+        else if (has_geometry_value.toBool())
+        {
+            if (clean.value(QStringLiteral("reconstruction_uncertainty_infinite")).toBool(false))
+            {
+                reconstruction_uncertainty = std::numeric_limits<double>::infinity();
+            }
+            else if (!finitePositiveNumber(
+                         clean, QStringLiteral("reconstruction_uncertainty"), &reconstruction_uncertainty))
+            {
+                has_reconstruction_uncertainties = false;
+            }
         }
         result.reconstructionUncertainties.push_back(reconstruction_uncertainty);
 
         int image_count = 0;
-        if (!nonNegativeInteger(point, QStringLiteral("track_len"), &image_count))
+        if (!nonNegativeInteger(clean, QStringLiteral("image_count"), &image_count) &&
+            !nonNegativeInteger(point, QStringLiteral("track_len"), &image_count))
         {
             has_image_counts = false;
         }
         result.imageCounts.push_back(image_count);
 
         double projection_accuracy = 0.0;
-        if (!finitePositiveNumber(point,
-                                  QStringLiteral("projection_accuracy"),
-                                  &projection_accuracy))
+        if (!finiteNonNegativeNumber(clean, QStringLiteral("projection_accuracy"), &projection_accuracy))
         {
             has_projection_accuracies = false;
         }
@@ -453,7 +472,7 @@ PruneCandidateQueryResult queryPruneCandidates(
         case QualityCriterion::ReconstructionUncertainty:
             return metadata.reconstructionUncertainties.at(index) > query.threshold;
         case QualityCriterion::ImageCount:
-            return double(metadata.imageCounts.at(index)) < query.threshold;
+            return double(metadata.imageCounts.at(index)) <= query.threshold;
         case QualityCriterion::ProjectionAccuracy:
             return metadata.projectionAccuracies.at(index) > query.threshold;
         case QualityCriterion::MinimumTriangulationAngle:

@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMetadata)
@@ -99,6 +100,10 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::ReadOnly));
     const QJsonObject sidecarObject = QJsonDocument::fromJson(sidecar.readAll()).object();
+    EXPECT_EQ(sidecarObject.value(QStringLiteral("clean_tie_points_metric_contract")).toString(),
+              QStringLiteral("metashape-2.3.2-build-22956"));
+    EXPECT_EQ(sidecarObject.value(QStringLiteral("schema")).toString(), QStringLiteral("plascan.sfm_sparse_points.v2"));
+    EXPECT_EQ(sidecarObject.value(QStringLiteral("images")).toArray().size(), 2);
     EXPECT_EQ(sidecarObject.value(QStringLiteral("points")).toArray().size(), 1);
     const QJsonObject sidecarPoint = sidecarObject.value(QStringLiteral("points")).toArray().first().toObject();
     EXPECT_TRUE(sidecarPoint.contains(QStringLiteral("rms_reproj_px")));
@@ -106,9 +111,20 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     EXPECT_TRUE(sidecarPoint.contains(QStringLiteral("min_tri_angle_deg")));
     EXPECT_TRUE(sidecarPoint.contains(QStringLiteral("reconstruction_uncertainty")));
     EXPECT_TRUE(sidecarPoint.contains(QStringLiteral("projection_accuracy")));
+    const QJsonArray observations = sidecarPoint.value(QStringLiteral("observations")).toArray();
+    ASSERT_EQ(observations.size(), 2);
+    ASSERT_TRUE(observations.first().isArray());
+    EXPECT_EQ(observations.first().toArray().size(), 7);
     EXPECT_TRUE(sidecarPoint.value(QStringLiteral("reconstruction_uncertainty")).toDouble() >= 1.0);
     EXPECT_DOUBLE_EQ(sidecarPoint.value(QStringLiteral("projection_accuracy")).toDouble(), 3.0);
+    const QJsonObject cleanTiePoints = sidecarPoint.value(QStringLiteral("clean_tie_points")).toObject();
+    EXPECT_DOUBLE_EQ(cleanTiePoints.value(QStringLiteral("reprojection_error")).toDouble(), 3.5);
+    EXPECT_TRUE(cleanTiePoints.value(QStringLiteral("has_projection_geometry")).toBool());
+    EXPECT_EQ(cleanTiePoints.value(QStringLiteral("image_count")).toInt(), 2);
+    EXPECT_DOUBLE_EQ(cleanTiePoints.value(QStringLiteral("projection_accuracy")).toDouble(), 3.0);
+    EXPECT_TRUE(cleanTiePoints.value(QStringLiteral("reconstruction_uncertainty")).toDouble() >= 1.0);
     EXPECT_EQ(execution.result.numPoints3D, 1);
+    EXPECT_TRUE(QFileInfo::exists(execution.result.displaySparseCloudPath));
     EXPECT_EQ(execution.result.qualityMetadata.value(QStringLiteral("result_kind")).toString(),
               QStringLiteral("sfm_sparse_reconstruction"));
     EXPECT_EQ(execution.result.perCameraResiduals.size(), 2);
@@ -181,11 +197,22 @@ TEST(AerialTriangulationResultWriterTest, RemovesWeakAndSpatiallyIsolatedPublish
     const xjw::aerial_triangulation::SparseQualityReport report =
         xjw::aerial_triangulation::QualityReportWriter::build(input, *reconstruction, result);
 
-    EXPECT_EQ(report.points.size(), 20);
-    EXPECT_EQ(report.publishedPointIds.size(), 20u);
-    for (const QJsonValue& value : report.points)
+    EXPECT_EQ(report.points.size(), 23);
+    EXPECT_EQ(report.publishedPointIds.size(), 23u);
+    EXPECT_EQ(report.displayPointIds.size(), 20u);
+    const QJsonObject firstPublishedPoint = report.points.first().toObject();
+    EXPECT_LT(firstPublishedPoint.value(QStringLiteral("min_tri_angle_deg")).toDouble(),
+              firstPublishedPoint.value(QStringLiteral("triangulation_angle_deg")).toDouble());
+    const std::unordered_set<xjw::Point3DId> displayPointIds(report.displayPointIds.cbegin(),
+                                                             report.displayPointIds.cend());
+    ASSERT_EQ(report.points.size(), static_cast<qsizetype>(report.publishedPointIds.size()));
+    for (qsizetype index = 0; index < report.points.size(); ++index)
     {
-        const QJsonArray xyz = value.toObject().value(QStringLiteral("point_xyz")).toArray();
+        if (!displayPointIds.contains(report.publishedPointIds[static_cast<std::size_t>(index)]))
+        {
+            continue;
+        }
+        const QJsonArray xyz = report.points.at(index).toObject().value(QStringLiteral("point_xyz")).toArray();
         ASSERT_EQ(xyz.size(), 3);
         EXPECT_LT(std::abs(xyz.at(0).toDouble()), 1.0);
     }
@@ -195,12 +222,13 @@ TEST(AerialTriangulationResultWriterTest, RemovesWeakAndSpatiallyIsolatedPublish
     EXPECT_EQ(cleanup.value(QStringLiteral("removed_by_track_length")).toInt(), 0);
     EXPECT_EQ(cleanup.value(QStringLiteral("removed_weak_two_view")).toInt(), 1);
     EXPECT_EQ(cleanup.value(QStringLiteral("removed_spatial_outliers")).toInt(), 1);
-    EXPECT_EQ(cleanup.value(QStringLiteral("published_points")).toInt(), 20);
+    EXPECT_EQ(cleanup.value(QStringLiteral("published_points")).toInt(), 23);
+    EXPECT_EQ(cleanup.value(QStringLiteral("display_points")).toInt(), 20);
 
     (void)isolatedPointIndex;
 }
 
-TEST(AerialTriangulationResultWriterTest, MatureHighQualityNetworkPublishesMultiViewPointsOnly)
+TEST(AerialTriangulationResultWriterTest, MatureHighQualityNetworkKeepsAlgorithmPointsAndCleansDisplayOnly)
 {
     constexpr int kCameraCount = 8;
     auto reconstruction = std::make_shared<xjw::SfmReconstruction>();
@@ -254,11 +282,18 @@ TEST(AerialTriangulationResultWriterTest, MatureHighQualityNetworkPublishesMulti
     const xjw::aerial_triangulation::SparseQualityReport report =
         xjw::aerial_triangulation::QualityReportWriter::build(input, *reconstruction, result);
 
-    ASSERT_EQ(report.points.size(), 1);
-    ASSERT_EQ(report.publishedPointIds.size(), 1u);
-    EXPECT_EQ(report.publishedPointIds.front(), multiViewPoint);
+    ASSERT_EQ(report.points.size(), 2);
+    ASSERT_EQ(report.publishedPointIds.size(), 2u);
+    EXPECT_NE(std::find(report.publishedPointIds.cbegin(), report.publishedPointIds.cend(), multiViewPoint),
+              report.publishedPointIds.cend());
+    EXPECT_NE(std::find(report.publishedPointIds.cbegin(), report.publishedPointIds.cend(), twoViewPoint),
+              report.publishedPointIds.cend());
+    ASSERT_EQ(report.displayPointIds.size(), 1u);
+    EXPECT_EQ(report.displayPointIds.front(), multiViewPoint);
     const QJsonObject cleanup = report.diagnostics.value(QStringLiteral("sparse_point_cleanup")).toObject();
     EXPECT_EQ(cleanup.value(QStringLiteral("removed_by_track_length")).toInt(), 1);
+    EXPECT_EQ(cleanup.value(QStringLiteral("published_points")).toInt(), 2);
+    EXPECT_EQ(cleanup.value(QStringLiteral("display_points")).toInt(), 1);
     const QJsonObject policy = cleanup.value(QStringLiteral("policy")).toObject();
     EXPECT_EQ(policy.value(QStringLiteral("min_track_length")).toInt(), 3);
     EXPECT_DOUBLE_EQ(policy.value(QStringLiteral("max_reprojection_error_px")).toDouble(), 1.2);

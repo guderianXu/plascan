@@ -10,12 +10,18 @@
 #include <exception>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 namespace xjw
 {
+    namespace image_matching
+    {
+        struct FeatureSet;
+    }
+
     namespace matchphotos
     {
 
@@ -41,9 +47,14 @@ namespace xjw
             int originalWidth = 0;
             int originalHeight = 0;
             double resizeScale = 1.0;
+            double coordinateScale = 1.0;
+            double coordinateOffsetX = 0.0;
+            double coordinateOffsetY = 0.0;
 
             cv::Mat inputImage;
             cv::Mat mask;
+            std::shared_ptr<image_matching::FeatureSet> cachedFeatures;
+            QString cacheMissReason;
 
             std::int64_t imageReadMs = 0;
             std::int64_t imageResizeMs = 0;

@@ -2,9 +2,12 @@
 
 #include <QElapsedTimer>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QWidget>
 
 class QLabel;
+class QComboBox;
+class QPushButton;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
@@ -17,17 +20,35 @@ class WorkPanelWidget final : public QWidget
     Q_OBJECT
 
 public:
-    explicit WorkPanelWidget(QWidget *parent = nullptr);
+    explicit WorkPanelWidget(QWidget* parent = nullptr);
+    QJsonArray taskSnapshots() const;
 
 public slots:
-    void setTaskSnapshots(const QJsonArray &tasks);
+    void setTaskSnapshots(const QJsonArray& tasks);
+
+signals:
+    void logRangeRequested(qulonglong firstSequence, qulonglong lastSequence, const QString& taskId);
+    void clearHistoryRequested();
+    void taskCommandRequested(
+        const QString& action, const QString& runId, const QString& referenceRunId, int priority, qulonglong revision);
 
 private:
     void updateElapsedTimes();
+    void rebuildTable();
+    void updateTaskActions();
+    QJsonObject selectedTask() const;
+    QString adjacentRunId(bool previous) const;
 
-    QLabel *_emptyLabel{};
-    QStackedWidget *_stack{};
-    QTableWidget *_taskTable{};
-    QTimer *_elapsedRefreshTimer{};
+    QLabel* _emptyLabel{};
+    QComboBox* _filterCombo{};
+    QPushButton* _clearHistoryButton{};
+    QPushButton* _pauseResumeButton{};
+    QPushButton* _cancelButton{};
+    QPushButton* _moveUpButton{};
+    QPushButton* _moveDownButton{};
+    QStackedWidget* _stack{};
+    QTableWidget* _taskTable{};
+    QTimer* _elapsedRefreshTimer{};
     QElapsedTimer _snapshotAge;
+    QJsonArray _taskSnapshots;
 };

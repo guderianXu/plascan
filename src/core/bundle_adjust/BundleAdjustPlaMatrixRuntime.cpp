@@ -22,7 +22,9 @@ plamatrix::SchurComplementLinearBackend plaMatrixLinearBackend(BABackend backend
     case BABackend::PlaMatrixOpenCl:
         return plamatrix::SchurComplementLinearBackend::OpenCl;
     default:
-        return plamatrix::SchurComplementLinearBackend::Cpu;
+        return plamatrix::hasSparseDirectSchurSolver()
+            ? plamatrix::SchurComplementLinearBackend::SparseCpu
+            : plamatrix::SchurComplementLinearBackend::DenseCpu;
     }
 }
 
@@ -35,6 +37,8 @@ const char* plaMatrixLinearBackendName(
         return "block_jacobi_pcg_cpu";
     case plamatrix::SchurComplementLinearBackend::DenseCpu:
         return "dense_cholesky_cpu";
+    case plamatrix::SchurComplementLinearBackend::SparseCpu:
+        return "sparse_cholesky_native_cpu";
     case plamatrix::SchurComplementLinearBackend::Cuda:
         return "block_jacobi_pcg_cuda";
     case plamatrix::SchurComplementLinearBackend::OpenCl:

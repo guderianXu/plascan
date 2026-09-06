@@ -8,11 +8,14 @@
 当前框架：
 
 - `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持
-  `auto_sift`、`orb_binary`、`sift_lightglue` 和 `loma_r`。
-- `auto_sift` 是默认算法，自动设备顺序为 CUDA、Metal、OpenCL、OpenCV CPU。显式选择的设备
-  不可用时明确失败；不保留 `cuda_sift` 算法别名。
-- `orb_binary` 是用于衡量二进制描述子内存、速度与召回的 CPU 基线。通用预选会把二进制字节临时
-  转为 float 词汇输入，最终像对匹配仍使用 Hamming；当前不执行 SIFT 专用 guided rematch。
+  `auto_sift`、`plamatch_hct`、`sift_lightglue` 和 `loma_r`。
+- `plamatch_hct` 是默认算法，自动设备顺序为 CUDA、OpenCL、CPU。显式选择的设备不可用时明确失败；
+  Metal 当前不受支持。
+- `auto_sift` 可显式选择，自动设备顺序为 CUDA、Metal、OpenCL、OpenCV CPU；不保留 `cuda_sift` 算法别名。
+- `plamatch_hct` 是内置 CPU/CUDA/OpenCL 算法。任务缓存同时保存独立的 2,048 点 coarse 流、full 特征
+  和 CPU 预建 HCTree；GPU 路径以任务级 batch 复用 full/coarse 描述子驻留。默认自动预选直接复现
+  “对齐照片”的流程：PlaMatch coarse 候选图经 HCTree、局部一致性和最多 20 轮森林削减后，
+  再与 Source/Estimated/Sequential 参考预选取并集；不再由词汇召回结果限制 PlaMatch 候选范围。
 - `pair_selection/` 负责影像对类型、影像对选择策略和 `PairSelector`。
 - `runtime/` 负责任务级 SIFT 内存缓存、ONNX 资源解析、本机 TensorRT engine 缓存、蒙版约束和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
@@ -23,6 +26,10 @@
 当前行为：
 
 - `MatchPhotosAlgorithmSelector` 校验工作流选择的注册算法、设备要求与质量预设。
+- “精度”与对齐照片使用相同的五档 API 值，只控制进入特征检测/匹配的首层采样：
+  `最高=0`（构造 `(2W-1)×(2H-1)` 半像素格点）、`高=1`（原尺寸）、`中=2`、`低=4`、
+  `最低=8`（后三档为整数步长抽样）。默认是“高”。该设置不改变关键点/连接点限制、像对预选、
+  SfM 或 BA 参数；`maxImageDim` 为正时才作为独立的显式内存上限。
 - SIFT 负责提供尺度和旋转鲁棒性，LightGlue 直接消费任务内存中的 SIFT 关键点与描述子。
 - CUDA SIFT 检测阈值为 `0.0005`（快速模式为 `0.003`）；OpenCV CPU 使用独立的 contrast threshold
   `0.02`（快速模式 `0.04`），避免把两个实现的不同量纲混为一个参数。
@@ -55,32 +62,34 @@
 - 匹配阶段加载本机缓存的 TensorRT engine。最终结果由 `ImageMatchRepository` 对称提交为“一幅影像一个
   `.pimatch` 分片”，同一文件保存所有相邻影像，并按算法版本与配置变体隔离本影像观测、模型指纹、
   置信度和残差，避免不同特征编号空间互相覆盖。
-- 几何验证阶段使用统一 `MatchGeometryVerifier` 的 USAC/MAGSAC 基础矩阵内点。为抑制重复结构伪造的弱几何边，
-  少于 64 个内点的像对还必须达到 70% 内点率；强支持像对仍按最小内点数通过。原始匹配数、内点数和内点率会记入像对设置。
+- PlaMatch-HCT 在关闭引导匹配时直接采用算法内部的局部一致性结果，与“对齐照片”保持一致：不少于 8 条
+  对应即接纳该像对，不再叠加 Fundamental/USAC 质量门。其它算法及启用引导匹配的 PlaMatch-HCT 仍使用
+  `MatchGeometryVerifier` 的 USAC/MAGSAC 基础矩阵与连续支持度、内点率和空间覆盖质量门。
 - GPU 匹配并发按算法独立解析：CUDA SIFT 使用与关键点数线性相关的双描述子缓冲模型，LightGlue 使用
   自身的二次 attention/相似度模型，LoMa-R 使用独立的 score 张量、描述子与 TensorRT workspace 模型。
   三者不共享经验公式。CUDA SIFT 每个像对 worker 使用独立非阻塞 stream，并在一次描述子上传后完成
   双向匹配；有效 worker 数、单 worker 估算显存和选择原因写入匹配记录。
-- 轨迹阶段通过 `TiePointTrackManager` 管理最终多视图连接点，并复用 `MultiViewTrackBuilder` 合并 track。
-- 轨迹阶段成功后会写出 `assets/tie_points/latest_tie_points.json`。当前 v2 格式除影像、track、
-  观测点、参数摘要和统计信息外，还为每条 track 保存几何验证后的 `direct_edges`；空三据此区分
-  原始像对匹配与多视轨迹的传递闭包，避免把未经直接验证的观测对用于两视三角化。v1 文件仍可读取，
-  但会按旧版闭包语义兼容处理，因此升级后应重新生成一次连接点文件。
-- `maxTiePointsPerImage` 对应连接点限制；
-  `0` 表示关闭连接点数量稀疏。
+- 轨迹阶段通过 `TiePointTrackManager` 管理最终多视图连接点，并使用 `ReferenceTrackBuilder` 复现“对齐照片”的
+  并查集合并、重复影像观测清理、尺度静止点过滤和逐影像水位式空间选择。该过程不读取算法专属匹配分数。
+- 轨迹阶段成功后会写出 `assets/tie_points/latest_tie_points.json`。当前 v3 格式把影像路径集中存于顶层，
+  每个观测只保存固定数值行 `[image_id, feature_idx, x, y, scale]`，并继续为每条 track 保存几何验证后的
+  `direct_edges`；空三据此区分原始像对匹配与多视轨迹的传递闭包，避免把未经直接验证的观测对用于两视三角化。
+  v1/v2 文件仍可读取；v1 会按旧版闭包语义兼容处理，新生成缓存使用 v3 以减少大工程读写和解析开销。
+- `maxTiePointsPerImage` 对应参考流程的单幅影像连接点目标值；`0` 表示关闭空间选择。最终轨迹是各影像选择结果
+  的并集，并非旧 PlaScan 的每影像/网格硬配额。
 - `excludeStationaryTiePoints` 会剔除在多张影像中像方坐标几乎固定的 track，用于过滤转台背景、
-  传感器污点或镜头伪影类假连接点。
-- `PairSelector` 合并来自手动输入、全量匹配、序列窗口、相机重叠、词汇召回和未来引导重匹配的候选影像对。
-- 无相机通用预选由 `VocabularyOverlapRetriever` 调用 `OverlapPairGraphPlanner`，
-  在词汇相似度候选上保留互选 TopK、补足单向 TopK、桥接连通分量，并固定补充序列窗口邻接候选，
-  避免 BoW 图看似连通但实际匹配/SfM 有效图断裂。高精度和困难纹理模式使用更高的每图候选覆盖，
-  额外候选必须与已接受像对共享邻居、形成影像级三角闭环，随后仍经过完整匹配和 USAC 几何门控。
-- 通用预选与最终匹配使用不同预算：词汇分配默认从每张影像均匀抽取最多 4096 条描述子，
-  最终匹配仍消费任务缓存中的完整特征。SIFT 128 维和 LoMa-R 256 维描述子只在各自任务内训练词汇，
-  不跨算法复用词汇中心；LoMa-R 的最高 3840 关键点档默认不会被预选预算截断。
-- `HierarchicalVocabularyTree` 使用真正的层次 K-means：每个内部节点独立聚类出子节点，描述子从根节点
-  逐层选择最近分支直到叶词。默认分支因子 10、深度 3，每条描述子约比较 30 个节点中心；不再构建
-  1000 个扁平中心，也不使用 FLANN KD-tree 冒充词汇树。训练节点和影像批次之间均可响应取消。
+  传感器污点或镜头伪影类假连接点；距离阈值是成对关键点平均尺度的 4 倍，并要求尺度比不超过 2。
+- Auto 模式启用任一预选时，所有正式算法共用 `PlaMatchHctPairPreselector`。PlaMatch-HCT 直接复用特征阶段产生的独立
+  coarse MLDB/HCT 索引；Auto SIFT、SIFT+LightGlue 和 LoMa-R 从各自正式特征中按响应与空间覆盖选取
+  最多 2048 点，并将浮点描述子确定性映射为 64-byte 排序签名。两条路径随后执行相同的 HCT 候选搜索、
+  局部空间一致性、最小支持阈值和最多 20 轮骨架森林削减，不重新读取影像或提取第二套 coarse 特征。
+- 参考预选同样集中在 `PlaMatchHctPairPreselector`，按 Source、Estimated、Sequential 语义与通用候选取并集。
+  Source/Estimated 可从完整参考相机读取中心，也可由 CLI 的 `--reference-csv name,x,y,z` 直接提供位置；
+  仅启用参考预选时不会为影像额外构造 coarse 特征视图。
+  两种预选同时关闭时，Auto 模式跳过 coarse 视图构造和 HCT 预选，直接生成全部 `N(N-1)/2` 个像对；
+  显式手工像对模式仍只使用用户提供的像对。`PairSelector` 只负责无需描述子的全量、序列和手动像对生成；
+  旧词汇树、旧相机 footprint 和稀疏场景
+  候选链已删除。GUI 的独立“重叠度分析”工具仍由 `src/core/overlap/OverlapAnalyzer` 提供，不参与匹配照片预选。
 - `MatchPhotosTask` 执行算法选择、影像对选择、特征提取、两两匹配、几何验证、引导重匹配和轨迹构建。
   引导阶段用空间网格枚举初始基础矩阵极线带内的候选边，每条边只计算一次 RootSIFT 距离并同时维护双向
   top-2，随后执行互选和 ratio 门控。新增对应与原对应合并后只运行一次 USAC，并删除新增外点再更新统计。
@@ -91,5 +100,4 @@
   guided 前几何通过像对/内点、guided 新增内点、最终几何边和轨迹数，同时输出预选率、匹配产出率、
   几何像对留存率、几何内点率和 guided 增益率，用来区分“候选召回不足”、“特征匹配弱”与“几何退化”。
 
-`src/core/overlap` 保持为可复用的候选生成模块，由 `PairSelector` 调用；
-它不会被改名，也不会被嵌入到本模块目录下。
+预选契约集中在 `pair_selection/PlaMatchHctPairPreselector`；`src/core/overlap` 只保留独立重叠度分析能力。

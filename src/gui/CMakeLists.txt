@@ -111,6 +111,7 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
   ${CMAKE_SOURCE_DIR}/src/core/image_matching
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+  ${CMAKE_SOURCE_DIR}/src/core/task_runtime
   ${CMAKE_SOURCE_DIR}/src/common
   ${OpenCV_INCLUDE_DIRS}
 )
@@ -221,6 +222,7 @@ target_link_libraries(gui_runtime PRIVATE
   plascan_common_io
   plascan_common_model
   project_workflows
+  task_runtime
   ${OpenCV_LIBS}
   ${PLASCAN_LIBZIP_TARGET}
   ${PLASCAN_GDAL_TARGET}

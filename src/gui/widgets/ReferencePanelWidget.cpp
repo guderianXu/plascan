@@ -6,12 +6,14 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QGroupBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QMenu>
 #include <QMessageBox>
-#include <QSplitter>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
 
@@ -36,15 +38,6 @@ QTreeView *createReferenceTree(const QString &objectName, QWidget *parent)
     tree->header()->setSectionResizeMode(QHeaderView::Interactive);
     tree->header()->setDefaultSectionSize(92);
     return tree;
-}
-
-QGroupBox *createSection(const QString &title, QTreeView *tree, QWidget *parent)
-{
-    auto *section = new QGroupBox(title, parent);
-    auto *layout = new QVBoxLayout(section);
-    layout->setContentsMargins(0, 2, 0, 0);
-    layout->addWidget(tree);
-    return section;
 }
 
 void showOnlyColumns(QTreeView *tree, const QList<int> &visibleColumns, int columnCount)
@@ -135,36 +128,51 @@ void ReferencePanelWidget::buildInterface()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(3);
 
-    auto *importToolbar = new QToolBar(this);
-    importToolbar->setObjectName(QStringLiteral("referenceImportToolbar"));
-    importToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    importToolbar->setMovable(false);
-    _importCameraAction = importToolbar->addAction(tr("导入相机参考"));
-    _importCameraAction->setObjectName(QStringLiteral("importCameraReferencesAction"));
-    _importMarkerAction = importToolbar->addAction(tr("导入标记参考"));
-    _importMarkerAction->setObjectName(QStringLiteral("importMarkerReferencesAction"));
-    _exportCameraAction = importToolbar->addAction(tr("导出"));
-    _exportCameraAction->setObjectName(QStringLiteral("exportCameraReferencesAction"));
-    importToolbar->addSeparator();
-    _settingsAction = importToolbar->addAction(tr("设置"));
-    _settingsAction->setObjectName(QStringLiteral("cameraReferenceSettingsAction"));
-    layout->addWidget(importToolbar);
+    auto* actionToolbar = new QToolBar(this);
+    actionToolbar->setObjectName(QStringLiteral("referenceActionToolbar"));
+    actionToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    actionToolbar->setMovable(false);
 
-    auto *viewToolbar = new QToolBar(this);
-    viewToolbar->setObjectName(QStringLiteral("referenceViewToolbar"));
-    viewToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    viewToolbar->setMovable(false);
-    _toggleCameraAction = viewToolbar->addAction(tr("启用/禁用"));
+    _importCameraAction = new QAction(tr("相机参考"), this);
+    _importCameraAction->setObjectName(QStringLiteral("importCameraReferencesAction"));
+    _importMarkerAction = new QAction(tr("标记参考"), this);
+    _importMarkerAction->setObjectName(QStringLiteral("importMarkerReferencesAction"));
+
+    auto* importMenu = new QMenu(actionToolbar);
+    importMenu->addAction(_importCameraAction);
+    importMenu->addAction(_importMarkerAction);
+    auto* importButton = new QToolButton(actionToolbar);
+    importButton->setObjectName(QStringLiteral("referenceImportButton"));
+    importButton->setText(tr("导入"));
+    importButton->setMenu(importMenu);
+    importButton->setPopupMode(QToolButton::InstantPopup);
+    actionToolbar->addWidget(importButton);
+
+    _exportCameraAction = actionToolbar->addAction(tr("导出"));
+    _exportCameraAction->setObjectName(QStringLiteral("exportCameraReferencesAction"));
+    _settingsAction = actionToolbar->addAction(tr("设置"));
+    _settingsAction->setObjectName(QStringLiteral("cameraReferenceSettingsAction"));
+    _toggleCameraAction = new QAction(tr("启用/禁用"), this);
     _toggleCameraAction->setObjectName(QStringLiteral("toggleCameraReferenceAction"));
-    _editMarkerAction = viewToolbar->addAction(tr("标记属性"));
+    _editMarkerAction = new QAction(tr("标记属性"), this);
     _editMarkerAction->setObjectName(QStringLiteral("editMarkerReferenceAction"));
-    viewToolbar->addSeparator();
+
+    auto* moreMenu = new QMenu(actionToolbar);
+    moreMenu->addAction(_toggleCameraAction);
+    moreMenu->addAction(_editMarkerAction);
+    auto* moreButton = new QToolButton(actionToolbar);
+    moreButton->setObjectName(QStringLiteral("referenceMoreButton"));
+    moreButton->setText(tr("更多"));
+    moreButton->setMenu(moreMenu);
+    moreButton->setPopupMode(QToolButton::InstantPopup);
+    actionToolbar->addWidget(moreButton);
+    layout->addWidget(actionToolbar);
 
     auto *modeGroup = new QActionGroup(this);
     modeGroup->setExclusive(true);
-    _sourceModeAction = viewToolbar->addAction(tr("源值"));
-    _estimatedModeAction = viewToolbar->addAction(tr("估计值"));
-    _errorModeAction = viewToolbar->addAction(tr("误差"));
+    _sourceModeAction = new QAction(tr("源值"), this);
+    _estimatedModeAction = new QAction(tr("估计值"), this);
+    _errorModeAction = new QAction(tr("误差"), this);
     for (QAction *action : {_sourceModeAction, _estimatedModeAction, _errorModeAction})
     {
         action->setCheckable(true);
@@ -174,28 +182,27 @@ void ReferencePanelWidget::buildInterface()
     _estimatedModeAction->setObjectName(QStringLiteral("referenceEstimatedModeAction"));
     _errorModeAction->setObjectName(QStringLiteral("referenceErrorModeAction"));
     _sourceModeAction->setChecked(true);
-    layout->addWidget(viewToolbar);
 
-    auto *splitter = new QSplitter(Qt::Vertical, this);
-    splitter->setObjectName(QStringLiteral("referenceSectionSplitter"));
-    splitter->setChildrenCollapsible(false);
-    _cameraTree = createReferenceTree(QStringLiteral("cameraReferenceTree"), splitter);
-    _markerTree = createReferenceTree(QStringLiteral("markerReferenceTree"), splitter);
-    _scaleBarTree = createReferenceTree(QStringLiteral("scaleBarReferenceTree"), splitter);
-    auto *cameraSection = createSection(tr("相机参考"), _cameraTree, splitter);
-    auto *markerSection = createSection(tr("标记"), _markerTree, splitter);
-    auto *scaleBarSection = createSection(tr("标尺"), _scaleBarTree, splitter);
-    cameraSection->setMinimumHeight(150);
-    markerSection->setMinimumHeight(100);
-    scaleBarSection->setMinimumHeight(100);
-    splitter->addWidget(cameraSection);
-    splitter->addWidget(markerSection);
-    splitter->addWidget(scaleBarSection);
-    splitter->setStretchFactor(0, 2);
-    splitter->setStretchFactor(1, 1);
-    splitter->setStretchFactor(2, 1);
-    splitter->setSizes({300, 150, 150});
-    layout->addWidget(splitter, 1);
+    auto* modeTabs = new QTabBar(this);
+    modeTabs->setObjectName(QStringLiteral("referenceModeTabs"));
+    modeTabs->setDocumentMode(true);
+    modeTabs->setExpanding(true);
+    modeTabs->setUsesScrollButtons(false);
+    modeTabs->addTab(_sourceModeAction->text());
+    modeTabs->addTab(_estimatedModeAction->text());
+    modeTabs->addTab(_errorModeAction->text());
+    layout->addWidget(modeTabs);
+
+    auto* dataTabs = new QTabWidget(this);
+    dataTabs->setObjectName(QStringLiteral("referenceDataTabs"));
+    dataTabs->setDocumentMode(true);
+    _cameraTree = createReferenceTree(QStringLiteral("cameraReferenceTree"), dataTabs);
+    _markerTree = createReferenceTree(QStringLiteral("markerReferenceTree"), dataTabs);
+    _scaleBarTree = createReferenceTree(QStringLiteral("scaleBarReferenceTree"), dataTabs);
+    dataTabs->addTab(_cameraTree, tr("相机"));
+    dataTabs->addTab(_markerTree, tr("标记"));
+    dataTabs->addTab(_scaleBarTree, tr("标尺"));
+    layout->addWidget(dataTabs, 1);
 
     _cameraModel = new xjw::gui::reference::CameraReferenceTreeModel(this);
     _markerModel = new xjw::gui::reference::MarkerReferenceTreeModel(this);
@@ -215,18 +222,21 @@ void ReferencePanelWidget::buildInterface()
             this, &ReferencePanelWidget::exportCameraReferencesRequested);
     connect(_settingsAction, &QAction::triggered,
             this, &ReferencePanelWidget::cameraReferenceSettingsRequested);
-    connect(_sourceModeAction, &QAction::triggered, this, [this]()
-    {
-        applyMode(xjw::gui::reference::ReferenceDisplayMode::Source);
-    });
-    connect(_estimatedModeAction, &QAction::triggered, this, [this]()
-    {
-        applyMode(xjw::gui::reference::ReferenceDisplayMode::Estimated);
-    });
-    connect(_errorModeAction, &QAction::triggered, this, [this]()
-    {
-        applyMode(xjw::gui::reference::ReferenceDisplayMode::Error);
-    });
+    connect(modeTabs,
+            &QTabBar::currentChanged,
+            this,
+            [this](int index)
+            {
+                const auto mode = index == 1   ? xjw::gui::reference::ReferenceDisplayMode::Estimated
+                                  : index == 2 ? xjw::gui::reference::ReferenceDisplayMode::Error
+                                               : xjw::gui::reference::ReferenceDisplayMode::Source;
+                QAction* action = index == 1 ? _estimatedModeAction : index == 2 ? _errorModeAction : _sourceModeAction;
+                action->setChecked(true);
+                applyMode(mode);
+            });
+    connect(_sourceModeAction, &QAction::triggered, modeTabs, [modeTabs]() { modeTabs->setCurrentIndex(0); });
+    connect(_estimatedModeAction, &QAction::triggered, modeTabs, [modeTabs]() { modeTabs->setCurrentIndex(1); });
+    connect(_errorModeAction, &QAction::triggered, modeTabs, [modeTabs]() { modeTabs->setCurrentIndex(2); });
     connect(_toggleCameraAction, &QAction::triggered, this, [this]()
     {
         const QString imageUuid = selectedCameraUuid();

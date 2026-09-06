@@ -14,54 +14,54 @@
 
 namespace
 {
-std::tm localTime(std::time_t timeValue)
-{
-    std::tm tmValue{};
-#if defined(_WIN32)
-    localtime_s(&tmValue, &timeValue);
-#else
-    localtime_r(&timeValue, &tmValue);
-#endif
-    return tmValue;
-}
-
-Logger::Level terminalLogLevelFromEnvironment()
-{
-    const char *configured = std::getenv("PLASCAN_TERMINAL_LOG_LEVEL");
-    if (!configured)
+    std::tm localTime(std::time_t timeValue)
     {
+        std::tm tmValue{};
+#if defined(_WIN32)
+        localtime_s(&tmValue, &timeValue);
+#else
+        localtime_r(&timeValue, &tmValue);
+#endif
+        return tmValue;
+    }
+
+    Logger::Level terminalLogLevelFromEnvironment()
+    {
+        const char* configured = std::getenv("PLASCAN_TERMINAL_LOG_LEVEL");
+        if (!configured)
+        {
+            return Logger::Info;
+        }
+        std::string value(configured);
+        std::transform(value.begin(),
+                       value.end(),
+                       value.begin(),
+                       [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
+        if (value == "DEBUG")
+        {
+            return Logger::Debug;
+        }
+        if (value == "WARN" || value == "WARNING")
+        {
+            return Logger::Warn;
+        }
+        if (value == "ERROR")
+        {
+            return Logger::Error;
+        }
         return Logger::Info;
     }
-    std::string value(configured);
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character)
-    {
-        return static_cast<char>(std::toupper(character));
-    });
-    if (value == "DEBUG")
-    {
-        return Logger::Debug;
-    }
-    if (value == "WARN" || value == "WARNING")
-    {
-        return Logger::Warn;
-    }
-    if (value == "ERROR")
-    {
-        return Logger::Error;
-    }
-    return Logger::Info;
-}
-}
+} // namespace
 
-Logger *Logger::instance()
+Logger* Logger::instance()
 {
     static Logger logger;
     return &logger;
 }
 
 Logger::Logger()
-    : _logDir(defaultLogDirectory())
-    , _terminalMinimumLevel(terminalLogLevelFromEnvironment())
+    : _logDir(defaultLogDirectory()), _terminalMinimumLevel(terminalLogLevelFromEnvironment()),
+      _sessionId(currentTimestamp())
 {
     _logFilePath = (std::filesystem::path(_logDir) / "plascan.log").string();
 }
@@ -85,7 +85,7 @@ void Logger::unregisterSink(int sinkId)
     _sinks.erase(sinkId);
 }
 
-void Logger::setLogDirectory(const std::string &dir)
+void Logger::setLogDirectory(const std::string& dir)
 {
     std::lock_guard<std::mutex> lock(_mutex);
     _logDir = dir.empty() ? defaultLogDirectory() : dir;
@@ -143,32 +143,70 @@ Logger::Level Logger::terminalMinimumLevel() const
     return _terminalMinimumLevel;
 }
 
+std::string Logger::sessionId() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _sessionId;
+}
+
+std::uint64_t Logger::latestSequence() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _latestSequence;
+}
+
+std::vector<Logger::Entry> Logger::recentEntries() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return {_recentEntries.begin(), _recentEntries.end()};
+}
+
 void Logger::log(Level level, std::string_view message)
+{
+    logEntry(level, message, threadContextStorage());
+}
+
+std::uint64_t Logger::logWithContext(Level level, std::string_view message, const Context& context)
+{
+    return logEntry(level, message, context);
+}
+
+std::uint64_t Logger::logEntry(Level level, std::string_view message, const Context& context)
 {
     if (level < threadMinimumLevelStorage())
     {
-        return;
+        return 0;
     }
 
     Entry entry;
     entry.level = level;
     entry.timestamp = currentTimestamp();
+    entry.category = context.category;
+    entry.taskId = context.taskId;
+    entry.stage = context.stage;
     entry.message.assign(message.begin(), message.end());
-    entry.formatted = formatLine(level, entry.timestamp, entry.message);
 
     std::vector<SinkCallback> sinks;
     bool write_terminal = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        entry.sequence = ++_latestSequence;
+        entry.sessionId = _sessionId;
+        entry.formatted = formatLine(level, entry.timestamp, entry.message);
         if (openLogFileLocked(false))
         {
             _file << entry.formatted;
             _file.flush();
             rotateIfNeededLocked();
         }
+        _recentEntries.push_back(entry);
+        while (_recentEntries.size() > _maxRecentEntries)
+        {
+            _recentEntries.pop_front();
+        }
 
         sinks.reserve(_sinks.size());
-        for (const auto &item : _sinks)
+        for (const auto& item : _sinks)
         {
             sinks.push_back(item.second);
         }
@@ -180,7 +218,7 @@ void Logger::log(Level level, std::string_view message)
         writeToTerminal(entry);
     }
 
-    for (const auto &sink : sinks)
+    for (const auto& sink : sinks)
     {
         try
         {
@@ -190,9 +228,11 @@ void Logger::log(Level level, std::string_view message)
         {
         }
     }
+
+    return entry.sequence;
 }
 
-void Logger::logf(Level level, const char *fmt, ...)
+void Logger::logf(Level level, const char* fmt, ...)
 {
     std::va_list args;
     va_start(args, fmt);
@@ -200,12 +240,12 @@ void Logger::logf(Level level, const char *fmt, ...)
     va_end(args);
 }
 
-void Logger::vlogf(Level level, const char *fmt, std::va_list args)
+void Logger::vlogf(Level level, const char* fmt, std::va_list args)
 {
     log(level, formatString(fmt, args));
 }
 
-void Logger::debugf(const char *fmt, ...)
+void Logger::debugf(const char* fmt, ...)
 {
     std::va_list args;
     va_start(args, fmt);
@@ -213,7 +253,7 @@ void Logger::debugf(const char *fmt, ...)
     va_end(args);
 }
 
-void Logger::infof(const char *fmt, ...)
+void Logger::infof(const char* fmt, ...)
 {
     std::va_list args;
     va_start(args, fmt);
@@ -221,7 +261,7 @@ void Logger::infof(const char *fmt, ...)
     va_end(args);
 }
 
-void Logger::warnf(const char *fmt, ...)
+void Logger::warnf(const char* fmt, ...)
 {
     std::va_list args;
     va_start(args, fmt);
@@ -229,7 +269,7 @@ void Logger::warnf(const char *fmt, ...)
     va_end(args);
 }
 
-void Logger::errorf(const char *fmt, ...)
+void Logger::errorf(const char* fmt, ...)
 {
     std::va_list args;
     va_start(args, fmt);
@@ -239,11 +279,11 @@ void Logger::errorf(const char *fmt, ...)
 
 std::string Logger::defaultLogDirectory()
 {
-    if (const char *xdgStateHome = std::getenv("XDG_STATE_HOME"))
+    if (const char* xdgStateHome = std::getenv("XDG_STATE_HOME"))
     {
         return (std::filesystem::path(xdgStateHome) / "PlaScan" / "logs").string();
     }
-    if (const char *home = std::getenv("HOME"))
+    if (const char* home = std::getenv("HOME"))
     {
         return (std::filesystem::path(home) / ".local" / "state" / "PlaScan" / "logs").string();
     }
@@ -261,7 +301,7 @@ std::string Logger::currentTimestamp()
     return stream.str();
 }
 
-const char *Logger::levelName(Level level)
+const char* Logger::levelName(Level level)
 {
     switch (level)
     {
@@ -278,7 +318,7 @@ const char *Logger::levelName(Level level)
     }
 }
 
-std::string Logger::formatString(const char *fmt, std::va_list args)
+std::string Logger::formatString(const char* fmt, std::va_list args)
 {
     if (!fmt)
     {
@@ -302,9 +342,7 @@ std::string Logger::formatString(const char *fmt, std::va_list args)
     return std::string(buffer.data(), static_cast<std::size_t>(required));
 }
 
-std::string Logger::formatLine(Level level,
-                               const std::string &timestamp,
-                               std::string_view message) const
+std::string Logger::formatLine(Level level, const std::string& timestamp, std::string_view message) const
 {
     std::ostringstream stream;
     stream << '[' << timestamp << "] [" << levelName(level) << "] " << message << '\n';
@@ -372,10 +410,10 @@ void Logger::rotateIfNeededLocked()
     openLogFileLocked(true);
 }
 
-void Logger::writeToTerminal(const Entry &entry) const
+void Logger::writeToTerminal(const Entry& entry) const
 {
     const std::lock_guard<std::mutex> lock(_terminalMutex);
-    std::ostream &stream = (entry.level >= Warn) ? std::cerr : std::cout;
+    std::ostream& stream = (entry.level >= Warn) ? std::cerr : std::cout;
     stream << entry.formatted;
     stream.flush();
 }

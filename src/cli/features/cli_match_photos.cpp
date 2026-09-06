@@ -35,13 +35,9 @@ namespace
     MatchPhotosProfile profileFromToken(const QString& token)
     {
         const QString normalized = xjw::cli::normalizedToken(token, QStringLiteral("auto"));
-        if (normalized == QStringLiteral("fast") || normalized == QStringLiteral("low"))
+        if (normalized == QStringLiteral("fast"))
         {
             return MatchPhotosProfile::Fast;
-        }
-        if (normalized == QStringLiteral("high") || normalized == QStringLiteral("highest"))
-        {
-            return MatchPhotosProfile::HighAccuracy;
         }
         if (normalized == QStringLiteral("difficult") || normalized == QStringLiteral("difficult_texture"))
         {
@@ -145,6 +141,7 @@ namespace
         object[QStringLiteral("requires_cuda")] = plan.requiresCuda;
         object[QStringLiteral("prefer_cuda")] = plan.preferCuda;
         object[QStringLiteral("rotation_robust")] = plan.rotationRobust;
+        object[QStringLiteral("alignment_downscale")] = plan.alignmentDownscale;
         object[QStringLiteral("max_image_dim")] = plan.maxImageDim;
         object[QStringLiteral("max_keypoints")] = plan.maxKeypoints;
         object[QStringLiteral("guided_matching_mode")] =
@@ -200,8 +197,6 @@ namespace
             sample[QStringLiteral("index_b")] = candidate.pair.indexB;
             sample[QStringLiteral("pair_key")] = candidate.pairKey;
             sample[QStringLiteral("priority_score")] = candidate.priorityScore;
-            sample[QStringLiteral("overlap_score")] = candidate.overlapScore;
-            sample[QStringLiteral("vocabulary_score")] = candidate.vocabularyScore;
             sample[QStringLiteral("sequence_score")] = candidate.sequenceScore;
             sample[QStringLiteral("sources")] = sourcesToJson(candidate.sources);
             sample[QStringLiteral("detail")] = candidate.detail;
@@ -252,16 +247,20 @@ namespace
     {
         QJsonObject object;
         object[QStringLiteral("algorithm_id")] = options.algorithmId;
+        object[QStringLiteral("alignment_accuracy")] = xjw::matchphotos::alignmentAccuracyName(options.accuracy);
+        object[QStringLiteral("alignment_downscale")] = xjw::matchphotos::alignmentAccuracyDownscale(options.accuracy);
         object[QStringLiteral("mask_apply_mode")] = options.maskApplyMode;
         object[QStringLiteral("max_image_dim")] = options.maxImageDim;
         object[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
         object[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
         object[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
-        object[QStringLiteral("tiepoint_grid_columns")] = options.tiePointGridColumns;
-        object[QStringLiteral("tiepoint_grid_rows")] = options.tiePointGridRows;
-        object[QStringLiteral("tiepoint_grid_cell_limit")] = options.maxTiePointsPerGridCell;
+        object[QStringLiteral("track_builder")] = QStringLiteral("align_photos_reference");
+        object[QStringLiteral("tiepoint_spatial_selection")] = QStringLiteral("per_image_water_fill_up_to_16x16");
         object[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
         object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
+        object[QStringLiteral("reference_preselection_mode")] =
+            xjw::matchphotos::referencePreselectionModeName(options.referencePreselectionMode);
+        object[QStringLiteral("reference_preselection_neighbors")] = options.referencePreselectionNeighbors;
         object[QStringLiteral("guided_image_matching_mode")] =
             xjw::matchphotos::guidedMatchingModeName(options.guidedMatchingMode);
         object[QStringLiteral("guided_image_matching")] =
@@ -323,18 +322,21 @@ int main(int argc, char* argv[])
     std::string chunkNameArg;
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
-    std::string algorithmIdArg = "auto_sift";
+    std::string algorithmIdArg = "plamatch_hct";
     std::string lightGlueEngineArg;
     std::string lomaRPackageArg;
     int lomaRKeypointBudget = 0;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     std::string pairModeArg = "auto";
+    std::string referencePreselectionModeArg = "source";
+    std::string referenceCsvArg;
     int keypointLimit = 40000;
     int keypointLimitPerMpx = 0;
     int tiepointLimit = 4000;
     int maxImageDim = 0;
     int sequenceWindow = 4;
+    int referencePreselectionNeighbors = 10;
     int maxPairs = 0;
     int cudaDevice = 0;
     int cudaParallelPairs = 0;
@@ -360,12 +362,14 @@ int main(int argc, char* argv[])
     app.add_option("--project", projectPathArg, "无头项目路径，默认写到输出目录 headless.plascan");
     app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
-    app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
+    app.add_option("--quality",
+                   qualityArg,
+                   "对齐精度: highest, high, medium, low, lowest (downscale 0/1/2/4/8)；"
+                   "兼容旧 profile token fast/difficult/cpu/cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
-    app.add_option("--algorithm-id",
-                   algorithmIdArg,
-                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
+    app.add_option(
+           "--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, plamatch_hct, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "plamatch_hct", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine",
                    lightGlueEngineArg,
                    "LightGlue .onnx（推荐）或兼容的本机 .engine；留空时按模型目录自动查找");
@@ -374,12 +378,21 @@ int main(int argc, char* argv[])
     app.add_option("--keypoint-limit", keypointLimit, "每张影像关键点限制");
     app.add_option("--keypoint-limit-per-mpx", keypointLimitPerMpx, "每百万像素关键点限制，0 表示不额外限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "每张影像连接点限制");
-    app.add_option("--max-image-dim", maxImageDim, "特征提取最长边限制，0 表示按预设");
+    app.add_option("--max-image-dim", maxImageDim, "独立的特征输入最长边上限，0 表示不额外限制");
     app.add_option("--mask-apply-mode", maskApplyModeArg, "蒙版应用阶段: none, keypoints, tiepoints");
     app.add_option("--mask-dir", maskDirArg, "蒙版目录，按影像文件名或 *_mask 文件名匹配");
     app.add_flag("--generic-preselection", genericPreselection, "启用通用预选");
     app.add_flag("--no-generic-preselection", noGenericPreselection, "禁用通用预选");
-    app.add_flag("--reference-preselection", referencePreselection, "启用参考预选；需要完整相机文件");
+    app.add_flag("--reference-preselection",
+                 referencePreselection,
+                 "启用参考预选；PlaMatch source/estimated 缺少坐标时按索引邻域回退");
+    app.add_option(
+           "--reference-preselection-mode", referencePreselectionModeArg, "参考预选模式: source, estimated, sequential")
+        ->check(CLI::IsMember({"source", "source_code", "estimated", "estimated_pose", "sequence", "sequential"}));
+    app.add_option("--reference-preselection-neighbors",
+                   referencePreselectionNeighbors,
+                   "Source/Estimated 最近参考位置数量；无坐标时作为索引邻域");
+    app.add_option("--reference-csv", referenceCsvArg, "位置先验 CSV：name,x,y,z；无需 .tsai 相机文件");
     app.add_flag("--guided-image-matching", guidedImageMatching, "兼容开关：等价于 --guided-image-matching-mode auto");
     app.add_option("--guided-image-matching-mode", guidedMatchingModeArg, "指导匹配模式: off, auto, force")
         ->check(CLI::IsMember({"off", "auto", "force"}));
@@ -427,7 +440,7 @@ int main(int argc, char* argv[])
     xjw::cli::PhotogrammetryListOptions listOptions;
     listOptions.allowImageOnlyRows = true;
     listOptions.loadCameras = referencePreselection;
-    listOptions.requireExistingCameras = referencePreselection;
+    listOptions.requireExistingCameras = false;
     std::vector<xjw::cli::PhotogrammetryInputItem> items;
     if (!xjw::cli::readPhotogrammetryImageList(inputList, listOptions, &items, &errorMessage))
     {
@@ -443,11 +456,7 @@ int main(int argc, char* argv[])
     {
         excludeFixedTiePoints = false;
     }
-    if (referencePreselection && xjw::cli::referenceCameraMap(items).size() < static_cast<int>(items.size()))
-    {
-        std::fprintf(stderr, "错误: 参考预选需要列表中每张影像都有可读取的相机文件。\n");
-        return cli::EXIT_ARG_ERR;
-    }
+    const QString requestedAlgorithmId = xjw::cli::normalizedToken(algorithmIdArg, QStringLiteral("plamatch_hct"));
 
     xjw::common::project::ProjectSession projectSession;
     if (!projectSession.openOrCreate(projectPath, QFileInfo(projectPath).completeBaseName(), &errorMessage))
@@ -475,12 +484,13 @@ int main(int argc, char* argv[])
 
     MatchPhotosOptions options;
     options.profile = profileFromToken(xjw::cli::fromStdString(qualityArg));
+    options.accuracy = xjw::matchphotos::alignmentAccuracyFromName(xjw::cli::fromStdString(qualityArg));
     options.device = deviceFromToken(xjw::cli::fromStdString(deviceArg));
     options.pairPolicy = xjw::matchphotos::makePairSelectionPolicy(pairPresetFromProfile(options.profile));
     options.pairPolicy.mode = pairModeFromToken(xjw::cli::fromStdString(pairModeArg));
     options.pairPolicy.sequenceWindow = std::max(1, sequenceWindow);
     options.pairPolicy.maxPairs = std::max(0, maxPairs);
-    options.algorithmId = xjw::cli::normalizedToken(algorithmIdArg, QStringLiteral("auto_sift"));
+    options.algorithmId = requestedAlgorithmId;
     options.lightGlueTensorRtEnginePath =
         lightGlueEngineArg.empty() ? QString()
                                    : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
@@ -515,6 +525,9 @@ int main(int argc, char* argv[])
     options.useExplicitKeypointLimit = keypointLimit > 0 || keypointLimitPerMpx > 0;
     options.useGenericPreselection = genericPreselection;
     options.useReferencePreselection = referencePreselection;
+    options.referencePreselectionMode =
+        xjw::matchphotos::referencePreselectionModeFromName(QString::fromStdString(referencePreselectionModeArg));
+    options.referencePreselectionNeighbors = std::max(1, referencePreselectionNeighbors);
     options.excludeStationaryTiePoints = excludeFixedTiePoints;
     options.reuseExistingMatches = !noReuseMatches;
     options.planOnly = planOnly;
@@ -526,6 +539,15 @@ int main(int argc, char* argv[])
     context.matchDirectory = QDir(assetDir).filePath(QStringLiteral("image_matches"));
     context.pairInput.images = xjw::cli::imagePaths(items);
     context.referenceCameras = xjw::cli::referenceCameraMap(items);
+    if (!referenceCsvArg.empty())
+    {
+        const QString referenceCsv = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(referenceCsvArg));
+        if (!xjw::cli::readReferencePositionCsv(referenceCsv, &context.referencePositions, &errorMessage))
+        {
+            std::fprintf(stderr, "参考位置读取失败: %s\n", qUtf8Printable(errorMessage));
+            return cli::EXIT_IO_ERR;
+        }
+    }
     context.maskPaths = xjw::cli::maskPathsFromDirectory(xjw::cli::fromStdString(maskDirArg), context.pairInput.images);
 
     std::atomic_bool cancelFlag(false);

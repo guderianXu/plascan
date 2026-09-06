@@ -163,37 +163,33 @@ public:
         result.scores.reserve(static_cast<std::size_t>(requested));
         std::vector<int> kept;
         kept.reserve(static_cast<std::size_t>(requested));
-        for (int index = 0; index < _config.featureKeypointCount &&
-                            static_cast<int>(kept.size()) < requested; ++index)
+        for (int index = 0; index < _config.featureKeypointCount && static_cast<int>(kept.size()) < requested; ++index)
         {
             const float nx = normalizedKeypoints[static_cast<std::size_t>(index) * 2U];
             const float ny = normalizedKeypoints[static_cast<std::size_t>(index) * 2U + 1U];
             const float x = (nx + 1.0f) * 0.5f * static_cast<float>(sourceWidth);
             const float y = (ny + 1.0f) * 0.5f * static_cast<float>(sourceHeight);
-            if (!std::isfinite(x) || !std::isfinite(y) ||
-                x < 0.0f || y < 0.0f || x >= sourceWidth || y >= sourceHeight ||
-                !pointAllowed(input.validMask, x, y))
+            if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0f || y < 0.0f || x >= sourceWidth ||
+                y >= sourceHeight || !pointAllowed(input.validMask, x, y))
             {
                 continue;
             }
             cv::KeyPoint keypoint;
-            keypoint.pt.x = static_cast<float>(x * input.coordinateScale);
-            keypoint.pt.y = static_cast<float>(y * input.coordinateScale);
+            keypoint.pt.x = static_cast<float>(x * input.coordinateScale + input.coordinateOffsetX);
+            keypoint.pt.y = static_cast<float>(y * input.coordinateScale + input.coordinateOffsetY);
             keypoint.response = keypointScores[static_cast<std::size_t>(index)];
-            keypoint.size = 1.0f;
+            keypoint.size = static_cast<float>(input.coordinateScale);
             keypoint.angle = -1.0f;
             result.keypoints.push_back(keypoint);
             result.scores.push_back(keypoint.response);
             kept.push_back(index);
         }
 
-        result.descriptors.create(static_cast<int>(kept.size()),
-                                  _config.descriptorDimension,
-                                  CV_32F);
+        result.descriptors.create(static_cast<int>(kept.size()), _config.descriptorDimension, CV_32F);
         for (int row = 0; row < static_cast<int>(kept.size()); ++row)
         {
-            const float *source = descriptors.data() +
-                static_cast<std::size_t>(kept[static_cast<std::size_t>(row)]) * descriptorDimension;
+            const float* source = descriptors.data() +
+                                  static_cast<std::size_t>(kept[static_cast<std::size_t>(row)]) * descriptorDimension;
             std::memcpy(result.descriptors.ptr<float>(row), source,
                         descriptorDimension * sizeof(float));
         }

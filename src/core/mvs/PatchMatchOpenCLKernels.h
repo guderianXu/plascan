@@ -2,14 +2,14 @@
 
 namespace xjw
 {
-namespace mvs
-{
-namespace detail
-{
+    namespace mvs
+    {
+        namespace detail
+        {
 
-inline constexpr const char* kPatchMatchOpenClBuildOptions = "-cl-mad-enable";
+            inline constexpr const char* kPatchMatchOpenClBuildOptions = "-cl-mad-enable";
 
-inline constexpr const char* kPatchMatchOpenClSourcePrefix = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourcePrefix = R"CLC(
 #define MAX_SOURCES 16
 #define MAX_ROBUST_SUPPORT 4
 #define WORK_GROUP_SIZE 16
@@ -220,7 +220,7 @@ static inline void compose_plane_homography(float4 normal,
 }
 )CLC";
 
-inline constexpr const char* kPatchMatchOpenClSourcePhotometric = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourcePhotometric = R"CLC(
 static inline float source_ncc(int center_x,
                         int center_y,
                         float depth,
@@ -418,7 +418,7 @@ static inline float source_ncc(int center_x,
             ++valid_count;
 )CLC";
 
-inline constexpr const char* kPatchMatchOpenClSourceGradientCensus = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourceGradientCensus = R"CLC(
 
             int gradient_valid = reference_x > 0 && reference_y > 0
                 && reference_x + 1 < width && reference_y + 1 < height;
@@ -603,7 +603,7 @@ inline constexpr const char* kPatchMatchOpenClSourceGradientCensus = R"CLC(
 }
 )CLC";
 
-inline constexpr const char* kPatchMatchOpenClSourceMain = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourceMain = R"CLC(
 static inline float joint_depth_score(int x,
                                 int y,
                                 float depth,
@@ -796,10 +796,11 @@ __kernel void initialize_planes(
     float inv_fx,
     float inv_fy,
     float cx,
-    float cy)
+    float cy,
+    int dispatch_row_offset)
 {
     int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
+    int y = (int)get_global_id(1) + dispatch_row_offset;
     int local_linear_index = (int)get_local_id(1) * WORK_GROUP_SIZE
         + (int)get_local_id(0);
     int tile_origin_x = (int)get_group_id(0) * WORK_GROUP_SIZE;
@@ -808,7 +809,7 @@ __kernel void initialize_planes(
     __local uchar reference_mask_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
     for (int tile_index = local_linear_index;
          tile_index < REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE;
-         tile_index += WORK_GROUP_SIZE * WORK_GROUP_SIZE)
+         tile_index += (int)(get_local_size(0) * get_local_size(1)))
     {
         int tile_x = tile_index % REFERENCE_TILE_SIZE;
         int tile_y = tile_index / REFERENCE_TILE_SIZE;
@@ -923,7 +924,7 @@ __kernel void initialize_planes(
 }
 )CLC";
 
-inline constexpr const char* kPatchMatchOpenClSourcePropagation = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourcePropagation = R"CLC(
 
 static inline int local_surface_normal(__global const float *depth,
                                        int width,
@@ -1000,6 +1001,7 @@ __kernel void propagate_planes(
     float inv_fy,
     float cx,
     float cy,
+    int dispatch_row_offset,
     float source_selection_neighbor_bonus,
     int enable_asymmetric_propagation,
     int checkerboard,
@@ -1007,7 +1009,7 @@ __kernel void propagate_planes(
     float perturbation)
 {
     int compact_x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
+    int y = (int)get_global_id(1) + dispatch_row_offset;
     int x = compact_x * 2 + ((y + checkerboard) & 1);
     int local_linear_index = (int)get_local_id(1) * WORK_GROUP_SIZE
         + (int)get_local_id(0);
@@ -1017,7 +1019,7 @@ __kernel void propagate_planes(
     __local uchar reference_mask_tile[CHECKERBOARD_TILE_WIDTH * REFERENCE_TILE_SIZE];
     for (int tile_index = local_linear_index;
          tile_index < CHECKERBOARD_TILE_WIDTH * REFERENCE_TILE_SIZE;
-         tile_index += WORK_GROUP_SIZE * WORK_GROUP_SIZE)
+         tile_index += (int)(get_local_size(0) * get_local_size(1)))
     {
         int tile_x = tile_index % CHECKERBOARD_TILE_WIDTH;
         int tile_y = tile_index / CHECKERBOARD_TILE_WIDTH;
@@ -1233,7 +1235,7 @@ __kernel void propagate_planes(
 }
 )CLC";
 
-inline constexpr const char* kPatchMatchOpenClSourceFinalize = R"CLC(
+            inline constexpr const char* kPatchMatchOpenClSourceFinalize = R"CLC(
 
 __kernel void finalize_planes(
     __global const float *reference,
@@ -1266,10 +1268,11 @@ __kernel void finalize_planes(
     float inv_fx,
     float inv_fy,
     float cx,
-    float cy)
+    float cy,
+    int dispatch_row_offset)
 {
     int x = (int)get_global_id(0);
-    int y = (int)get_global_id(1);
+    int y = (int)get_global_id(1) + dispatch_row_offset;
     int local_linear_index = (int)get_local_id(1) * WORK_GROUP_SIZE
         + (int)get_local_id(0);
     int tile_origin_x = (int)get_group_id(0) * WORK_GROUP_SIZE;
@@ -1278,7 +1281,7 @@ __kernel void finalize_planes(
     __local uchar reference_mask_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
     for (int tile_index = local_linear_index;
          tile_index < REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE;
-         tile_index += WORK_GROUP_SIZE * WORK_GROUP_SIZE)
+         tile_index += (int)(get_local_size(0) * get_local_size(1)))
     {
         int tile_x = tile_index % REFERENCE_TILE_SIZE;
         int tile_y = tile_index / REFERENCE_TILE_SIZE;
@@ -1358,6 +1361,6 @@ __kernel void finalize_planes(
 }
 )CLC";
 
-} // namespace detail
-} // namespace mvs
+        } // namespace detail
+    } // namespace mvs
 } // namespace xjw

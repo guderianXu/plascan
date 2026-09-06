@@ -41,29 +41,13 @@ inline WorkspacePanelDescriptor workspacePanelDescriptor(WorkspacePanelId id)
                 true,
                 true};
     case WorkspacePanelId::Properties:
-        return {id,
-                WorkspacePanelKind::Dock,
-                QStringLiteral("properties_visible"),
-                true,
-                true};
+        return {id, WorkspacePanelKind::Dock, QStringLiteral("properties_visible"), false, false};
     case WorkspacePanelId::Photos:
-        return {id,
-                WorkspacePanelKind::Dock,
-                QStringLiteral("photos_visible"),
-                true,
-                true};
+        return {id, WorkspacePanelKind::Dock, QStringLiteral("photos_visible"), false, false};
     case WorkspacePanelId::Work:
-        return {id,
-                WorkspacePanelKind::Dock,
-                QStringLiteral("work_visible"),
-                true,
-                true};
+        return {id, WorkspacePanelKind::Dock, QStringLiteral("work_visible"), false, false};
     case WorkspacePanelId::Log:
-        return {id,
-                WorkspacePanelKind::Dock,
-                QStringLiteral("log_visible"),
-                true,
-                false};
+        return {id, WorkspacePanelKind::Dock, QStringLiteral("log_visible"), false, false};
     case WorkspacePanelId::MainToolbar:
         return {id,
                 WorkspacePanelKind::ToolBar,

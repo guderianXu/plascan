@@ -4,6 +4,7 @@
 
 #include <plapoint/filters/preprocessing.h>
 
+#include <limits>
 #include <vector>
 
 using namespace xjw;
@@ -197,18 +198,19 @@ TEST(SparsePointCloudProcessorTest, ZeroReprojectionThresholdIsAppliedWithoutCle
 
 TEST(SparsePointCloudProcessorTest, FiltersUncertaintyAndProjectionAccuracyAboveThreshold)
 {
-    std::vector<SparsePointCloudPoint> points = {
-        makePoint(0.0, 0.0, 0.0, 0.2, 3.0, 4),
-        makePoint(1.0, 0.0, 0.0, 0.2, 3.0, 4),
-        makePoint(2.0, 0.0, 0.0, 0.2, 3.0, 4),
-        makePoint(3.0, 0.0, 0.0, 0.2, 3.0, 4)
-    };
+    std::vector<SparsePointCloudPoint> points = {makePoint(0.0, 0.0, 0.0, 0.2, 3.0, 4),
+                                                 makePoint(1.0, 0.0, 0.0, 0.2, 3.0, 4),
+                                                 makePoint(2.0, 0.0, 0.0, 0.2, 3.0, 4),
+                                                 makePoint(3.0, 0.0, 0.0, 0.2, 3.0, 4),
+                                                 makePoint(4.0, 0.0, 0.0, 0.2, 3.0, 4)};
     points[0].reconstructionUncertainty = 5.0;
     points[0].projectionAccuracy = 1.0;
     points[1].reconstructionUncertainty = 15.0;
     points[1].projectionAccuracy = 1.0;
     points[2].reconstructionUncertainty = 6.0;
     points[2].projectionAccuracy = 3.0;
+    points[4].reconstructionUncertainty = std::numeric_limits<double>::infinity();
+    points[4].projectionAccuracy = 1.0;
 
     SparsePointCloudFilterOptions options;
     options.filterByReprojError = false;
@@ -224,7 +226,7 @@ TEST(SparsePointCloudProcessorTest, FiltersUncertaintyAndProjectionAccuracyAbove
     const SparsePointCloudFilterStats stats =
         SparsePointCloudProcessor::filter(&points, options);
 
-    EXPECT_EQ(stats.removedByReconstructionUncertainty, 1);
+    EXPECT_EQ(stats.removedByReconstructionUncertainty, 2);
     EXPECT_EQ(stats.removedByProjectionAccuracy, 1);
     ASSERT_EQ(points.size(), 2u);
     EXPECT_DOUBLE_EQ(points[0].x, 0.0);

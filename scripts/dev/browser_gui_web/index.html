@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PlaScan Browser Debug Hub</title>
+  <link rel="alternate" type="application/json" title="PlaScan Agent Debug API"
+        href="/api/agent/capabilities">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-agent-api="/api/agent/capabilities">
+  <div class="app-shell">
+    <header class="command-bar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">PS</span>
+        <div>
+          <p class="eyebrow">PLASCAN · BROWSER LAB</p>
+          <h1>GUI 调试工作台</h1>
+        </div>
+      </div>
+      <div class="command-actions">
+        <div class="session-meta">
+          <span id="bridgeHealth" class="health-pill waiting"><i></i>正在连接</span>
+          <span class="session-id"><small>RUN</small><b id="runId" class="mono">—</b></span>
+        </div>
+        <button id="globalRefresh" class="icon-button" title="刷新所有状态" aria-label="刷新所有状态">↻</button>
+        <a id="openVnc" class="button secondary" target="_blank" rel="noreferrer">独立窗口</a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="viewer-card">
+        <header class="viewer-head">
+          <div>
+            <p class="section-kicker"><span class="live-dot"></span> LIVE VIEW</p>
+            <h2>真实 PlaScan 界面</h2>
+          </div>
+          <div class="viewer-tags" aria-label="运行环境">
+            <span>Xvfb :91</span>
+            <span>noVNC</span>
+            <span>输入已启用</span>
+          </div>
+        </header>
+        <div class="viewer-stage">
+          <iframe id="vncFrame" title="PlaScan noVNC session"></iframe>
+        </div>
+        <footer class="viewer-foot">
+          <span>隔离显示器，不占用物理桌面</span>
+          <span id="lastUpdated" class="mono">等待首个快照</span>
+        </footer>
+      </section>
+
+      <aside class="inspector-card">
+        <section class="status-overview" aria-label="会话摘要">
+          <article class="primary-metric">
+            <span class="metric-label">当前工程</span>
+            <strong id="projectState">未打开</strong>
+            <small id="projectPath" title="">等待工程会话</small>
+          </article>
+          <div class="metric-grid">
+            <article><span>影像</span><strong id="imageCount">0</strong></article>
+            <article><span>任务</span><strong id="taskCount">0</strong></article>
+            <article><span>窗口</span><strong id="activeWindow">—</strong></article>
+            <article><span>模态</span><strong id="modalWindow">无</strong></article>
+          </div>
+        </section>
+
+        <nav class="tabs" aria-label="调试视图">
+          <button class="tab active" data-tab="summary" aria-selected="true"><span>概览</span></button>
+          <button class="tab" data-tab="ui" aria-selected="false"><span>控件</span><b id="uiCount">—</b></button>
+          <button class="tab" data-tab="logs" aria-selected="false"><span>日志</span><b id="logCount">0</b></button>
+          <button class="tab" data-tab="artifacts" aria-selected="false"><span>产物</span><b id="artifactCount">0</b></button>
+        </nav>
+
+        <section id="summaryPanel" class="panel active">
+          <div id="recentError" class="alert hidden"></div>
+          <div class="panel-heading">
+            <div><p class="section-kicker">TASK MONITOR</p><h3>运行任务</h3></div>
+            <button id="refreshSnapshot" class="text-button">刷新</button>
+          </div>
+          <div id="tasks" class="stack empty-state">
+            <span class="empty-icon">✓</span>
+            <strong>当前没有活动任务</strong>
+            <small>任务启动后，阶段、进度和取消状态会出现在这里。</small>
+          </div>
+          <div class="session-details">
+            <div><span>工程状态</span><b id="projectDirty">只读快照</b></div>
+            <div><span>最近刷新</span><b id="snapshotTime">—</b></div>
+          </div>
+        </section>
+
+        <section id="uiPanel" class="panel">
+          <div class="toolbar search-toolbar">
+            <input id="uiFilter" type="search" placeholder="搜索 objectName、类型或文本">
+            <button id="refreshUi" class="button secondary">读取控件</button>
+          </div>
+          <div class="sub-actions">
+            <span>只显示具名对象，交互经过允许列表校验</span>
+            <button id="closeDialog" class="text-button danger">关闭模态框</button>
+          </div>
+          <div id="uiObjects" class="stack empty-state">
+            <span class="empty-icon">⌘</span>
+            <strong>尚未读取控件树</strong>
+            <small>读取后可按稳定 objectName 检索和触发控件。</small>
+          </div>
+        </section>
+
+        <section id="logsPanel" class="panel">
+          <div class="toolbar">
+            <select id="logLevel" aria-label="日志级别">
+              <option value="all">全部级别</option>
+              <option value="error">错误</option>
+              <option value="warning">警告</option>
+              <option value="info">信息</option>
+              <option value="debug">调试</option>
+            </select>
+            <button id="refreshLogs" class="button secondary">刷新日志</button>
+          </div>
+          <pre id="logs" class="log-view">暂无日志</pre>
+        </section>
+
+        <section id="artifactsPanel" class="panel">
+          <div class="toolbar artifact-toolbar">
+            <div><p class="section-kicker">EVIDENCE</p><h3>截图与产物</h3></div>
+            <button id="captureScreenshot" class="button">捕获 Qt 窗口</button>
+          </div>
+          <img id="debugScreenshot" class="screenshot hidden" alt="Qt debug capture">
+          <div id="artifacts" class="stack empty-state">
+            <span class="empty-icon">◇</span>
+            <strong>当前没有登记产物</strong>
+            <small>工程报告、点云、网格与地形成果会列在这里。</small>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

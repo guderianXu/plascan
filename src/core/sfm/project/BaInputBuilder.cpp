@@ -21,7 +21,6 @@ void resetBuildResult(BaInputBuildResult *result)
     result->scaleBarConstraints.clear();
     result->indexedObservationCount = 0;
     result->multiViewTrackCount = 0;
-    result->rejectedConflictTrackCount = 0;
     result->matchDiagnostics = {};
     result->surveyControlTrackCount = 0;
     result->surveyControlObservationCount = 0;

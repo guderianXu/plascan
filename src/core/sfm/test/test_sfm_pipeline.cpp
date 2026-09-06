@@ -21,6 +21,8 @@
 #include "pipeline/ImageRegistrationEngine.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pipeline/IncrementalSfmDetail.h"
+#include "pipeline/InitialPairInitializer.h"
+#include "pipeline/ReferenceModelQuality.h"
 #include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "common/SfmTypes.h"
@@ -34,10 +36,49 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
 using namespace xjw;
+
+TEST(SimilarityTransformTest, RobustThresholdIgnoresSingleExtremeCorrespondence)
+{
+    const std::vector<std::array<double, 3>> source{
+        {{0.0, 0.0, 0.0}},
+        {{1.0, 0.0, 0.0}},
+        {{0.0, 1.0, 1.0}},
+        {{1.0, 1.0, 0.0}},
+        {{2.0, 0.5, 1.0}},
+        {{-1.0, 2.0, 0.5}},
+        {{0.5, -1.0, 2.0}},
+        {{2.0, 2.0, 2.0}},
+        {{-2.0, 0.0, 1.0}},
+        {{0.0, -2.0, 1.5}},
+        {{1.5, 1.0, -1.0}},
+        {{-1.0, -1.0, -1.0}},
+    };
+    std::vector<std::array<double, 3>> target;
+    target.reserve(source.size());
+    for (const auto& point : source)
+    {
+        target.push_back({{2.0 * point[0] + 10.0, 2.0 * point[1] - 3.0, 2.0 * point[2] + 5.0}});
+    }
+    target.back() = {{1.0e9, -1.0e9, 5.0e8}};
+
+    const auto transform = incremental_sfm_detail::estimateRobustCameraCenterSimilarity(source, target);
+
+    ASSERT_TRUE(transform.valid);
+    EXPECT_GE(transform.inlierCount, 11);
+    EXPECT_NEAR(transform.scale, 2.0, 1.0e-9);
+    for (std::size_t index = 0; index + 1 < source.size(); ++index)
+    {
+        const auto mapped = incremental_sfm_detail::transformPoint(transform, source[index]);
+        EXPECT_NEAR(mapped[0], target[index][0], 1.0e-8);
+        EXPECT_NEAR(mapped[1], target[index][1], 1.0e-8);
+        EXPECT_NEAR(mapped[2], target[index][2], 1.0e-8);
+    }
+}
 
 TEST(PnpCorrespondenceSelectionTest, PrefersMultineighborConsensusAndKeepsOneToOneMapping)
 {
@@ -112,23 +153,6 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
 {
     const IncrementalSfmOptions options;
     EXPECT_FALSE(options.preserveCameraLayerDuringSelfCalibration);
-    EXPECT_FALSE(options.correctUnanchoredAerialDoming);
-}
-
-TEST(SfmBundleAdjustCoordinatorPolicyTest, StabilizesEveryTrustedFocalUnanchoredAerialCalibrationRound)
-{
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, false, true, true, true, 444, 0.9504, 0.0974));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, true, true, true, true, 444, 0.9504, 0.0974));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, false, true, false, true, 444, 0.9504, 0.0974));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, false, true, true, false, 444, 0.9504, 0.0974));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, false, true, true, true, 444, 0.9504, 0.0200));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
-        false, false, true, true, true, 444, 0.7500, 0.0974));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesAppliedAdaptiveDiagnosticsAcrossNoOpAndSkippedRounds)
@@ -165,60 +189,19 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesAppliedAdaptiveDiagnosticsAc
     EXPECT_EQ(skipped.accumulated.parameterMask, merged.accumulated.parameterMask);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, CalibrationSeedRefreshPreservesStableReferenceMetrics)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, ReferenceFinalStageExposesCompleteBrownMask)
 {
-    std::vector<FramePinholeCamera> before(2);
-    for (FramePinholeCamera& camera : before)
-    {
-        camera.setIntrinsics(1000.0, 1010.0, 512.0, 384.0);
-    }
-    BAResult result;
-    result.refinedCameras = before;
-    result.refinedCameras[0].setIntrinsics(980.0, 989.8, 512.0, 384.0);
-    FramePinholeCamera::Distortion distortion = result.refinedCameras[0].distortion();
-    distortion.radialK1 = -0.02;
-    result.refinedCameras[0].setDistortion(distortion);
-    result.refinedSharedFocalScale = 1.234;
-    result.refinedSharedFocalAspectScale = 0.987;
-    result.refinedSharedPrincipalOffsetX = 3.25;
-    result.refinedSharedPrincipalOffsetY = -2.75;
-    result.refinedSharedRadialK1 = -0.031;
-
-    SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(before, &result);
-
-    EXPECT_EQ(result.refinedIntrinsicCount, 1);
-    EXPECT_DOUBLE_EQ(result.refinedSharedFocalScale, 1.234);
-    EXPECT_DOUBLE_EQ(result.refinedSharedFocalAspectScale, 0.987);
-    EXPECT_DOUBLE_EQ(result.refinedSharedPrincipalOffsetX, 3.25);
-    EXPECT_DOUBLE_EQ(result.refinedSharedPrincipalOffsetY, -2.75);
-    EXPECT_DOUBLE_EQ(result.refinedSharedRadialK1, -0.031);
-}
-
-TEST(SfmBundleAdjustCoordinatorPolicyTest, FocalOnlyRefinementCountsAsReusableCalibrationSeed)
-{
-    std::vector<FramePinholeCamera> references(2);
-    for (FramePinholeCamera& camera : references)
-    {
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    }
-    std::vector<FramePinholeCamera> current = references;
-    current[0].setIntrinsics(980.0, 980.0, 512.0, 384.0);
-
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, true, false));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(references, references, true, false));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, false, true));
-
-    FramePinholeCamera::Distortion distortion = current[0].distortion();
-    distortion.radialK1 = -0.02;
-    current[0].setDistortion(distortion);
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(current, references, false, true));
-}
-
-TEST(SfmBundleAdjustCoordinatorPolicyTest, ReusesConfiguredIterationBudgetAfterCalibrationSeedExists)
-{
-    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, false), 60);
-    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, true), 20);
-    EXPECT_EQ(SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(80, true), 80);
+    const BAIntrinsicParameterMask mask =
+        SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(SfmBundleAdjustmentStage::FinalVariance);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)]);
+    EXPECT_FALSE(mask[static_cast<std::size_t>(BAIntrinsicParameter::FocalAspectRatio)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointX)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointY)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK2)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK3)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP1)]);
+    EXPECT_TRUE(mask[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP2)]);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
@@ -317,6 +300,87 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
     EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false, 444), 1);
 }
 
+TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesReferenceIterationBudgetForEachStage)
+{
+    const auto trial = SfmBundleAdjustCoordinator::referenceBaPolicy(SfmBundleAdjustmentStage::InitialPairTrial);
+    EXPECT_EQ(trial.maxIterations, 20);
+    EXPECT_EQ(trial.maxRounds, 5);
+    EXPECT_EQ(trial.minimumNetPointGain, 100);
+    EXPECT_FALSE(trial.useVarianceFiltering);
+    EXPECT_FALSE(trial.fixedRounds);
+
+    const auto incremental = SfmBundleAdjustCoordinator::referenceBaPolicy(SfmBundleAdjustmentStage::Incremental);
+    EXPECT_EQ(incremental.maxIterations, 10);
+    EXPECT_EQ(incremental.maxRounds, 5);
+    EXPECT_EQ(incremental.minimumNetPointGain, 1);
+    EXPECT_FALSE(incremental.useVarianceFiltering);
+    EXPECT_FALSE(incremental.fixedRounds);
+
+    const auto final = SfmBundleAdjustCoordinator::referenceBaPolicy(SfmBundleAdjustmentStage::FinalVariance);
+    EXPECT_EQ(final.maxIterations, 10);
+    EXPECT_EQ(final.maxRounds, 5);
+    EXPECT_EQ(final.minimumNetPointGain, 0);
+    EXPECT_TRUE(final.useVarianceFiltering);
+    EXPECT_TRUE(final.fixedRounds);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesReferenceCalibrationMasksForEachStage)
+{
+    const auto incremental =
+        SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(SfmBundleAdjustmentStage::Incremental);
+    EXPECT_TRUE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)]);
+    EXPECT_TRUE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)]);
+    EXPECT_TRUE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::RadialK2)]);
+    EXPECT_FALSE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::FocalAspectRatio)]);
+    EXPECT_FALSE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointX)]);
+    EXPECT_FALSE(incremental[static_cast<std::size_t>(BAIntrinsicParameter::RadialK3)]);
+
+    const auto final =
+        SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(SfmBundleAdjustmentStage::FinalVariance);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)]);
+    EXPECT_FALSE(final[static_cast<std::size_t>(BAIntrinsicParameter::FocalAspectRatio)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointX)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointY)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::RadialK2)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::RadialK3)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP1)]);
+    EXPECT_TRUE(final[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP2)]);
+}
+
+TEST(ReferenceInitialPairScoreTest, AppliesTieredComparatorAndAccuracyStableGate)
+{
+    ReferenceInitialPairScore incumbent;
+    incumbent.alignedCameraCount = 3;
+    incumbent.pointCount = 150;
+    incumbent.pointCountTier = true;
+    incumbent.accuracyTier = false;
+    incumbent.maximumCameraReprojectionRms = 0.1;
+    incumbent.geometryAccuracy = 0.0024;
+
+    ReferenceInitialPairScore candidate = incumbent;
+    candidate.accuracyTier = true;
+    candidate.geometryAccuracy = 0.0025;
+    candidate.maximumCameraReprojectionRms = 0.5;
+    EXPECT_TRUE(referenceInitialPairScoreBetter(candidate, incumbent));
+    EXPECT_TRUE(referenceInitialPairScoreStable(candidate, 100));
+
+    candidate.geometryAccuracy = 0.00249;
+    EXPECT_FALSE(referenceInitialPairScoreStable(candidate, 100));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesReferencePointGainExitForEachStage)
+{
+    EXPECT_FALSE(
+        SfmBundleAdjustCoordinator::shouldContinueReferenceBa(SfmBundleAdjustmentStage::InitialPairTrial, 120, 21));
+    EXPECT_TRUE(
+        SfmBundleAdjustCoordinator::shouldContinueReferenceBa(SfmBundleAdjustmentStage::InitialPairTrial, 120, 20));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldContinueReferenceBa(SfmBundleAdjustmentStage::Incremental, 20, 20));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldContinueReferenceBa(SfmBundleAdjustmentStage::Incremental, 21, 20));
+    EXPECT_TRUE(
+        SfmBundleAdjustCoordinator::shouldContinueReferenceBa(SfmBundleAdjustmentStage::FinalVariance, 0, 1000));
+}
+
 TEST(SfmBundleAdjustCoordinatorPolicyTest, ReducesOnlyVeryLargeWellSupportedGlobalNetwork)
 {
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(false, 444, 100028, 79006, 21022));
@@ -384,6 +448,159 @@ namespace
         u = uv[0];
         v = uv[1];
         return ok;
+    }
+
+    TEST(ReferenceStructureFilterTest, DeletesWholePointWhenAnyObservationIsFar)
+    {
+        SfmReconstruction reconstruction;
+        const FramePinholeCamera camera0 = makeCamera(-2.0, 0.0, 0.0);
+        const FramePinholeCamera camera1 = makeCamera(2.0, 0.0, 0.0);
+        const std::array<double, 3> world{{0.0, 0.0, 20.0}};
+        double u0 = 0.0;
+        double v0 = 0.0;
+        double u1 = 0.0;
+        double v1 = 0.0;
+        ASSERT_TRUE(projectPoint(camera0, world[0], world[1], world[2], u0, v0));
+        ASSERT_TRUE(projectPoint(camera1, world[0], world[1], world[2], u1, v1));
+
+        ImageData image0;
+        image0.id = 0;
+        image0.keypoints.push_back({static_cast<float>(u0), static_cast<float>(v0), 1.0f});
+        image0.point3DIds.push_back(kInvalidPoint3DId);
+        ImageData image1;
+        image1.id = 1;
+        image1.keypoints.push_back({static_cast<float>(u1 + 20.0), static_cast<float>(v1), 1.0f});
+        image1.point3DIds.push_back(kInvalidPoint3DId);
+        reconstruction.addImage(image0);
+        reconstruction.addImage(image1);
+        reconstruction.registerImage(0, camera0);
+        reconstruction.registerImage(1, camera1);
+        Track track;
+        track.elements = {{0, 0}, {1, 0}};
+        const Point3DId point_id = reconstruction.addPoint3DWithTrack(world, track);
+
+        const ReferenceStructureFilterResult result = filterReferenceStructurePoints(reconstruction, 4.0, 4);
+
+        EXPECT_EQ(result.farPoints, 1);
+        EXPECT_FALSE(reconstruction.hasPoint3D(point_id));
+        EXPECT_TRUE(reconstruction.hasInactivePoint3D(point_id));
+        EXPECT_EQ(reconstruction.image(0).point3DIds[0], point_id);
+        EXPECT_EQ(reconstruction.image(1).point3DIds[0], point_id);
+    }
+
+    TEST(ReferenceStructureFilterTest, ParallelChunksMatchSerialFiltering)
+    {
+        constexpr std::size_t point_count = 205;
+        const std::array<FramePinholeCamera, 3> cameras{{
+            makeCamera(-2.0, 0.0, 0.0),
+            makeCamera(2.0, 0.0, 0.0),
+            makeCamera(0.0, 2.0, 0.0),
+        }};
+        std::array<ImageData, 3> images;
+        for (ImageId image_id = 0; image_id < images.size(); ++image_id)
+        {
+            images[image_id].id = image_id;
+            images[image_id].keypoints.reserve(point_count);
+            images[image_id].point3DIds.assign(point_count, kInvalidPoint3DId);
+        }
+
+        std::vector<std::array<double, 3>> world_points;
+        world_points.reserve(point_count);
+        for (std::size_t point_index = 0; point_index < point_count; ++point_index)
+        {
+            const std::array<double, 3> world{{
+                0.03 * static_cast<double>(point_index % 17),
+                0.02 * static_cast<double>(point_index % 11),
+                18.0 + 0.01 * static_cast<double>(point_index),
+            }};
+            world_points.push_back(world);
+            for (ImageId image_id = 0; image_id < images.size(); ++image_id)
+            {
+                double u = 0.0;
+                double v = 0.0;
+                ASSERT_TRUE(projectPoint(cameras[image_id], world[0], world[1], world[2], u, v));
+                if (image_id == 2 && point_index % 11 == 0)
+                {
+                    u += 12.0;
+                }
+                images[image_id].keypoints.push_back({static_cast<float>(u), static_cast<float>(v), 1.0f});
+            }
+        }
+
+        SfmReconstruction reconstruction;
+        for (ImageId image_id = 0; image_id < images.size(); ++image_id)
+        {
+            reconstruction.addImage(images[image_id]);
+            reconstruction.registerImage(image_id, cameras[image_id]);
+        }
+        for (std::size_t point_index = 0; point_index < point_count; ++point_index)
+        {
+            Track track;
+            for (ImageId image_id = 0; image_id < images.size(); ++image_id)
+            {
+                track.elements.push_back({image_id, static_cast<FeatureIdx>(point_index)});
+            }
+            reconstruction.addPoint3DWithTrack(world_points[point_index], track);
+        }
+
+        SfmReconstruction serial = reconstruction;
+        SfmReconstruction parallel = reconstruction;
+        const ReferenceStructureFilterResult serial_result = filterReferenceStructurePoints(serial, 4.0, 1);
+        const ReferenceStructureFilterResult parallel_result = filterReferenceStructurePoints(parallel, 4.0, 4);
+        std::vector<Point3DId> serial_points = serial.allPoint3DIds();
+        std::vector<Point3DId> parallel_points = parallel.allPoint3DIds();
+        std::sort(serial_points.begin(), serial_points.end());
+        std::sort(parallel_points.begin(), parallel_points.end());
+
+        EXPECT_EQ(parallel_result.farPoints, serial_result.farPoints);
+        EXPECT_EQ(parallel_result.inaccuratePoints, serial_result.inaccuratePoints);
+        EXPECT_EQ(parallel_result.weakPoints, serial_result.weakPoints);
+        EXPECT_EQ(parallel_points, serial_points);
+    }
+
+    TEST(ReferenceStructureFilterTest, ZeroRequestedThresholdUsesSensorScale)
+    {
+        auto make_reconstruction = []()
+        {
+            SfmReconstruction reconstruction;
+            FramePinholeCamera camera0 = makeCamera(-2.0, 0.0, 0.0);
+            FramePinholeCamera camera1 = makeCamera(2.0, 0.0, 0.0);
+            camera0.setImageSize(CameraImageSize{6000, 4000});
+            camera1.setImageSize(CameraImageSize{6000, 4000});
+
+            const std::array<double, 3> world{{0.0, 0.0, 20.0}};
+            double u0 = 0.0;
+            double v0 = 0.0;
+            double u1 = 0.0;
+            double v1 = 0.0;
+            EXPECT_TRUE(projectPoint(camera0, world[0], world[1], world[2], u0, v0));
+            EXPECT_TRUE(projectPoint(camera1, world[0], world[1], world[2], u1, v1));
+
+            ImageData image0;
+            image0.id = 0;
+            image0.keypoints.push_back({static_cast<float>(u0), static_cast<float>(v0), 1.0f});
+            image0.point3DIds.push_back(kInvalidPoint3DId);
+            ImageData image1;
+            image1.id = 1;
+            image1.keypoints.push_back({static_cast<float>(u1 + 2.5), static_cast<float>(v1), 1.0f});
+            image1.point3DIds.push_back(kInvalidPoint3DId);
+            reconstruction.addImage(image0);
+            reconstruction.addImage(image1);
+            reconstruction.registerImage(0, camera0);
+            reconstruction.registerImage(1, camera1);
+            Track track;
+            track.elements = {{0, 0}, {1, 0}};
+            reconstruction.addPoint3DWithTrack(world, track);
+            return reconstruction;
+        };
+
+        SfmReconstruction sensor_scaled = make_reconstruction();
+        SfmReconstruction explicitly_capped = make_reconstruction();
+        const ReferenceStructureFilterResult sensor_result = filterReferenceStructurePoints(sensor_scaled, 0.0, 1);
+        const ReferenceStructureFilterResult capped_result = filterReferenceStructurePoints(explicitly_capped, 1.5, 1);
+
+        EXPECT_EQ(sensor_result.farPoints, 0);
+        EXPECT_EQ(capped_result.farPoints, 1);
     }
 
     /// 生成合成 3D 点（在两个相机前方、可被投影的点）
@@ -498,6 +715,30 @@ namespace
             m.idx2 = idx2;
             matches.push_back(m);
         }
+    }
+
+    TEST(ReferenceInitialPairPoseTest, EnumeratesFivePointHypothesesFromSelectedPair)
+    {
+        IncrementalSfmOptions options;
+        options.initMinChiralityInliers = 5;
+        IncrementalSfm sfm(options);
+        const FramePinholeCamera camera0 = makeCamera(-4.0, 0.0, 0.0);
+        const FramePinholeCamera camera1 = makeCamera(4.0, 0.0, 0.0);
+        const auto points = generatePoints(120, 0.0, 0.0, 45.0, 4.0, 20260905);
+        std::vector<FeatureKeypoint> keypoints0;
+        std::vector<FeatureKeypoint> keypoints1;
+        std::vector<FeatureMatch> matches;
+        buildSyntheticMatches(camera0, camera1, points, keypoints0, keypoints1, matches);
+        ASSERT_GE(matches.size(), 20U);
+        sfm.addImageWithCamera(0, "five_point_0.png", camera0, keypoints0);
+        sfm.addImageWithCamera(1, "five_point_1.png", camera1, keypoints1);
+        sfm.addMatches(0, 1, matches);
+
+        InitialPairInitializer initializer(sfm);
+        const std::vector<FramePinholeCamera> hypotheses = initializer.enumerateFivePointPoseHypotheses(0, 1);
+
+        EXPECT_FALSE(hypotheses.empty());
+        EXPECT_LE(hypotheses.size(), 32U);
     }
 
     void buildKnownPoseTracks(const std::vector<FramePinholeCamera>& cameras,
@@ -1298,9 +1539,9 @@ TEST_F(BAFilterTest, DisabledFilterKeepsAllPoints)
             ++invalidCount;
     }
 
-    // 不过滤时，应该没有（或极少）无效点（仅优化失败的）
-    // 注意：即使禁用过滤，数值发散也可能导致极个别点无效
-    EXPECT_LE(invalidCount, 2) << "With filter disabled, very few points should be marked invalid";
+    // 禁用后处理过滤不会把输入阶段已拒绝的退化/不可用轨迹重新变成有效轨迹。
+    EXPECT_EQ(invalidCount, result.plaMatrixRejectedInitialTracks)
+        << "Disabling the point filter must not reject additional usable tracks";
 }
 
 // 4. 空场景不崩溃
@@ -1462,8 +1703,7 @@ TEST(IncrementalSfmInitialPairTest, BoundedLookaheadEnablesMultiSeedEvaluationFo
     options.initialPairLookaheadMaxImages = 8;
     options.multiInitialPairMaxImages = 32;
 
-    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
-        options, 500, 4));
+    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(options, 500, 4));
     EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 500), 8);
     EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 5), 5);
 }
@@ -1474,10 +1714,8 @@ TEST(IncrementalSfmInitialPairTest, FullTrialsRetainSmallProjectSafetyLimit)
     options.initialPairLookaheadMaxImages = 0;
     options.multiInitialPairMaxImages = 32;
 
-    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
-        options, 32, 2));
-    EXPECT_FALSE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(
-        options, 33, 2));
+    EXPECT_TRUE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(options, 32, 2));
+    EXPECT_FALSE(incremental_sfm_detail::shouldEvaluateMultipleInitialPairModels(options, 33, 2));
     EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 33), 33);
 }
 
@@ -1487,6 +1725,47 @@ TEST(IncrementalSfmInitialPairTest, LookaheadAlwaysTestsRegistrationBeyondTheSee
     options.initialPairLookaheadMaxImages = 1;
 
     EXPECT_EQ(incremental_sfm_detail::initialPairTrialTargetImages(options, 20), 3);
+}
+
+TEST(IncrementalSfmInitialPairTest, ReferenceDefaultsUseThreeCameraTrialsAndFortyCandidates)
+{
+    const IncrementalSfmOptions options;
+
+    EXPECT_TRUE(options.useReferenceInitialPairTrials);
+    EXPECT_EQ(options.initialPairLookaheadMaxImages, 3);
+    EXPECT_EQ(options.maxInitPairCandidates, 40);
+}
+
+TEST(IncrementalSfmInitialPairTest, ReferenceStableTrialRequiresCoveragePointsAndLowError)
+{
+    IncrementalSfmResult result;
+    result.numRegisteredImages = 3;
+    result.numPoints3D = 100;
+    result.meanReprojError = 0.5;
+    EXPECT_TRUE(incremental_sfm_detail::initialPairTrialIsStable(result, 50));
+
+    result.numRegisteredImages = 2;
+    EXPECT_FALSE(incremental_sfm_detail::initialPairTrialIsStable(result, 50));
+    result.numRegisteredImages = 3;
+    result.meanReprojError = 0.5001;
+    EXPECT_FALSE(incremental_sfm_detail::initialPairTrialIsStable(result, 50));
+}
+
+TEST(ReferenceResectionScheduleTest, MatchesRecoveredSupportCutoff)
+{
+    EXPECT_EQ(incremental_sfm_detail::referenceResectionSupportCutoff(0), 2u);
+    EXPECT_EQ(incremental_sfm_detail::referenceResectionSupportCutoff(40), 30u);
+    EXPECT_EQ(incremental_sfm_detail::referenceResectionSupportCutoff(99), 74u);
+    EXPECT_EQ(incremental_sfm_detail::referenceResectionSupportCutoff(100), 75u);
+    EXPECT_EQ(incremental_sfm_detail::referenceResectionSupportCutoff(1950), 1000u);
+}
+
+TEST(ReferenceResectionScheduleTest, ReferenceP3pAndBatchResectionAreEnabledByDefault)
+{
+    const IncrementalSfmOptions options;
+
+    EXPECT_TRUE(options.useReferenceBatchResection);
+    EXPECT_TRUE(options.pnpOptions.useMinimalP3p);
 }
 
 TEST(IncrementalSfmOptionsTest, ReprojectionThresholdIsSharedWithBundleAdjustment)
@@ -1567,10 +1846,138 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     EXPECT_TRUE(result.success) << result.summary;
     ASSERT_EQ(result.numRegisteredImages, 3);
     EXPECT_GT(result.numPoints3D, 0);
-    EXPECT_EQ(result.hierarchicalBAPlannedBlocks, 2);
-    EXPECT_GT(result.hierarchicalBAAppliedBlocks, 0);
-    EXPECT_GT(result.hierarchicalBAUpdatedCameras, 0);
+    // 参考 BA 最终调度固定执行五轮全局 BA，不再插入旧的分块层次 BA。
+    EXPECT_EQ(result.hierarchicalBAPlannedBlocks, 0);
+    EXPECT_EQ(result.hierarchicalBAAppliedBlocks, 0);
+    EXPECT_EQ(result.hierarchicalBAUpdatedCameras, 0);
     EXPECT_GE(result.hierarchicalBATotalSeconds, 0.0);
+}
+
+TEST_F(SfmPipelineTest, IndependentCameraBlocksMergeByPersistentTracks)
+{
+    opts.independentBlockMinImages = 6;
+    opts.independentBlockGroupSize = 2;
+    opts.independentBlockMinimumLargeSide = 1;
+    opts.enableHierarchicalBA = false;
+    opts.initMinNumMatches = 20;
+    opts.initMinNumInliers = 15;
+    opts.initMinChiralityInliers = 10;
+    opts.initMinTriAngle = 1.0;
+    opts.triangulatorOptions.minTriAngle = 0.5;
+    opts.pnpOptions.minNumInliers = 12;
+    opts.localBAInterval = 100;
+    opts.globalBAInterval = 100;
+    opts.iterativeBARounds = 1;
+
+    std::vector<FramePinholeCamera> cameras;
+    for (int index = 0; index < 6; ++index)
+    {
+        cameras.push_back(makeCamera(-5.0 + 2.0 * index, 0.0, 0.0));
+    }
+    const auto points = generatePoints(120, 0.0, 0.0, 50.0, 3.0, 20260904);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    buildIndexedKeypoints(cameras, points, keypoints);
+    ASSERT_GE(keypoints.front().size(), 100U);
+    const std::vector<FeatureMatch> matches = makeIndexedMatches(0, static_cast<int>(keypoints.front().size()));
+
+    std::vector<Track> tracks(keypoints.front().size());
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        for (ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+        {
+            tracks[trackIndex].elements.push_back({imageId, static_cast<FeatureIdx>(trackIndex)});
+        }
+    }
+    const std::size_t validTrackCount = tracks.size();
+    for (ImageId first = 0; first + 1 < cameras.size(); ++first)
+    {
+        for (std::size_t repeat = 0; repeat < 500; ++repeat)
+        {
+            Track partitionTrack;
+            const FeatureIdx dummyFeature =
+                static_cast<FeatureIdx>(validTrackCount + static_cast<std::size_t>(first) * 500 + repeat);
+            partitionTrack.elements = {{first, dummyFeature}, {first + 1, dummyFeature}};
+            tracks.push_back(std::move(partitionTrack));
+        }
+    }
+
+    IncrementalSfm sfm(opts);
+    for (ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        sfm.addImageWithCamera(
+            imageId, "independent_" + std::to_string(imageId) + ".png", cameras[imageId], keypoints[imageId]);
+    }
+    for (ImageId first = 0; first < cameras.size(); ++first)
+    {
+        for (ImageId second = first + 1; second < cameras.size(); ++second)
+        {
+            sfm.addMatches(first, second, matches);
+        }
+    }
+    sfm.setInputMultiViewTracks(tracks);
+
+    const IncrementalSfmResult result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    EXPECT_EQ(result.numRegisteredImages, 6);
+    EXPECT_GT(result.independentCameraBlocks, 1);
+    EXPECT_GE(result.independentBlockMergeInliers, 10);
+    EXPECT_GT(result.numPoints3D, 0);
+    ASSERT_NE(result.reconstruction, nullptr);
+    std::set<std::string> sensorKeys;
+    for (ImageId imageId : result.reconstruction->registeredImageIds())
+    {
+        sensorKeys.insert(result.reconstruction->image(imageId).sensorKey);
+    }
+    EXPECT_EQ(sensorKeys.size(), static_cast<std::size_t>(result.independentCameraBlocks));
+}
+
+TEST_F(SfmPipelineTest, IndependentCameraBlockFailureFallsBackToSingleModel)
+{
+    opts.independentBlockMinImages = 3;
+    opts.independentBlockGroupSize = 1;
+    opts.independentBlockMinimumLargeSide = 1;
+    opts.initMinNumMatches = 20;
+    opts.initMinNumInliers = 15;
+    opts.initMinChiralityInliers = 10;
+    opts.initMinTriAngle = 1.0;
+    opts.triangulatorOptions.minTriAngle = 0.5;
+    opts.localBAInterval = 100;
+    opts.globalBAInterval = 100;
+    opts.iterativeBARounds = 1;
+
+    const FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const FramePinholeCamera isolatedCamera = makeCamera(16.0, 0.0, 0.0);
+    const auto points = generatePoints(120, 4.0, 0.0, 50.0, 3.0, 90210);
+    std::vector<FeatureKeypoint> keypoints0;
+    std::vector<FeatureKeypoint> keypoints1;
+    std::vector<FeatureMatch> matches;
+    buildSyntheticMatches(camera0, camera1, points, keypoints0, keypoints1, matches);
+    ASSERT_GE(matches.size(), 100U);
+
+    std::vector<Track> tracks;
+    tracks.reserve(matches.size());
+    for (const FeatureMatch& match : matches)
+    {
+        Track track;
+        track.elements = {{0, match.idx1}, {1, match.idx2}};
+        tracks.push_back(std::move(track));
+    }
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "fallback_0.png", camera0, keypoints0);
+    sfm.addImageWithCamera(1, "fallback_1.png", camera1, keypoints1);
+    sfm.addImageWithCamera(2, "fallback_isolated.png", isolatedCamera, {});
+    sfm.addMatches(0, 1, matches);
+    sfm.setInputMultiViewTracks(tracks);
+
+    const IncrementalSfmResult result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    EXPECT_EQ(result.numRegisteredImages, 2);
+    EXPECT_EQ(result.independentCameraBlocks, 1);
+    EXPECT_GT(result.numPoints3D, 0);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesLowOrderCalibrationForParallelAerialBlock)

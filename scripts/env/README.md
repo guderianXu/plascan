@@ -108,16 +108,16 @@ Configure, build, and test with the pinned OpenCV 5 source package:
 python scripts/env/configure_with_env.py --source-deps --build-type release --build --test
 ```
 
-## Pinned Qt/OpenCV/GDAL/AprilTag source build
+## Pinned Qt/OpenCV/GDAL/AprilTag/OpenEXR source build
 
 Initialize only the source modules required by PlaScan (do not recursively initialize the complete Qt supermodule):
 
 ```bash
-git submodule update --init 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon
+git submodule update --init 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon 3rdparty/Imath 3rdparty/openexr
 git -C 3rdparty/qt submodule update --init qtbase qtshadertools
 ```
 
-Build and install Qt 6.11.2, OpenCV 5.0.0, GDAL 3.12.4, and AprilTag 3.4.5 before configuring PlaScan. OpenCV contrib is not required. PoissonRecon is consumed directly from its pinned submodule:
+Build and install Qt 6.11.2, OpenCV 5.0.0, GDAL 3.12.4, AprilTag 3.4.5, OpenEXR 3.2.2, and Imath 3.1.9 before configuring PlaScan. OpenCV contrib is not required. PoissonRecon is consumed directly from its pinned submodule:
 
 ```bash
 python scripts/env/configure_with_env.py --source-deps --build --test

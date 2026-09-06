@@ -8,11 +8,22 @@
 #include <opencv2/core.hpp>
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace xjw::image_matching
 {
+
+    class IFeaturePayload
+    {
+    public:
+        virtual ~IFeaturePayload() = default;
+
+        virtual std::string schemaId() const = 0;
+        virtual std::size_t approximateBytes() const = 0;
+        virtual bool isConsistent(std::size_t featureCount) const = 0;
+    };
 
     struct FeatureSet
     {
@@ -24,6 +35,7 @@ namespace xjw::image_matching
         std::string computeBackend = "cpu";   ///< 本次提取实际使用的计算后端，不参与持久化。
         int imageWidth = 0;                   ///< 坐标所属原始影像宽度。
         int imageHeight = 0;                  ///< 坐标所属原始影像高度。
+        std::shared_ptr<const IFeaturePayload> payload; ///< 算法私有、任务期只读扩展数据。
 
         bool empty() const;
         int size() const;

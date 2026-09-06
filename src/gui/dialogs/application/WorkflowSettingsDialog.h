@@ -13,6 +13,9 @@
 #include <QJsonObject>
 
 class QComboBox;
+class QCheckBox;
+class QDoubleSpinBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -22,26 +25,26 @@ class QToolButton;
 class WorkflowSettingsDialog final : public QDialog
 {
 public:
-    explicit WorkflowSettingsDialog(QWidget *parent = nullptr);
+    explicit WorkflowSettingsDialog(QWidget* parent = nullptr);
 
-    /// 返回 v7 工作流程分组配置，包含算法资源和生成模型计算模式。
+    /// 返回 v9 工作流程分组配置，包含算法专属参数、资源和生成模型计算模式。
     static QJsonObject defaultSettings();
 
     /**
      * @brief 提取空中三角测量设置。
      *
-     * 同时接受 v5/v4/v3 的 workflows.aerial_triangulation 对象和旧 v2 扁平字段，
+     * 同时接受旧版 workflows.aerial_triangulation 对象和旧 v2 扁平字段，
      * 供项目无损升级以及空三启动参数合并使用。
      */
-    static QJsonObject aerialTriangulationSettings(const QJsonObject &settings);
+    static QJsonObject aerialTriangulationSettings(const QJsonObject& settings);
 
     /// 提取并规范化生成模型设置；计算模式为 cuda/opencl/hybrid 之一。
-    static QJsonObject modelGenerationSettings(const QJsonObject &settings);
+    static QJsonObject modelGenerationSettings(const QJsonObject& settings);
 
-    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v7。
-    void applySettings(const QJsonObject &settings);
+    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v9。
+    void applySettings(const QJsonObject& settings);
 
-    /// 收集按工作流程分组的 v7 配置。
+    /// 收集按工作流程分组的 v9 配置。
     QJsonObject collectSettings() const;
 
 private:
@@ -64,19 +67,23 @@ private:
     /// 根据选中的生成模型计算模式显示实际阶段路由。
     void refreshModelComputePolicy();
 
-    QComboBox *_workflowCombo = nullptr;
-    QStackedWidget *_workflowPages = nullptr;
-    QComboBox *_matchingAlgorithmCombo = nullptr;
-    QComboBox *_lomaRKeypointBudgetCombo = nullptr;
-    QLineEdit *_matchingResourceEdit = nullptr;
-    QToolButton *_matchingResourceBrowseButton = nullptr;
-    QPushButton *_downloadModelButton = nullptr;
-    QLabel *_matchingResourceStatusLabel = nullptr;
-    QComboBox *_modelComputeModeCombo = nullptr;
-    QLabel *_cudaDeviceStatusLabel = nullptr;
-    QLabel *_openClDeviceStatusLabel = nullptr;
-    QLabel *_modelComputePolicyLabel = nullptr;
-    QPushButton *_detectComputeDevicesButton = nullptr;
+    QComboBox* _workflowCombo = nullptr;
+    QStackedWidget* _workflowPages = nullptr;
+    QFormLayout* _aerialForm = nullptr;
+    QComboBox* _matchingAlgorithmCombo = nullptr;
+    QComboBox* _lomaRKeypointBudgetCombo = nullptr;
+    QDoubleSpinBox* _siftMaximumRatioSpin = nullptr;
+    QCheckBox* _adaptiveSiftRatioCheck = nullptr;
+    QWidget* _matchingResourceRow = nullptr;
+    QLineEdit* _matchingResourceEdit = nullptr;
+    QToolButton* _matchingResourceBrowseButton = nullptr;
+    QPushButton* _downloadModelButton = nullptr;
+    QLabel* _matchingResourceStatusLabel = nullptr;
+    QComboBox* _modelComputeModeCombo = nullptr;
+    QLabel* _cudaDeviceStatusLabel = nullptr;
+    QLabel* _openClDeviceStatusLabel = nullptr;
+    QLabel* _modelComputePolicyLabel = nullptr;
+    QPushButton* _detectComputeDevicesButton = nullptr;
     bool _cudaAvailable = false;
     bool _openClAvailable = false;
     bool _hybridAvailable = false;

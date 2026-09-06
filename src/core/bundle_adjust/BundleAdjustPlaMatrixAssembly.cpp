@@ -15,8 +15,216 @@
 
 namespace xjw::detail::plamatrix_ba
 {
+    namespace
+    {
+        bool useReferencePointParameterization(const BAOptions& options)
+        {
+            return !options.enableLaserPlaneConstraints && !options.enableControlPointConstraints &&
+                   !options.enableLaserRangeConstraints && !options.enableScaleBarConstraints;
+        }
+
+        double referencePointScale(const std::array<double, 3>& point)
+        {
+            const double length = std::sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2]);
+            const double scaled_length = length / 1000.0;
+            if (!std::isfinite(scaled_length) || scaled_length == 0.0)
+            {
+                return 1.0;
+            }
+            return scaled_length / std::atan(scaled_length);
+        }
+
+        std::array<double, 3> targetCenterCoordinates(const std::array<double, 3>& value)
+        {
+            return {{value[0], -value[1], -value[2]}};
+        }
+
+        std::array<double, 3> cross(const std::array<double, 3>& left, const std::array<double, 3>& right)
+        {
+            return {{left[1] * right[2] - left[2] * right[1],
+                     left[2] * right[0] - left[0] * right[2],
+                     left[0] * right[1] - left[1] * right[0]}};
+        }
+
+        double norm(const std::array<double, 3>& value)
+        {
+            return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
+        }
+
+        bool
+        usesReferenceGaugeTangent(const BAOptions& options, const OptimizationState& state, std::size_t camera_index)
+        {
+            return options.referenceGaugeAnchorCameraIndex >= 0 && options.referenceGaugeScaleCameraIndex >= 0 &&
+                   options.referenceGaugeAnchorCameraIndex < static_cast<int>(state.cameras.size()) &&
+                   options.referenceGaugeScaleCameraIndex < static_cast<int>(state.cameras.size()) &&
+                   camera_index == static_cast<std::size_t>(options.referenceGaugeScaleCameraIndex) &&
+                   std::isfinite(options.referenceGaugeBaseline) && options.referenceGaugeBaseline > 0.0;
+        }
+
+        std::array<std::array<double, 3>, 2> referenceGaugeTargetTangentBasis(const BAOptions& options,
+                                                                              const OptimizationState& state)
+        {
+            const auto origin = targetCenterCoordinates(
+                state.cameras[static_cast<std::size_t>(options.referenceGaugeAnchorCameraIndex)].cameraCenter());
+            const auto center = targetCenterCoordinates(
+                state.cameras[static_cast<std::size_t>(options.referenceGaugeScaleCameraIndex)].cameraCenter());
+            std::array<double, 3> unit{{center[0] - origin[0], center[1] - origin[1], center[2] - origin[2]}};
+            const double length = norm(unit);
+            const double inverse_length = length >= 1.0e-20 ? 1.0 / length : 0.0;
+            for (double& value : unit)
+            {
+                value *= inverse_length;
+            }
+
+            std::size_t axis_index = std::abs(unit[0]) > std::abs(unit[1]) ? 1U : 0U;
+            if (std::abs(unit[axis_index]) > std::abs(unit[2]))
+            {
+                axis_index = 2;
+            }
+            std::array<double, 3> axis{};
+            axis[axis_index] = 1.0;
+            std::array<double, 3> second = cross(axis, unit);
+            const double second_length = norm(second);
+            const double inverse_second_length = second_length >= 1.0e-20 ? 1.0 / second_length : 0.0;
+            for (double& value : second)
+            {
+                value *= inverse_second_length;
+            }
+            return {{cross(unit, second), second}};
+        }
+
+        std::array<double, 3> applyReferenceGaugeTangentStep(const BAOptions& options,
+                                                             const OptimizationState& state,
+                                                             double first,
+                                                             double second)
+        {
+            const auto origin = targetCenterCoordinates(
+                state.cameras[static_cast<std::size_t>(options.referenceGaugeAnchorCameraIndex)].cameraCenter());
+            const auto center = targetCenterCoordinates(
+                state.cameras[static_cast<std::size_t>(options.referenceGaugeScaleCameraIndex)].cameraCenter());
+            const auto basis = referenceGaugeTargetTangentBasis(options, state);
+            const std::array<double, 3> tangent_delta{{basis[0][0] * first + basis[1][0] * second,
+                                                       basis[0][1] * first + basis[1][1] * second,
+                                                       basis[0][2] * first + basis[1][2] * second}};
+            const std::array<double, 3> tentative{
+                {center[0] + tangent_delta[0], center[1] + tangent_delta[1], center[2] + tangent_delta[2]}};
+            const std::array<double, 3> direction{
+                {tentative[0] - origin[0], tentative[1] - origin[1], tentative[2] - origin[2]}};
+            const double updated_length = norm(direction);
+            if (updated_length < 1.0e-20)
+            {
+                return targetCenterCoordinates(origin);
+            }
+            const double inverse_updated_length = 1.0 / updated_length;
+            return targetCenterCoordinates(
+                {{origin[0] + (direction[0] * inverse_updated_length) * options.referenceGaugeBaseline,
+                  origin[1] + (direction[1] * inverse_updated_length) * options.referenceGaugeBaseline,
+                  origin[2] + (direction[2] * inverse_updated_length) * options.referenceGaugeBaseline}});
+        }
+
+        void applyReferenceCameraPoseStep(FramePinholeCamera* camera, const double* delta)
+        {
+            auto rotation = camera->cameraToWorldRotation();
+            // 转到参考 type-4 矩阵约定 R*diag(1,-1,-1)。
+            for (int row = 0; row < 3; ++row)
+            {
+                rotation[static_cast<std::size_t>(row * 3 + 1)] *= -1.0;
+                rotation[static_cast<std::size_t>(row * 3 + 2)] *= -1.0;
+            }
+            const double sx = std::sin(delta[0]);
+            const double cx = std::cos(delta[0]);
+            const double sy = std::sin(delta[1]);
+            const double cy = std::cos(delta[1]);
+            const double sz = std::sin(delta[2]);
+            const double cz = std::cos(delta[2]);
+            const std::array<double, 9> rx{{1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx}};
+            const std::array<double, 9> ry{{cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy}};
+            const std::array<double, 9> rz{{cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, 1.0}};
+            const auto multiply = [](const std::array<double, 9>& left, const std::array<double, 9>& right)
+            {
+                std::array<double, 9> product{};
+                for (int row = 0; row < 3; ++row)
+                {
+                    for (int column = 0; column < 3; ++column)
+                    {
+                        for (int inner = 0; inner < 3; ++inner)
+                        {
+                            product[static_cast<std::size_t>(row * 3 + column)] +=
+                                left[static_cast<std::size_t>(row * 3 + inner)] *
+                                right[static_cast<std::size_t>(inner * 3 + column)];
+                        }
+                    }
+                }
+                return product;
+            };
+            rotation = multiply(multiply(multiply(rotation, rx), ry), rz);
+            for (int row = 0; row < 3; ++row)
+            {
+                rotation[static_cast<std::size_t>(row * 3 + 1)] *= -1.0;
+                rotation[static_cast<std::size_t>(row * 3 + 2)] *= -1.0;
+            }
+            auto center = camera->cameraCenter();
+            center[0] += delta[3];
+            center[1] += delta[4];
+            center[2] += delta[5];
+            camera->setPose(rotation, center);
+        }
+
+    } // namespace
+
     namespace assembly_detail
     {
+
+        ObservationPrimaryTerms observationPrimaryTerms(const BAOptions& options,
+                                                        const ActiveProblem& active,
+                                                        const OptimizationState& state,
+                                                        std::size_t camera_index,
+                                                        const ObservationLinearization& linearization)
+        {
+            ObservationPrimaryTerms terms;
+            std::array<double, 18> camera_jacobian{};
+            const bool constrained_center = usesReferenceGaugeTangent(options, state, camera_index);
+            const auto target_basis = constrained_center ? referenceGaugeTargetTangentBasis(options, state)
+                                                         : std::array<std::array<double, 3>, 2>{};
+            for (int row = 0; row < 2; ++row)
+            {
+                std::copy_n(
+                    linearization.cameraJacobian.data() + row * 6, 3, camera_jacobian.data() + row * kPrimaryBlockSize);
+                if (constrained_center)
+                {
+                    for (std::size_t parameter = 0; parameter < 2; ++parameter)
+                    {
+                        const auto world_basis = targetCenterCoordinates(target_basis[parameter]);
+                        for (int axis = 0; axis < 3; ++axis)
+                        {
+                            camera_jacobian[static_cast<std::size_t>(row * kPrimaryBlockSize + 3) + parameter] +=
+                                linearization.cameraJacobian[static_cast<std::size_t>(row * 6 + 3 + axis)] *
+                                world_basis[static_cast<std::size_t>(axis)];
+                        }
+                    }
+                }
+                else
+                {
+                    std::copy_n(linearization.cameraJacobian.data() + row * 6 + 3,
+                                3,
+                                camera_jacobian.data() + row * kPrimaryBlockSize + 3);
+                }
+            }
+            if (active.cameraBlock[camera_index] >= 0)
+            {
+                terms.blocks[terms.count] = active.cameraBlock[camera_index];
+                terms.jacobians[terms.count++] = camera_jacobian;
+            }
+            if (active.intrinsicBlockByCamera[camera_index] >= 0)
+            {
+                terms.blocks[terms.count] = active.intrinsicBlockByCamera[camera_index];
+                std::copy(linearization.intrinsicJacobian.begin(),
+                          linearization.intrinsicJacobian.end(),
+                          terms.jacobians[terms.count].begin());
+                ++terms.count;
+            }
+            return terms;
+        }
 
         std::array<double, 54> paddedPointJacobian(const double* point_jacobian, int residual_size)
         {
@@ -57,7 +265,9 @@ namespace xjw::detail::plamatrix_ba
         }
 
         void addObservation(plamatrix::BlockNormalEquations<double>* equations,
+                            const BAOptions& options,
                             const ActiveProblem& active,
+                            const OptimizationState& state,
                             std::size_t camera_index,
                             int point_primary_block,
                             int point_eliminated_block,
@@ -67,24 +277,15 @@ namespace xjw::detail::plamatrix_ba
             {
                 return;
             }
+            const ObservationPrimaryTerms terms =
+                observationPrimaryTerms(options, active, state, camera_index, linearization);
             std::array<plamatrix::Index, 3> primary_blocks{};
             std::array<const double*, 3> primary_jacobians{};
-            std::size_t primary_block_count = 0;
-            std::array<double, 18> camera_jacobian{};
-            for (int row = 0; row < 2; ++row)
+            std::size_t primary_block_count = terms.count;
+            for (std::size_t index = 0; index < terms.count; ++index)
             {
-                std::copy_n(
-                    linearization.cameraJacobian.data() + row * 6, 6, camera_jacobian.data() + row * kPrimaryBlockSize);
-            }
-            if (active.cameraBlock[camera_index] >= 0)
-            {
-                primary_blocks[primary_block_count] = active.cameraBlock[camera_index];
-                primary_jacobians[primary_block_count++] = camera_jacobian.data();
-            }
-            if (active.intrinsicBlockByCamera[camera_index] >= 0)
-            {
-                primary_blocks[primary_block_count] = active.intrinsicBlockByCamera[camera_index];
-                primary_jacobians[primary_block_count++] = linearization.intrinsicJacobian.data();
+                primary_blocks[index] = terms.blocks[index];
+                primary_jacobians[index] = terms.jacobians[index].data();
             }
             const auto point_primary_jacobian = paddedPointJacobian(linearization.pointJacobian.data(), 2);
             if (point_primary_block >= 0)
@@ -133,10 +334,17 @@ namespace xjw::detail::plamatrix_ba
                                        int iteration,
                                        ObservationLinearization* output)
         {
+            constexpr double image_huber_delta = 0.0;
+            const bool reference_point_parameterization = useReferencePointParameterization(options);
             if (state.intrinsicGroups.empty())
             {
-                return linearizeObservation(
-                    state.cameras[camera_index], point, observation, options.huberDelta, output);
+                return linearizeObservation(state.cameras[camera_index],
+                                            point,
+                                            observation,
+                                            image_huber_delta,
+                                            output,
+                                            true,
+                                            reference_point_parameterization);
             }
             const std::size_t group_index = static_cast<std::size_t>(active.calibrationGroupByCamera[camera_index]);
             const auto active_parameters =
@@ -150,8 +358,10 @@ namespace xjw::detail::plamatrix_ba
                                                             active_parameters,
                                                             point,
                                                             observation,
-                                                            options.huberDelta,
-                                                            output);
+                                                            image_huber_delta,
+                                                            output,
+                                                            true,
+                                                            reference_point_parameterization);
         }
 
     } // namespace assembly_detail
@@ -167,7 +377,8 @@ namespace xjw::detail::plamatrix_ba
                                   int iteration,
                                   std::size_t begin,
                                   std::size_t end,
-                                  plamatrix::BlockNormalEquations<double>* equations)
+                                  plamatrix::BlockNormalEquations<double>* equations,
+                                  int eliminated_block_offset)
         {
             double cost = 0.0;
             for (std::size_t track_index = begin; track_index < end; ++track_index)
@@ -199,10 +410,12 @@ namespace xjw::detail::plamatrix_ba
                     }
                     cost += linearization.robustCost;
                     assembly_detail::addObservation(equations,
+                                                    options,
                                                     active,
+                                                    state,
                                                     camera_index,
                                                     active.trackPrimaryBlock[track_index],
-                                                    active.trackBlock[track_index],
+                                                    active.trackBlock[track_index] - eliminated_block_offset,
                                                     linearization);
                 }
                 ConstraintLinearization constraint;
@@ -258,7 +471,7 @@ namespace xjw::detail::plamatrix_ba
             if (thread_count <= 1 || tracks.size() < 128)
             {
                 return assembleTrackRange(
-                    input_cameras, tracks, options, active, state, iteration, 0, tracks.size(), equations);
+                    input_cameras, tracks, options, active, state, iteration, 0, tracks.size(), equations, 0);
             }
 
             std::vector<std::size_t> local_boundaries;
@@ -312,19 +525,62 @@ namespace xjw::detail::plamatrix_ba
             errors->assign(static_cast<std::size_t>(thread_count), {});
             std::vector<std::unique_ptr<plamatrix::BlockNormalEquations<double>>> local_partial_equations;
             auto* partial_equations = workspace ? &workspace->partialEquations : &local_partial_equations;
+            bool use_eliminated_shards = equations && useReferencePointParameterization(options) &&
+                                         active.laserBlockCount == 0 && active.trackBlockCount > 0;
+            std::vector<int> eliminated_offsets(static_cast<std::size_t>(thread_count), 0);
+            std::vector<int> eliminated_counts(static_cast<std::size_t>(thread_count), 0);
+            if (use_eliminated_shards)
+            {
+                for (int thread = 0; thread < thread_count && use_eliminated_shards; ++thread)
+                {
+                    const std::size_t begin = (*boundaries)[static_cast<std::size_t>(thread)];
+                    const std::size_t end = (*boundaries)[static_cast<std::size_t>(thread + 1)];
+                    int first_block = -1;
+                    int block_count = 0;
+                    for (std::size_t track_index = begin; track_index < end; ++track_index)
+                    {
+                        const int block = active.trackBlock[track_index];
+                        if (block < 0)
+                        {
+                            continue;
+                        }
+                        if (first_block < 0)
+                        {
+                            first_block = block;
+                        }
+                        if (block != first_block + block_count)
+                        {
+                            use_eliminated_shards = false;
+                            break;
+                        }
+                        ++block_count;
+                    }
+                    eliminated_offsets[static_cast<std::size_t>(thread)] = std::max(0, first_block);
+                    eliminated_counts[static_cast<std::size_t>(thread)] = block_count;
+                }
+            }
             if (equations)
             {
-                while (static_cast<int>(partial_equations->size()) < thread_count)
-                {
-                    partial_equations->push_back(std::make_unique<plamatrix::BlockNormalEquations<double>>(
-                        active.primaryBlockCount,
-                        active.trackBlockCount + active.laserBlockCount,
-                        kPrimaryBlockSize,
-                        kEliminatedBlockSize));
-                }
+                partial_equations->resize(static_cast<std::size_t>(thread_count));
                 for (int thread = 0; thread < thread_count; ++thread)
                 {
-                    (*partial_equations)[static_cast<std::size_t>(thread)]->clearValues();
+                    const auto index = static_cast<std::size_t>(thread);
+                    const int eliminated_count = use_eliminated_shards
+                                                     ? eliminated_counts[index]
+                                                     : active.trackBlockCount + active.laserBlockCount;
+                    auto& partial = (*partial_equations)[index];
+                    if (!partial || partial->primaryBlockCount() != active.primaryBlockCount ||
+                        partial->eliminatedBlockCount() != eliminated_count ||
+                        partial->primaryBlockSize() != kPrimaryBlockSize ||
+                        partial->eliminatedBlockSize() != kEliminatedBlockSize)
+                    {
+                        partial = std::make_unique<plamatrix::BlockNormalEquations<double>>(
+                            active.primaryBlockCount, eliminated_count, kPrimaryBlockSize, kEliminatedBlockSize);
+                    }
+                    else
+                    {
+                        partial->clearValues();
+                    }
                 }
             }
 
@@ -344,7 +600,8 @@ namespace xjw::detail::plamatrix_ba
                         iteration,
                         begin,
                         end,
-                        equations ? (*partial_equations)[static_cast<std::size_t>(thread)].get() : nullptr);
+                        equations ? (*partial_equations)[static_cast<std::size_t>(thread)].get() : nullptr,
+                        use_eliminated_shards ? eliminated_offsets[static_cast<std::size_t>(thread)] : 0);
                 }
                 catch (...)
                 {
@@ -361,7 +618,14 @@ namespace xjw::detail::plamatrix_ba
                 }
                 if (equations)
                 {
-                    equations->mergeFrom(*(*partial_equations)[index]);
+                    if (use_eliminated_shards)
+                    {
+                        equations->mergeEliminatedShardFrom(*(*partial_equations)[index], eliminated_offsets[index]);
+                    }
+                    else
+                    {
+                        equations->mergeFrom(*(*partial_equations)[index]);
+                    }
                 }
             }
             return std::accumulate(partial_costs->begin(), partial_costs->end(), 0.0);
@@ -466,34 +730,129 @@ namespace xjw::detail::plamatrix_ba
         return maximum;
     }
 
+    BAIntrinsicParameterMask committedReferenceIntrinsicParameters(const BAOptions& options,
+                                                                   const ActiveProblem& active,
+                                                                   const OptimizationState& state,
+                                                                   double final_cost)
+    {
+        BAIntrinsicParameterMask committed{};
+        if (!options.useReferenceCalibrationTransitionPrior)
+        {
+            for (const auto& group : state.intrinsicGroups)
+            {
+                for (std::size_t parameter = 0; parameter < committed.size(); ++parameter)
+                {
+                    committed[parameter] = committed[parameter] || group.enabled[parameter];
+                }
+            }
+            return committed;
+        }
+
+        committed = options.referencePreviousIntrinsicParameterMask;
+        std::size_t prior_residual_count = 0;
+        std::size_t intrinsic_parameter_count = 0;
+        for (const auto& group : state.intrinsicGroups)
+        {
+            for (std::size_t parameter = 0; parameter < committed.size(); ++parameter)
+            {
+                prior_residual_count += group.transitionWeight[parameter] != 0.0 ? 1U : 0U;
+                intrinsic_parameter_count += group.enabled[parameter] ? 1U : 0U;
+            }
+        }
+        const std::size_t residual_count =
+            static_cast<std::size_t>(std::max(0, active.observationCount)) * 2U + prior_residual_count;
+        const std::size_t parameter_count = static_cast<std::size_t>(std::max(0, active.cameraBlockCount)) * 6U +
+                                            intrinsic_parameter_count +
+                                            static_cast<std::size_t>(std::max(0, active.activeTrackCount)) * 3U +
+                                            static_cast<std::size_t>(std::max(0, active.activeLaserRangeCount)) * 3U;
+        if (!std::isfinite(final_cost) || residual_count <= parameter_count)
+        {
+            return committed;
+        }
+        const double residual_sigma =
+            std::sqrt(2.0 * std::max(0.0, final_cost) / static_cast<double>(residual_count - parameter_count));
+        if (!std::isfinite(residual_sigma) || residual_sigma <= 0.0)
+        {
+            return committed;
+        }
+
+        for (const auto& group : state.intrinsicGroups)
+        {
+            for (std::size_t parameter = 0; parameter < committed.size(); ++parameter)
+            {
+                if (committed[parameter] || !group.enabled[parameter] || group.transitionWeight[parameter] == 0.0)
+                {
+                    continue;
+                }
+                const double value = group.parameters[parameter];
+                const double reference = parameter == static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)
+                                             ? group.focalReference
+                                             : group.prior[parameter];
+                const double normalized_change =
+                    std::abs(value - reference) * group.transitionWeight[parameter] / residual_sigma;
+                if (normalized_change > 0.5)
+                {
+                    committed[parameter] = true;
+                }
+            }
+        }
+        return committed;
+    }
+
     void applyStep(const ActiveProblem& active,
                    const std::vector<double>& primary_step,
                    const std::vector<double>& eliminated_step,
-                   OptimizationState* state)
+                   OptimizationState* state,
+                   const BAOptions& options,
+                   double step_scale)
     {
+        std::vector<double> scaled_primary = primary_step;
+        if (step_scale != 1.0)
+        {
+            for (double& value : scaled_primary)
+            {
+                value *= step_scale;
+            }
+        }
         for (std::size_t camera_index = 0; camera_index < state->cameras.size(); ++camera_index)
         {
             const int block = active.cameraBlock[camera_index];
             if (block >= 0)
             {
-                state->cameras[camera_index].applyDeltaPose(primary_step.data() + block * kPrimaryBlockSize);
+                const double* delta = scaled_primary.data() + block * kPrimaryBlockSize;
+                if (usesReferenceGaugeTangent(options, *state, camera_index))
+                {
+                    const auto center = applyReferenceGaugeTangentStep(options, *state, delta[3], delta[4]);
+                    std::array<double, 6> rotation_delta{{delta[0], delta[1], delta[2], 0.0, 0.0, 0.0}};
+                    applyReferenceCameraPoseStep(&state->cameras[camera_index], rotation_delta.data());
+                    state->cameras[camera_index].setCameraCenter(center);
+                }
+                else
+                {
+                    applyReferenceCameraPoseStep(&state->cameras[camera_index], delta);
+                }
             }
         }
-        applyIntrinsicStep(active, primary_step, &state->intrinsicGroups);
+        applyIntrinsicStep(active, scaled_primary, &state->intrinsicGroups);
+        const bool reference_point_parameterization = useReferencePointParameterization(options);
         for (std::size_t track_index = 0; track_index < state->points.size(); ++track_index)
         {
             const int primary_block = active.trackPrimaryBlock[track_index];
             const int eliminated_block = active.trackBlock[track_index];
+            const double point_scale =
+                reference_point_parameterization ? referencePointScale(state->points[track_index]) : 1.0;
             for (int axis = 0; axis < 3; ++axis)
             {
                 if (primary_block >= 0)
                 {
                     state->points[track_index][static_cast<std::size_t>(axis)] +=
-                        primary_step[static_cast<std::size_t>(primary_block * kPrimaryBlockSize + axis)];
+                        point_scale *
+                        scaled_primary[static_cast<std::size_t>(primary_block * kPrimaryBlockSize + axis)];
                 }
                 else if (eliminated_block >= 0)
                 {
                     state->points[track_index][static_cast<std::size_t>(axis)] +=
+                        point_scale * step_scale *
                         eliminated_step[static_cast<std::size_t>(eliminated_block * kEliminatedBlockSize + axis)];
                 }
             }
@@ -508,7 +867,7 @@ namespace xjw::detail::plamatrix_ba
             for (int axis = 0; axis < 3; ++axis)
             {
                 state->laserPoints[shot_index][static_cast<std::size_t>(axis)] +=
-                    eliminated_step[static_cast<std::size_t>(block * kEliminatedBlockSize + axis)];
+                    step_scale * eliminated_step[static_cast<std::size_t>(block * kEliminatedBlockSize + axis)];
             }
         }
     }

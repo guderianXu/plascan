@@ -50,9 +50,11 @@ GUI 控件和 CLI 参数适配。
 | --- | --- | --- |
 | 自动设备 | 自动（CUDA → OpenCL → CPU） | `auto` |
 | 计算设备 | CPU / CUDA / OpenCL | `cpu` / `cuda` / `opencl` |
+| 对齐照片精度 | 最高 / 高（默认）/ 中 / 低 / 最低 | `highest` / `high` / `medium` / `low` / `lowest`（downscale `0/1/2/4/8`） |
 | MVS 质量 | 超高 / 高 / 中 / 低 / 最低 | `highest` / `high` / `medium` / `low` / `lowest` |
 | 深度过滤 | 自动 / 温和 / 中等 / 强 | `auto` / `mild` / `moderate` / `aggressive` |
-| 匹配算法 | 自动 SIFT / SIFT + LightGlue / LoMa-R | `auto_sift` / `sift_lightglue` / `loma_r` |
+| 匹配算法 | PlaMatch-HCT（默认）/ 自动 SIFT / SIFT + LightGlue / LoMa-R | `plamatch_hct` / `auto_sift` / `sift_lightglue` / `loma_r` |
+| PlaMatch 参考预选 | 源位置 / 已估位置 / 照片序列 | `source` / `estimated` / `sequential` |
 
 显式选择的设备或模型不可用时必须失败并说明原因；只有 `auto` 可以按项目定义的优先级选择后端。
 

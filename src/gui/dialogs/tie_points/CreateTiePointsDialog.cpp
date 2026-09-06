@@ -43,7 +43,7 @@ CreateTiePointsDialog::CreateTiePointsDialog(QWidget* parent) : QDialog(parent)
 
 QString CreateTiePointsDialog::accuracy() const
 {
-    return _accuracyCombo ? _accuracyCombo->currentData().toString() : QStringLiteral("highest");
+    return _accuracyCombo ? _accuracyCombo->currentData().toString() : QStringLiteral("high");
 }
 
 int CreateTiePointsDialog::keypointLimit() const
@@ -103,11 +103,11 @@ void CreateTiePointsDialog::setReferencePreselectionAvailable(bool available, in
 {
     if (_referencePreselectionCheck)
     {
-        _referencePreselectionCheck->setEnabled(available);
+        _referencePreselectionCheck->setEnabled(imageCount >= 2);
         _referencePreselectionCheck->setChecked(false);
         _referencePreselectionCheck->setToolTip(
             available ? tr("已检测到 %1/%2 个相机参考，可生成参考预选匹配对。").arg(cameraCount).arg(imageCount)
-                      : tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
+                      : tr("相机参考不完整；PlaMatch 将使用已有坐标，没有坐标时按影像索引邻域回退。"));
     }
 }
 
@@ -203,12 +203,12 @@ void CreateTiePointsDialog::buildUi()
 
     _accuracyCombo = new QComboBox(_generalGroup);
     _accuracyCombo->setObjectName(QStringLiteral("m_accuracyCombo"));
-    _accuracyCombo->addItem(tr("最低"), QStringLiteral("lowest"));
-    _accuracyCombo->addItem(tr("低"), QStringLiteral("low"));
-    _accuracyCombo->addItem(tr("中"), QStringLiteral("medium"));
-    _accuracyCombo->addItem(tr("高"), QStringLiteral("high"));
     _accuracyCombo->addItem(tr("最高"), QStringLiteral("highest"));
-    _accuracyCombo->setCurrentIndex(_accuracyCombo->findData(QStringLiteral("highest")));
+    _accuracyCombo->addItem(tr("高"), QStringLiteral("high"));
+    _accuracyCombo->addItem(tr("中"), QStringLiteral("medium"));
+    _accuracyCombo->addItem(tr("低"), QStringLiteral("low"));
+    _accuracyCombo->addItem(tr("最低"), QStringLiteral("lowest"));
+    _accuracyCombo->setCurrentIndex(_accuracyCombo->findData(QStringLiteral("high")));
     xjw::gui::dialogs::configureWorkflowComboBox(_accuracyCombo, 240);
     generalLayout->addRow(tr("精度:"), _accuracyCombo);
 
@@ -221,7 +221,8 @@ void CreateTiePointsDialog::buildUi()
     _referencePreselectionCheck = new QCheckBox(tr("参考预选"), _generalGroup);
     _referencePreselectionCheck->setObjectName(QStringLiteral("m_referencePreselectionCheck"));
     _referencePreselectionCheck->setEnabled(false);
-    _referencePreselectionCheck->setToolTip(tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
+    _referencePreselectionCheck->setToolTip(
+        tr("PlaMatch 使用相机参考生成候选；没有坐标时按影像索引邻域回退。"));
     xjw::gui::dialogs::configureWorkflowCheckBox(_referencePreselectionCheck);
     generalLayout->addRow(QString(), _referencePreselectionCheck);
     mainLayout->addWidget(_generalGroup);

@@ -12,6 +12,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -248,6 +249,7 @@ QString projectUri(const QString &runtimeRoot,
 QString stageExternalPath(const QString &source,
                           const QString &runtimeRoot,
                           const QString &projectPath,
+                          QHash<QString, QString> *stagedExternalPaths,
                           QString *errorMessage)
 {
     const QFileInfo info(source);
@@ -269,13 +271,23 @@ QString stageExternalPath(const QString &source,
         return {};
     }
 
-    const QString bucket = stableToken(info.absoluteFilePath());
+    const QString sourceKey = QDir::cleanPath(info.absoluteFilePath());
+    if (stagedExternalPaths && stagedExternalPaths->contains(sourceKey))
+    {
+        return stagedExternalPaths->value(sourceKey);
+    }
+
+    const QString bucket = stableToken(sourceKey);
     const QString destination = QDir(runtimeRoot).filePath(
         QStringLiteral("assets/imported/%1/%2")
             .arg(bucket, info.fileName()));
     if (!copyTree(info.absoluteFilePath(), destination, errorMessage))
     {
         return {};
+    }
+    if (stagedExternalPaths)
+    {
+        stagedExternalPaths->insert(sourceKey, destination);
     }
     return destination;
 }
@@ -285,6 +297,7 @@ QJsonValue portableValue(const QJsonValue &value,
                           const QString &dataRoot,
                           const QString &projectPath,
                           QSet<QString> *referencedEntries,
+                          QHash<QString, QString> *stagedExternalPaths,
                           QString *errorMessage,
                           bool *success)
 {
@@ -303,6 +316,7 @@ QJsonValue portableValue(const QJsonValue &value,
                 dataRoot,
                 projectPath,
                 referencedEntries,
+                stagedExternalPaths,
                 errorMessage,
                 success));
         }
@@ -322,6 +336,7 @@ QJsonValue portableValue(const QJsonValue &value,
                     dataRoot,
                     projectPath,
                     referencedEntries,
+                    stagedExternalPaths,
                     errorMessage,
                     success));
         }
@@ -382,7 +397,7 @@ QJsonValue portableValue(const QJsonValue &value,
     }
 
     const QString staged =
-        stageExternalPath(candidate, runtimeRoot, projectPath, errorMessage);
+        stageExternalPath(candidate, runtimeRoot, projectPath, stagedExternalPaths, errorMessage);
     if (staged.isEmpty())
     {
         if (!errorMessage || errorMessage->isEmpty())
@@ -718,6 +733,7 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
     const QString dataRoot =
         ProjectPackageLayout::dataDirectory(_projectPath);
     QSet<QString> referencedEntries;
+    QHash<QString, QString> stagedExternalPaths;
     bool success = true;
     *core = portableValue(
                 *core,
@@ -725,6 +741,7 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
                 dataRoot,
                 _projectPath,
                 &referencedEntries,
+                &stagedExternalPaths,
                 errorMessage,
                 &success)
                 .toObject();
@@ -737,6 +754,7 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
                        dataRoot,
                        _projectPath,
                        &referencedEntries,
+                       &stagedExternalPaths,
                        errorMessage,
                        &success)
                        .toObject();

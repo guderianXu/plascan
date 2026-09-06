@@ -278,33 +278,6 @@ target_include_directories(test_tie_point_track_manager PRIVATE
 )
 gtest_discover_tests(test_tie_point_track_manager)
 
-# ==============================================================================
-# test_vocabulary_overlap_retriever — 基于特征词汇的重叠对预检索
-# ==============================================================================
-add_executable(test_vocabulary_overlap_retriever test_vocabulary_overlap_retriever.cpp)
-target_link_libraries(test_vocabulary_overlap_retriever PRIVATE
-    overlap
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_vocabulary_overlap_retriever PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/overlap
-)
-gtest_discover_tests(test_vocabulary_overlap_retriever)
-
-# ==============================================================================
-# test_overlap_pair_graph_planner — 无相机 Generic/BoW 候选图连通性规划
-# ==============================================================================
-add_executable(test_overlap_pair_graph_planner test_overlap_pair_graph_planner.cpp)
-target_link_libraries(test_overlap_pair_graph_planner PRIVATE
-    overlap
-    GTest::gtest_main
-)
-target_include_directories(test_overlap_pair_graph_planner PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/overlap
-)
-gtest_discover_tests(test_overlap_pair_graph_planner)
-
 # test_overlap_analyzer — 基于相机模型的重叠对估计
 
 add_executable(test_overlap_analyzer test_overlap_analyzer.cpp)
@@ -422,6 +395,7 @@ add_executable(test_bundle_adjust_plamatrix_backend
 target_link_libraries(test_bundle_adjust_plamatrix_backend PRIVATE
     bundle_adjust
     camera
+    plamatrix::plamatrix
     GTest::gtest_main
 )
 target_include_directories(test_bundle_adjust_plamatrix_backend PRIVATE
@@ -716,6 +690,28 @@ gtest_discover_tests(test_gui_project_utils
         ENVIRONMENT_MODIFICATION
             "${PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS}")
 
+add_executable(test_browser_debug_bridge
+    test_browser_debug_bridge.cpp
+)
+target_link_libraries(test_browser_debug_bridge PRIVATE
+    gui_runtime
+    Qt6::Core
+    Qt6::Network
+    Qt6::Widgets
+    GTest::gtest
+)
+target_include_directories(test_browser_debug_bridge PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/runtime
+)
+plascan_import_qt_offscreen_plugin(test_browser_debug_bridge)
+gtest_discover_tests(test_browser_debug_bridge
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "${PLASCAN_GUI_TEST_QT_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "${PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS}")
+
 add_executable(test_map_project_dialog
     test_map_project_dialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.cpp
@@ -939,6 +935,10 @@ plascan_add_python_unittest(PhotogrammetryBenchmarkRunnerTest test_photogrammetr
 plascan_add_python_unittest(PrepareMunFrlLidarBaProjectTest test_prepare_mun_frl_lidar_ba_project)
 plascan_add_python_unittest(EstimateLidarNormalsTest test_estimate_lidar_normals)
 plascan_add_python_unittest(TestParallelismRunnerTest test_run_tests)
+plascan_add_python_unittest(BrowserGuiLauncherTest test_browser_gui)
+plascan_add_python_unittest(BrowserDebugServerTest test_browser_debug_server)
+plascan_add_python_unittest(BrowserGuiScenarioTest test_browser_gui_scenario)
+plascan_add_python_unittest(BrowserAgentProtocolTest test_browser_agent)
 plascan_add_python_unittest(PrepareTanksIgnatiusLidarBaTest test_prepare_tanks_ignatius_lidar_ba)
 plascan_add_python_unittest(SummarizeMvsDepthProvenanceTest test_summarize_mvs_depth_provenance)
 plascan_add_python_unittest(ModelProvenanceTest test_model_provenance)

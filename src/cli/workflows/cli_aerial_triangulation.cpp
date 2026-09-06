@@ -20,8 +20,10 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 
 #include <algorithm>
 #include <atomic>
@@ -187,6 +189,9 @@ namespace
         object[QStringLiteral("geometry_min_grid_coverage")] = options.geometryMinGridCoverage;
         object[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
         object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
+        object[QStringLiteral("reference_preselection_mode")] =
+            xjw::matchphotos::referencePreselectionModeName(options.referencePreselectionMode);
+        object[QStringLiteral("reference_preselection_neighbors")] = options.referencePreselectionNeighbors;
         object[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
         object[QStringLiteral("reuse_existing_matches")] = options.reuseExistingMatches;
         return object;
@@ -201,6 +206,7 @@ namespace
         object[QStringLiteral("match_dir")] = config.tiePointContext.matchDirectory;
         object[QStringLiteral("mask_count")] = config.tiePointContext.maskPaths.size();
         object[QStringLiteral("reference_camera_count")] = config.tiePointContext.referenceCameras.size();
+        object[QStringLiteral("reference_position_count")] = config.tiePointContext.referencePositions.size();
         return object;
     }
 
@@ -262,6 +268,84 @@ namespace
         return report;
     }
 
+    QJsonObject lightweightReportRecord(const QJsonObject& report, const QString& kind, const QString& path)
+    {
+        QJsonObject record{{QStringLiteral("kind"), kind},
+                           {QStringLiteral("path"), path},
+                           {QStringLiteral("success"), report.value(QStringLiteral("success"))},
+                           {QStringLiteral("dry_run"), report.value(QStringLiteral("dry_run"))},
+                           {QStringLiteral("generated_at"), report.value(QStringLiteral("generated_at"))},
+                           {QStringLiteral("image_count"), report.value(QStringLiteral("image_count"))}};
+        for (const QString& key : {QStringLiteral("registered_images"),
+                                   QStringLiteral("points3d"),
+                                   QStringLiteral("mean_reproj_error"),
+                                   QStringLiteral("summary"),
+                                   QStringLiteral("error_message")})
+        {
+            if (report.contains(key))
+            {
+                record.insert(key, report.value(key));
+            }
+        }
+        return record;
+    }
+
+    QJsonObject compactProjectMatchSettings(QJsonObject settings)
+    {
+        // 影像关系已由记录顶层 image/neighbors 表达，不在每张影像的 settings 中
+        // 重复保存数百条外部路径，避免工程便携化时重复导入同一大文件。
+        settings.remove(QStringLiteral("image0"));
+        settings.remove(QStringLiteral("image1"));
+        settings.remove(QStringLiteral("owner_image"));
+        settings.remove(QStringLiteral("neighbor_images"));
+        return settings;
+    }
+
+    QHash<QString, QString> managedImagesByUniqueName(const QJsonObject& projectFiles)
+    {
+        QHash<QString, QString> managed;
+        QSet<QString> ambiguous;
+        for (const QJsonValue& value : projectFiles.value(QStringLiteral("images")).toArray())
+        {
+            const QJsonObject image = value.toObject();
+            const QString path = image.value(QStringLiteral("path")).toString();
+            const QString key = QFileInfo(path).fileName().toCaseFolded();
+            if (key.isEmpty())
+            {
+                continue;
+            }
+            if (managed.contains(key))
+            {
+                ambiguous.insert(key);
+            }
+            else
+            {
+                managed.insert(key, path);
+            }
+        }
+        for (const QString& key : ambiguous)
+        {
+            managed.remove(key);
+        }
+        return managed;
+    }
+
+    QString managedImagePath(const QString& image, const QHash<QString, QString>& managedByName)
+    {
+        return managedByName.value(QFileInfo(image).fileName().toCaseFolded(), image);
+    }
+
+    QStringList managedImagePaths(const QStringList& images, const QHash<QString, QString>& managedByName)
+    {
+        QStringList result;
+        result.reserve(images.size());
+        for (const QString& image : images)
+        {
+            result.append(managedImagePath(image, managedByName));
+        }
+        return result;
+    }
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -282,13 +366,14 @@ int main(int argc, char* argv[])
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
     std::string referenceModeArg = "source_code";
-    std::string algorithmIdArg = "auto_sift";
+    std::string referenceCsvArg;
+    std::string algorithmIdArg = "plamatch_hct";
     std::string lightGlueEngineArg;
     std::string lomaRPackageArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     int keypointLimit = 40000;
-    int tiepointLimit = 8000;
+    int tiepointLimit = 4000;
     int initialImageId1 = -1;
     int initialImageId2 = -1;
     int threads = std::max(1u, std::thread::hardware_concurrency());
@@ -315,19 +400,19 @@ int main(int argc, char* argv[])
     app.add_option("-o,--output-dir", outputDirArg, "输出目录")->required();
     app.add_option("--export-camera-dir",
                    exportCameraDirArg,
-                   "正式 SfM/BA 成功后导出 cameras/*.tsai 和 image_camera.lis；目录必须不存在");
+                   "正式 SfM/BA 成功后导出 cameras/*.tsai 和 image_camera.lis；目录必须不存在或为空");
     app.add_option("--project", projectPathArg, "无头项目路径，默认写到输出目录 headless.plascan");
     app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--assets-dir", assetsDirArg, "复用特征与匹配的 assets 目录，默认使用输出目录下的 assets");
     app.add_option("--match-dir", matchDirArg, "逐影像匹配目录，默认使用 assets/image_matches");
-    app.add_option("--quality", qualityArg, "精度: lowest, low, medium, high, highest");
+    app.add_option("--quality", qualityArg, "特征匹配精度: highest, high, medium, low, lowest (downscale 0/1/2/4/8)");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
-    app.add_option("--algorithm-id",
-                   algorithmIdArg,
-                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
+    app.add_option("--reference-csv", referenceCsvArg, "位置先验 CSV：name,x,y,z；不要求提供 .tsai 相机文件");
+    app.add_option(
+           "--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, plamatch_hct, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "plamatch_hct", "sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg, "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg, "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
@@ -429,11 +514,7 @@ int main(int argc, char* argv[])
         adaptiveCameraModelFitting = false;
     }
     const QString requestedReferenceMode = referenceModeFromToken(xjw::cli::fromStdString(referenceModeArg));
-    if (referencePreselection && cameras.isEmpty() && requestedReferenceMode != QStringLiteral("sequence"))
-    {
-        std::fprintf(stderr, "错误: 参考预选需要完整相机文件；无相机场景请使用通用预选或序列策略。\n");
-        return cli::EXIT_ARG_ERR;
-    }
+    const QString requestedAlgorithmId = xjw::cli::normalizedToken(algorithmIdArg, QStringLiteral("plamatch_hct"));
 
     // 阶段 3：打开或创建项目，选择目标 Chunk，并把本次影像合并进项目元数据。
     xjw::common::project::ProjectSession projectSession;
@@ -491,7 +572,7 @@ int main(int argc, char* argv[])
         options.initialImageId1 = static_cast<xjw::ImageId>(initialImageId1);
         options.initialImageId2 = static_cast<xjw::ImageId>(initialImageId2);
     }
-    options.matchingAlgorithmId = xjw::cli::normalizedToken(algorithmIdArg, QStringLiteral("auto_sift"));
+    options.matchingAlgorithmId = requestedAlgorithmId;
     options.lightGlueTensorRtEnginePath =
         lightGlueEngineArg.empty() ? QString()
                                    : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
@@ -501,6 +582,15 @@ int main(int argc, char* argv[])
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;
     options.referenceCameras = xjw::cli::referenceCameraMap(items);
+    if (!referenceCsvArg.empty())
+    {
+        const QString referenceCsv = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(referenceCsvArg));
+        if (!xjw::cli::readReferencePositionCsv(referenceCsv, &options.referencePositions, &errorMessage))
+        {
+            std::fprintf(stderr, "参考位置读取失败: %s\n", qUtf8Printable(errorMessage));
+            return cli::EXIT_IO_ERR;
+        }
+    }
     options.maskPaths = xjw::cli::maskPathsFromDirectory(xjw::cli::fromStdString(maskDirArg), options.images);
     options.cancelFlag = cancelFlag;
     options.progressFn = [](const QString& stage, int percent)
@@ -537,9 +627,8 @@ int main(int argc, char* argv[])
             std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(errorMessage));
             return cli::EXIT_IO_ERR;
         }
-        QJsonObject reportRecord = report;
-        reportRecord[QStringLiteral("kind")] = QStringLiteral("aerial_triangulation_cli_dry_run");
-        reportRecord[QStringLiteral("path")] = reportPath;
+        const QJsonObject reportRecord =
+            lightweightReportRecord(report, QStringLiteral("aerial_triangulation_cli_dry_run"), reportPath);
         projectSession.upsertResultByPath(QStringLiteral("report_results"), QStringLiteral("path"), reportRecord);
         if (!projectSession.save(&errorMessage))
         {
@@ -568,6 +657,7 @@ int main(int argc, char* argv[])
     timer.start();
     const xjw::aerial_triangulation::AerialTriangulationResult result =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::run(options);
+    options.progressFn(QStringLiteral("空三算法结果已生成"), 94);
 
     xjw::cli::FinalBaCameraExportResult cameraExport;
     QString cameraExportError;
@@ -580,6 +670,9 @@ int main(int argc, char* argv[])
                                                                &cameraExport,
                                                                &cameraExportError);
     }
+    options.progressFn(requestedCameraExportDir.isEmpty() ? QStringLiteral("无需导出最终 BA 相机")
+                                                          : QStringLiteral("最终 BA 相机导出阶段完成"),
+                       95);
 
     QJsonObject report = makeRunReport(
         result, outputDir, options.images.size(), options.cameraPaths.size(), static_cast<double>(timer.elapsed()));
@@ -594,15 +687,18 @@ int main(int argc, char* argv[])
         std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;
     }
+    options.progressFn(QStringLiteral("质量报告已写入"), 96);
     // 阶段 6：工程仅登记逐影像最终分片。特征描述子是任务内临时数据，
     // 像对信息和残差已封装在 `.pimatch` 中，不再产生旧缓存数组。
+    const QHash<QString, QString> managedByName = managedImagesByUniqueName(projectSession.projectFiles());
     for (const xjw::matchphotos::MatchPhotosImageMatchRecord& image : result.tiePointResult.imageMatchFiles)
     {
-        QJsonObject record{{QStringLiteral("image"), image.imagePath},
+        QJsonObject record{{QStringLiteral("image"), managedImagePath(image.imagePath, managedByName)},
                            {QStringLiteral("output"), image.matchFilePath},
-                           {QStringLiteral("neighbors"), QJsonArray::fromStringList(image.neighborImagePaths)},
+                           {QStringLiteral("neighbors"),
+                            QJsonArray::fromStringList(managedImagePaths(image.neighborImagePaths, managedByName))},
                            {QStringLiteral("neighbor_variant_count"), image.neighborVariantCount},
-                           {QStringLiteral("settings"), image.settings},
+                           {QStringLiteral("settings"), compactProjectMatchSettings(image.settings)},
                            {QStringLiteral("created_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
         projectSession.upsertResultByPath(QStringLiteral("image_match_results"), QStringLiteral("output"), record);
     }
@@ -622,11 +718,13 @@ int main(int argc, char* argv[])
         record[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
         record[QStringLiteral("output_dir")] = reconstructionDir;
         record[QStringLiteral("sparse_point_count")] = reconstruction.numPoints3D;
-        record[QStringLiteral("selected_images")] = QJsonArray::fromStringList(options.images);
+        record[QStringLiteral("selected_images")] =
+            QJsonArray::fromStringList(managedImagePaths(options.images, managedByName));
         record[QStringLiteral("files")] = files;
         record[QStringLiteral("quality_metadata")] = reconstruction.qualityMetadata;
         projectSession.appendResult(QStringLiteral("aerial_triangulation_results"), record);
     }
+    options.progressFn(QStringLiteral("空三产物已登记"), 97);
     int updatedCameraCount = 0;
     if (reconstruction.success &&
         !projectSession.updateImageCameras(reconstruction.pendingCamUpdates, &updatedCameraCount, &errorMessage))
@@ -634,10 +732,11 @@ int main(int argc, char* argv[])
         std::fprintf(stderr, "空三已完成，但相机写回失败: %s\n", qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;
     }
-    QJsonObject reportRecord = report;
-    reportRecord[QStringLiteral("kind")] = QStringLiteral("aerial_triangulation_cli");
-    reportRecord[QStringLiteral("path")] = reportPath;
+    options.progressFn(QStringLiteral("优化相机已写回"), 98);
+    const QJsonObject reportRecord =
+        lightweightReportRecord(report, QStringLiteral("aerial_triangulation_cli"), reportPath);
     projectSession.upsertResultByPath(QStringLiteral("report_results"), QStringLiteral("path"), reportRecord);
+    options.progressFn(QStringLiteral("正在保存工程"), 99);
     if (!projectSession.save(&errorMessage))
     {
         std::fprintf(stderr, "空三结果已生成，但 Chunk 写回失败: %s\n", qUtf8Printable(errorMessage));
@@ -647,6 +746,11 @@ int main(int argc, char* argv[])
     {
         std::fprintf(stderr, "空三已完成并写回项目，但最终 BA 相机导出失败: %s\n", qUtf8Printable(cameraExportError));
         return cli::EXIT_IO_ERR;
+    }
+
+    if (result.reconstructionResult.success)
+    {
+        options.progressFn(QStringLiteral("空中三角测量完成"), 100);
     }
 
     // 输出稳定的 key=value 摘要，便于批处理脚本读取；完整诊断信息保存在 JSON 报告中。

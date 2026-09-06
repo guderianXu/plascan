@@ -15,7 +15,6 @@
 #include "quality/SfmQualityMetrics.h"
 #include "reconstruction/SfmReconstruction.h"
 
-#include <QFileInfo>
 #include <QImageReader>
 #include <QJsonArray>
 #include <QSize>
@@ -121,6 +120,45 @@ namespace xjw::aerial_triangulation
             return maximumAngle;
         }
 
+        double minimumTriangulationAngleDegrees(const SfmReconstruction& reconstruction, const ScenePoint3D& point)
+        {
+            double minimumAngle = 180.0;
+            bool foundPair = false;
+            for (std::size_t first = 0; first + 1 < point.track.elements.size(); ++first)
+            {
+                const ImageId imageA = point.track.elements[first].imageId;
+                if (!reconstruction.hasCamera(imageA))
+                {
+                    continue;
+                }
+                const std::array<double, 3> centerA = reconstruction.camera(imageA).cameraCenter();
+                for (std::size_t second = first + 1; second < point.track.elements.size(); ++second)
+                {
+                    const ImageId imageB = point.track.elements[second].imageId;
+                    if (!reconstruction.hasCamera(imageB))
+                    {
+                        continue;
+                    }
+                    const std::array<double, 3> centerB = reconstruction.camera(imageB).cameraCenter();
+                    const std::array<double, 3> rayA{
+                        point.xyz[0] - centerA[0], point.xyz[1] - centerA[1], point.xyz[2] - centerA[2]};
+                    const std::array<double, 3> rayB{
+                        point.xyz[0] - centerB[0], point.xyz[1] - centerB[1], point.xyz[2] - centerB[2]};
+                    const double normA = std::hypot(rayA[0], rayA[1], rayA[2]);
+                    const double normB = std::hypot(rayB[0], rayB[1], rayB[2]);
+                    if (normA <= 1e-12 || normB <= 1e-12)
+                    {
+                        continue;
+                    }
+                    const double cosine = std::clamp(
+                        (rayA[0] * rayB[0] + rayA[1] * rayB[1] + rayA[2] * rayB[2]) / (normA * normB), -1.0, 1.0);
+                    minimumAngle = std::min(minimumAngle, std::acos(cosine) * 180.0 / 3.14159265358979323846);
+                    foundPair = true;
+                }
+            }
+            return foundPair ? minimumAngle : 0.0;
+        }
+
         /**
          * @brief 获取网格覆盖统计所需影像尺寸。
          *
@@ -157,6 +195,7 @@ namespace xjw::aerial_triangulation
             std::unordered_map<ImageId, std::pair<double, int>> cameraErrors;
             std::optional<QJsonArray> serializedPoints;
             std::vector<Point3DId> publishedPointIds;
+            std::vector<Point3DId> displayPointIds;
             QJsonObject cleanupDiagnostics;
         };
 
@@ -184,12 +223,15 @@ namespace xjw::aerial_triangulation
 
         QJsonObject cleanupDiagnostics(const SparsePublishQualityPolicy& policy,
                                        const SparseCleanupCounters& counters,
-                                       int publishedPoints)
+                                       int algorithmPoints,
+                                       int displayPoints)
         {
             return QJsonObject{
                 {QStringLiteral("reconstruction_points"), counters.reconstructionPoints},
                 {QStringLiteral("metric_ready_points"), counters.metricReadyPoints},
-                {QStringLiteral("published_points"), publishedPoints},
+                {QStringLiteral("algorithm_points"), algorithmPoints},
+                {QStringLiteral("published_points"), algorithmPoints},
+                {QStringLiteral("display_points"), displayPoints},
                 {QStringLiteral("removed_incomplete_metrics"), counters.removedIncompleteMetrics},
                 {QStringLiteral("removed_by_reprojection"), counters.removedByReprojection},
                 {QStringLiteral("removed_by_track_length"), counters.removedByTrackLength},
@@ -336,11 +378,12 @@ namespace xjw::aerial_triangulation
             CollectedSparseQuality collected;
             SparseCleanupCounters cleanupCounters;
             cleanupCounters.reconstructionPoints = static_cast<int>(reconstruction.numPoints3D());
-            std::vector<SparsePublishCandidate> publishCandidates;
+            std::vector<SparsePublishCandidate> displayCandidates;
             if (serializeDetails)
             {
                 collected.serializedPoints.emplace();
-                publishCandidates.reserve(reconstruction.numPoints3D());
+                collected.publishedPointIds.reserve(reconstruction.numPoints3D());
+                displayCandidates.reserve(reconstruction.numPoints3D());
             }
             for (const Point3DId pointId : reconstruction.allPoint3DIds())
             {
@@ -357,18 +400,21 @@ namespace xjw::aerial_triangulation
                 }
 
                 const double triangulationAngle = maximumTriangulationAngleDegrees(reconstruction, point);
+                const double minimumTriangulationAngle = minimumTriangulationAngleDegrees(reconstruction, point);
                 SfmQualityPoint qualityPoint;
                 qualityPoint.trackLength = static_cast<int>(point.track.length());
                 qualityPoint.reprojectionErrorPx = point.error;
                 qualityPoint.triangulationAngleDeg = triangulationAngle;
                 std::optional<QJsonArray> observations;
                 std::vector<TiePointQualityObservation> qualityObservations;
+                std::vector<TiePointQualityObservation> cleanTiePointObservations;
                 std::vector<ImageId> qualityCameraIds;
                 bool hasCompleteQualityObservations = true;
                 if (serializeDetails)
                 {
                     observations.emplace();
                     qualityObservations.reserve(point.track.elements.size());
+                    cleanTiePointObservations.reserve(point.track.elements.size());
                     qualityCameraIds.reserve(point.track.elements.size());
                 }
 
@@ -387,39 +433,39 @@ namespace xjw::aerial_triangulation
                     }
 
                     const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-                    const double measurementScale = std::isfinite(keypoint.scale) && keypoint.scale > 0.0f
-                                                        ? static_cast<double>(keypoint.scale)
-                                                        : 1.0;
+                    const double rawMeasurementScale = static_cast<double>(keypoint.scale);
+                    const double measurementScale =
+                        std::isfinite(keypoint.scale) && keypoint.scale > 0.0f ? rawMeasurementScale : 1.0;
                     qualityPoint.observations.push_back({static_cast<int>(element.imageId), keypoint.x, keypoint.y});
                     if (!serializeDetails)
                     {
                         continue;
                     }
 
-                    QJsonObject observation{
-                        {QStringLiteral("image_id"), static_cast<int>(element.imageId)},
-                        {QStringLiteral("image_path"), QString::fromStdString(image.imagePath)},
-                        {QStringLiteral("image_name"), QFileInfo(QString::fromStdString(image.imagePath)).fileName()},
-                        {QStringLiteral("feature_idx"), static_cast<int>(element.featureIdx)},
-                        {QStringLiteral("xy"), QJsonArray{keypoint.x, keypoint.y}},
-                        {QStringLiteral("scale"), measurementScale},
+                    QJsonArray observation{
+                        static_cast<int>(element.imageId),
+                        static_cast<int>(element.featureIdx),
+                        keypoint.x,
+                        keypoint.y,
+                        measurementScale,
                     };
                     qualityCameraIds.push_back(element.imageId);
+
+                    const FramePinholeCamera* cleanCamera =
+                        reconstruction.hasCamera(element.imageId) ? &reconstruction.camera(element.imageId) : nullptr;
+                    cleanTiePointObservations.push_back({cleanCamera, rawMeasurementScale, {keypoint.x, keypoint.y}});
 
                     if (reconstruction.hasCamera(element.imageId))
                     {
                         double projected[2]{};
                         const FramePinholeCamera& camera = reconstruction.camera(element.imageId);
-                        qualityObservations.push_back({&camera, measurementScale});
+                        qualityObservations.push_back({&camera, measurementScale, {keypoint.x, keypoint.y}});
                         const bool projectedOk = camera.projectWorldPoint(point.xyz.data(), projected) ||
                                                  camera.projectWorldPointSigned(point.xyz.data(), projected);
                         if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))
                         {
-                            const double residualX = projected[0] - keypoint.x;
-                            const double residualY = projected[1] - keypoint.y;
-                            observation.insert(QStringLiteral("projected_xy"), QJsonArray{projected[0], projected[1]});
-                            observation.insert(QStringLiteral("residual_xy"), QJsonArray{residualX, residualY});
-                            observation.insert(QStringLiteral("residual_norm_px"), std::hypot(residualX, residualY));
+                            observation.append(projected[0]);
+                            observation.append(projected[1]);
                         }
                     }
                     else
@@ -433,6 +479,8 @@ namespace xjw::aerial_triangulation
                 {
                     const double uncertainty = reconstructionUncertainty(qualityObservations, point.xyz);
                     const double accuracy = projectionAccuracy(qualityObservations);
+                    const CleanTiePointQuality cleanQuality =
+                        evaluateCleanTiePointQuality(cleanTiePointObservations, point.xyz);
                     if (!hasCompleteQualityObservations || qualityObservations.size() != point.track.elements.size() ||
                         !std::isfinite(uncertainty) || uncertainty <= 0.0 || !std::isfinite(accuracy) ||
                         accuracy <= 0.0)
@@ -442,15 +490,39 @@ namespace xjw::aerial_triangulation
                         continue;
                     }
 
+                    QJsonObject cleanTiePointMetrics{
+                        {QStringLiteral("reprojection_error"), cleanQuality.reprojectionError},
+                        {QStringLiteral("has_projection_geometry"), cleanQuality.hasProjectionGeometry},
+                        {QStringLiteral("image_count"), static_cast<int>(cleanQuality.imageCount)},
+                    };
+                    if (std::isfinite(cleanQuality.projectionAccuracy))
+                    {
+                        cleanTiePointMetrics.insert(QStringLiteral("projection_accuracy"),
+                                                    cleanQuality.projectionAccuracy);
+                    }
+                    if (cleanQuality.hasProjectionGeometry)
+                    {
+                        if (std::isfinite(cleanQuality.reconstructionUncertainty))
+                        {
+                            cleanTiePointMetrics.insert(QStringLiteral("reconstruction_uncertainty"),
+                                                        cleanQuality.reconstructionUncertainty);
+                        }
+                        else
+                        {
+                            cleanTiePointMetrics.insert(QStringLiteral("reconstruction_uncertainty_infinite"), true);
+                        }
+                    }
+
                     QJsonObject serializedPoint{
                         {QStringLiteral("track_len"), static_cast<int>(point.track.length())},
                         {QStringLiteral("rms_reproj_px"), point.error},
                         {QStringLiteral("triangulation_angle_deg"), triangulationAngle},
-                        {QStringLiteral("min_tri_angle_deg"), triangulationAngle},
+                        {QStringLiteral("min_tri_angle_deg"), minimumTriangulationAngle},
                         {QStringLiteral("point_xyz"), QJsonArray{point.xyz[0], point.xyz[1], point.xyz[2]}},
                         {QStringLiteral("observations"), *observations},
                         {QStringLiteral("reconstruction_uncertainty"), uncertainty},
                         {QStringLiteral("projection_accuracy"), accuracy},
+                        {QStringLiteral("clean_tie_points"), cleanTiePointMetrics},
                         {QStringLiteral("track_source"),
                          point.track.source == TrackSource::PriorMarker ? QStringLiteral("prior_marker")
                                                                         : QStringLiteral("feature_match")},
@@ -475,9 +547,16 @@ namespace xjw::aerial_triangulation
                     candidate.filterPoint.projectionAccuracy = accuracy;
                     candidate.filterPoint.trackLen = static_cast<int>(point.track.length());
                     ++cleanupCounters.metricReadyPoints;
+                    collected.serializedPoints->append(candidate.serializedPoint);
+                    collected.publishedPointIds.push_back(candidate.pointId);
+                    for (const ImageId imageId : candidate.cameraIds)
+                    {
+                        collected.cameraErrors[imageId].first += candidate.filterPoint.rmsReprojPx;
+                        ++collected.cameraErrors[imageId].second;
+                    }
                     if (passesPublishGeometryGate(candidate, policy, &cleanupCounters))
                     {
-                        publishCandidates.push_back(std::move(candidate));
+                        displayCandidates.push_back(std::move(candidate));
                     }
                 }
                 collected.qualityPoints.push_back(std::move(qualityPoint));
@@ -486,24 +565,19 @@ namespace xjw::aerial_triangulation
             if (serializeDetails)
             {
                 const std::unordered_set<std::size_t> spatiallySupported = spatiallySupportedCandidateIndices(
-                    publishCandidates, policy, &cleanupCounters.removedSpatialOutliers);
-                for (std::size_t index = 0; index < publishCandidates.size(); ++index)
+                    displayCandidates, policy, &cleanupCounters.removedSpatialOutliers);
+                for (std::size_t index = 0; index < displayCandidates.size(); ++index)
                 {
                     if (!spatiallySupported.contains(index))
                     {
                         continue;
                     }
-                    SparsePublishCandidate& candidate = publishCandidates[index];
-                    collected.serializedPoints->append(candidate.serializedPoint);
-                    collected.publishedPointIds.push_back(candidate.pointId);
-                    for (const ImageId imageId : candidate.cameraIds)
-                    {
-                        collected.cameraErrors[imageId].first += candidate.filterPoint.rmsReprojPx;
-                        ++collected.cameraErrors[imageId].second;
-                    }
+                    collected.displayPointIds.push_back(displayCandidates[index].pointId);
                 }
-                collected.cleanupDiagnostics =
-                    cleanupDiagnostics(policy, cleanupCounters, static_cast<int>(collected.publishedPointIds.size()));
+                collected.cleanupDiagnostics = cleanupDiagnostics(policy,
+                                                                  cleanupCounters,
+                                                                  static_cast<int>(collected.publishedPointIds.size()),
+                                                                  static_cast<int>(collected.displayPointIds.size()));
             }
             return collected;
         }
@@ -548,6 +622,7 @@ namespace xjw::aerial_triangulation
         CollectedSparseQuality collected = collectSparseQuality(reconstruction, true, publishPolicy);
         report.points = std::move(*collected.serializedPoints);
         report.publishedPointIds = std::move(collected.publishedPointIds);
+        report.displayPointIds = std::move(collected.displayPointIds);
 
         // 第二阶段：为全部输入影像输出记录，包括未注册影像，便于 GUI 直接定位缺口。
         for (int index = 0; index < input.images.size(); ++index)

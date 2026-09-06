@@ -1224,6 +1224,10 @@ namespace xjw::aerial_triangulation
         }
 
         const bool focalInitializationSearch = focalCandidates.size() > 1;
+        const int refinedIntrinsicCount = execution.result.sfmDiagnostics
+                                              .value(QStringLiteral("ba_refined_intrinsic_count"))
+                                              .toInt();
+        const bool intrinsicModelRefined = refinedIntrinsicCount > 0;
         QString selfCalibrationStatus =
             hasCompleteKnownPosePrior
                 ? QStringLiteral("known_pose_fixed_calibration")
@@ -1254,6 +1258,10 @@ namespace xjw::aerial_triangulation
         else if (focalInitializationSearch)
         {
             selfCalibrationStatus = QStringLiteral("fixed_coarse_seed");
+        }
+        else if (!hasCompleteKnownPosePrior && intrinsicModelRefined)
+        {
+            selfCalibrationStatus = QStringLiteral("reference_model_refined");
         }
         execution.result.sfmDiagnostics.insert(QStringLiteral("camera_self_calibration_status"), selfCalibrationStatus);
         execution.result.sfmDiagnostics.insert(QStringLiteral("camera_self_calibration_requires_review"),

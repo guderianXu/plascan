@@ -23,8 +23,9 @@ std::size_t FeatureSet::approximateBytes() const
     const std::size_t descriptorBytes = descriptors.empty()
         ? 0
         : descriptors.total() * descriptors.elemSize();
+    const std::size_t payloadBytes = payload ? payload->approximateBytes() : 0;
     return keypoints.size() * sizeof(cv::KeyPoint) +
-        scores.size() * sizeof(float) + descriptorBytes;
+        scores.size() * sizeof(float) + descriptorBytes + payloadBytes;
 }
 
 bool FeatureSet::isConsistent() const
@@ -35,10 +36,11 @@ bool FeatureSet::isConsistent() const
     }
     const bool supportedDescriptorType =
         descriptors.type() == CV_32F || descriptors.type() == CV_8U;
-    return supportedDescriptorType &&
+    const bool baseConsistent = supportedDescriptorType &&
         descriptors.rows == size() &&
         scores.size() == keypoints.size() &&
         imageWidth > 0 && imageHeight > 0;
+    return baseConsistent && (!payload || payload->isConsistent(keypoints.size()));
 }
 
 } // namespace xjw::image_matching

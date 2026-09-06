@@ -28,13 +28,10 @@ namespace xjw
             int skippedPairCount = 0;
             int totalComponents = 0;
             int acceptedComponents = 0;
-            int rejectedConflictComponents = 0;
-            int rejectedConflictEdges = 0;
-            int rejectedInconsistentBridgeEdges = 0;
-            int acceptedSupportedBridgeEdges = 0;
-            int prunedByQualityThinning = 0;
+            int removedDuplicateObservations = 0;
+            int removedShortTracks = 0;
+            int prunedBySpatialSelection = 0;
             int prunedStationaryTracks = 0;
-            double meanTrackConfidence = 0.0;
             QJsonObject trackSummary;
             QString tiePointPath;
         };

@@ -30,14 +30,18 @@ struct PlanetaryLineScanBaOptions
 {
     BABackend backend = BABackend::Auto;
     int plaMatrixDevice = 0;
-    int minPlaMatrixGpuCameras = BAOptions::kDefaultMinPlaMatrixGpuCameras;
-    int minPlaMatrixGpuObservations = BAOptions::kDefaultMinPlaMatrixGpuObservations;
+    int minPlaMatrixCudaCameras = BAOptions::kDefaultMinPlaMatrixCudaCameras;
+    int minPlaMatrixCudaObservations = BAOptions::kDefaultMinPlaMatrixCudaObservations;
+    int minPlaMatrixOpenClCameras = BAOptions::kDefaultMinPlaMatrixOpenClCameras;
+    int minPlaMatrixOpenClObservations = BAOptions::kDefaultMinPlaMatrixOpenClObservations;
+    int minPlaMatrixDenseCameras = BAOptions::kDefaultMinPlaMatrixDenseCameras;
+    int minPlaMatrixCudaDenseObservations = BAOptions::kDefaultMinPlaMatrixCudaDenseObservations;
+    int minPlaMatrixOpenClDenseObservations = BAOptions::kDefaultMinPlaMatrixOpenClDenseObservations;
     int maxDenseSchurCameras = 200;
     bool allowBackendFallback = true;
     std::shared_ptr<std::atomic<bool>> cancelFlag;
     bool enableLaserRangeConstraints = false;
-    PlanetaryLaserLineScanTimeMode laserTimeMode =
-        PlanetaryLaserLineScanTimeMode::ShotEphemerisTime;
+    PlanetaryLaserLineScanTimeMode laserTimeMode = PlanetaryLaserLineScanTimeMode::ShotEphemerisTime;
     int maximumIterations = 50;
     int threadCount = 0;
     double imageSigmaPixels = 1.0;

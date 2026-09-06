@@ -65,7 +65,7 @@
     },
     {
       "name": "linux-source-deps-release",
-      "displayName": "Linux Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "displayName": "Linux pinned source dependencies including OpenEXR 3.2.2",
       "inherits": "source-deps-base",
       "binaryDir": "${sourceDir}/build/linux-source-deps-release",
       "condition": {
@@ -183,7 +183,7 @@
     },
     {
       "name": "macos-source-deps-release",
-      "displayName": "macOS Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "displayName": "macOS pinned source dependencies including OpenEXR 3.2.2",
       "inherits": "source-deps-base",
       "binaryDir": "${sourceDir}/build/macos-source-deps-release",
       "condition": {
@@ -249,7 +249,7 @@
     },
     {
       "name": "windows-source-deps-release",
-      "displayName": "Windows Qt 6.11.2 + OpenCV 5.0.0 + GDAL 3.12.4 source dependencies",
+      "displayName": "Windows pinned source dependencies including OpenEXR 3.2.2",
       "inherits": "source-deps-base",
       "binaryDir": "${sourceDir}/build/windows-source-deps-release",
       "condition": {

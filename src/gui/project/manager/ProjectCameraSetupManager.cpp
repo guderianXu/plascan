@@ -550,7 +550,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
     workflowOptions.threads = 0;
     workflowOptions.matchingAlgorithmId =
         settings.value(QStringLiteral("algorithm_id"))
-            .toString(QStringLiteral("auto_sift"))
+            .toString(QStringLiteral("plamatch_hct"))
             .trimmed()
             .toLower();
     workflowOptions.resetAlignment = false;

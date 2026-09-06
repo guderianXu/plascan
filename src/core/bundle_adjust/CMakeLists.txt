@@ -15,6 +15,7 @@ add_library(bundle_adjust STATIC
     BundleAdjustPlaMatrixConstraints.cpp
     BundleAdjustPlaMatrixAssembly.cpp
     BundleAdjustPlaMatrixAssemblySurvey.cpp
+    BundleAdjustPlaMatrixReferenceSchur.cpp
     BundleAdjustPlaMatrixProjection.cpp
     BundleAdjustPlaMatrixRuntime.cpp
 )

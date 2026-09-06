@@ -7,7 +7,7 @@
 
 namespace Ui
 {
-class AerialTriangulationDialog;
+    class AerialTriangulationDialog;
 }
 
 /**
@@ -21,30 +21,31 @@ class AerialTriangulationDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit AerialTriangulationDialog(QWidget *parent = nullptr);
+    explicit AerialTriangulationDialog(QWidget* parent = nullptr);
     ~AerialTriangulationDialog() override;
 
     /// 更新当前项目的影像数量提示。
     void setImageCount(int count);
+
+    /// 显示现有连接点文件及其真实持久化配额；limit<0 表示旧缓存未记录该字段。
+    void setCachedTiePointLimit(bool cacheExists, int limit = -1);
 
     /**
      * @brief 更新参考预选的可用性提示。
      *
      * 即使相机参考不完整，也不会直接禁用控件，因为“照片序列”模式不依赖相机文件。
      */
-    void setReferencePreselectionAvailable(bool available,
-                                           int cameraCount = 0,
-                                           int imageCount = 0);
+    void setReferencePreselectionAvailable(bool available, int cameraCount = 0, int imageCount = 0);
 
     /// 从项目或工作流 JSON 恢复界面状态；恢复期间不会发送 settingsChanged()。
-    void applySettings(const QJsonObject &settings);
+    void applySettings(const QJsonObject& settings);
 
     /// 将当前界面状态序列化为供上层工作流使用的稳定 JSON 字段。
     QJsonObject collectSettings() const;
 
 signals:
     /// 用户修改任一有效参数后发送完整配置快照。
-    void settingsChanged(const QJsonObject &settings);
+    void settingsChanged(const QJsonObject& settings);
 
 private:
     /// 初始化选项、默认值、提示文案以及控件间的联动关系。
@@ -56,9 +57,14 @@ private:
     /// 在非批量恢复状态下收集并发送最新配置。
     void emitSettingsChanged();
 
+    /// 根据当前设置和缓存文件头实时说明复用或重建动作。
+    void updateStatusText();
+
     std::unique_ptr<Ui::AerialTriangulationDialog> _ui;
 
     // 防止 applySettings() 批量更新控件时产生中间状态信号。
     bool _applyingSettings = false;
-
+    int _imageCount = 0;
+    bool _tiePointCacheExists = false;
+    int _cachedTiePointLimit = -1;
 };

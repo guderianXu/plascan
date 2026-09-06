@@ -382,6 +382,13 @@ void SelectionPropertiesWidget::showResourceProperties(const QJsonObject &meta,
 
 void SelectionPropertiesWidget::setRows(const QString &title, const QVector<PropertyRow> &rows)
 {
+    const bool hasSelection = !rows.isEmpty();
+    if (_hasSelection != hasSelection)
+    {
+        _hasSelection = hasSelection;
+        emit selectionStateChanged(_hasSelection);
+    }
+
     if (_title)
     {
         _title->setText(title);

@@ -22,7 +22,7 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertEqual([], manifest["default-features"])
         self.assertNotIn("features", manifest)
 
-    def test_ba_cuda_thresholds_have_one_default_source(self):
+    def test_ba_auto_backend_thresholds_have_one_default_source(self):
         options = read_text("src/core/bundle_adjust/BundleAdjustOptions.h")
         cli = read_text("src/cli/reconstruction/cli_bundle_adjust.cpp")
         source = read_text(
@@ -30,17 +30,23 @@ class BaCudaContractsTest(unittest.TestCase):
         )
         line_scan = read_text("src/core/lidar/PlanetaryLineScanBundleAdjust.h")
 
-        self.assertIn("kDefaultMinPlaMatrixGpuCameras = 24;", options)
-        self.assertIn("kDefaultMinPlaMatrixGpuObservations = 30000;", options)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuCameras", cli)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuObservations", cli)
+        self.assertIn("kAutoBackendPolicyVersion = 2;", options)
+        self.assertIn("kDefaultMinPlaMatrixCudaCameras = 128;", options)
+        self.assertIn("kDefaultMinPlaMatrixCudaObservations = 30000;", options)
+        self.assertIn("kDefaultMinPlaMatrixOpenClCameras = 160;", options)
+        self.assertIn("kDefaultMinPlaMatrixOpenClObservations = 50000;", options)
+        self.assertIn("kDefaultMinPlaMatrixDenseCameras = 120;", options)
+        self.assertIn("kDefaultMinPlaMatrixCudaDenseObservations = 150000;", options)
+        self.assertIn("kDefaultMinPlaMatrixOpenClDenseObservations = 200000;", options)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixCudaCameras", cli)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixOpenClCameras", cli)
         self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
         self.assertIn("options->baOptions.backend = BABackend::PlaMatrixCpu;", source)
-        self.assertNotIn("minPlaMatrixGpuObservations = 300000", source)
+        self.assertNotIn("minPlaMatrixCudaObservations = 300000", source)
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuCameras", line_scan)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixGpuObservations", line_scan)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixCudaCameras", line_scan)
+        self.assertIn("BAOptions::kDefaultMinPlaMatrixOpenClCameras", line_scan)
 
     def test_adaptive_camera_model_declares_full_model_then_filters_parameters(self):
         source = read_text(
@@ -74,7 +80,9 @@ class BaCudaContractsTest(unittest.TestCase):
 
         self.assertIn('toString(QStringLiteral("auto"))', project_manager)
         self.assertIn('opts.baOpt.backend = xjw::BABackend::Auto;', project_manager)
-        self.assertIn('opts.baOpt.minPlaMatrixGpuObservations', project_manager)
+        self.assertIn('opts.baOpt.minPlaMatrixCudaObservations', project_manager)
+        self.assertIn('opts.baOpt.minPlaMatrixOpenClObservations', project_manager)
+        self.assertIn('ba_auto_backend_policy_version', project_manager)
         self.assertIn('opts.baOpt.maxInitialTrackRms', project_manager)
         self.assertIn('opts.baOpt.enableBackendQualityGate', project_manager)
 

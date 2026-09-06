@@ -6,7 +6,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/PlascanVerifySourceCheckout.cmake)
 
 set(PLASCAN_SOURCE_DEPENDENCY_PREFIX
     "${CMAKE_BINARY_DIR}/install"
-    CACHE PATH "Install prefix shared by the pinned Qt, OpenCV, GDAL, and AprilTag source builds")
+    CACHE PATH "Install prefix shared by the pinned Qt, OpenCV, GDAL, AprilTag, and OpenEXR source builds")
 option(PLASCAN_SOURCE_OPENCV_WITH_CUDA
        "Build the source OpenCV dependency with CUDA support" OFF)
 option(PLASCAN_SOURCE_OPENCV_WITH_CUDNN
@@ -24,6 +24,8 @@ set(_plascan_opencv_source "${CMAKE_SOURCE_DIR}/3rdparty/opencv")
 set(_plascan_apriltag_source "${CMAKE_SOURCE_DIR}/3rdparty/apriltag")
 set(_plascan_gdal_source "${CMAKE_SOURCE_DIR}/3rdparty/gdal")
 set(_plascan_poisson_recon_source "${CMAKE_SOURCE_DIR}/3rdparty/PoissonRecon")
+set(_plascan_imath_source "${CMAKE_SOURCE_DIR}/3rdparty/Imath")
+set(_plascan_openexr_source "${CMAKE_SOURCE_DIR}/3rdparty/openexr")
 
 plascan_verify_source_checkout(
   "Qt ${PLASCAN_SOURCE_QT_VERSION}"
@@ -60,6 +62,16 @@ plascan_verify_source_checkout(
   "${_plascan_poisson_recon_source}"
   "${PLASCAN_SOURCE_POISSON_RECON_COMMIT}"
   "Src/Reconstructors.h")
+plascan_verify_source_checkout(
+  "Imath ${PLASCAN_SOURCE_IMATH_VERSION}"
+  "${_plascan_imath_source}"
+  "${PLASCAN_SOURCE_IMATH_COMMIT}"
+  "CMakeLists.txt")
+plascan_verify_source_checkout(
+  "OpenEXR ${PLASCAN_SOURCE_OPENEXR_VERSION}"
+  "${_plascan_openexr_source}"
+  "${PLASCAN_SOURCE_OPENEXR_COMMIT}"
+  "CMakeLists.txt")
 
 set(_plascan_external_cmake_args
   "-DCMAKE_BUILD_TYPE:STRING=Release"
@@ -176,6 +188,56 @@ ExternalProject_Add(plascan_apriltag_source
   USES_TERMINAL_BUILD TRUE
   USES_TERMINAL_INSTALL TRUE)
 
+ExternalProject_Add(plascan_imath_source
+  SOURCE_DIR "${_plascan_imath_source}"
+  BINARY_DIR "${CMAKE_BINARY_DIR}/imath-build"
+  CMAKE_GENERATOR Ninja
+  CMAKE_ARGS
+    ${_plascan_external_cmake_args}
+    "-DBUILD_SHARED_LIBS:BOOL=ON"
+    "-DBUILD_TESTING:BOOL=OFF"
+    "-DBUILD_DOCS:BOOL=OFF"
+    "-DPYTHON:BOOL=OFF"
+    "-DIMATH_IS_SUBPROJECT:BOOL=ON"
+    "-DIMATH_INSTALL_PKG_CONFIG:BOOL=OFF"
+    "-DIMATH_INSTALL_SYM_LINK:BOOL=OFF"
+  BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel
+  INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR>
+  BUILD_BYPRODUCTS
+    "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/lib/cmake/Imath/ImathConfig.cmake"
+  STEP_TARGETS configure
+  USES_TERMINAL_CONFIGURE TRUE
+  USES_TERMINAL_BUILD TRUE
+  USES_TERMINAL_INSTALL TRUE)
+
+ExternalProject_Add(plascan_openexr_source
+  SOURCE_DIR "${_plascan_openexr_source}"
+  BINARY_DIR "${CMAKE_BINARY_DIR}/openexr-build"
+  CMAKE_GENERATOR Ninja
+  CMAKE_ARGS
+    ${_plascan_external_cmake_args}
+    "-DBUILD_SHARED_LIBS:BOOL=ON"
+    "-DBUILD_TESTING:BOOL=OFF"
+    "-DBUILD_DOCS:BOOL=OFF"
+    "-DImath_DIR:PATH=${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/lib/cmake/Imath"
+    "-DOPENEXR_BUILD_TOOLS:BOOL=OFF"
+    "-DOPENEXR_INSTALL_TOOLS:BOOL=OFF"
+    "-DOPENEXR_INSTALL_EXAMPLES:BOOL=OFF"
+    "-DOPENEXR_INSTALL_DOCS:BOOL=OFF"
+    "-DOPENEXR_BUILD_PYTHON:BOOL=OFF"
+    "-DOPENEXR_IS_SUBPROJECT:BOOL=ON"
+    "-DOPENEXR_INSTALL_PKG_CONFIG:BOOL=OFF"
+    "-DOPENEXR_FORCE_INTERNAL_IMATH:BOOL=OFF"
+  BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel
+  INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR>
+  BUILD_BYPRODUCTS
+    "${PLASCAN_SOURCE_DEPENDENCY_PREFIX}/lib/cmake/OpenEXR/OpenEXRConfig.cmake"
+  DEPENDS plascan_imath_source
+  STEP_TARGETS configure
+  USES_TERMINAL_CONFIGURE TRUE
+  USES_TERMINAL_BUILD TRUE
+  USES_TERMINAL_INSTALL TRUE)
+
 ExternalProject_Add(plascan_gdal_source
   SOURCE_DIR "${_plascan_gdal_source}"
   BINARY_DIR "${CMAKE_BINARY_DIR}/gdal-build"
@@ -226,7 +288,13 @@ ExternalProject_Add(plascan_gdal_source
   USES_TERMINAL_INSTALL TRUE)
 
 add_custom_target(plascan_source_dependencies ALL
-  DEPENDS plascan_qt_source plascan_opencv_source plascan_apriltag_source plascan_gdal_source)
+  DEPENDS
+    plascan_qt_source
+    plascan_opencv_source
+    plascan_apriltag_source
+    plascan_gdal_source
+    plascan_imath_source
+    plascan_openexr_source)
 
 message(STATUS "PlaScan source dependency superbuild")
 message(STATUS "  Qt: ${PLASCAN_SOURCE_QT_VERSION} (${_plascan_qt_source})")
@@ -234,4 +302,6 @@ message(STATUS "  OpenCV: ${PLASCAN_SOURCE_OPENCV_VERSION} (${_plascan_opencv_so
 message(STATUS "  AprilTag: ${PLASCAN_SOURCE_APRILTAG_VERSION} (${_plascan_apriltag_source})")
 message(STATUS "  GDAL: ${PLASCAN_SOURCE_GDAL_VERSION} (${_plascan_gdal_source})")
 message(STATUS "  PoissonRecon: ${PLASCAN_SOURCE_POISSON_RECON_COMMIT} (${_plascan_poisson_recon_source})")
+message(STATUS "  Imath: ${PLASCAN_SOURCE_IMATH_VERSION} (${_plascan_imath_source})")
+message(STATUS "  OpenEXR: ${PLASCAN_SOURCE_OPENEXR_VERSION} (${_plascan_openexr_source})")
 message(STATUS "  Install prefix: ${PLASCAN_SOURCE_DEPENDENCY_PREFIX}")

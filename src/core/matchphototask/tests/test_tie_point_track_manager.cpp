@@ -103,18 +103,27 @@ TEST(TiePointTrackManagerTest, BuildsFinalMultiviewTracksFromInMemoryPairData)
     ASSERT_TRUE(file.open(QIODevice::ReadOnly));
     const QJsonObject stored = QJsonDocument::fromJson(file.readAll()).object();
     EXPECT_EQ(stored.value(QStringLiteral("format")).toString(), QStringLiteral("plascan_tie_points"));
-    EXPECT_EQ(stored.value(QStringLiteral("format_version")).toInt(), 2);
+    EXPECT_EQ(stored.value(QStringLiteral("format_version")).toInt(), 3);
+    EXPECT_EQ(stored.value(QStringLiteral("observation_fields")).toArray(),
+              QJsonArray({QStringLiteral("image_id"),
+                          QStringLiteral("feature_idx"),
+                          QStringLiteral("x"),
+                          QStringLiteral("y"),
+                          QStringLiteral("scale")}));
     EXPECT_EQ(stored.value(QStringLiteral("track_count")).toInt(), 1);
     const QJsonObject summary = stored.value(QStringLiteral("summary")).toObject();
-    EXPECT_EQ(summary.value(QStringLiteral("rejected_inconsistent_bridge_edges")).toInt(), 0);
-    EXPECT_EQ(summary.value(QStringLiteral("accepted_supported_bridge_edges")).toInt(), 0);
+    EXPECT_EQ(summary.value(QStringLiteral("strategy")).toString(), QStringLiteral("align_photos_reference"));
+    EXPECT_EQ(summary.value(QStringLiteral("generated_tracks")).toInt(), 1);
+    EXPECT_EQ(summary.value(QStringLiteral("pruned_by_spatial_selection")).toInt(), 0);
     const QJsonObject storedTrack = stored.value(QStringLiteral("tracks")).toArray().first().toObject();
-    const QJsonArray storedObservations =
-        storedTrack.value(QStringLiteral("observations")).toArray();
+    const QJsonArray storedObservations = storedTrack.value(QStringLiteral("observations")).toArray();
     EXPECT_EQ(storedObservations.size(), 3);
-    for (const QJsonValue &value : storedObservations)
+    for (const QJsonValue& value : storedObservations)
     {
-        EXPECT_DOUBLE_EQ(value.toObject().value(QStringLiteral("scale")).toDouble(), 1.0);
+        ASSERT_TRUE(value.isArray());
+        const QJsonArray observation = value.toArray();
+        ASSERT_EQ(observation.size(), 5);
+        EXPECT_DOUBLE_EQ(observation.at(4).toDouble(), 1.0);
     }
     const QJsonArray directEdges = storedTrack.value(QStringLiteral("direct_edges")).toArray();
     ASSERT_EQ(directEdges.size(), 2);

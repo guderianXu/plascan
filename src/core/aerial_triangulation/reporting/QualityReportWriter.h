@@ -28,8 +28,9 @@ namespace xjw::aerial_triangulation
 /// 一次正式稀疏结果的完整报告片段。
 struct SparseQualityReport
 {
-    QJsonArray points; ///< 每点坐标、轨迹长度、误差和交会角。
-    std::vector<xjw::Point3DId> publishedPointIds; ///< 与 points 顺序一致的正式发布点 ID。
+    QJsonArray points; ///< 全部算法有效点的坐标、轨迹长度、误差和交会角。
+    std::vector<xjw::Point3DId> publishedPointIds; ///< 与 points 顺序一致的正式算法点 ID。
+    std::vector<xjw::Point3DId> displayPointIds; ///< 仅供显示/轻量导出的清理点 ID。
     QJsonArray perCameraResiduals; ///< 每相机观测数与残差分布。
     QJsonObject qualityMetadata; ///< 工程/MVS 消费的稳定质量字段。
     QJsonObject diagnostics; ///< 更详细的开发和候选分析信息。

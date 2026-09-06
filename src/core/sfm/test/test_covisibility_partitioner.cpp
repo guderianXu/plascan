@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
 #include "graph/CovisibilityPartitioner.h"
+#include "graph/ReferenceCameraGroupPartitioner.h"
 #include "pipeline/HierarchicalBundleAdjuster.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -12,87 +14,97 @@
 namespace
 {
 
-void addWeightedEdge(xjw::CorrespondenceGraph *graph,
-                     xjw::ImageId first,
-                     xjw::ImageId second,
-                     std::size_t weight)
-{
-    std::vector<xjw::FeatureMatch> matches(weight);
-    for (xjw::FeatureMatch &match : matches)
+    void addWeightedEdge(xjw::CorrespondenceGraph* graph, xjw::ImageId first, xjw::ImageId second, std::size_t weight)
     {
-        match.idx1 = 0;
-        match.idx2 = 0;
-        match.score = 1.0F;
-    }
-    graph->addMatches(first, second, matches);
-}
-
-struct SyntheticGraph
-{
-    std::vector<xjw::ImageId> imageIds;
-    xjw::CorrespondenceGraph graph;
-};
-
-SyntheticGraph makeLocalGraph(int image_count, xjw::ImageId first_id, xjw::ImageId stride)
-{
-    SyntheticGraph result;
-    result.imageIds.reserve(static_cast<std::size_t>(image_count));
-    for (int index = 0; index < image_count; ++index)
-    {
-        const xjw::ImageId image_id = first_id + static_cast<xjw::ImageId>(index) * stride;
-        result.imageIds.push_back(image_id);
-        result.graph.addImage(image_id, 1);
-    }
-    for (int index = 0; index < image_count; ++index)
-    {
-        for (int offset = 1; offset <= 3 && index + offset < image_count; ++offset)
+        std::vector<xjw::FeatureMatch> matches(weight);
+        for (xjw::FeatureMatch& match : matches)
         {
-            addWeightedEdge(&result.graph,
-                            result.imageIds[static_cast<std::size_t>(index)],
-                            result.imageIds[static_cast<std::size_t>(index + offset)],
-                            static_cast<std::size_t>(120 - offset * 25));
+            match.idx1 = 0;
+            match.idx2 = 0;
+            match.score = 1.0F;
+        }
+        graph->addMatches(first, second, matches);
+    }
+
+    struct SyntheticGraph
+    {
+        std::vector<xjw::ImageId> imageIds;
+        xjw::CorrespondenceGraph graph;
+    };
+
+    SyntheticGraph makeLocalGraph(int image_count, xjw::ImageId first_id, xjw::ImageId stride)
+    {
+        SyntheticGraph result;
+        result.imageIds.reserve(static_cast<std::size_t>(image_count));
+        for (int index = 0; index < image_count; ++index)
+        {
+            const xjw::ImageId image_id = first_id + static_cast<xjw::ImageId>(index) * stride;
+            result.imageIds.push_back(image_id);
+            result.graph.addImage(image_id, 1);
+        }
+        for (int index = 0; index < image_count; ++index)
+        {
+            for (int offset = 1; offset <= 3 && index + offset < image_count; ++offset)
+            {
+                addWeightedEdge(&result.graph,
+                                result.imageIds[static_cast<std::size_t>(index)],
+                                result.imageIds[static_cast<std::size_t>(index + offset)],
+                                static_cast<std::size_t>(120 - offset * 25));
+            }
+        }
+        return result;
+    }
+
+    void expectValidPartition(const SyntheticGraph& input,
+                              const std::vector<xjw::CovisibilityBlock>& blocks,
+                              std::size_t maximum_core_size,
+                              std::size_t maximum_overlap_size)
+    {
+        std::unordered_map<xjw::ImageId, int> core_count;
+        for (const xjw::CovisibilityBlock& block : blocks)
+        {
+            EXPECT_FALSE(block.coreImageIds.empty());
+            EXPECT_LE(block.coreImageIds.size(), maximum_core_size);
+            EXPECT_LE(block.overlapImageIds.size(), maximum_overlap_size);
+            const std::unordered_set<xjw::ImageId> core(block.coreImageIds.begin(), block.coreImageIds.end());
+            for (xjw::ImageId image_id : block.coreImageIds)
+            {
+                ++core_count[image_id];
+            }
+            for (xjw::ImageId overlap_id : block.overlapImageIds)
+            {
+                EXPECT_EQ(core.count(overlap_id), 0U);
+                const bool connected_to_core = std::any_of(
+                    block.coreImageIds.begin(),
+                    block.coreImageIds.end(),
+                    [&](xjw::ImageId core_id) { return input.graph.numMatchesBetween(core_id, overlap_id) > 0; });
+                EXPECT_TRUE(connected_to_core);
+            }
+        }
+        EXPECT_EQ(core_count.size(), input.imageIds.size());
+        for (xjw::ImageId image_id : input.imageIds)
+        {
+            EXPECT_EQ(core_count[image_id], 1);
         }
     }
-    return result;
-}
-
-void expectValidPartition(const SyntheticGraph &input,
-                          const std::vector<xjw::CovisibilityBlock> &blocks,
-                          std::size_t maximum_core_size,
-                          std::size_t maximum_overlap_size)
-{
-    std::unordered_map<xjw::ImageId, int> core_count;
-    for (const xjw::CovisibilityBlock &block : blocks)
-    {
-        EXPECT_FALSE(block.coreImageIds.empty());
-        EXPECT_LE(block.coreImageIds.size(), maximum_core_size);
-        EXPECT_LE(block.overlapImageIds.size(), maximum_overlap_size);
-        const std::unordered_set<xjw::ImageId> core(
-            block.coreImageIds.begin(), block.coreImageIds.end());
-        for (xjw::ImageId image_id : block.coreImageIds)
-        {
-            ++core_count[image_id];
-        }
-        for (xjw::ImageId overlap_id : block.overlapImageIds)
-        {
-            EXPECT_EQ(core.count(overlap_id), 0U);
-            const bool connected_to_core = std::any_of(
-                block.coreImageIds.begin(), block.coreImageIds.end(),
-                [&](xjw::ImageId core_id)
-                {
-                    return input.graph.numMatchesBetween(core_id, overlap_id) > 0;
-                });
-            EXPECT_TRUE(connected_to_core);
-        }
-    }
-    EXPECT_EQ(core_count.size(), input.imageIds.size());
-    for (xjw::ImageId image_id : input.imageIds)
-    {
-        EXPECT_EQ(core_count[image_id], 1);
-    }
-}
 
 } // namespace
+
+std::vector<xjw::Track> makeReferenceChainTracks(const std::vector<xjw::ImageId>& imageIds)
+{
+    std::vector<xjw::Track> tracks;
+    for (std::size_t first = 0; first + 1 < imageIds.size(); ++first)
+    {
+        for (std::size_t repeat = 0; repeat < 8; ++repeat)
+        {
+            xjw::Track track;
+            track.elements = {{imageIds[first], static_cast<xjw::FeatureIdx>(repeat)},
+                              {imageIds[first + 1], static_cast<xjw::FeatureIdx>(repeat)}};
+            tracks.push_back(std::move(track));
+        }
+    }
+    return tracks;
+}
 
 TEST(CovisibilityPartitionerTest, Partitions444CameraNetworkIntoBalancedOverlappingBlocks)
 {
@@ -101,8 +113,7 @@ TEST(CovisibilityPartitionerTest, Partitions444CameraNetworkIntoBalancedOverlapp
     options.targetCoreSize = 64;
     options.overlapSize = 12;
 
-    const auto blocks = xjw::CovisibilityPartitioner::partition(
-        input.imageIds, input.graph, options);
+    const auto blocks = xjw::CovisibilityPartitioner::partition(input.imageIds, input.graph, options);
 
     ASSERT_EQ(blocks.size(), 7U);
     expectValidPartition(input, blocks, 64, 12);
@@ -116,10 +127,8 @@ TEST(CovisibilityPartitionerTest, IsDeterministicFor1000ArbitraryCameraIds)
     options.targetCoreSize = 64;
     options.overlapSize = 10;
 
-    const auto first = xjw::CovisibilityPartitioner::partition(
-        input.imageIds, input.graph, options);
-    const auto second = xjw::CovisibilityPartitioner::partition(
-        input.imageIds, input.graph, options);
+    const auto first = xjw::CovisibilityPartitioner::partition(input.imageIds, input.graph, options);
+    const auto second = xjw::CovisibilityPartitioner::partition(input.imageIds, input.graph, options);
 
     ASSERT_EQ(first.size(), 16U);
     ASSERT_EQ(first.size(), second.size());
@@ -140,29 +149,75 @@ TEST(CovisibilityPartitionerTest, NeverMixesDisconnectedComponentsInsideOneCore)
         first.imageIds.push_back(image_id);
         first.graph.addImage(image_id, 1);
     }
-    for (const xjw::ImagePair &pair : second.graph.imagePairs())
+    for (const xjw::ImagePair& pair : second.graph.imagePairs())
     {
-        addWeightedEdge(&first.graph,
-                        pair.first,
-                        pair.second,
-                        second.graph.numMatchesBetween(pair.first, pair.second));
+        addWeightedEdge(&first.graph, pair.first, pair.second, second.graph.numMatchesBetween(pair.first, pair.second));
     }
 
     xjw::CovisibilityPartitionOptions options;
     options.targetCoreSize = 32;
     options.overlapSize = 6;
-    const auto blocks = xjw::CovisibilityPartitioner::partition(
-        first.imageIds, first.graph, options);
+    const auto blocks = xjw::CovisibilityPartitioner::partition(first.imageIds, first.graph, options);
 
-    for (const xjw::CovisibilityBlock &block : blocks)
+    for (const xjw::CovisibilityBlock& block : blocks)
     {
         const bool low_component = block.coreImageIds.front() < 1000;
-        EXPECT_TRUE(std::all_of(block.coreImageIds.begin(), block.coreImageIds.end(),
-                                [low_component](xjw::ImageId image_id)
-                                {
-                                    return (image_id < 1000) == low_component;
-                                }));
+        EXPECT_TRUE(std::all_of(block.coreImageIds.begin(),
+                                block.coreImageIds.end(),
+                                [low_component](xjw::ImageId image_id) { return (image_id < 1000) == low_component; }));
     }
+}
+
+TEST(ReferenceCameraGroupPartitionerTest, KeepsSmallConnectedNetworkInOneGroup)
+{
+    std::vector<xjw::ImageId> imageIds(80);
+    std::iota(imageIds.begin(), imageIds.end(), 100U);
+
+    const auto groups = xjw::partitionReferenceCameraGroups(imageIds, makeReferenceChainTracks(imageIds));
+
+    ASSERT_EQ(groups.size(), 1U);
+    EXPECT_EQ(groups.front().size(), imageIds.size());
+}
+
+TEST(ReferenceCameraGroupPartitionerTest, ProducesDeterministicDisjointGroupsForLargeNetwork)
+{
+    std::vector<xjw::ImageId> imageIds(128);
+    std::iota(imageIds.begin(), imageIds.end(), 1000U);
+    const std::vector<xjw::Track> tracks = makeReferenceChainTracks(imageIds);
+
+    const auto first = xjw::partitionReferenceCameraGroups(imageIds, tracks);
+    const auto second = xjw::partitionReferenceCameraGroups(imageIds, tracks);
+
+    ASSERT_GT(first.size(), 1U);
+    EXPECT_EQ(first, second);
+    std::unordered_map<xjw::ImageId, int> occurrences;
+    for (const auto& group : first)
+    {
+        EXPECT_GT(group.size(), 1U);
+        for (xjw::ImageId imageId : group)
+        {
+            ++occurrences[imageId];
+        }
+    }
+    EXPECT_EQ(occurrences.size(), imageIds.size());
+    for (xjw::ImageId imageId : imageIds)
+    {
+        EXPECT_EQ(occurrences[imageId], 1);
+    }
+}
+
+TEST(ReferenceCameraGroupPartitionerTest, SupportsSmallLimitForEndToEndFixtures)
+{
+    std::vector<xjw::ImageId> imageIds(6);
+    std::iota(imageIds.begin(), imageIds.end(), 0U);
+    const std::vector<xjw::Track> tracks = makeReferenceChainTracks(imageIds);
+    xjw::ReferenceCameraGroupPartitionOptions options;
+    options.maximumGroupSize = 2;
+    options.minimumLargeSide = 1;
+
+    const auto groups = xjw::partitionReferenceCameraGroups(imageIds, tracks, options);
+
+    EXPECT_GT(groups.size(), 1U);
 }
 
 TEST(HierarchicalBundleAdjusterPolicyTest, UsesProblemScaleWithoutSceneTypeAssumption)
@@ -187,19 +242,13 @@ TEST(HierarchicalBundleAdjusterPolicyTest, DistributesEveryThreadAcrossActiveWor
     int totalAssigned = 0;
     for (int workerIndex = 0; workerIndex < 7; ++workerIndex)
     {
-        const int assigned =
-            xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(
-                32, 7, workerIndex);
+        const int assigned = xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 7, workerIndex);
         EXPECT_GE(assigned, 4);
         EXPECT_LE(assigned, 5);
         totalAssigned += assigned;
     }
     EXPECT_EQ(totalAssigned, 32);
 
-    EXPECT_EQ(
-        xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 0),
-        11);
-    EXPECT_EQ(
-        xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 2),
-        10);
+    EXPECT_EQ(xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 0), 11);
+    EXPECT_EQ(xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 2), 10);
 }

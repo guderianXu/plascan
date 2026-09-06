@@ -19,6 +19,7 @@
 #include "search/SfmSearchPolicy.h"
 
 #include "io/PathIO.h"
+#include "io/ImageExifMetadata.h"
 #include "log/Logger.h"
 #include "ProjectCameraIO.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
@@ -66,6 +67,28 @@ namespace xjw::aerial_triangulation
                 *errorMessage = message;
             }
             return false;
+        }
+
+        std::string sensorKeyForImage(const QString& imagePath)
+        {
+            const auto metadata = xjw::common::io::readImageExifMetadata(imagePath);
+            if (!metadata.has_value())
+            {
+                return {};
+            }
+            const QString make = metadata->make.trimmed().toLower();
+            const QString model = metadata->model.trimmed().toLower();
+            if (make.isEmpty() && model.isEmpty())
+            {
+                return {};
+            }
+            QString key = make + QLatin1Char('/') + model;
+            if (metadata->focalLengthMm.has_value() && std::isfinite(*metadata->focalLengthMm) &&
+                *metadata->focalLengthMm > 0.0)
+            {
+                key += QStringLiteral("/f=%1mm").arg(*metadata->focalLengthMm, 0, 'f', 3);
+            }
+            return key.toUtf8().toStdString();
         }
 
         /// 用项目的路径 token 规则将持久化影像路径映射到本次输入索引。
@@ -159,14 +182,18 @@ namespace xjw::aerial_triangulation
                 options->trackThinningGridRows = input.trackThinningGridRows;
             }
 
-            // 固定每 3/10 张执行局部/全局 BA 只适合小工程。数百张影像时，后半程每次
-            // 全局 BA 都会重新装配几十万条观测，重复次数远大于求解本身需要。大工程仍
-            // 保留局部稳姿和周期全局消漂，但让间隔随总影像数增长，最终全局 BA 不受影响。
-            const SfmBaSchedule baSchedule = resolveSfmBaSchedule(
-                input.images.size(), options->localBAInterval, options->localBANumImages, options->globalBAInterval);
-            options->localBAInterval = baSchedule.localInterval;
-            options->localBANumImages = baSchedule.localWindowImages;
-            options->globalBAInterval = baSchedule.globalInterval;
+            if (options->executionProfile == SfmExecutionProfile::CoarseEvaluation)
+            {
+                // 焦距候选粗筛不执行正式的逐批完整块 BA；数百图候选继续放宽局部/全局间隔，
+                // 胜出焦距正式重放时再进入参考 20/10 次、五轮结构刷新调度。
+                const SfmBaSchedule baSchedule = resolveSfmBaSchedule(input.images.size(),
+                                                                      options->localBAInterval,
+                                                                      options->localBANumImages,
+                                                                      options->globalBAInterval);
+                options->localBAInterval = baSchedule.localInterval;
+                options->localBANumImages = baSchedule.localWindowImages;
+                options->globalBAInterval = baSchedule.globalInterval;
+            }
             options->baOptions.cancelFlag = input.cancelFlag;
             options->baOptions.numThreads = resolveSfmThreadBudget(input.threads);
             options->baOptions.progressCallback =
@@ -224,18 +251,18 @@ namespace xjw::aerial_triangulation
             }
             options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
-            // 通用的“保留当前相机层”仍关闭，因为零畸变初值可能已经形成 dome/bowl。
-            // 仅当批次元数据给出可信焦距时，最终全局 BA 才允许启用独立的航摄穹顶
-            // 修正：固定焦距、只估计 k1，并把明显弯曲的近俯视相机层约束到共面层。
+            // 普通“对齐照片”不向相机中心附加共面/航带形状先验。穹顶误差由标定组、
+            // 分阶段内参释放、参考 gauge 和异常点过滤共同处理；显式专业流程仍可直接
+            // 使用 BA 层的 cameraPlaneConstraint。
             options->preserveCameraLayerDuringSelfCalibration = false;
-            options->correctUnanchoredAerialDoming = input.hasTrustedFocalPrior;
             options->baOptions.hasTrustedSharedFocalPrior = input.hasTrustedFocalPrior;
 
             options->useSequencePoseRecovery = input.useSequencePoseRecovery;
             options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;
             options->sequenceLoopClosure = input.sequenceLoopClosure;
-            options->repairParallelAerialPoseOutliers =
-                input.hasTrustedFocalPrior && input.useSequencePoseRecovery && !input.sequenceLoopClosure;
+            // 最终五轮方差精化后不自动启动另一套摘除/重注册/最终 BA；该能力保留为
+            // IncrementalSfm 的显式非参考扩展，但正式“对齐照片”路径保持一次最终周期。
+            options->repairParallelAerialPoseOutliers = false;
             if (input.adaptiveCameraModelFitting)
             {
                 options->adaptiveCameraModelFitting = true;
@@ -252,15 +279,11 @@ namespace xjw::aerial_triangulation
                     // EXIF 量化误差，同时显著窄于完全无标定搜索。
                     options->baOptions.minSharedFocalScale = 0.94;
                     options->baOptions.maxSharedFocalScale = 1.06;
-                    options->baOptions.maxSharedFocalStepScale = 1.06;
-                    options->baOptions.maxSharedFocalIterations = 8;
                 }
                 else
                 {
                     options->baOptions.minSharedFocalScale = 0.90;
                     options->baOptions.maxSharedFocalScale = 1.10;
-                    options->baOptions.maxSharedFocalStepScale = 1.12;
-                    options->baOptions.maxSharedFocalIterations = 6;
                 }
                 if (cpuOnly)
                 {
@@ -432,6 +455,7 @@ namespace xjw::aerial_triangulation
         {
             const ImageId imageId = static_cast<ImageId>(index);
             const QString& imagePath = input.images.at(index);
+            const std::string sensorKey = sensorKeyForImage(imagePath);
             imageIdByPath.insert(xjw::common::project::normalizePath(imagePath), imageId);
             const std::vector<FeatureKeypoint> keypoints = graph.keypointsByImage.value(imageId);
 
@@ -440,7 +464,8 @@ namespace xjw::aerial_triangulation
                 sfm.addImage(imageId,
                              xjw::common::io::toUtf8Path(imagePath),
                              xjw::common::io::toUtf8Path(input.cameraPaths.at(index)),
-                             keypoints);
+                             keypoints,
+                             sensorKey);
                 continue;
             }
 
@@ -457,7 +482,8 @@ namespace xjw::aerial_triangulation
                         // 重置对齐时只复用内参，外参重新由相对定向/增量注册估计。
                         camera = cameraWithIdentityPose(camera);
                     }
-                    sfm.addImageWithCamera(imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints);
+                    sfm.addImageWithCamera(
+                        imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints, sensorKey);
                     continue;
                 }
             }
@@ -474,7 +500,7 @@ namespace xjw::aerial_triangulation
                 std::max(imageSize.width(), imageSize.height()) * std::max(0.1, input.estimatedFocalScale);
             FramePinholeCamera camera;
             camera.setIntrinsics(focal, focal, imageSize.width() * 0.5, imageSize.height() * 0.5);
-            sfm.addImageWithCamera(imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints);
+            sfm.addImageWithCamera(imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints, sensorKey);
         }
 
         // 阶段 4：人工标记和比例尺作为 prior track/control constraint 注入，
@@ -501,6 +527,7 @@ namespace xjw::aerial_triangulation
         {
             sfm.addMatches(pair.imageA, pair.imageB, pair.matches);
         }
+        sfm.setInputMultiViewTracks(graph.tracks);
 
         // 阶段 6：运行初始对、增量 PnP/三角化、局部/全局 BA 和质量过滤。
         const IncrementalSfmResult sfmResult = sfm.run(
@@ -558,11 +585,16 @@ namespace xjw::aerial_triangulation
         diagnostics.insert(QStringLiteral("hierarchical_ba_applied_blocks"), sfmResult.hierarchicalBAAppliedBlocks);
         diagnostics.insert(QStringLiteral("hierarchical_ba_updated_cameras"), sfmResult.hierarchicalBAUpdatedCameras);
         diagnostics.insert(QStringLiteral("hierarchical_ba_total_seconds"), sfmResult.hierarchicalBATotalSeconds);
+        diagnostics.insert(QStringLiteral("independent_camera_blocks"), sfmResult.independentCameraBlocks);
+        diagnostics.insert(QStringLiteral("independent_block_merge_inliers"), sfmResult.independentBlockMergeInliers);
         diagnostics.insert(QStringLiteral("aerial_pose_outliers_detected"), sfmResult.aerialPoseOutliersDetected);
         diagnostics.insert(QStringLiteral("aerial_pose_outliers_repaired"), sfmResult.aerialPoseOutliersRepaired);
         diagnostics.insert(QStringLiteral("aerial_pose_outliers_rejected"),
                            sfmResult.aerialPoseOutliersDetected - sfmResult.aerialPoseOutliersRepaired);
         diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"), sfmResult.baRefinedIntrinsicCount);
+        diagnostics.insert(QStringLiteral("ba_refined_calibration_group_count"),
+                           sfmResult.baRefinedCalibrationGroupCount);
+        diagnostics.insert(QStringLiteral("ba_self_calibration_stages_run"), sfmResult.baSelfCalibrationStagesRun);
         diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_fitting_evaluated"),
                            sfmResult.baAdaptiveCameraModelFittingEvaluated);
         diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_fitting_applied"),
@@ -590,6 +622,13 @@ namespace xjw::aerial_triangulation
         diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_incremental_information_score"),
                            intrinsicParameterIncrementalInformationScore);
         diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_sensitivity"), intrinsicParameterSensitivity);
+        diagnostics.insert(QStringLiteral("ba_intrinsic_observability_evaluated"),
+                           sfmResult.baAdaptiveCameraModelFittingEvaluated);
+        diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_mask_source"),
+                           sfmResult.baAdaptiveCameraModelFittingEvaluated
+                               ? QStringLiteral("adaptive_assessment")
+                               : (sfmResult.baRefinedIntrinsicCount > 0 ? QStringLiteral("reference_ba_stage")
+                                                                        : QStringLiteral("fixed")));
         QJsonObject cameraModelObservability;
         cameraModelObservability.insert(QStringLiteral("geometry_strength"), sfmResult.baCameraModelGeometryStrength);
         cameraModelObservability.insert(QStringLiteral("optical_axis_concentration"),
@@ -619,6 +658,34 @@ namespace xjw::aerial_triangulation
         diagnostics.insert(QStringLiteral("ba_shared_radial_k3"), sfmResult.baSharedRadialK3);
         diagnostics.insert(QStringLiteral("ba_shared_tangential_p1"), sfmResult.baSharedTangentialP1);
         diagnostics.insert(QStringLiteral("ba_shared_tangential_p2"), sfmResult.baSharedTangentialP2);
+        const QJsonObject intrinsicReference{{QStringLiteral("focal_scale"), 1.0},
+                                             {QStringLiteral("focal_aspect_scale"), 1.0},
+                                             {QStringLiteral("principal_offset_x_px"), 0.0},
+                                             {QStringLiteral("principal_offset_y_px"), 0.0},
+                                             {QStringLiteral("radial_k1"), 0.0},
+                                             {QStringLiteral("radial_k2"), 0.0},
+                                             {QStringLiteral("radial_k3"), 0.0},
+                                             {QStringLiteral("tangential_p1"), 0.0},
+                                             {QStringLiteral("tangential_p2"), 0.0}};
+        const QJsonObject intrinsicFinal{{QStringLiteral("focal_scale"), sfmResult.baSharedFocalScale},
+                                         {QStringLiteral("focal_aspect_scale"), sfmResult.baSharedFocalAspectScale},
+                                         {QStringLiteral("principal_offset_x_px"), sfmResult.baSharedPrincipalOffsetX},
+                                         {QStringLiteral("principal_offset_y_px"), sfmResult.baSharedPrincipalOffsetY},
+                                         {QStringLiteral("radial_k1"), sfmResult.baSharedRadialK1},
+                                         {QStringLiteral("radial_k2"), sfmResult.baSharedRadialK2},
+                                         {QStringLiteral("radial_k3"), sfmResult.baSharedRadialK3},
+                                         {QStringLiteral("tangential_p1"), sfmResult.baSharedTangentialP1},
+                                         {QStringLiteral("tangential_p2"), sfmResult.baSharedTangentialP2}};
+        QJsonObject intrinsicDelta;
+        for (auto it = intrinsicFinal.constBegin(); it != intrinsicFinal.constEnd(); ++it)
+        {
+            intrinsicDelta.insert(it.key(), it.value().toDouble() - intrinsicReference.value(it.key()).toDouble());
+        }
+        diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_reference_definition"),
+                           QStringLiteral("normalized_stable_calibration_group_reference"));
+        diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_reference"), intrinsicReference);
+        diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_final"), intrinsicFinal);
+        diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_delta"), intrinsicDelta);
         diagnostics.insert(QStringLiteral("ba_backend_message"), QString::fromStdString(sfmResult.baBackendMessage));
         diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),
                            intrinsicSanitization.inspectedCameraCount);
@@ -633,10 +700,8 @@ namespace xjw::aerial_triangulation
         diagnostics.insert(QStringLiteral("project_intrinsic_prior_rejected"), rejectedProjectIntrinsicCount);
         diagnostics.insert(QStringLiteral("input_max_tracks_per_image"), sfmOptions.maxTracksPerImage);
         diagnostics.insert(QStringLiteral("input_max_tracks_per_grid_cell"), sfmOptions.maxTracksPerGridCell);
-        diagnostics.insert(QStringLiteral("input_track_thinning_grid_columns"),
-                           sfmOptions.trackThinningGridColumns);
-        diagnostics.insert(QStringLiteral("input_track_thinning_grid_rows"),
-                           sfmOptions.trackThinningGridRows);
+        diagnostics.insert(QStringLiteral("input_track_thinning_grid_columns"), sfmOptions.trackThinningGridColumns);
+        diagnostics.insert(QStringLiteral("input_track_thinning_grid_rows"), sfmOptions.trackThinningGridRows);
 
         std::vector<double> final_camera_focals;
         if (execution.reconstruction)
@@ -726,7 +791,7 @@ namespace xjw::aerial_triangulation
         const QJsonObject root = document.object();
         const int formatVersion = root.value(QStringLiteral("format_version")).toInt();
         if (root.value(QStringLiteral("format")).toString() != QLatin1String("plascan_tie_points") ||
-            (formatVersion != 1 && formatVersion != 2))
+            (formatVersion < 1 || formatVersion > 3))
         {
             return fail(QStringLiteral("不支持的连接点文件格式或版本"), errorMessage);
         }
@@ -825,21 +890,35 @@ namespace xjw::aerial_triangulation
             {
                 const QJsonValue observationValue = persistedObservationArray.at(persistedIndex);
                 const QJsonObject observationObject = observationValue.toObject();
-                const int persistedImageId = observationObject.value(QStringLiteral("image_id")).toInt(-1);
+                const QJsonArray compactObservation = observationValue.toArray();
+                const bool compact = observationValue.isArray();
+                if (compact && compactObservation.size() < 4)
+                {
+                    continue;
+                }
+                const int persistedImageId = compact ? compactObservation.at(0).toInt(-1)
+                                                     : observationObject.value(QStringLiteral("image_id")).toInt(-1);
                 const qint64 originalFeatureIndex =
-                    observationObject.value(QStringLiteral("feature_idx")).toInteger(-1);
+                    compact ? compactObservation.at(1).toInteger(-1)
+                            : observationObject.value(QStringLiteral("feature_idx")).toInteger(-1);
                 const QJsonArray xy = observationObject.value(QStringLiteral("xy")).toArray();
-                if (!selectedIdByPersistedId.contains(persistedImageId) || originalFeatureIndex < 0 || xy.size() < 2)
+                if (!selectedIdByPersistedId.contains(persistedImageId) || originalFeatureIndex < 0 ||
+                    (!compact && xy.size() < 2))
                 {
                     continue;
                 }
 
-                const double x = xy.at(0).toDouble(std::numeric_limits<double>::quiet_NaN());
-                const double y = xy.at(1).toDouble(std::numeric_limits<double>::quiet_NaN());
-                const double scale = observationObject.contains(QStringLiteral("scale"))
-                    ? observationObject.value(QStringLiteral("scale")).toDouble(
-                          std::numeric_limits<double>::quiet_NaN())
-                    : std::numeric_limits<double>::quiet_NaN();
+                const double x =
+                    (compact ? compactObservation.at(2) : xy.at(0)).toDouble(std::numeric_limits<double>::quiet_NaN());
+                const double y =
+                    (compact ? compactObservation.at(3) : xy.at(1)).toDouble(std::numeric_limits<double>::quiet_NaN());
+                const double persistedScale =
+                    compact && compactObservation.size() >= 5
+                        ? compactObservation.at(4).toDouble(std::numeric_limits<double>::quiet_NaN())
+                    : observationObject.contains(QStringLiteral("scale"))
+                        ? observationObject.value(QStringLiteral("scale"))
+                              .toDouble(std::numeric_limits<double>::quiet_NaN())
+                        : std::numeric_limits<double>::quiet_NaN();
                 if (!std::isfinite(x) || !std::isfinite(y))
                 {
                     continue;
@@ -853,6 +932,7 @@ namespace xjw::aerial_triangulation
                 {
                     compactIndex = static_cast<FeatureIdx>(graph->keypointsByImage[imageId].size());
                     indexMap.insert(originalKey, compactIndex);
+                    const double scale = std::isfinite(persistedScale) && persistedScale > 0.0 ? persistedScale : 1.0;
                     graph->keypointsByImage[imageId].push_back(
                         {static_cast<float>(x), static_cast<float>(y), static_cast<float>(scale)});
                 }
@@ -875,6 +955,15 @@ namespace xjw::aerial_triangulation
             {
                 continue;
             }
+
+            Track track;
+            track.confidence = confidence;
+            track.elements.reserve(observations.size());
+            for (const ParsedObservation& observation : observations)
+            {
+                track.elements.push_back({observation.imageId, observation.featureIndex});
+            }
+            graph->tracks.push_back(std::move(track));
 
             bool addedTrackEdge = false;
             if (formatVersion >= 2)
@@ -917,13 +1006,11 @@ namespace xjw::aerial_triangulation
                     }
                 }
             }
-            if (addedTrackEdge)
-            {
-                ++graph->trackCount;
-            }
+            (void)addedTrackEdge;
         }
 
-        if (graph->trackCount <= 0 || graph->matchPairs.empty())
+        graph->trackCount = static_cast<int>(graph->tracks.size());
+        if (graph->tracks.empty() || graph->matchPairs.empty())
         {
             return fail(QStringLiteral("连接点文件中没有可用于 SfM 的多视图轨迹"), errorMessage);
         }

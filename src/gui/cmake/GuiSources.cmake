@@ -32,6 +32,8 @@ set(GUI_SOURCES
   platform/TaskbarProgressController.cpp
   runtime/PythonRuntimeManager.cpp
   runtime/GeospatialRuntimePaths.cpp
+  runtime/BrowserDebugBridge.cpp
+  runtime/TaskRuntimeService.cpp
   project/services/MetashapeCameraReferenceImporter.cpp
   reference/CameraReferenceController.cpp
   reference/CameraReferenceCsvExporter.cpp
@@ -54,6 +56,7 @@ set(GUI_SOURCES
   markers/MarkerDetectionReviewDialog.cpp
   markers/PrintMarkersDialog.cpp
   panels/LogPanel.cpp
+  panels/LogEntryModel.cpp
   views/DepthOverlayData.cpp
   widgets/DepthOverlayController.cpp
   views/LayerFeatureLoader.cpp

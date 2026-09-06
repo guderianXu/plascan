@@ -32,8 +32,9 @@ int main(int argc, char* argv[])
     std::string rightImageArg;
     std::string outputDirectoryArg;
     std::string enginePathArg;
-    std::string algorithmIdArg = "auto_sift";
+    std::string algorithmIdArg = "plamatch_hct";
     std::string deviceArg = "auto";
+    std::string qualityArg = "high";
     int maxKeypoints = 40000;
     int maxImageDim = 0;
     int cudaDevice = 0;
@@ -51,13 +52,14 @@ int main(int argc, char* argv[])
     app.add_option("-m,--model",
                    enginePathArg,
                    "算法模型资源：LightGlue .onnx/本机 .engine 或 LoMa-R JSON 清单；"
-                   "Auto SIFT 无需模型");
-    app.add_option("-a,--algorithm-id",
-                   algorithmIdArg,
-                   "统一影像匹配算法 ID: auto_sift, orb_binary, sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"auto_sift", "orb_binary", "sift_lightglue", "loma_r"}));
+                   "Auto SIFT 与 PlaMatch-HCT 无需模型");
+    app.add_option(
+           "-a,--algorithm-id", algorithmIdArg, "统一影像匹配算法 ID: auto_sift, plamatch_hct, sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"auto_sift", "plamatch_hct", "sift_lightglue", "loma_r"}));
     app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大关键点数");
     app.add_option("--max-image-dim", maxImageDim, "提取输入最长边，0 表示保持原始分辨率");
+    app.add_option("--quality", qualityArg, "对齐精度: highest, high, medium, low, lowest (downscale 0/1/2/4/8)")
+        ->check(CLI::IsMember({"highest", "high", "medium", "low", "lowest"}));
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda, opencl, metal")
         ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl", "metal"}));
@@ -95,6 +97,7 @@ int main(int argc, char* argv[])
     xjw::matchphotos::MatchPhotosOptions options;
     options.algorithmId = QString::fromStdString(algorithmIdArg).trimmed().toLower();
     options.profile = xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
+    options.accuracy = xjw::matchphotos::alignmentAccuracyFromName(QString::fromStdString(qualityArg));
     if (deviceArg == "cpu")
     {
         options.device = xjw::matchphotos::ComputeDevice::Cpu;

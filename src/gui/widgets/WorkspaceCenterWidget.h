@@ -7,8 +7,8 @@
 
 #include "graph/ObservationNetworkBuilder.h"
 
-class QPushButton;
 class QStackedWidget;
+class QTabBar;
 class CanvasWidget;
 class CameraSceneWidget;
 class ObservationNetworkView;
@@ -61,13 +61,12 @@ public slots:
     void clearProjectView();
 
 private:
+    void activateView(int index);
+    void setDocumentTab(int index, const QString& text, const QString& tooltip, bool visible = true);
     void refreshModelFromMeta(const QJsonObject &meta);
 
     Ui::WorkspaceCenterWidget *_ui = nullptr;
-    QPushButton *_modelBtn = nullptr;
-    QPushButton *_imageBtn = nullptr;
-    QPushButton *_compareBtn = nullptr;
-    QPushButton *_obsNetBtn = nullptr;
+    QTabBar* _documentTabs = nullptr;
     QStackedWidget *_stack = nullptr;
     CameraSceneWidget *_modelView = nullptr;
     CanvasWidget *_canvas = nullptr;

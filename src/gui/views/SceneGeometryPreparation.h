@@ -23,6 +23,8 @@
 using SceneRenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 using PointVertexIndex = std::uint32_t;
 
+inline constexpr qint64 kDefaultMaximumVisiblePointCount = 5'000'000;
+
 struct CloudSpatialSummary
 {
     QVector3D center;
@@ -49,10 +51,8 @@ struct PointRenderChunkPreparation
 
     bool isValid() const
     {
-        return pointCount > 0
-            && sourceIndices.size() == pointCount
-            && !vertexData.isEmpty()
-            && scalarData.size() == pointCount * int(sizeof(float));
+        return pointCount > 0 && sourceIndices.size() == pointCount && !vertexData.isEmpty() &&
+               scalarData.size() == pointCount * int(sizeof(float));
     }
 };
 
@@ -86,10 +86,8 @@ struct PointSelectionPreparation
 
     bool isValid() const
     {
-        return pointCount > 0
-            && indices.size() == static_cast<std::size_t>(pointCount)
-            && !vertexData.isEmpty()
-            && scalarData.size() == pointCount * int(sizeof(float));
+        return pointCount > 0 && indices.size() == static_cast<std::size_t>(pointCount) && !vertexData.isEmpty() &&
+               scalarData.size() == pointCount * int(sizeof(float));
     }
 };
 
@@ -107,81 +105,72 @@ struct ScreenSelectionRegion
     QPolygonF polygon;
 };
 
-CloudSpatialSummary prepareCloudSpatialSummary(
-    const SceneRenderCloud &cloud,
-    const std::atomic_bool *cancellationFlag = nullptr);
+CloudSpatialSummary prepareCloudSpatialSummary(const SceneRenderCloud& cloud,
+                                               const std::atomic_bool* cancellationFlag = nullptr);
 
-PointRenderPreparation preparePointRenderData(
-    const SceneRenderCloud &cloud,
-    const QVector<int> &imageCounts = {},
-    const std::atomic_bool *cancellationFlag = nullptr);
+PointRenderPreparation preparePointRenderData(const SceneRenderCloud& cloud,
+                                              const QVector<int>& imageCounts = {},
+                                              const std::atomic_bool* cancellationFlag = nullptr);
 
-QVector<PointRenderChunkPreparation> preparePointRenderChunks(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const QByteArray &scalarData,
-    const CloudSpatialSummary &spatialSummary,
-    int maximumPointsPerChunk = 262'144,
-    int minimumPointCountForChunking = 524'288,
-    const std::atomic_bool *cancellationFlag = nullptr);
+QVector<PointRenderChunkPreparation> preparePointRenderChunks(const QByteArray& vertexData,
+                                                              int strideBytes,
+                                                              const QByteArray& scalarData,
+                                                              const CloudSpatialSummary& spatialSummary,
+                                                              int maximumPointsPerChunk = 262'144,
+                                                              int minimumPointCountForChunking = 524'288,
+                                                              const std::atomic_bool* cancellationFlag = nullptr);
 
-PointRenderPlan planPointRenderChunks(
-    const QVector<PointRenderChunkPreparation> &chunks,
-    const QMatrix4x4 &clipMatrix,
-    const QSize &viewportSize,
-    float pointDiameterPixels,
-    qint64 maximumVisiblePoints = 3'000'000);
+PointRenderPlan planPointRenderChunks(const QVector<PointRenderChunkPreparation>& chunks,
+                                      const QMatrix4x4& clipMatrix,
+                                      const QSize& viewportSize,
+                                      float pointDiameterPixels,
+                                      qint64 maximumVisiblePoints = kDefaultMaximumVisiblePointCount);
 
 QByteArray preparePointScalarData(std::size_t pointCount,
-                                  const QVector<int> &imageCounts,
-                                  xjw::gui::tie_points::ScalarRange *range = nullptr,
-                                  const std::atomic_bool *cancellationFlag = nullptr);
+                                  const QVector<int>& imageCounts,
+                                  xjw::gui::tie_points::ScalarRange* range = nullptr,
+                                  const std::atomic_bool* cancellationFlag = nullptr);
 
-std::vector<PointVertexIndex> selectPointVertexIndices(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const QRect &screenRect,
-    const QMatrix4x4 &clipMatrix,
-    const QSize &viewportSize,
-    const QPointF &sceneOffset,
-    const std::atomic_bool *cancellationFlag = nullptr);
+std::vector<PointVertexIndex> selectPointVertexIndices(const QByteArray& vertexData,
+                                                       int strideBytes,
+                                                       const QRect& screenRect,
+                                                       const QMatrix4x4& clipMatrix,
+                                                       const QSize& viewportSize,
+                                                       const QPointF& sceneOffset,
+                                                       const std::atomic_bool* cancellationFlag = nullptr);
 
-std::vector<PointVertexIndex> selectPointVertexIndices(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const ScreenSelectionRegion &region,
-    const QMatrix4x4 &clipMatrix,
-    const QSize &viewportSize,
-    const QPointF &sceneOffset,
-    const std::atomic_bool *cancellationFlag = nullptr);
+std::vector<PointVertexIndex> selectPointVertexIndices(const QByteArray& vertexData,
+                                                       int strideBytes,
+                                                       const ScreenSelectionRegion& region,
+                                                       const QMatrix4x4& clipMatrix,
+                                                       const QSize& viewportSize,
+                                                       const QPointF& sceneOffset,
+                                                       const std::atomic_bool* cancellationFlag = nullptr);
 
-PointSelectionPreparation preparePointSelection(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const QByteArray &scalarData,
-    const QRect &screenRect,
-    const QMatrix4x4 &clipMatrix,
-    const QSize &viewportSize,
-    const QPointF &sceneOffset,
-    std::size_t maximumCompactPointCount =
-        std::numeric_limits<std::size_t>::max(),
-    const std::atomic_bool *cancellationFlag = nullptr);
+PointSelectionPreparation
+preparePointSelection(const QByteArray& vertexData,
+                      int strideBytes,
+                      const QByteArray& scalarData,
+                      const QRect& screenRect,
+                      const QMatrix4x4& clipMatrix,
+                      const QSize& viewportSize,
+                      const QPointF& sceneOffset,
+                      std::size_t maximumCompactPointCount = std::numeric_limits<std::size_t>::max(),
+                      const std::atomic_bool* cancellationFlag = nullptr);
 
-PointSelectionPreparation preparePointSelection(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const QByteArray &scalarData,
-    const ScreenSelectionRegion &region,
-    const QMatrix4x4 &clipMatrix,
-    const QSize &viewportSize,
-    const QPointF &sceneOffset,
-    std::size_t maximumCompactPointCount =
-        std::numeric_limits<std::size_t>::max(),
-    const std::atomic_bool *cancellationFlag = nullptr);
+PointSelectionPreparation
+preparePointSelection(const QByteArray& vertexData,
+                      int strideBytes,
+                      const QByteArray& scalarData,
+                      const ScreenSelectionRegion& region,
+                      const QMatrix4x4& clipMatrix,
+                      const QSize& viewportSize,
+                      const QPointF& sceneOffset,
+                      std::size_t maximumCompactPointCount = std::numeric_limits<std::size_t>::max(),
+                      const std::atomic_bool* cancellationFlag = nullptr);
 
-PointSelectionPreparation prepareIndexedPointSelection(
-    const QByteArray &vertexData,
-    int strideBytes,
-    const QByteArray &scalarData,
-    const std::vector<PointVertexIndex> &indices,
-    const std::atomic_bool *cancellationFlag = nullptr);
+PointSelectionPreparation prepareIndexedPointSelection(const QByteArray& vertexData,
+                                                       int strideBytes,
+                                                       const QByteArray& scalarData,
+                                                       const std::vector<PointVertexIndex>& indices,
+                                                       const std::atomic_bool* cancellationFlag = nullptr);

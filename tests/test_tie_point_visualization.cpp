@@ -25,6 +25,18 @@ using xjw::gui::tie_points::pointSizeForMode;
 using xjw::gui::tie_points::queryPruneCandidates;
 using xjw::gui::tie_points::scalarRampColor;
 
+QJsonObject cleanTiePointMetrics(double reprojectionError,
+                                 double reconstructionUncertainty,
+                                 int imageCount,
+                                 double projectionAccuracy)
+{
+    return QJsonObject{{QStringLiteral("reprojection_error"), reprojectionError},
+                       {QStringLiteral("has_projection_geometry"), true},
+                       {QStringLiteral("reconstruction_uncertainty"), reconstructionUncertainty},
+                       {QStringLiteral("image_count"), imageCount},
+                       {QStringLiteral("projection_accuracy"), projectionAccuracy}};
+}
+
 TEST(TiePointVisualizationTest, ElevationRunsFromBlueLowToRedHigh)
 {
     const ScalarRange range{-5.0, -1.0};
@@ -116,22 +128,24 @@ TEST(TiePointVisualizationTest, LoadsAllQualityFieldsInOriginalPointOrder)
     const QString path = directory.filePath(QStringLiteral("quality.json"));
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-    const QJsonArray points{
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
-                    {QStringLiteral("reconstruction_uncertainty"), 5.0},
-                    {QStringLiteral("track_len"), 8},
-                    {QStringLiteral("projection_accuracy"), 1.0},
-                    {QStringLiteral("min_tri_angle_deg"), 6.0}},
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
-                    {QStringLiteral("reconstruction_uncertainty"), 15.0},
-                    {QStringLiteral("track_len"), 2},
-                    {QStringLiteral("projection_accuracy"), 3.0},
-                    {QStringLiteral("min_tri_angle_deg"), 1.5}},
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 1.2},
-                    {QStringLiteral("reconstruction_uncertainty"), 7.0},
-                    {QStringLiteral("track_len"), 4},
-                    {QStringLiteral("projection_accuracy"), 1.5},
-                    {QStringLiteral("min_tri_angle_deg"), 3.0}}};
+    const QJsonArray points{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+                                        {QStringLiteral("reconstruction_uncertainty"), 5.0},
+                                        {QStringLiteral("track_len"), 99},
+                                        {QStringLiteral("projection_accuracy"), 1.0},
+                                        {QStringLiteral("clean_tie_points"), cleanTiePointMetrics(0.4, 5.0, 8, 1.0)},
+                                        {QStringLiteral("min_tri_angle_deg"), 6.0}},
+                            QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+                                        {QStringLiteral("reconstruction_uncertainty"), 15.0},
+                                        {QStringLiteral("track_len"), 2},
+                                        {QStringLiteral("projection_accuracy"), 3.0},
+                                        {QStringLiteral("clean_tie_points"), cleanTiePointMetrics(2.5, 15.0, 2, 3.0)},
+                                        {QStringLiteral("min_tri_angle_deg"), 1.5}},
+                            QJsonObject{{QStringLiteral("rms_reproj_px"), 1.2},
+                                        {QStringLiteral("reconstruction_uncertainty"), 7.0},
+                                        {QStringLiteral("track_len"), 4},
+                                        {QStringLiteral("projection_accuracy"), 1.5},
+                                        {QStringLiteral("clean_tie_points"), cleanTiePointMetrics(1.2, 7.0, 4, 1.5)},
+                                        {QStringLiteral("min_tri_angle_deg"), 3.0}}};
     file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
                    .toJson(QJsonDocument::Compact));
     file.close();
@@ -156,6 +170,53 @@ TEST(TiePointVisualizationTest, LoadsAllQualityFieldsInOriginalPointOrder)
     EXPECT_DOUBLE_EQ(metadata.projectionAccuracyRange.maximum, 3.0);
 }
 
+TEST(TiePointVisualizationTest, LoadsInfiniteReferenceUncertaintyWithoutExpandingSliderRange)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("singular_quality.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    QJsonObject singular = cleanTiePointMetrics(0.5, 5.0, 3, 1.0);
+    singular.remove(QStringLiteral("reconstruction_uncertainty"));
+    singular[QStringLiteral("reconstruction_uncertainty_infinite")] = true;
+    const QJsonArray points{
+        QJsonObject{{QStringLiteral("track_len"), 3},
+                    {QStringLiteral("clean_tie_points"), cleanTiePointMetrics(0.5, 5.0, 3, 1.0)}},
+        QJsonObject{{QStringLiteral("track_len"), 3}, {QStringLiteral("clean_tie_points"), singular}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}}).toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+    ASSERT_TRUE(metadata.hasCriterion(QualityCriterion::ReconstructionUncertainty, 2));
+    EXPECT_DOUBLE_EQ(metadata.reconstructionUncertaintyRange.minimum, 5.0);
+    EXPECT_DOUBLE_EQ(metadata.reconstructionUncertaintyRange.maximum, 5.0);
+    const auto candidates = queryPruneCandidates(metadata, {QualityCriterion::ReconstructionUncertainty, 10.0}, 2);
+    ASSERT_TRUE(candidates.succeeded());
+    EXPECT_EQ(candidates.indices, (std::vector<std::uint32_t>{1U}));
+}
+
+TEST(TiePointVisualizationTest, DoesNotTreatLegacyMetricsAsReferenceCleanMetrics)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("legacy_quality.json"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const QJsonArray points{QJsonObject{{QStringLiteral("rms_reproj_px"), 2.0},
+                                        {QStringLiteral("reconstruction_uncertainty"), 15.0},
+                                        {QStringLiteral("track_len"), 2},
+                                        {QStringLiteral("projection_accuracy"), 3.0}}};
+    file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}}).toJson(QJsonDocument::Compact));
+    file.close();
+
+    const QualityMetadata metadata = loadQualityMetadata(path);
+    EXPECT_FALSE(metadata.hasCriterion(QualityCriterion::ReprojectionError, 1));
+    EXPECT_FALSE(metadata.hasCriterion(QualityCriterion::ReconstructionUncertainty, 1));
+    EXPECT_TRUE(metadata.hasCriterion(QualityCriterion::ImageCount, 1));
+    EXPECT_FALSE(metadata.hasCriterion(QualityCriterion::ProjectionAccuracy, 1));
+}
+
 TEST(TiePointVisualizationTest, KeepsAvailableCriteriaWhenOneFieldIsMissing)
 {
     QTemporaryDir directory;
@@ -164,9 +225,9 @@ TEST(TiePointVisualizationTest, KeepsAvailableCriteriaWhenOneFieldIsMissing)
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     const QJsonArray points{
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 0.4}}},
                     {QStringLiteral("track_len"), 8}},
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 2.5}}},
                     {QStringLiteral("track_len"), 2}}};
     file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
                    .toJson(QJsonDocument::Compact));
@@ -193,9 +254,9 @@ TEST(TiePointVisualizationTest, MissingImageCountKeepsReprojectionPreviewAvailab
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     const QJsonArray points{
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 0.4}}},
                     {QStringLiteral("min_tri_angle_deg"), 6.0}},
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 2.5},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 2.5}}},
                     {QStringLiteral("min_tri_angle_deg"), 1.5}}};
     file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
                    .toJson(QJsonDocument::Compact));
@@ -220,10 +281,10 @@ TEST(TiePointVisualizationTest, ZeroPlaceholderAnglesAreNotOfferedForCleaning)
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     const QJsonArray points{
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.4},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 0.4}}},
                     {QStringLiteral("track_len"), 3},
                     {QStringLiteral("min_tri_angle_deg"), 0.0}},
-        QJsonObject{{QStringLiteral("rms_reproj_px"), 0.8},
+        QJsonObject{{QStringLiteral("clean_tie_points"), QJsonObject{{QStringLiteral("reprojection_error"), 0.8}}},
                     {QStringLiteral("track_len"), 4},
                     {QStringLiteral("min_tri_angle_deg"), 0.0}}};
     file.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
@@ -244,7 +305,7 @@ TEST(TiePointVisualizationTest, QueriesPruneCandidatesWithCriterionDirection)
     metadata.sourcePointCount = 4;
     metadata.reprojectionErrors = {0.4, 2.5, 1.2, 3.0};
     metadata.reconstructionUncertainties = {5.0, 15.0, 7.0, 20.0};
-    metadata.imageCounts = {8, 2, 4, 1};
+    metadata.imageCounts = {8, 3, 4, 1};
     metadata.projectionAccuracies = {1.0, 3.0, 1.5, 4.0};
     metadata.minimumTriangulationAngles = {6.0, 1.5, 3.0, 0.5};
 
@@ -272,6 +333,21 @@ TEST(TiePointVisualizationTest, QueriesPruneCandidatesWithCriterionDirection)
     ASSERT_TRUE(angle.succeeded());
     EXPECT_EQ(angle.candidateCount, 2);
     EXPECT_EQ(angle.indices, (std::vector<std::uint32_t>{1U, 3U}));
+}
+
+TEST(TiePointVisualizationTest, ReferenceThresholdsAreStrictExceptInclusiveImageCount)
+{
+    QualityMetadata metadata;
+    metadata.sourcePointCount = 1;
+    metadata.reprojectionErrors = {2.0};
+    metadata.reconstructionUncertainties = {10.0};
+    metadata.imageCounts = {2};
+    metadata.projectionAccuracies = {3.0};
+
+    EXPECT_EQ(queryPruneCandidates(metadata, {QualityCriterion::ReprojectionError, 2.0}, 1).candidateCount, 0);
+    EXPECT_EQ(queryPruneCandidates(metadata, {QualityCriterion::ReconstructionUncertainty, 10.0}, 1).candidateCount, 0);
+    EXPECT_EQ(queryPruneCandidates(metadata, {QualityCriterion::ProjectionAccuracy, 3.0}, 1).candidateCount, 0);
+    EXPECT_EQ(queryPruneCandidates(metadata, {QualityCriterion::ImageCount, 2.0}, 1).candidateCount, 1);
 }
 
 TEST(TiePointVisualizationTest, BoundsLargeCandidateResultsWithStableEvenSampling)

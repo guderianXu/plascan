@@ -76,6 +76,24 @@ flowchart LR
 
 投影精度当前仍写入 sidecar，但没有自动设硬阈值。PlaScan 的该值来自特征尺度均值，尚未证明与 Metashape 的 Projection Accuracy 数值同标度；未经标定直接套用 2 或 3 会误删大尺度但稳定的 SIFT 特征。
 
+### 交互式 Clean Tie Points 参考算法（2026-09-04）
+
+交互式“清理连接点”另存一套与“对齐照片”参考工程一致的逐点指标，不复用
+上述自动发布门控的 RMS 和尺度加权不确定度：
+
+- 重投影误差为全部有效已对齐观测中 `像素残差范数 / 关键点尺度` 的最大值，尺度恰为 0 时按 1 处理；
+- 重建不确定度固定相机参数，以 PlaScan Brown-Conrady 投影的解析点雅可比构造无尺度权重的
+  `H = Σ(JᵀJ)`，结果为 `sqrt(σmax / σmin)`；奇异几何按无穷大参与选择；
+- Image Count 使用有效观测数，删除条件为 `count <= level`；其余三个高值判据均使用严格 `>`；
+- Projection Accuracy 为原始关键点尺度的算术平均。
+
+正式空三 sidecar 在根级写入
+`clean_tie_points_metric_contract = "metashape-2.3.2-build-22956"`，并在每个点的
+`clean_tie_points` 对象中保存四项指标。旧 sidecar 缺少该对象时不会把
+`rms_reproj_px` 或旧 `reconstruction_uncertainty` 静默解释成参考算法结果，需要重新运行空中三角测量。
+GUI 的预览、分批暂删和最终后台写出读取同一套指标；删除仍生成版本化稀疏点云成果，不自动重新执行 BA。
+此外，`min_tri_angle_deg` 已改为真实最小相机射线夹角，自动发布策略继续使用原有最大夹角字段，二者不再混写。
+
 上述成熟网络门限只在 `quality >= 2` 且已注册相机数不少于 8 时启用；小网络继续使用较宽门限和两视图组合检查。每次结果都会在 `sfmDiagnostics.sparse_point_cleanup` 写出重建点数、指标完整点数、发布点数，以及按重投影、轨长、交会角、不确定度、弱两视图和空间孤立分别删除的数量。
 
 ## Evidence → Finding → Path

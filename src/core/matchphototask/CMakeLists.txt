@@ -10,8 +10,8 @@ add_library(matchphototask STATIC
     pair_selection/PairSelectionPolicy.h
     pair_selection/PairSelector.cpp
     pair_selection/PairSelector.h
-    pair_selection/SparseSceneOverlapAnalyzer.cpp
-    pair_selection/SparseSceneOverlapAnalyzer.h
+    pair_selection/PlaMatchHctPairPreselector.cpp
+    pair_selection/PlaMatchHctPairPreselector.h
     pair_selection/PairTypes.cpp
     pair_selection/PairTypes.h
     runtime/MatchPhotosRuntime.cpp
@@ -56,14 +56,12 @@ target_include_directories(matchphototask PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/tie_points
     ${CMAKE_CURRENT_SOURCE_DIR}/task
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../overlap
     ${CMAKE_CURRENT_SOURCE_DIR}/../image_matching
     ${CMAKE_CURRENT_SOURCE_DIR}/../sfm
 )
 
 target_link_libraries(matchphototask PUBLIC
     Qt6::Core
-    overlap
     image_matching
     plascan_common_io
     plascan_common_model

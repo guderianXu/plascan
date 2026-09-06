@@ -1,6 +1,7 @@
 ﻿#include "MatchPhotosAlgorithmSelector.h"
 
 #include "ImageMatchingRegistry.h"
+#include "plamatch_hct/PlaMatchHctAlgorithm.h"
 #include "sift/AutoSiftAlgorithm.h"
 
 #include <algorithm>
@@ -46,6 +47,24 @@ bool shouldPreferCuda(const MatchPhotosOptions &options)
     // Auto 表示优先使用可用加速设备，而不是默认 CPU。运行阶段会解析实际后端；
     // 用户显式选择任一设备时都不允许静默替换。
     return true;
+}
+
+image_matching::SiftComputeBackend plaMatchRequestedBackend(ComputeDevice device)
+{
+    switch (device)
+    {
+    case ComputeDevice::Auto:
+        return image_matching::SiftComputeBackend::Automatic;
+    case ComputeDevice::Cpu:
+        return image_matching::SiftComputeBackend::Cpu;
+    case ComputeDevice::Cuda:
+        return image_matching::SiftComputeBackend::Cuda;
+    case ComputeDevice::OpenCl:
+        return image_matching::SiftComputeBackend::OpenCl;
+    case ComputeDevice::Metal:
+        return image_matching::SiftComputeBackend::Metal;
+    }
+    return image_matching::SiftComputeBackend::Automatic;
 }
 
 int defaultMaxKeypoints(MatchPhotosProfile profile)
@@ -98,10 +117,12 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.algorithmId = options.algorithmId.trimmed().toLower();
     if (plan.algorithmId.isEmpty())
     {
-        plan.algorithmId = QStringLiteral("auto_sift");
+        plan.algorithmId = QStringLiteral("plamatch_hct");
     }
-    plan.strategyId = QStringLiteral("metashape_like_%1_%2")
-                          .arg(profileId(options.profile), plan.algorithmId);
+    plan.strategyId = QStringLiteral("metashape_like_%1_%2_%3")
+                          .arg(profileId(options.profile),
+                               alignmentAccuracyName(options.accuracy),
+                               plan.algorithmId);
 
     // 注册表是算法扩展的唯一入口。选择器不再维护独立的 if/else 工厂列表，
     // 因而新算法不会迫使 GUI、空三或缓存格式同步增加自由字符串分支。
@@ -126,32 +147,56 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.executionBackend = descriptor->requiresCuda
         ? image_matching::SiftComputeBackend::Cuda
         : image_matching::SiftComputeBackend::Automatic;
-    plan.extractsFeaturesInMemory =
-        descriptor->inputModel == image_matching::AlgorithmInputModel::ReusableFeatures;
+    plan.extractsFeaturesInMemory = descriptor->inputModel == image_matching::AlgorithmInputModel::ReusableFeatures;
     plan.requiresColorInput = descriptor->requiresColorInput;
-    if (plan.requiresCuda && options.device != ComputeDevice::Auto &&
-        options.device != ComputeDevice::Cuda)
+    plan.suppliesCoarsePairPreselection = descriptor->suppliesCoarsePairPreselection;
+    plan.supportsBatchFeatureMatching = descriptor->supportsBatchFeatureMatching;
+    if (plan.requiresCuda && options.device != ComputeDevice::Auto && options.device != ComputeDevice::Cuda)
     {
-        plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用当前计算设备")
-                                   .arg(plan.displayName);
+        plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用当前计算设备").arg(plan.displayName);
         return plan;
     }
     plan.valid = true;
     plan.preferCuda = shouldPreferCuda(options);
     plan.rotationRobust = true;
-    // 引导策略是用户可见的显式三态。质量档只调整数值预算，不能覆盖该策略，
+    // 引导策略是用户可见的显式三态。性能 profile 与五档 Accuracy 都不能覆盖该策略，
     // 否则匹配 sidecar 与后续 SfM 的缓存契约会出现同一任务内不一致。
     plan.guidedMatchingMode = options.guidedMatchingMode;
+    plan.alignmentDownscale = alignmentAccuracyDownscale(options.accuracy);
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.siftDetectionThreshold = resolveSiftDetectionThreshold(options.profile);
     plan.siftContrastThreshold = resolveSiftContrastThreshold(options.profile);
-    plan.lowTextureRecovery =
-        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) &&
-        options.profile != MatchPhotosProfile::Fast;
+    plan.lowTextureRecovery = plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) &&
+                              options.profile != MatchPhotosProfile::Fast;
+    if (plan.algorithmId == QLatin1String(image_matching::kPlaMatchHctAlgorithmId))
+    {
+        const bool force_cpu_profile =
+            options.device == ComputeDevice::Auto && options.profile == MatchPhotosProfile::CpuCompatible;
+        const image_matching::PlaMatchHctBackendResolution resolution = image_matching::resolvePlaMatchHctBackend(
+            force_cpu_profile ? image_matching::SiftComputeBackend::Cpu : plaMatchRequestedBackend(options.device),
+            options.cudaDevice);
+        if (!resolution.valid)
+        {
+            plan.valid = false;
+            plan.validationError = resolution.errorMessage;
+            return plan;
+        }
+        plan.executionBackend = resolution.backend;
+        plan.preferCuda = resolution.backend == image_matching::SiftComputeBackend::Cuda;
+        plan.backendFallback =
+            options.device == ComputeDevice::Auto && resolution.backend == image_matching::SiftComputeBackend::Cpu;
+        plan.computeDeviceName = resolution.deviceName;
+        plan.computeDeviceDisplayName = resolution.displayName;
+        plan.backendReason = QStringLiteral("PlaMatch-HCT 计算设备：%1").arg(resolution.displayName);
+    }
     if (plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId))
     {
         plan.featureSchemaVersion = 3;
+    }
+    else if (plan.algorithmId == QLatin1String(image_matching::kPlaMatchHctAlgorithmId))
+    {
+        plan.featureSchemaVersion = 2;
     }
     plan.reason = QStringLiteral("%1 在任务内存中提取并匹配特征；只持久化最终 "
                                  ".pimatch 观测，不写中间特征文件。")
@@ -159,11 +204,11 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     return plan;
 }
 
-MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::resolveExecutionBackend(
-    const MatchPhotosOptions &options,
-    MatchPhotosAlgorithmPlan plan,
-    image_matching::SiftComputeBackend resolvedBackend,
-    int deviceIndex)
+MatchPhotosAlgorithmPlan
+MatchPhotosAlgorithmSelector::resolveExecutionBackend(const MatchPhotosOptions& options,
+                                                      MatchPhotosAlgorithmPlan plan,
+                                                      image_matching::SiftComputeBackend resolvedBackend,
+                                                      int deviceIndex)
 {
     if (!plan.valid ||
         plan.algorithmId != QLatin1String(image_matching::kAutoSiftAlgorithmId))

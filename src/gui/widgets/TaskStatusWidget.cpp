@@ -5,14 +5,10 @@
 #include <QProgressBar>
 #include <QToolButton>
 
-TaskStatusWidget::TaskStatusWidget(QWidget *parent)
-    : QWidget(parent)
-    , _statusLabel(new QLabel(this))
-    , _detailLabel(new QLabel(this))
-    , _progressBar(new QProgressBar(this))
-    , _cancelButton(new QToolButton(this))
-    , _cancelText(tr("取消"))
-    , _cancellingText(tr("正在取消..."))
+TaskStatusWidget::TaskStatusWidget(QWidget* parent)
+    : QWidget(parent), _statusLabel(new QLabel(this)), _detailLabel(new QLabel(this)),
+      _progressBar(new QProgressBar(this)), _cancelButton(new QToolButton(this)), _cancelText(tr("取消")),
+      _cancellingText(tr("正在取消..."))
 {
     setObjectName(QStringLiteral("taskStatusWidget"));
 
@@ -28,13 +24,14 @@ TaskStatusWidget::TaskStatusWidget(QWidget *parent)
     _progressBar->setRange(0, 100);
     _progressBar->setFixedWidth(200);
     _progressBar->setFixedHeight(16);
-    _progressBar->setTextVisible(false);
+    _progressBar->setFormat(QStringLiteral("%p%"));
+    _progressBar->setTextVisible(true);
 
     _cancelButton->setObjectName(QStringLiteral("cancelButton"));
     _cancelButton->setText(_cancelText);
     _cancelButton->setFixedHeight(18);
 
-    auto *layout = new QHBoxLayout(this);
+    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
     layout->addWidget(_statusLabel);
@@ -42,11 +39,14 @@ TaskStatusWidget::TaskStatusWidget(QWidget *parent)
     layout->addWidget(_progressBar);
     layout->addWidget(_cancelButton);
 
-    connect(_cancelButton, &QToolButton::clicked, this, [this]()
-    {
-        markCancelling();
-        emit cancelRequested();
-    });
+    connect(_cancelButton,
+            &QToolButton::clicked,
+            this,
+            [this]()
+            {
+                markCancelling();
+                emit cancelRequested();
+            });
 
     hide();
 }
@@ -56,7 +56,7 @@ void TaskStatusWidget::setCancellable(bool cancellable)
     _cancelButton->setVisible(cancellable);
 }
 
-void TaskStatusWidget::setCancellingText(const QString &text)
+void TaskStatusWidget::setCancellingText(const QString& text)
 {
     _cancellingText = text;
 }
@@ -66,7 +66,7 @@ void TaskStatusWidget::setLabelMinimumWidth(int width)
     _statusLabel->setMinimumWidth(width);
 }
 
-void TaskStatusWidget::setDetailText(const QString &text)
+void TaskStatusWidget::setDetailText(const QString& text)
 {
     const QString normalized = text.trimmed();
     _detailLabel->setText(normalized);
@@ -74,7 +74,7 @@ void TaskStatusWidget::setDetailText(const QString &text)
     _detailLabel->setVisible(!normalized.isEmpty());
 }
 
-void TaskStatusWidget::begin(const QString &statusText, int minimum, int maximum)
+void TaskStatusWidget::begin(const QString& statusText, int minimum, int maximum)
 {
     if (!_active)
     {
@@ -90,7 +90,7 @@ void TaskStatusWidget::begin(const QString &statusText, int minimum, int maximum
     show();
 }
 
-void TaskStatusWidget::updateProgress(const QString &statusText, int value)
+void TaskStatusWidget::updateProgress(const QString& statusText, int value)
 {
     if (!_active)
     {

@@ -122,16 +122,6 @@ TEST(TriangulatorParamsTest, DefaultsAreTightened)
 
     EXPECT_LE(opts.continueMaxReprojError, 2.5);
     EXPECT_LE(opts.completeMaxReprojError, 2.5);
-    EXPECT_GT(opts.twoViewFragmentMaxReprojError, 0.0);
-    EXPECT_LE(opts.twoViewFragmentMaxReprojError, opts.maxReprojError);
-    EXPECT_GT(opts.twoViewFragmentPixelSigma, 0.0);
-    EXPECT_GT(opts.twoViewFragmentMaxRelativeDepthUncertainty, 0.0);
-    EXPECT_LE(opts.twoViewFragmentMaxRelativeDepthUncertainty, 0.02);
-    EXPECT_TRUE(opts.enableTwoViewLocalDepthConsistency);
-    EXPECT_GT(opts.twoViewLocalDepthRadiusPixels, 0.0);
-    EXPECT_GE(opts.twoViewLocalDepthMinReferences, 3);
-    EXPECT_GT(opts.twoViewLocalDepthMaxMadFraction, 0.0);
-    EXPECT_GT(opts.twoViewLocalDepthMaxDeviation, opts.twoViewLocalDepthMaxMadFraction);
 }
 
 // ─── IncrementalSfm 参数验证 ────────────────────────────────────
@@ -176,11 +166,11 @@ TEST(IncrementalSfmParamsTest, BracketedSequencePnpRequiresAbsoluteGeometricSupp
     EXPECT_LE(opts.bracketedSequencePnpMinInlierRatio, 0.05);
 }
 
-TEST(IncrementalSfmParamsTest, FinalGlobalBaRetriesUnregisteredImages)
+TEST(IncrementalSfmParamsTest, ReferenceFinalGlobalBaDoesNotRetryByDefault)
 {
     const xjw::IncrementalSfmOptions opts;
 
-    EXPECT_TRUE(opts.retryUnregisteredAfterFinalBA);
+    EXPECT_FALSE(opts.retryUnregisteredAfterFinalBA);
     EXPECT_GE(opts.maxFinalRegistrationRetryPasses, 1);
     EXPECT_LE(opts.maxFinalRegistrationRetryPasses, 3);
 }
@@ -550,6 +540,81 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
         ASSERT_TRUE(recovered.projectWorldPoint(worldPoints[index].data(), pixel));
         EXPECT_NEAR(pixel[0], imagePoints[index][0], 1.0e-4);
         EXPECT_NEAR(pixel[1], imagePoints[index][1], 1.0e-4);
+    }
+}
+
+TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
+{
+    const std::array<double, 9> identity{{
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    }};
+    const std::array<double, 3> trueCenter{{0.31, -0.18, 0.42}};
+
+    FramePinholeCamera camera;
+    camera.setIntrinsics(1160.0, 1140.0, 640.0, 480.0);
+    camera.setDistortion(-0.08, 0.015, -0.001, 0.0007, -0.0005);
+    camera.setImageSize(CameraImageSize{1280, 960});
+    camera.setPose(identity, trueCenter);
+
+    std::vector<std::array<double, 3>> worldPoints;
+    std::vector<std::array<double, 2>> imagePoints;
+    worldPoints.reserve(80);
+    imagePoints.reserve(80);
+    for (int index = 0; index < 80; ++index)
+    {
+        const double x = -1.4 + 0.31 * static_cast<double>(index % 10);
+        const double y = -1.0 + 0.29 * static_cast<double>((index / 10) % 8);
+        const double z = 5.0 + 0.17 * static_cast<double>((index * 7) % 11);
+        const std::array<double, 3> world{{x, y, z}};
+        double pixel[2]{};
+        ASSERT_TRUE(camera.projectWorldPoint(world.data(), pixel));
+        worldPoints.push_back(world);
+        imagePoints.push_back({{pixel[0], pixel[1]}});
+    }
+    for (std::size_t index = 68; index < imagePoints.size(); ++index)
+    {
+        imagePoints[index][0] += 170.0 + static_cast<double>(index);
+        imagePoints[index][1] -= 130.0 - static_cast<double>(index);
+    }
+
+    PnpOptions options;
+    options.useReferenceResection = true;
+    options.maxReprojError = 3.0;
+    options.minNumInliers = 5;
+
+    cv::setRNGSeed(23);
+    const PnpResult first = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+    cv::setRNGSeed(987654);
+    for (int index = 0; index < 100; ++index)
+    {
+        static_cast<void>(cv::theRNG().next());
+    }
+    const PnpResult second = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+
+    ASSERT_TRUE(first.success);
+    EXPECT_TRUE(first.usedReferenceResection);
+    EXPECT_EQ(first.ransacIterations, 500);
+    EXPECT_GE(first.referenceThresholdLevel, 0);
+    EXPECT_LT(first.referenceThresholdLevel, 10);
+    EXPECT_EQ(first.numInliers, 68);
+    EXPECT_EQ(first.inlierMask, second.inlierMask);
+    EXPECT_EQ(first.C, second.C);
+    EXPECT_EQ(first.R, second.R);
+    for (std::size_t index = 0; index < trueCenter.size(); ++index)
+    {
+        EXPECT_NEAR(first.C[index], trueCenter[index], 1.0e-5);
+    }
+    for (std::size_t index = 0; index < identity.size(); ++index)
+    {
+        EXPECT_NEAR(first.R[index], identity[index], 1.0e-5);
     }
 }
 

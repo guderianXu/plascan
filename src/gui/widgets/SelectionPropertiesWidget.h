@@ -22,6 +22,9 @@ public slots:
                                 const QString &section,
                                 const QString &resourcePath);
 
+signals:
+    void selectionStateChanged(bool hasSelection);
+
 private:
     struct PropertyRow
     {
@@ -46,4 +49,5 @@ private:
 
     QLabel *_title = nullptr;
     QTableWidget *_table = nullptr;
+    bool _hasSelection = false;
 };

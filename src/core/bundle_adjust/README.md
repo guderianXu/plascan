@@ -34,31 +34,40 @@ AerialTriangulationWorkflow
 
 | 后端 | 三维点 | 相机位姿 | 共享焦距 | 控制约束 | Auto 用途 |
 |------|--------|----------|----------|----------|-----------|
-| Legacy CPU/OpenMP | 支持 | 有限 | 有限 | 有限 | point-only 固定相机问题 |
+| `legacy_cpu` 兼容名 | 映射到 PlaMatrix CPU | 映射到 PlaMatrix CPU | 完整 Brown 分组共享内参 | 全部支持 | 仅用于读取旧工程/CLI 参数 |
 | PlaMatrix CPU/CUDA/OpenCL | 支持 | 支持 | 完整 Brown 分组共享内参 | GCP/LiDAR/比例尺/姿态/激光测距 | 联合 BA 正式后端，按规模自动选择 |
 
 三个 PlaMatrix 后端共用解析 Brown-Conrady 相机、点和
-九参数共享内参雅可比，以及 GCP、LiDAR 平面/测距、比例尺、位姿先验和相机平面约束；只切换
-CPU/CUDA/OpenCL Schur-PCG。CUDA/OpenCL 在设备端装配 Schur CSR 数值并显式报告该路径，设备不可用时
+九参数共享内参雅可比，以及 GCP、LiDAR 平面/测距、比例尺、位姿先验和相机平面约束；参考非线性驱动完全共用，
+仅切换线性求解后端。CPU 使用 PlaMatrix 原生块稀疏 Schur Cholesky，并在同一拓扑的 LM trial 之间复用
+最小度排列、填充图和输入映射。CUDA/OpenCL 使用设备 Schur-PCG。
+CUDA/OpenCL 在设备端装配 Schur CSR 数值并显式报告该路径，设备不可用时
 回退 PlaMatrix CPU；显式禁止回退时返回 `BackendUnavailable`。
 
 ## 性能策略
 
 - PlaMatrix 使用解析 Brown-Conrady 重投影雅可比和约束雅可比；line-scan 投影使用共享有限差分装配。
-- PlaMatrix LM 在一次求解内复用法方程块拓扑、线程局部装配器、轨迹负载分区、Schur pattern 和 trial 状态
-  缓冲；重复迭代只清零数值，不再重建相同容器。CPU 矩阵自由 Schur-PCG 默认使用开销更低的
-  block-Jacobi，保留可配置的 cluster-Jacobi 供特定强耦合网络基准选用；早期 LM 步采用动态非精确线性容差，
-  接近收敛时自动收紧。CPU 容差上限为 `2e-3`，CUDA/OpenCL 上限为 `1e-3`，以保持跨后端结果等价性。
-- 小规模稠密 Schur Cholesky 数值失败时明确记录原因并切换 CPU Schur-PCG；结果分别报告法方程装配、
-  trial 目标函数、状态复制、预条件器、实际线性容差范围和稠密回退次数。
-- point-only 固定相机问题使用 Legacy CPU/OpenMP；小规模联合问题使用 PlaMatrix CPU。达到相机数和
-  观测数门槛时，Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix OpenCL。
+- PlaMatrix 参考驱动在一次求解内复用法方程块拓扑、线程局部装配器、轨迹负载分区、Schur pattern 和 trial
+  状态缓冲；CPU/CUDA/OpenCL 都从零阻尼开始，线性失败才增加阻尼，并使用最多 34 次 Armijo 折半回溯。
+- FullRefinement 的标准摄影测量问题在线完成每个三维点的 3×3 局部阻尼与 Schur 消元，不再把全部
+  camera-point cross 保存到求解器后二次消元。20 个 worker 使用私有块对角/梯度/RHS 和 4 个共享原子
+  非对角槽，且只遍历真正激活的相机/内参标量；求得 primary step 后重新线性化各点完成回代。
+- 在线路径用完整 RHS 与更新向量直接计算方向下降量，按最多 34 次 Armijo 折半决定写回；CUDA/OpenCL
+  在零阻尼 PCG 出现可恢复的 SPD breakdown 时提高阻尼并在原后端重试。GCP、LiDAR、比例尺、位姿先验、
+  相机层约束和独立 BA 继续使用通用块法方程路径。
+- CPU 使用原生块稀疏直接 Schur，并复用 CSR pattern、最小度排列和填充结构。CUDA/OpenCL 使用
+  `1e-12` 目标容差的设备块 Jacobi-PCG。结果分别报告
+  法方程装配、trial 目标函数、状态复制、符号/数值分解、预条件器、实际线性容差和设备求解耗时。
+- point-only、已知位姿和小规模联合问题统一使用参考 PlaMatrix CPU。Auto 按后端独立门槛选择：CUDA
+  常规规模为 128 相机/30000 观测，OpenCL 为 160/50000；120 相机以上的高密度问题分别在
+  150000/200000 观测进入 CUDA/OpenCL。CUDA 仍优先于 OpenCL，显式后端不受这些门槛限制。
 - 层级 BA 的独立块固定使用 PlaMatrix CPU 并发，避免多个并行块争抢同一 GPU 上下文。
 - CUDA 选择依据是完整 setup + solve 墙钟时间和质量门控，不只比较线性求解器内部耗时；小问题不会强制迁移到 GPU。
-- `ba_backend_benchmark` 用于比较 Legacy 和 PlaMatrix CPU/CUDA/OpenCL；
+- `ba_backend_benchmark` 用于比较同一参考驱动的 CPU、CUDA 和 OpenCL 线性后端；`legacy_cpu` 仅是 CPU 别名；
   `aerial_geometry_benchmark` 负责测量空三外围几何阶段，避免把低收益 kernel 接入默认流程。
 - PlaMatrix CPU/CUDA/OpenCL 的同数据数值与耗时对比见
-  `docs/benchmarks/2026-08-19-plamatrix-ba-backend-parity.md`。
+  `docs/benchmarks/2026-08-19-plamatrix-ba-backend-parity.md`；CPU 原生稀疏直接解验证见
+  `docs/benchmarks/2026-09-04-plamatrix-native-sparse-direct.md`。
 
 ## 结果状态与回写
 
@@ -68,8 +77,8 @@ CPU/CUDA/OpenCL Schur-PCG。CUDA/OpenCL 在设备端装配 Schur CSR 数值并�
 - `solutionUsable`：求解器结果是否允许调用方使用。
 - 请求/实际后端、回退标记与原因。
 - 相机、轨迹、观测规模，RMS，setup/solve/postprocess/total 耗时。
-- PlaMatrix 初始/最终鲁棒代价、LM 接受/拒绝步、初始 gross gate、线性后端/设备、PCG 迭代、
-  Schur pattern 构建/复用次数、数值装配位置及耗时。
+- PlaMatrix 初始/最终代价、Armijo 接受/拒绝步、初始 gross gate、线性后端/设备、PCG 迭代、
+  Schur pattern 构建/复用次数、是否命中参考在线 Schur、数值装配位置及耗时。
 
 取消、数值失败或不可用结果不会修改调用方传入的相机和三维点。Auto 先运行一个满足能力和规模条件的
 候选后端，只有状态不可用或 RMS、有效轨迹等质量门控失败时才运行回退后端。SfM 协调层另行记录
@@ -77,11 +86,17 @@ CPU/CUDA/OpenCL Schur-PCG。CUDA/OpenCL 在设备端装配 Schur CSR 数值并�
 
 ## 联合共享内参与自适应模型
 
-PlaMatrix 使用每个标定组一个九参数内参块：`log(fx)`、`log(fy/fx)`、主点偏移、
-`k1/k2/k3/p1/p2`，并使用同一参数掩码、参考标定、边界、弱先验和分阶段释放策略。
+PlaMatrix 使用每个标定组一个九参数内参块：物理像素焦距 `fx`、`log(fy/fx)`、主点偏移、
+`k1/k2/k3/p1/p2`。参考 BA 的 SfM 自标定按传感器分组，并用影像尺寸与焦距构造参数释放过渡先验：
+已激活参数的 sigma 放大 `1e6`，新释放参数的 sigma 缩小到 `0.01`；只有归一化参数变化超过 `0.5`
+才提交到下一轮。它不再运行旧的固定内参预热或三组焦距/k1 多起点预览。
 相机可以有不同初始焦距，但同一相机组在求解后得到同一个焦距。焦距、相机位姿和三维点处于同一个
-PlaMatrix Schur-LM 问题，不使用外层交替更新模拟联合自标定。`cameraCalibrationGroupIds` 可为不同镜头/焦段建立独立参数，
-默认先固定焦距预热几何，再释放各组焦距。默认只释放焦距，不自动释放主点或畸变。
+PlaMatrix Schur 问题，不使用外层交替更新模拟联合自标定。`cameraCalibrationGroupIds` 可为不同镜头/焦段建立独立参数；
+请求的参数在同一参考阶段释放，默认只释放焦距，不自动释放主点或畸变。
+
+焦距 `fx` 在求解状态中直接使用像素单位并执行加法更新，观察雅可比、边界和过渡先验使用同一物理参数；
+不再通过 `log(f)` 的乘法步长改变参考轨迹。自由网尺度相机只保留球面上的两条切向中心自由度，并在每次
+trial 后恢复初始基线半径；固定 9 维块中未启用的坐标由 PlaMatrix 稀疏直接解在有效子空间中等价消除。
 
 空三的 `adaptiveCameraModelFitting` 会把完整 Brown 模型作为允许上限，再由
 `BundleAdjustAdaptiveCameraModel` 从当前粗解逐项选择 `f/aspect/cx/cy/k1/k2/k3/p1/p2`。策略使用与
@@ -92,11 +107,9 @@ PlaMatrix Schur-LM 问题，不使用外层交替更新模拟联合自标定。`
 会换算到统一参考像场，避免固定的普通镜头半径门槛把本可观测的低阶畸变永久冻结。`k2/k3` 仍要求足够大的绝对
 归一化半径和汇聚几何，防止高阶参数在平行航带中吸收地形穹顶。该尺度作为单独 BA 选项应用，不会在多轮 BA 中复合。
 证据不足时保持 `fixed`；调用方已有的逐参数掩码始终作为不可越过的上限。
-多起点预览、完整精化及多轮重三角化可以继承上一轮数值初值，但焦距/宽高比/主点边界和全部内参弱先验
-始终相对稳定的 `sharedIntrinsicReferenceCameras`，不会把相对范围逐轮复合放大。`IncrementalSfm::run()`
-在整个生命周期内按影像 ID 保存首次有效参考，周期性、最终及重试全局 BA 共用同一锚点；单次迭代的大型
-自标定多起点只在首轮执行。逐参数掩码在 PlaMatrix 与 Legacy 焦距路径中使用同一生效判定，Legacy 会先把越界 warm start
-投影回稳定焦距范围，并拒绝把多标定组或扩展模型静默合并成不等价的单组焦距解。
+多轮重三角化继承上一轮数值初值，但焦距/宽高比/主点边界始终相对稳定的
+`sharedIntrinsicReferenceCameras`，不会逐轮复合放大。`IncrementalSfm::run()` 按影像 ID 保存首次有效参考，
+并持续携带参考 BA 真正提交的内参掩码。`legacy_cpu` 请求直接映射到相同联合求解器，不再存在另一套焦距路径。
 MetaShape 用户手册只公开了按数据条件自适应选择相机参数的工作流概念，未披露内部评分、矩阵构造或阈值。
 PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为独立设计，不主张与 MetaShape 内部实现等价。
 
@@ -110,9 +123,8 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
 - `fixedTrackIndices` 使轨迹的三维点参数块保持常量，但不删除其对相机的重投影残差；
   PlaMatrix 和 Legacy 后端语义一致。
-- Legacy 的法方程线性化与 LM trial step 使用同一个 Huber robust cost。
-- PlaMatrix 的 Huber 代价、观测权重和活动轨迹 gross gate 使用统一定义。
-- Legacy 和 PlaMatrix 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
+- CPU/CUDA/OpenCL 影像重投影都使用关键点尺度白化后的普通最小二乘。
+- 所有后端统一执行正深度检查、结果统计和质量门控；参考 SfM 外层负责动态 `3σ` 点过滤。
 - 后端选择和求解规划只统计有限像点、正权重且形成双相机轨迹的有效观测；零权重、负权重和
   非有限权重不会再被不同后端解释成不同残差贡献。
 - Auto 质量门控除重投影 RMS 和有效 track 比例外，还检查 LiDAR、控制点和比例尺 RMS 不得恶化。

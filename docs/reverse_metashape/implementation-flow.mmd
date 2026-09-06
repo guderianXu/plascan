@@ -1,19 +1,22 @@
 flowchart LR
-  input["多视角影像与可选参考位姿"] --> pair_select["通用/参考/序列预选"]
+  input["多视角影像与可选参考位姿"] --> feature_mode{"局部特征算法"}
 
-  pair_select --> feature_mode{"局部特征算法"}
-  feature_mode -- "默认" --> sift["Auto SIFT / RootSIFT"]
-  feature_mode -- "实验兼容" --> orb["ORB binary"]
+  feature_mode -- "默认" --> plamatch["PlaMatch-HCT / MLDB"]
+  feature_mode -- "可选" --> sift["Auto SIFT / RootSIFT"]
   feature_mode -- "模型通道" --> learned["SIFT-LightGlue / LoMa-R"]
 
-  sift --> float_match["浮点描述子匹配"]
-  orb --> hamming["Hamming top-2 + ratio + mutual"]
-  learned --> learned_match["TensorRT 匹配"]
+  plamatch --> native_coarse["原生 coarse MLDB/HCT"]
+  sift --> adapted_coarse["正式浮点描述子 coarse 视图"]
+  learned --> adapted_coarse
+  native_coarse --> pair_select["HCT + 局部一致性 + 参考预选"]
+  adapted_coarse --> pair_select
 
-  float_match --> geometry["USAC/MAGSAC 两视几何"]
-  hamming --> geometry
-  learned_match --> geometry
-  geometry --> guided{"Auto SIFT 引导重匹配?"}
+  pair_select --> formal_match{"正式像对匹配"}
+  plamatch --> formal_match
+  sift --> formal_match
+  learned --> formal_match
+  formal_match --> geometry["USAC/MAGSAC 两视几何"]
+  geometry --> guided{"算法支持引导重匹配?"}
   guided -- "是" --> rematch["基础矩阵引导二次匹配"]
   guided -- "否" --> tracks["多视图连接点轨迹"]
   rematch --> tracks

@@ -125,10 +125,12 @@ TEST(SfmAttemptRunnerTest, ReadsPersistedTiePointTracksIntoCompactObservationGra
     EXPECT_EQ(graph.imagePaths.size(), 2);
     EXPECT_EQ(graph.keypointsByImage.value(0).size(), 2u);
     EXPECT_EQ(graph.keypointsByImage.value(1).size(), 2u);
-    EXPECT_TRUE(std::isnan(graph.keypointsByImage.value(0).front().scale));
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 1.0f);
     ASSERT_EQ(graph.matchPairs.size(), 1u);
     EXPECT_EQ(graph.matchPairs.front().matches.size(), 2u);
     EXPECT_EQ(graph.trackCount, 2);
+    ASSERT_EQ(graph.tracks.size(), 2u);
+    EXPECT_EQ(graph.tracks.front().length(), 2u);
     EXPECT_FALSE(graph.usesRawDirectEdges);
     EXPECT_EQ(graph.directEdgeCount, 0u);
     EXPECT_EQ(graph.synthesizedClosureEdgeCount, 2u);
@@ -152,26 +154,32 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
             {QStringLiteral("scale"), 2.5},
         };
     };
-    writeJson(tiePointPath,
-              QJsonObject{
-                  {QStringLiteral("format"), QStringLiteral("plascan_tie_points")},
-                  {QStringLiteral("format_version"), 2},
-                  {QStringLiteral("images"),
-                   QJsonArray{
-                       QJsonObject{{QStringLiteral("image_id"), 0}, {QStringLiteral("path"), imageA}},
-                       QJsonObject{{QStringLiteral("image_id"), 1}, {QStringLiteral("path"), imageB}},
-                       QJsonObject{{QStringLiteral("image_id"), 2}, {QStringLiteral("path"), imageC}},
-                   }},
-                  {QStringLiteral("tracks"),
-                   QJsonArray{
-                       QJsonObject{
-                           {QStringLiteral("confidence"), 0.9},
-                           {QStringLiteral("observations"),
-                            QJsonArray{observation(0, 10, 10.0), observation(1, 20, 11.0), observation(2, 30, 12.0)}},
-                           {QStringLiteral("direct_edges"), QJsonArray{QJsonArray{0, 1}, QJsonArray{1, 2}}},
-                       },
-                   }},
-              });
+    writeJson(
+        tiePointPath,
+        QJsonObject{
+            {QStringLiteral("format"), QStringLiteral("plascan_tie_points")},
+            {QStringLiteral("format_version"), 2},
+            {QStringLiteral("images"),
+             QJsonArray{
+                 QJsonObject{{QStringLiteral("image_id"), 0}, {QStringLiteral("path"), imageA}},
+                 QJsonObject{{QStringLiteral("image_id"), 1}, {QStringLiteral("path"), imageB}},
+                 QJsonObject{{QStringLiteral("image_id"), 2}, {QStringLiteral("path"), imageC}},
+             }},
+            {QStringLiteral("tracks"),
+             QJsonArray{
+                 QJsonObject{
+                     {QStringLiteral("confidence"), 0.9},
+                     {QStringLiteral("observations"),
+                      QJsonArray{observation(0, 10, 10.0), observation(1, 20, 11.0), observation(2, 30, 12.0)}},
+                     {QStringLiteral("direct_edges"), QJsonArray{QJsonArray{0, 1}, QJsonArray{1, 2}}},
+                 },
+                 QJsonObject{
+                     {QStringLiteral("confidence"), 1.0},
+                     {QStringLiteral("observations"), QJsonArray{observation(0, 40, 30.0), observation(2, 50, 32.0)}},
+                     {QStringLiteral("direct_edges"), QJsonArray{}},
+                 },
+             }},
+        });
 
     xjw::aerial_triangulation::PreparedTiePointGraph graph;
     QString errorMessage;
@@ -180,7 +188,9 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
         << qPrintable(errorMessage);
 
     EXPECT_TRUE(graph.usesRawDirectEdges);
-    EXPECT_EQ(graph.trackCount, 1);
+    EXPECT_EQ(graph.trackCount, 2);
+    ASSERT_EQ(graph.tracks.size(), 2u);
+    EXPECT_EQ(graph.tracks.front().length(), 3u);
     EXPECT_EQ(graph.directEdgeCount, 2u);
     EXPECT_EQ(graph.synthesizedClosureEdgeCount, 0u);
     ASSERT_FALSE(graph.keypointsByImage.value(0).empty());
@@ -189,6 +199,54 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
     EXPECT_EQ(graph.matchPairs[0].matches.size(), 1u);
     EXPECT_EQ(graph.matchPairs[1].matches.size(), 1u);
     EXPECT_NE(graph.matchPairs[0].imageA, graph.matchPairs[1].imageA);
+}
+
+TEST(SfmAttemptRunnerTest, ReadsVersion3CompactObservations)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("b.png"));
+    const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
+    writeJson(tiePointPath,
+              QJsonObject{
+                  {QStringLiteral("format"), QStringLiteral("plascan_tie_points")},
+                  {QStringLiteral("format_version"), 3},
+                  {QStringLiteral("observation_fields"),
+                   QJsonArray{QStringLiteral("image_id"),
+                              QStringLiteral("feature_idx"),
+                              QStringLiteral("x"),
+                              QStringLiteral("y"),
+                              QStringLiteral("scale")}},
+                  {QStringLiteral("images"),
+                   QJsonArray{
+                       QJsonObject{{QStringLiteral("image_id"), 0}, {QStringLiteral("path"), imageA}},
+                       QJsonObject{{QStringLiteral("image_id"), 1}, {QStringLiteral("path"), imageB}},
+                   }},
+                  {QStringLiteral("tracks"),
+                   QJsonArray{QJsonObject{
+                       {QStringLiteral("confidence"), 0.75},
+                       {QStringLiteral("observations"),
+                        QJsonArray{QJsonArray{0, 10, 12.5, 20.0, 1.5}, QJsonArray{1, 20, 13.0, 20.5, 2.5}}},
+                       {QStringLiteral("direct_edges"), QJsonArray{QJsonArray{0, 1}}},
+                   }}},
+              });
+
+    xjw::aerial_triangulation::PreparedTiePointGraph graph;
+    QString errorMessage;
+    ASSERT_TRUE(xjw::aerial_triangulation::SfmAttemptRunner::readTiePointGraph(
+        tiePointPath, QStringList{imageA, imageB}, &graph, &errorMessage))
+        << qPrintable(errorMessage);
+
+    EXPECT_TRUE(graph.usesRawDirectEdges);
+    ASSERT_EQ(graph.tracks.size(), 1u);
+    EXPECT_EQ(graph.directEdgeCount, 1u);
+    ASSERT_EQ(graph.keypointsByImage.value(0).size(), 1u);
+    ASSERT_EQ(graph.keypointsByImage.value(1).size(), 1u);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().x, 12.5f);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 1.5f);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(1).front().scale, 2.5f);
 }
 
 TEST(SfmAttemptRunnerTest, RejectsTiePointFileFromAnotherImageSet)
@@ -399,6 +457,20 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
         result.result.sfmDiagnostics.value(QStringLiteral("ba_adaptive_camera_model_fitting_applied")).toBool());
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("ba_refined_intrinsic_count")).toInt(), 0);
     EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("ba_shared_focal_scale")).toDouble(), 0.0);
+    EXPECT_EQ(
+        result.result.sfmDiagnostics.value(QStringLiteral("ba_intrinsic_parameter_reference_definition")).toString(),
+        QStringLiteral("normalized_stable_calibration_group_reference"));
+    const QJsonObject intrinsicReference =
+        result.result.sfmDiagnostics.value(QStringLiteral("ba_intrinsic_parameter_reference")).toObject();
+    const QJsonObject intrinsicFinal =
+        result.result.sfmDiagnostics.value(QStringLiteral("ba_intrinsic_parameter_final")).toObject();
+    const QJsonObject intrinsicDelta =
+        result.result.sfmDiagnostics.value(QStringLiteral("ba_intrinsic_parameter_delta")).toObject();
+    EXPECT_DOUBLE_EQ(intrinsicReference.value(QStringLiteral("focal_scale")).toDouble(), 1.0);
+    EXPECT_DOUBLE_EQ(intrinsicFinal.value(QStringLiteral("focal_scale")).toDouble(),
+                     result.result.sfmDiagnostics.value(QStringLiteral("ba_shared_focal_scale")).toDouble());
+    EXPECT_DOUBLE_EQ(intrinsicDelta.value(QStringLiteral("focal_scale")).toDouble(),
+                     intrinsicFinal.value(QStringLiteral("focal_scale")).toDouble() - 1.0);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("final_camera_focal_count")).toInt(), 2);
     EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("final_camera_focal_median_px")).toDouble(), 0.0);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("input_max_tracks_per_image")).toInt(), 8000);

@@ -98,7 +98,7 @@ function(plascan_deploy_source_dependency_runtime target_name)
         "$<TARGET_FILE_DIR:${target_name}>"
       COMMAND_EXPAND_LISTS
       VERBATIM
-        COMMENT "Deploying source-built Qt/OpenCV/GDAL/AprilTag runtime DLLs for ${target_name}")
+        COMMENT "Deploying source-built Qt/OpenCV/GDAL/AprilTag/OpenEXR runtime DLLs for ${target_name}")
   endif()
 
   foreach(_plascan_plugin_group IN ITEMS platforms imageformats iconengines styles tls)

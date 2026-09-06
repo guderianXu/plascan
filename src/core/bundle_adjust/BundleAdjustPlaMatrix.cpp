@@ -2,12 +2,12 @@
 
 #include "BundleAdjustPlaMatrixAssembly.h"
 #include "BundleAdjustPlaMatrixProblem.h"
+#include "BundleAdjustPlaMatrixReferenceSchur.h"
 #include "BundleAdjustPlaMatrixRuntime.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
 
 #include <plamatrix/optimization/block_schur.h>
-#include <plamatrix/optimization/levenberg_marquardt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -25,36 +25,17 @@ namespace xjw::detail
         using plamatrix_ba::ActiveProblem;
         using plamatrix_ba::prepareActiveProblem;
 
-        // 使用严格的目标函数收敛阈值，避免在已经达到相同
-        // 重投影精度后继续用拒绝步消耗迭代上限。
-        constexpr double kRelativeCostTolerance = 1e-6;
-
-        double linearSolverTolerance(const BAOptions& options,
-                                     double previous_relative_cost_change,
-                                     bool retrying_trial,
-                                     plamatrix::SchurComplementLinearBackend backend)
-        {
-            if (!options.enableInexactPlaMatrixLinearSolve)
-            {
-                return 1.0e-8;
-            }
-            const double progress = std::isfinite(previous_relative_cost_change)
-                                        ? std::clamp(previous_relative_cost_change, 1.0e-16, 1.0)
-                                        : 1.0;
-            double tolerance = options.plaMatrixLinearForcingScale * std::sqrt(progress);
-            if (retrying_trial)
-            {
-                tolerance *= 0.25;
-            }
-            const double backend_maximum = backend == plamatrix::SchurComplementLinearBackend::Cpu
-                                               ? options.maxPlaMatrixLinearTolerance
-                                               : std::min(options.maxPlaMatrixLinearTolerance, 1.0e-3);
-            return std::clamp(tolerance, options.minPlaMatrixLinearTolerance, backend_maximum);
-        }
-
         bool isCancelled(const BAOptions& options)
         {
             return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
+        }
+
+        bool isRetryableReferenceLinearFailure(const std::exception& error)
+        {
+            const std::string message = error.what();
+            return message.find("breakdown") != std::string::npos ||
+                   message.find("positive definite") != std::string::npos ||
+                   message.find("numerically SPD") != std::string::npos;
         }
 
         bool
@@ -62,11 +43,103 @@ namespace xjw::detail
         {
             return std::all_of(state.intrinsicGroups.begin(),
                                state.intrinsicGroups.end(),
-                               [&](const auto& group)
-                               {
+                               [&](const auto& group) {
                                    return plamatrix_ba::activeIntrinsicParameters(options, group.enabled, iteration) ==
                                           group.enabled;
                                });
+        }
+
+        struct ReferenceStepRms
+        {
+            double global = 0.0;
+            double point = 0.0;
+        };
+
+        ReferenceStepRms referenceStepRms(const BAOptions& options,
+                                          const ActiveProblem& active,
+                                          const plamatrix_ba::OptimizationState& state,
+                                          int iteration,
+                                          const std::vector<double>& primary_step,
+                                          const std::vector<double>& eliminated_step)
+        {
+            double global_squared = 0.0;
+            std::size_t global_dimension = 0;
+            double point_squared = 0.0;
+            std::size_t point_dimension = 0;
+            const auto accumulate = [](const std::vector<double>& values,
+                                       std::size_t offset,
+                                       std::size_t count,
+                                       double* squared,
+                                       std::size_t* dimension)
+            {
+                for (std::size_t index = 0; index < count; ++index)
+                {
+                    const double value = values[offset + index];
+                    *squared += value * value;
+                }
+                *dimension += count;
+            };
+
+            for (std::size_t camera_index = 0; camera_index < active.cameraBlock.size(); ++camera_index)
+            {
+                const int block = active.cameraBlock[camera_index];
+                if (block >= 0)
+                {
+                    accumulate(primary_step,
+                               static_cast<std::size_t>(block * plamatrix_ba::kPrimaryBlockSize),
+                               6,
+                               &global_squared,
+                               &global_dimension);
+                }
+            }
+            for (std::size_t group_index = 0; group_index < state.intrinsicGroups.size(); ++group_index)
+            {
+                const auto active_parameters = plamatrix_ba::activeIntrinsicParameters(
+                    options, state.intrinsicGroups[group_index].enabled, iteration);
+                const std::size_t offset = static_cast<std::size_t>(
+                    (active.cameraBlockCount + static_cast<int>(group_index)) * plamatrix_ba::kPrimaryBlockSize);
+                for (std::size_t parameter = 0; parameter < active_parameters.size(); ++parameter)
+                {
+                    if (active_parameters[parameter])
+                    {
+                        accumulate(primary_step, offset + parameter, 1, &global_squared, &global_dimension);
+                    }
+                }
+            }
+            for (std::size_t track_index = 0; track_index < active.trackPrimaryBlock.size(); ++track_index)
+            {
+                const int primary_block = active.trackPrimaryBlock[track_index];
+                if (primary_block >= 0)
+                {
+                    accumulate(primary_step,
+                               static_cast<std::size_t>(primary_block * plamatrix_ba::kPrimaryBlockSize),
+                               3,
+                               &point_squared,
+                               &point_dimension);
+                }
+                const int eliminated_block = active.trackBlock[track_index];
+                if (eliminated_block >= 0)
+                {
+                    accumulate(eliminated_step,
+                               static_cast<std::size_t>(eliminated_block * plamatrix_ba::kEliminatedBlockSize),
+                               3,
+                               &point_squared,
+                               &point_dimension);
+                }
+            }
+            for (const int block : active.laserBlock)
+            {
+                if (block >= 0)
+                {
+                    accumulate(eliminated_step,
+                               static_cast<std::size_t>(block * plamatrix_ba::kEliminatedBlockSize),
+                               3,
+                               &point_squared,
+                               &point_dimension);
+                }
+            }
+            return {global_dimension > 0 ? std::sqrt(global_squared / static_cast<double>(global_dimension)) : 0.0,
+                    point_dimension > 0 ? std::sqrt(point_squared / static_cast<double>(point_dimension)) : 0.0};
         }
 
     } // namespace
@@ -104,11 +177,6 @@ namespace xjw::detail
         result.setupSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count();
         result.observationCount = active.observationCount;
         result.plaMatrixRejectedInitialTracks = active.rejectedInitialTracks;
-        if (solver_backend == plamatrix::SchurComplementLinearBackend::Cpu &&
-            active.primaryBlockCount <= std::max(1, options.maxDenseSchurCameras))
-        {
-            solver_backend = plamatrix::SchurComplementLinearBackend::DenseCpu;
-        }
         result.plaMatrixLinearSolverName = plaMatrixLinearBackendName(solver_backend);
         if (active.observationCount == 0 && active.activeLaserRangeCount == 0)
         {
@@ -121,17 +189,19 @@ namespace xjw::detail
         const auto solve_start = std::chrono::steady_clock::now();
         plamatrix_ba::OptimizationState state = plamatrix_ba::initializeState(cameras, tracks, options, active);
         double current_cost = std::numeric_limits<double>::quiet_NaN();
-        plamatrix::LevenbergMarquardtOptions<double> lm_options;
-        lm_options.initialDamping = std::clamp(options.damping, 1e-12, 1e12);
-        plamatrix::LevenbergMarquardtStrategy<double> lm(lm_options);
+        double damping = 0.0;
+        int accepted_steps = 0;
+        int rejected_steps = 0;
         bool converged = active.primaryBlockCount == 0 && active.trackBlockCount + active.laserBlockCount == 0;
         bool cancelled = false;
         int iterations = 0;
-        double previous_relative_cost_change = 1.0;
         double minimum_linear_tolerance = std::numeric_limits<double>::infinity();
         double maximum_linear_tolerance = 0.0;
         plamatrix::SchurComplementSolverWorkspace<double> solver_workspace;
         plamatrix_ba::NormalEquationAssemblyWorkspace assembly_workspace(active);
+        plamatrix_ba::ReferenceSchurWorkspace reference_schur_workspace(active);
+        const bool use_reference_online_schur = plamatrix_ba::canUseReferenceOnlineSchur(options, active);
+        result.plaMatrixReferenceOnlineSchurUsed = use_reference_online_schur;
         plamatrix_ba::OptimizationState candidate_state = state;
         std::vector<double> primary_step;
         std::vector<double> eliminated_step;
@@ -146,7 +216,8 @@ namespace xjw::detail
             }
 
             const int iteration_budget = std::max(1, options.maxIterations);
-            while (iterations < iteration_budget && !converged)
+            bool terminate = false;
+            while (iterations < iteration_budget && !converged && !terminate)
             {
                 if (isCancelled(options))
                 {
@@ -156,17 +227,26 @@ namespace xjw::detail
 
                 const int stage_iteration = iterations;
                 double linearized_cost = 0.0;
-                const auto assembly_start = std::chrono::steady_clock::now();
-                plamatrix_ba::buildNormalEquations(
-                    cameras, tracks, options, active, state, stage_iteration, &assembly_workspace, &linearized_cost);
-                result.plaMatrixAssemblySeconds +=
-                    std::chrono::duration<double>(std::chrono::steady_clock::now() - assembly_start).count();
-                ++result.plaMatrixLinearizations;
-                ++result.plaMatrixObjectiveEvaluations;
-                current_cost = linearized_cost;
-                if (result.plaMatrixLinearizations == 1)
+                if (!use_reference_online_schur)
                 {
-                    result.plaMatrixInitialCost = current_cost;
+                    const auto assembly_start = std::chrono::steady_clock::now();
+                    plamatrix_ba::buildNormalEquations(cameras,
+                                                       tracks,
+                                                       options,
+                                                       active,
+                                                       state,
+                                                       stage_iteration,
+                                                       &assembly_workspace,
+                                                       &linearized_cost);
+                    result.plaMatrixAssemblySeconds +=
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - assembly_start).count();
+                    ++result.plaMatrixLinearizations;
+                    ++result.plaMatrixObjectiveEvaluations;
+                    current_cost = linearized_cost;
+                    if (result.plaMatrixLinearizations == 1)
+                    {
+                        result.plaMatrixInitialCost = current_cost;
+                    }
                 }
 
                 bool relinearize = false;
@@ -179,55 +259,80 @@ namespace xjw::detail
                         break;
                     }
 
+                    if (use_reference_online_schur)
+                    {
+                        const auto assembly_start = std::chrono::steady_clock::now();
+                        const auto build =
+                            plamatrix_ba::buildReferenceReducedNormalEquations(cameras,
+                                                                               tracks,
+                                                                               options,
+                                                                               active,
+                                                                               state,
+                                                                               stage_iteration,
+                                                                               damping,
+                                                                               &reference_schur_workspace);
+                        result.plaMatrixAssemblySeconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - assembly_start).count();
+                        ++result.plaMatrixLinearizations;
+                        ++result.plaMatrixObjectiveEvaluations;
+                        current_cost = build.objectiveCost;
+                        if (result.plaMatrixLinearizations == 1)
+                        {
+                            result.plaMatrixInitialCost = current_cost;
+                        }
+                        if (build.pointSystemSingular)
+                        {
+                            ++iterations;
+                            ++rejected_steps;
+                            damping = damping == 0.0 ? 1.0e-3 : damping * 10.0;
+                            continue;
+                        }
+                    }
+
                     plamatrix::SchurComplementSolverOptions<double> solver_options;
                     solver_options.linearBackend = solver_backend;
                     solver_options.deviceIndex = options.plaMatrixDevice;
-                    solver_options.maxIterations = (solver_backend == plamatrix::SchurComplementLinearBackend::Cpu ||
-                                                    solver_backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
-                                                       ? std::max(50, active.primaryBlockCount * 12)
-                                                       : std::max(200, active.primaryBlockCount * 30);
-                    solver_options.relativeTolerance = linearSolverTolerance(
-                        options, previous_relative_cost_change, !retry_primary_step.empty(), solver_backend);
+                    solver_options.maxIterations =
+                        (solver_backend == plamatrix::SchurComplementLinearBackend::Cpu ||
+                         solver_backend == plamatrix::SchurComplementLinearBackend::DenseCpu ||
+                         solver_backend == plamatrix::SchurComplementLinearBackend::SparseCpu)
+                            ? std::max(50, active.primaryBlockCount * 12)
+                            : std::max(200, active.primaryBlockCount * 30);
+                    solver_options.relativeTolerance = 1.0e-12;
                     minimum_linear_tolerance = std::min(minimum_linear_tolerance, solver_options.relativeTolerance);
                     maximum_linear_tolerance = std::max(maximum_linear_tolerance, solver_options.relativeTolerance);
                     solver_options.absoluteTolerance = 1e-12;
                     solver_options.preconditionerClusterSize = options.plaMatrixPreconditionerClusterSize;
-                    solver_options.useInitialGuess = !retry_primary_step.empty();
+                    solver_options.useInitialGuess = !use_reference_online_schur && !retry_primary_step.empty();
                     solver_options.useMixedPrecision =
                         options.enablePlaMatrixMixedPrecision &&
                         solver_backend == plamatrix::SchurComplementLinearBackend::Cuda &&
                         active.primaryBlockCount >= 50;
-                    primary_step = retry_primary_step;
+                    primary_step = use_reference_online_schur ? std::vector<double>{} : retry_primary_step;
                     eliminated_step.clear();
-                    auto solver_report = plamatrix::solveDampedSchurComplement(assembly_workspace.equations,
-                                                                               lm.damping(),
-                                                                               solver_options,
-                                                                               solver_workspace,
-                                                                               &primary_step,
-                                                                               &eliminated_step);
-                    if (!solver_report.converged && solver_backend == plamatrix::SchurComplementLinearBackend::DenseCpu)
+                    const auto& equations = use_reference_online_schur ? reference_schur_workspace.reducedEquations
+                                                                       : assembly_workspace.equations;
+                    plamatrix::SchurComplementSolverReport<double> solver_report;
+                    try
                     {
-                        // Small Schur systems can still be nearly rank deficient because of
-                        // gauge freedom or an inactive self-calibration stage. Keep the dense
-                        // path as the fast default, but retry its failed factorization/residual
-                        // check with the damped block-Jacobi PCG backend before rejecting the
-                        // LM trial step.
-                        ++result.plaMatrixDenseFallbacks;
-                        result.plaMatrixDenseFallbackMessage = solver_report.message.empty()
-                                                                   ? "dense Schur solve did not converge"
-                                                                   : solver_report.message;
-                        solver_backend = plamatrix::SchurComplementLinearBackend::Cpu;
-                        result.plaMatrixLinearSolverName = plaMatrixLinearBackendName(solver_backend);
-                        solver_options.linearBackend = solver_backend;
-                        solver_options.useInitialGuess = false;
-                        primary_step.clear();
-                        eliminated_step.clear();
-                        solver_report = plamatrix::solveDampedSchurComplement(assembly_workspace.equations,
-                                                                              lm.damping(),
-                                                                              solver_options,
-                                                                              solver_workspace,
-                                                                              &primary_step,
-                                                                              &eliminated_step);
+                        solver_report =
+                            plamatrix::solveDampedSchurComplement(equations,
+                                                                  use_reference_online_schur ? 0.0 : damping,
+                                                                  solver_options,
+                                                                  solver_workspace,
+                                                                  &primary_step,
+                                                                  &eliminated_step);
+                    }
+                    catch (const std::exception& error)
+                    {
+                        if (!use_reference_online_schur || !isRetryableReferenceLinearFailure(error))
+                        {
+                            throw;
+                        }
+                        ++iterations;
+                        ++rejected_steps;
+                        damping = damping == 0.0 ? 1.0e-3 : damping * 10.0;
+                        continue;
                     }
                     result.plaMatrixLinearIterations += solver_report.iterations;
                     if (!solver_report.preconditionerName.empty())
@@ -251,6 +356,11 @@ namespace xjw::detail
                     result.plaMatrixSchurAssemblySeconds += solver_report.schurAssemblySeconds;
                     result.plaMatrixCholeskyFactorizationSeconds += solver_report.choleskyFactorizationSeconds;
                     result.plaMatrixTriangularSolveSeconds += solver_report.triangularSolveSeconds;
+                    result.plaMatrixSymbolicAnalysisSeconds += solver_report.symbolicAnalysisSeconds;
+                    if (solver_report.symbolicAnalysisReused)
+                    {
+                        ++result.plaMatrixSymbolicAnalysisReuses;
+                    }
                     result.plaMatrixResidualCheckSeconds += solver_report.residualCheckSeconds;
                     result.plaMatrixLinearSolveSeconds += solver_report.linearSolveSeconds;
                     result.plaMatrixBackSubstitutionSeconds += solver_report.backSubstitutionSeconds;
@@ -266,46 +376,134 @@ namespace xjw::detail
                     ++iterations;
                     if (!solver_report.converged)
                     {
-                        retry_primary_step = primary_step;
-                        lm.rejectStep();
+                        retry_primary_step = use_reference_online_schur ? std::vector<double>{} : primary_step;
+                        ++rejected_steps;
+                        damping = damping == 0.0 ? 1.0e-3 : damping * 10.0;
                         continue;
                     }
 
-                    const double step_norm = plamatrix_ba::maximumStepNorm(primary_step, eliminated_step);
-                    if (step_norm <= options.stepTolerance)
+                    double reference_directional_decrease = 0.0;
+                    if (use_reference_online_schur)
+                    {
+                        const auto back_substitution_start = std::chrono::steady_clock::now();
+                        const auto back_substitution =
+                            plamatrix_ba::recoverReferencePointSteps(cameras,
+                                                                     tracks,
+                                                                     options,
+                                                                     active,
+                                                                     state,
+                                                                     stage_iteration,
+                                                                     damping,
+                                                                     primary_step,
+                                                                     reference_schur_workspace.directPrimaryRhs,
+                                                                     &eliminated_step);
+                        result.plaMatrixBackSubstitutionSeconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - back_substitution_start)
+                                .count();
+                        if (!back_substitution.success || !std::isfinite(back_substitution.directionalDecrease))
+                        {
+                            ++rejected_steps;
+                            damping = damping == 0.0 ? 1.0e-3 : damping * 10.0;
+                            continue;
+                        }
+                        reference_directional_decrease = back_substitution.directionalDecrease;
+                    }
+
+                    const ReferenceStepRms reference_step_rms =
+                        referenceStepRms(options, active, state, stage_iteration, primary_step, eliminated_step);
+                    constexpr double convergence_tolerance = 1.0e-6;
+                    const bool update_is_small = reference_step_rms.global <= convergence_tolerance &&
+                                                 reference_step_rms.point <= convergence_tolerance;
+                    if (update_is_small && !use_reference_online_schur)
                     {
                         converged = isFinalIntrinsicStage(options, state, stage_iteration);
                         relinearize = !converged;
+                        if (options.progressCallback)
+                        {
+                            const double rms =
+                                std::sqrt(std::max(0.0, current_cost) / std::max(1, active.observationCount));
+                            if (!options.progressCallback(iterations, iteration_budget, rms, active.activeTrackCount))
+                            {
+                                cancelled = true;
+                            }
+                        }
                         continue;
                     }
 
-                    const auto trial_state_start = std::chrono::steady_clock::now();
-                    candidate_state = state;
-                    plamatrix_ba::applyStep(active, primary_step, eliminated_step, &candidate_state);
-                    result.plaMatrixTrialStateSeconds +=
-                        std::chrono::duration<double>(std::chrono::steady_clock::now() - trial_state_start).count();
-                    const auto objective_start = std::chrono::steady_clock::now();
-                    const double candidate_cost = plamatrix_ba::evaluateObjective(
-                        cameras, tracks, options, active, candidate_state, stage_iteration);
-                    result.plaMatrixObjectiveSeconds +=
-                        std::chrono::duration<double>(std::chrono::steady_clock::now() - objective_start).count();
-                    ++result.plaMatrixObjectiveEvaluations;
-                    if (std::isfinite(candidate_cost) && candidate_cost < current_cost)
+                    double candidate_cost = std::numeric_limits<double>::infinity();
+                    double accepted_alpha = 1.0;
+                    double directional_decrease = reference_directional_decrease;
+                    // 所有 PlaScan 扩展约束都复用同一个目标函数，因此在完整 retraction 上
+                    // 数值估计 -g^T d，比为每种因子维护第二套方向导数更不易产生语义漂移。
+                    if (!use_reference_online_schur)
                     {
-                        const double cost_change = current_cost - candidate_cost;
-                        const double relative_cost_change = cost_change / std::max(1.0, std::abs(current_cost));
+                        constexpr double derivative_step = 1.0e-4;
+                        candidate_state = state;
+                        plamatrix_ba::applyStep(
+                            active, primary_step, eliminated_step, &candidate_state, options, derivative_step);
+                        const double derivative_cost = plamatrix_ba::evaluateObjective(
+                            cameras, tracks, options, active, candidate_state, stage_iteration);
+                        ++result.plaMatrixObjectiveEvaluations;
+                        if (std::isfinite(derivative_cost) && derivative_cost < current_cost)
+                        {
+                            directional_decrease = (current_cost - derivative_cost) / derivative_step;
+                        }
+                    }
+                    const int line_search_steps = options.referenceLineSearchSteps;
+                    bool armijo_accepted = false;
+                    for (int line_search = 0; line_search < line_search_steps; ++line_search)
+                    {
+                        const auto trial_state_start = std::chrono::steady_clock::now();
+                        candidate_state = state;
+                        plamatrix_ba::applyStep(
+                            active, primary_step, eliminated_step, &candidate_state, options, accepted_alpha);
+                        result.plaMatrixTrialStateSeconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - trial_state_start).count();
+                        const auto objective_start = std::chrono::steady_clock::now();
+                        candidate_cost = plamatrix_ba::evaluateObjective(
+                            cameras, tracks, options, active, candidate_state, stage_iteration);
+                        result.plaMatrixObjectiveSeconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - objective_start).count();
+                        ++result.plaMatrixObjectiveEvaluations;
+                        const double sufficient_decrease =
+                            options.referenceArmijoCoefficient * accepted_alpha * directional_decrease;
+                        const double acceptance_limit =
+                            use_reference_online_schur
+                                ? current_cost - sufficient_decrease
+                                : (directional_decrease > 0.0 ? current_cost - sufficient_decrease : current_cost);
+                        if (std::isfinite(candidate_cost) && candidate_cost <= acceptance_limit &&
+                            candidate_cost < current_cost)
+                        {
+                            armijo_accepted = true;
+                            break;
+                        }
+                        accepted_alpha *= 0.5;
+                    }
+                    if (std::isfinite(candidate_cost) && candidate_cost < current_cost &&
+                        (!use_reference_online_schur || armijo_accepted))
+                    {
                         std::swap(state, candidate_state);
                         current_cost = candidate_cost;
-                        previous_relative_cost_change = relative_cost_change;
-                        lm.acceptStep();
+                        ++accepted_steps;
+                        damping /= 10.0;
                         converged = isFinalIntrinsicStage(options, state, stage_iteration) &&
-                                    relative_cost_change <= kRelativeCostTolerance;
+                                    accepted_alpha * reference_step_rms.global <= 1.0e-6 &&
+                                    accepted_alpha * reference_step_rms.point <= 1.0e-6;
                         relinearize = !converged;
                     }
                     else
                     {
-                        retry_primary_step = primary_step;
-                        lm.rejectStep();
+                        ++rejected_steps;
+                        if (use_reference_online_schur)
+                        {
+                            terminate = true;
+                            relinearize = true;
+                        }
+                        else
+                        {
+                            retry_primary_step = primary_step;
+                            damping = damping == 0.0 ? 1.0e-3 : damping * 10.0;
+                        }
                     }
 
                     if (options.progressCallback)
@@ -328,8 +526,8 @@ namespace xjw::detail
         }
 
         result.solveSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - solve_start).count();
-        result.plaMatrixAcceptedSteps = lm.acceptedSteps();
-        result.plaMatrixRejectedSteps = lm.rejectedSteps();
+        result.plaMatrixAcceptedSteps = accepted_steps;
+        result.plaMatrixRejectedSteps = rejected_steps;
         result.plaMatrixLinearToleranceMinimum =
             std::isfinite(minimum_linear_tolerance) ? minimum_linear_tolerance : 0.0;
         result.plaMatrixLinearToleranceMaximum = maximum_linear_tolerance;
@@ -354,16 +552,19 @@ namespace xjw::detail
         }
 
         result.solveStatus = converged ? BASolveStatus::Success : BASolveStatus::NoConvergence;
-        result.solutionUsable = std::isfinite(current_cost) && (converged || lm.acceptedSteps() > 0);
+        result.solutionUsable = std::isfinite(current_cost);
         result.backendMessage =
-            converged ? "PlaMatrix 联合 BA 收敛（" + result.plaMatrixLinearSolverName + "）"
-                      : "PlaMatrix 联合 BA 达到迭代上限，返回可用解（" + result.plaMatrixLinearSolverName + "）";
+            converged ? "参考联合 BA 收敛（" + result.plaMatrixLinearSolverName + " + Armijo）"
+                      : "参考联合 BA 达到迭代上限，返回可用解（" + result.plaMatrixLinearSolverName + " + Armijo）";
         if (result.plaMatrixDenseFallbacks > 0)
         {
             result.backendMessage += "；稠密 Schur 回退原因：" + result.plaMatrixDenseFallbackMessage;
         }
         result.refinedCameras = state.cameras;
-        plamatrix_ba::publishIntrinsics(cameras, options, active, state.intrinsicGroups, &result);
+        result.referenceCommittedIntrinsicParameterMask =
+            plamatrix_ba::committedReferenceIntrinsicParameters(options, active, state, current_cost);
+        plamatrix_ba::publishIntrinsics(
+            cameras, options, active, state.intrinsicGroups, result.referenceCommittedIntrinsicParameterMask, &result);
         result.refinedCameraCount = active.cameraBlockCount;
         if (!state.intrinsicGroups.empty())
         {

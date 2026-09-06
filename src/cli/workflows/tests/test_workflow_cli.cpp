@@ -1382,6 +1382,7 @@ TEST(ThreeDReconstructionCliContractTest, DefaultsMatchGuiWorkflowAndSupportsSta
 
     expectContainsAll(source, {
         R"(std::string device = "auto")",
+        R"(std::string sfmMatchingAlgorithmId = "plamatch_hct")",
         R"(std::string mvsBackend = "auto")",
         "registerConsoleLogger",
         "Logger::instance()->registerSink",
@@ -1446,7 +1447,8 @@ TEST(ThreeDReconstructionCliContractTest, StreamsFusionAndUsesRegisteredCameras)
     expectContainsAll(gui, {
         "registeredImages",
         "result.pendingCamUpdates.keys()",
-        "replaceTiePointResult(result.sparseCloudPath",
+        "pmGuard->replaceTiePointResult(",
+        "result.sparseCloudPath",
     });
 }
 

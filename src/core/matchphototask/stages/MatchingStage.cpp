@@ -56,6 +56,13 @@ QString backendDisplayName(image_matching::SiftComputeBackend backend)
     return image_matching::siftBackendDisplayName(backend);
 }
 
+QString matchingBackendDisplayName(const MatchPhotosAlgorithmPlan &plan)
+{
+    return plan.computeDeviceDisplayName.isEmpty()
+        ? backendDisplayName(plan.executionBackend)
+        : plan.computeDeviceDisplayName;
+}
+
 QByteArray sha256(const QByteArray &payload)
 {
     return QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
@@ -116,9 +123,14 @@ QByteArray rawConfigFingerprint(const MatchPhotosOptions &options,
     object[QStringLiteral("algorithm")] = plan.algorithmId;
     object[QStringLiteral("algorithm_version")] = static_cast<int>(
         plan.algorithmVersion);
+    object[QStringLiteral("alignment_accuracy")] = alignmentAccuracyName(options.accuracy);
+    object[QStringLiteral("alignment_downscale")] = plan.alignmentDownscale;
     object[QStringLiteral("max_image_dim")] = plan.maxImageDim;
     object[QStringLiteral("feature_keypoint_limit")] = plan.maxKeypoints;
     object[QStringLiteral("feature_schema_version")] = plan.featureSchemaVersion;
+    object[QStringLiteral("execution_backend")] =
+        QString::fromLatin1(image_matching::siftBackendName(plan.executionBackend));
+    object[QStringLiteral("compute_device_name")] = plan.computeDeviceName;
     object[QStringLiteral("feature_remove_borders")] = plan.featureRemoveBorders;
     object[QStringLiteral("sift_detection_threshold")] =
         static_cast<double>(plan.siftDetectionThreshold);
@@ -320,11 +332,13 @@ MatchPhotosMatchRecord makeRecord(
     record.settings[QStringLiteral("algorithm_id")] = record.algorithmId;
     record.settings[QStringLiteral("algorithm_version")] =
         static_cast<int>(record.algorithmVersion);
-    const bool autoSift =
-        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId);
-    record.settings[QStringLiteral("matching_backend")] = autoSift
+    const bool reportsComputeBackend =
+        plan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) ||
+        plan.supportsBatchFeatureMatching;
+    record.settings[QStringLiteral("matching_backend")] = reportsComputeBackend
         ? QString::fromLatin1(image_matching::siftBackendName(plan.executionBackend))
         : plan.algorithmId;
+    record.settings[QStringLiteral("matching_device")] = plan.computeDeviceDisplayName;
     record.settings[QStringLiteral("backend_fallback")] = plan.backendFallback;
     record.settings[QStringLiteral("match_reused")] = reused;
     record.settings[QStringLiteral("geometry_cache_reusable")] = geometryReusable;
@@ -627,6 +641,8 @@ MatchPhotosStageReport MatchingStage::run(
     }
     const bool usesCudaMatching = algorithmPlan.requiresCuda ||
         (algorithmPlan.algorithmId == QLatin1String(image_matching::kAutoSiftAlgorithmId) &&
+         algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda) ||
+        (algorithmPlan.supportsBatchFeatureMatching &&
          algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda);
     const GpuMatchingParallelismDecision parallelism = resolveGpuMatchingParallelism(
         gpuMatchingAlgorithm,
@@ -636,7 +652,12 @@ MatchPhotosStageReport MatchingStage::run(
         parallelismBudget,
         descriptorDimension,
         gpuMemory);
-    const int workerCount = work.empty() ? 0 : std::max(1, parallelism.effectiveWorkers);
+    const bool useBatchFeatureMatching = algorithmPlan.supportsBatchFeatureMatching &&
+        (algorithmPlan.executionBackend == image_matching::SiftComputeBackend::Cuda ||
+         algorithmPlan.executionBackend == image_matching::SiftComputeBackend::OpenCl);
+    const int workerCount = work.empty()
+        ? 0
+        : (useBatchFeatureMatching ? 1 : std::max(1, parallelism.effectiveWorkers));
 
     reportMatchPhotosProgress(
         context,
@@ -645,7 +666,7 @@ MatchPhotosStageReport MatchingStage::run(
             .arg(algorithmPlan.displayName)
             .arg(static_cast<int>(work.size()))
             .arg(reusedPairs)
-            .arg(backendDisplayName(algorithmPlan.executionBackend))
+            .arg(matchingBackendDisplayName(algorithmPlan))
             .arg(workerCount),
         reusedPairs,
         totalPairs);
@@ -759,12 +780,176 @@ MatchPhotosStageReport MatchingStage::run(
     std::atomic_int failedPairs{0};
     std::mutex resultMutex;
     QString fatalError;
-    try
+    if (useBatchFeatureMatching)
     {
-        xjw::common::concurrency::runWorkerGroup(
-            static_cast<std::size_t>(workerCount),
-            [&](std::stop_token stopToken)
+        QString createError;
+        std::unique_ptr<image_matching::IImageMatchingAlgorithm> algorithm =
+            image_matching::ImageMatchingRegistry::create(algorithmPlan.algorithmId, runtime, &createError);
+        if (!algorithm)
+        {
+            return makeMatchingReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("%1 批量匹配器创建失败：%2").arg(algorithmPlan.displayName, createError),
+                completed.load());
+        }
+
+        std::vector<image_matching::FeaturePairInput> batchInputs;
+        std::vector<int> batchWorkIndices;
+        std::vector<std::shared_ptr<const image_matching::FeatureSet>> batchFeatures0;
+        std::vector<std::shared_ptr<const image_matching::FeatureSet>> batchFeatures1;
+        batchInputs.reserve(work.size());
+        batchWorkIndices.reserve(work.size());
+        batchFeatures0.reserve(work.size());
+        batchFeatures1.reserve(work.size());
+        for (int workIndex = 0; workIndex < static_cast<int>(work.size()); ++workIndex)
+        {
+            const WorkItem& item = work[static_cast<std::size_t>(workIndex)];
+            if (item.pair.image0Path.isEmpty() || item.pair.image1Path.isEmpty())
             {
+                ++failedPairs;
+                ++completed;
+                continue;
+            }
+            auto features0 = context.featureCache->find(item.pair.image0Path);
+            auto features1 = context.featureCache->find(item.pair.image1Path);
+            if (!features0 || !features1)
+            {
+                ++failedPairs;
+                ++completed;
+                continue;
+            }
+            batchFeatures0.push_back(std::move(features0));
+            batchFeatures1.push_back(std::move(features1));
+            batchInputs.push_back({batchFeatures0.back().get(), batchFeatures1.back().get()});
+            batchWorkIndices.push_back(workIndex);
+        }
+
+        std::vector<image_matching::MatchResult> batchResults;
+        const int batch_progress_base = completed.load();
+        const int batch_progress_work = static_cast<int>(batchInputs.size());
+        const int batch_progress_maximum = batch_progress_base + 2 * batch_progress_work;
+        try
+        {
+            if (shouldCancelMatchPhotos(context))
+            {
+                return makeMatchingReport(
+                    MatchPhotosStageStatus::Failed, QStringLiteral("用户取消连接点匹配"), completed.load());
+            }
+            batchResults = algorithm->matchFeatureBatch(
+                batchInputs,
+                [&context]() { return shouldCancelMatchPhotos(context); },
+                [&context, &algorithmPlan, batch_progress_base, batch_progress_work, batch_progress_maximum](
+                    std::size_t current, std::size_t maximum)
+                {
+                    const int processed = static_cast<int>(std::min<std::size_t>(current, maximum));
+                    reportMatchPhotosProgress(context,
+                                              QStringLiteral("matching"),
+                                              QStringLiteral("%1 设备批量匹配：%2/%3 对")
+                                                  .arg(algorithmPlan.displayName)
+                                                  .arg(processed)
+                                                  .arg(batch_progress_work),
+                                              batch_progress_base + processed,
+                                              batch_progress_maximum);
+                });
+        }
+        catch (const std::exception& error)
+        {
+            if (shouldCancelMatchPhotos(context))
+            {
+                return makeMatchingReport(
+                    MatchPhotosStageStatus::Failed, QStringLiteral("用户取消连接点匹配"), completed.load());
+            }
+            return makeMatchingReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("%1 批量匹配失败：%2").arg(algorithmPlan.displayName, QString::fromUtf8(error.what())),
+                completed.load());
+        }
+        if (batchResults.size() != batchInputs.size())
+        {
+            return makeMatchingReport(MatchPhotosStageStatus::Failed,
+                                      QStringLiteral("%1 批量匹配结果数量不一致：期望 %2，实际 %3")
+                                          .arg(algorithmPlan.displayName)
+                                          .arg(batchInputs.size())
+                                          .arg(batchResults.size()),
+                                      completed.load());
+        }
+
+        for (std::size_t batchIndex = 0; batchIndex < batchResults.size(); ++batchIndex)
+        {
+            if (shouldCancelMatchPhotos(context))
+            {
+                break;
+            }
+            const int workIndex = batchWorkIndices[batchIndex];
+            const WorkItem& item = work[static_cast<std::size_t>(workIndex)];
+            try
+            {
+                image_matching::MatchResult& raw = batchResults[batchIndex];
+                if (raw.cvMatches.empty() && !raw.matches0.empty())
+                {
+                    raw.buildCvMatchesFromIndices();
+                }
+                auto pairData = makePairData(item.pair,
+                                             *batchFeatures0[batchIndex],
+                                             *batchFeatures1[batchIndex],
+                                             raw,
+                                             context,
+                                             options,
+                                             algorithmPlan,
+                                             item.configurationFingerprint,
+                                             engineFingerprint);
+                MatchPhotosMatchRecord record = makeRecord(repository,
+                                                           std::move(pairData),
+                                                           algorithmPlan,
+                                                           options,
+                                                           false,
+                                                           false,
+                                                           geometryFingerprint,
+                                                           item.cacheWarning);
+                record.settings[QStringLiteral("gpu_matching_workers")] = 1;
+                record.settings[QStringLiteral("gpu_matching_batch")] = true;
+                record.settings[QStringLiteral("gpu_matching_batch_pairs")] = static_cast<int>(batchInputs.size());
+                record.settings[QStringLiteral("gpu_worker_estimated_mib")] =
+                    static_cast<double>(parallelism.estimatedBytesPerWorker) / (1024.0 * 1024.0);
+                record.settings[QStringLiteral("gpu_parallelism_reason")] =
+                    QStringLiteral("任务级批量驻留：每幅影像描述子上传一次");
+                records[static_cast<std::size_t>(item.outputIndex)] = std::move(record);
+                populated[static_cast<std::size_t>(item.outputIndex)] = true;
+            }
+            catch (const std::exception& error)
+            {
+                ++failedPairs;
+                if (fatalError.isEmpty())
+                {
+                    fatalError = QStringLiteral("%1 / %2：%3")
+                                     .arg(item.pair.image0Path, item.pair.image1Path, QString::fromUtf8(error.what()));
+                }
+            }
+
+            const int done = ++completed;
+            const int postprocessed = static_cast<int>(batchIndex) + 1;
+            reportMatchPhotosProgress(context,
+                                      QStringLiteral("matching"),
+                                      QStringLiteral("%1 匹配结果处理：%2/%3 对，总任务 %4/%5，复用 %6，失败 %7")
+                                          .arg(algorithmPlan.displayName)
+                                          .arg(postprocessed)
+                                          .arg(batch_progress_work)
+                                          .arg(done)
+                                          .arg(totalPairs)
+                                          .arg(reusedPairs)
+                                          .arg(failedPairs.load()),
+                                      batch_progress_base + batch_progress_work + postprocessed,
+                                      batch_progress_maximum);
+        }
+    }
+    else
+    {
+        try
+        {
+            xjw::common::concurrency::runWorkerGroup(
+                static_cast<std::size_t>(workerCount),
+                [&](std::stop_token stopToken)
+                {
                 struct WorkspaceRelease
                 {
                     ~WorkspaceRelease()
@@ -868,23 +1053,24 @@ MatchPhotosStageReport MatchingStage::run(
                                               done,
                                               totalPairs);
                 }
-            });
-    }
-    catch (const std::exception &error)
-    {
-        return makeMatchingReport(
-            MatchPhotosStageStatus::Failed,
-            QStringLiteral("%1 匹配 worker 异常：%2")
-                .arg(algorithmPlan.displayName, QString::fromUtf8(error.what())),
-            completed.load());
-    }
-    catch (...)
-    {
-        return makeMatchingReport(
-            MatchPhotosStageStatus::Failed,
-            QStringLiteral("%1 匹配 worker 发生未知异常")
-                .arg(algorithmPlan.displayName),
-            completed.load());
+                });
+        }
+        catch (const std::exception &error)
+        {
+            return makeMatchingReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("%1 匹配 worker 异常：%2")
+                    .arg(algorithmPlan.displayName, QString::fromUtf8(error.what())),
+                completed.load());
+        }
+        catch (...)
+        {
+            return makeMatchingReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("%1 匹配 worker 发生未知异常")
+                    .arg(algorithmPlan.displayName),
+                completed.load());
+        }
     }
 
     if (shouldCancelMatchPhotos(context))
@@ -926,7 +1112,7 @@ MatchPhotosStageReport MatchingStage::run(
             .arg(totalMatches)
             .arg(reusedPairs)
             .arg(failedPairs.load())
-            .arg(backendDisplayName(algorithmPlan.executionBackend))
+            .arg(matchingBackendDisplayName(algorithmPlan))
             .arg(workerCount)
             .arg(modelName),
         matchedPairs);

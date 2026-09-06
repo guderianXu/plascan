@@ -92,9 +92,10 @@ confidence、源数、基线方向数和动作，便于在固定 GT 域中复核
 传播到 BA、PnP、MVS 或纹理核心。该选项仅接受 `colmap-text`（显式或自动识别）输入。
 
 `aerial_triangulation_cli --export-camera-dir <新目录>` 只在正式 SfM/BA 模型通过质量门并成功
-写出后导出最终相机。目标目录必须不存在；成功后包含与输入影像一一对应的
+写出后导出最终相机。目标目录可以不存在或已存在但为空，非空目录仍拒绝覆盖；成功后包含与输入影像一一对应的
 `cameras/*.tsai` 和可直接传给 `reconstruct_pipeline_cli` 的 `image_camera.lis`。缺失任一最终
 相机时整批拒绝，候选搜索阶段的相机不会落盘。
+工作流本身最高上报 94%，CLI 在相机导出、报告、结果登记、相机写回和工程保存后再推进到 100%。
 
 ## Chunk 工程行为
 

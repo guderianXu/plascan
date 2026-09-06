@@ -66,7 +66,150 @@ bool pointProjectionJacobian(const FramePinholeCamera &camera,
     return true;
 }
 
+bool cleanTiePointProjectionJacobian(const FramePinholeCamera& camera,
+                                     const std::array<double, 3>& worldPoint,
+                                     cv::Matx<double, 2, 3>* jacobian)
+{
+    if (!jacobian)
+    {
+        return false;
+    }
+
+    double projected[2]{};
+    if (!camera.projectWorldPoint(worldPoint.data(), projected))
+    {
+        return false;
+    }
+
+    double local[3]{};
+    camera.worldToCamera(worldPoint.data(), local);
+    if (!std::isfinite(local[0]) || !std::isfinite(local[1]) || !std::isfinite(local[2]) ||
+        std::abs(local[2]) <= 1.0e-12)
+    {
+        return false;
+    }
+
+    const double inverse_z = 1.0 / local[2];
+    const double x = local[0] * inverse_z;
+    const double y = local[1] * inverse_z;
+    const double r2 = x * x + y * y;
+    const double r4 = r2 * r2;
+    const FramePinholeCamera::Distortion distortion = camera.distortion();
+    const double radial = 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r4 + distortion.radialK3 * r4 * r2;
+    const double radial_derivative =
+        distortion.radialK1 + 2.0 * distortion.radialK2 * r2 + 3.0 * distortion.radialK3 * r4;
+    const double radial_x = 2.0 * x * radial_derivative;
+    const double radial_y = 2.0 * y * radial_derivative;
+    const double distorted_x_x =
+        radial + x * radial_x + 2.0 * distortion.tangentialP1 * y + 6.0 * distortion.tangentialP2 * x;
+    const double distorted_x_y = x * radial_y + 2.0 * distortion.tangentialP1 * x + 2.0 * distortion.tangentialP2 * y;
+    const double distorted_y_x = y * radial_x + 2.0 * distortion.tangentialP1 * x + 2.0 * distortion.tangentialP2 * y;
+    const double distorted_y_y =
+        radial + y * radial_y + 6.0 * distortion.tangentialP1 * y + 2.0 * distortion.tangentialP2 * x;
+
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+    const double u_scale = static_cast<double>(intrinsics.uAxisSign) * intrinsics.focalX;
+    const double v_scale = static_cast<double>(intrinsics.vAxisSign) * intrinsics.focalY;
+    const std::array<double, 3> local_u{u_scale * distorted_x_x * inverse_z,
+                                        u_scale * distorted_x_y * inverse_z,
+                                        -u_scale * (distorted_x_x * x + distorted_x_y * y) * inverse_z};
+    const std::array<double, 3> local_v{v_scale * distorted_y_x * inverse_z,
+                                        v_scale * distorted_y_y * inverse_z,
+                                        -v_scale * (distorted_y_x * x + distorted_y_y * y) * inverse_z};
+    const std::array<double, 9> world_to_camera = camera.worldToCameraRotation();
+    for (int world_axis = 0; world_axis < 3; ++world_axis)
+    {
+        double derivative_u = 0.0;
+        double derivative_v = 0.0;
+        for (int local_axis = 0; local_axis < 3; ++local_axis)
+        {
+            const double rotation = world_to_camera[static_cast<std::size_t>(local_axis * 3 + world_axis)];
+            derivative_u += local_u[static_cast<std::size_t>(local_axis)] * rotation;
+            derivative_v += local_v[static_cast<std::size_t>(local_axis)] * rotation;
+        }
+        if (!std::isfinite(derivative_u) || !std::isfinite(derivative_v))
+        {
+            return false;
+        }
+        (*jacobian)(0, world_axis) = derivative_u;
+        (*jacobian)(1, world_axis) = derivative_v;
+    }
+    return cv::norm(cv::Mat(*jacobian), cv::NORM_L2SQR) > 0.0;
+}
+
 } // namespace
+
+CleanTiePointQuality evaluateCleanTiePointQuality(const std::vector<TiePointQualityObservation>& observations,
+                                                  const std::array<double, 3>& worldPoint)
+{
+    CleanTiePointQuality result;
+    double scale_sum = 0.0;
+    cv::Matx33d information = cv::Matx33d::zeros();
+    int geometry_count = 0;
+
+    for (const TiePointQualityObservation& observation : observations)
+    {
+        ++result.imageCount;
+        scale_sum += observation.measurementScale;
+        if (!observation.camera)
+        {
+            continue;
+        }
+
+        double projected[2]{};
+        if (observation.camera->projectWorldPoint(worldPoint.data(), projected))
+        {
+            const double scale = observation.measurementScale == 0.0 ? 1.0 : observation.measurementScale;
+            const double residual_x = projected[0] - observation.imagePoint[0];
+            const double residual_y = projected[1] - observation.imagePoint[1];
+            const double normalized_residual = std::hypot(residual_x, residual_y) / scale;
+            if (std::isfinite(normalized_residual))
+            {
+                result.reprojectionError = std::max(result.reprojectionError, normalized_residual);
+            }
+        }
+
+        cv::Matx<double, 2, 3> jacobian;
+        if (!cleanTiePointProjectionJacobian(*observation.camera, worldPoint, &jacobian))
+        {
+            continue;
+        }
+        information += jacobian.t() * jacobian;
+        ++geometry_count;
+    }
+
+    if (result.imageCount != 0)
+    {
+        result.projectionAccuracy = scale_sum / static_cast<double>(result.imageCount);
+    }
+    if (geometry_count < 2)
+    {
+        return result;
+    }
+
+    cv::Mat singular_values;
+    cv::SVD::compute(cv::Mat(information), singular_values);
+    if (singular_values.total() != 3)
+    {
+        return result;
+    }
+    const double first = singular_values.at<double>(0);
+    const double second = singular_values.at<double>(1);
+    const double third = singular_values.at<double>(2);
+    const double minimum = std::min({first, second, third});
+    const double maximum = std::max({first, second, third});
+    if (minimum > 0.0 && std::isfinite(minimum) && std::isfinite(maximum))
+    {
+        result.reconstructionUncertainty = std::sqrt(maximum / minimum);
+        result.hasProjectionGeometry = std::isfinite(result.reconstructionUncertainty);
+    }
+    else if (maximum > 0.0)
+    {
+        result.reconstructionUncertainty = std::numeric_limits<double>::infinity();
+        result.hasProjectionGeometry = true;
+    }
+    return result;
+}
 
 double reconstructionUncertainty(
     const std::vector<TiePointQualityObservation> &observations,
