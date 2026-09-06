@@ -8797,7 +8797,7 @@ TEST(CameraSceneWidgetTest, QrhiWidgetDoesNotPaintDirectlyWithQPainter)
     };
 
     const QString renderBody =
-        cameraSceneFunctionBody(source, QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"));
+        cameraSceneFunctionBody(source, QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer* cb)"));
     const QString requestOverlayBody =
         cameraSceneFunctionBody(source, QStringLiteral("void CameraSceneWidget::requestOverlayUpdate()"));
     const QString paintOverlayBody =
@@ -8885,7 +8885,8 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnQrhiGpu)
     EXPECT_TRUE(source.contains(QStringLiteral("use_prepared_point_buffer")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
     EXPECT_TRUE(source.contains(QStringLiteral("9 * sizeof(float),")));
-    EXPECT_TRUE(source.contains(QStringLiteral("sizeof(float),\n            QRhiVertexInputBinding::PerInstance")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("QRhiVertexInputBinding(sizeof(float), QRhiVertexInputBinding::PerInstance)")));
     EXPECT_TRUE(source.contains(QStringLiteral("cb->draw(6, quint32(instanceCount))")));
     EXPECT_TRUE(source.contains(QStringLiteral("planPointRenderChunks(")));
     EXPECT_TRUE(header.contains(QStringLiteral("_pointChunks")));

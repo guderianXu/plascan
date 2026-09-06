@@ -47,7 +47,7 @@ TEST(CameraSceneRenderContractTest, DrawsPhotoBeforeOrAfterGeometryAccordingToLa
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype render_start = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"));
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer* cb)"));
     const qsizetype background = source.indexOf(
         QStringLiteral("_cameraImageDisplayLayer == CameraImageDisplayLayer::Background"),
         render_start);
@@ -183,7 +183,7 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"), ensureStart);
     const qsizetype renderStart = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"), drawStart);
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer* cb)"), drawStart);
     const qsizetype overlayStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"), renderStart);
 
@@ -401,8 +401,9 @@ TEST(CameraSceneRenderContractTest, LargePointCloudsPrepareGpuVerticesOffTheGuiT
     EXPECT_TRUE(source.contains(QStringLiteral("use_prepared_point_buffer")));
     EXPECT_TRUE(source.contains(QStringLiteral("*result.cloud, {}, cancellationFlag")));
     EXPECT_TRUE(preparationSource.contains(QStringLiteral("prepareCloudSpatialSummary")));
+    EXPECT_TRUE(preparationSource.contains(QStringLiteral("scalar_output[index] =")));
     EXPECT_TRUE(preparationSource.contains(QStringLiteral(
-        "scalar_output[index] = has_image_counts")));
+        "has_image_counts ? static_cast<float>(imageCounts.at")));
     EXPECT_FALSE(preparationSource.contains(QStringLiteral(
         "cloud.size(), imageCounts, nullptr, cancellationFlag")));
     EXPECT_TRUE(preparationSource.contains(QStringLiteral("std::nth_element(")));
@@ -556,7 +557,7 @@ TEST(CameraSceneRenderContractTest, ResourceUpdateBatchRollsBackUntilSubmitted)
     const QString source =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype render_start = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"));
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer* cb)"));
     const qsizetype render_end = source.indexOf(
         QStringLiteral("void CameraSceneWidget::paintOverlay"), render_start);
     ASSERT_GE(render_start, 0);
@@ -657,7 +658,7 @@ TEST(CameraSceneRenderContractTest, ManualPointSelectionAndEditsRunInBackgroundH
     ASSERT_GE(snapshotCommit, 0);
     EXPECT_LT(generationCheck, snapshotCommit);
     EXPECT_TRUE(applyBlock.contains(QStringLiteral(
-        "image_counts,\n                cancellation.get()")));
+        "filterPointCloudWithDelta(source, std::move(selected_indices), image_counts, cancellation.get())")));
     EXPECT_TRUE(applyBlock.contains(QStringLiteral(
         "path, *task_result.edit.cloud, cancellation.get()")));
 
@@ -1488,8 +1489,8 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("readObjStreaming(")));
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("report_obj_progress")));
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral(
-        "&& !request.pointCloudResource\n"
-        "                        && !result.textureWarning.isEmpty())")));
+        "request.format == SceneLoadFormat::Obj && !request.pointCloudResource &&\n"
+        "                        !result.textureWarning.isEmpty()")));
 
     const qsizetype uploadStart = sceneSource.indexOf(
         QStringLiteral("bool CameraSceneWidget::uploadGpuData"));
@@ -1533,7 +1534,7 @@ TEST(CameraSceneRenderContractTest, LargeObjUsesIndeterminateReadAndChunkedPoint
     EXPECT_TRUE(source.contains(QStringLiteral(
         "int(QRhiGraphicsPipeline::Points)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "for (const ObjPointPreviewChunk &preparedChunk")));
+        "for (const ObjPointPreviewChunk& preparedChunk")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)
@@ -1545,7 +1546,7 @@ TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPiv
 
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool       _hasCloudBounds = false;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "const QVector<QVector3D> &vertices = _cachedCloudBoxVertices;")));
+        "const QVector<QVector3D>& vertices = _cachedCloudBoxVertices;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "constexpr qreal half_size_pixels = 7.0;")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral(
@@ -1605,8 +1606,7 @@ TEST(CameraSceneRenderContractTest, ShadedTexturedModelKeepsPhotoColorAndAddsLig
         "src/gui/shaders/camera_scene_textured_mesh.frag"));
 
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "_modelColorMode == ModelColorMode::Texture ||\n"
-        "              _modelColorMode == ModelColorMode::Shaded")));
+        "_modelColorMode == ModelColorMode::Texture || _modelColorMode == ModelColorMode::Shaded")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("vViewPosition")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("if (mode == 1)")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
