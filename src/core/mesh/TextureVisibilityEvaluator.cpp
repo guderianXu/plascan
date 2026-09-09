@@ -1,5 +1,7 @@
 #include "TextureMappingV4Internal.h"
 
+#include "TextureCandidateCost.h"
+#include "TextureLabelOptimizer.h"
 #include "TextureOverlapExposure.h"
 
 #include <opencv2/imgproc.hpp>
@@ -7,26 +9,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
-#include <map>
-#include <queue>
 #include <set>
-#include <utility>
 
 namespace xjw::mesh::texture_v4
 {
-
-bool passesUnaryQualityFloor(const FaceAssignment &assignment,
-                             const FaceCandidate &candidate,
-                             float replacement_ratio)
-{
-    if (assignment.candidates.isEmpty())
-    {
-        return false;
-    }
-    return candidate.score >=
-        assignment.candidates.front().score * replacement_ratio;
-}
 
 namespace
 {
@@ -229,11 +215,6 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
         ++result->rejectedAngleCount;
         return {};
     }
-    if (config.enableOutOfFocusFilter && view.sharpnessWeight < 0.35f)
-    {
-        ++result->rejectedResolutionCount;
-        return {};
-    }
     const bool require_final_mesh_visibility = area >= 1.0;
     if (require_final_mesh_visibility &&
         !isFinalMeshFaceVisibleSomewhere(view, face_index))
@@ -267,21 +248,33 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
             normalized_x * normalized_x + normalized_y * normalized_y)),
         0.35f,
         1.0f);
-    const float resolution_score = std::clamp(
-        static_cast<float>(std::sqrt(area) / 8.0), 0.10f, 1.0f);
     const float projected_resolution = std::clamp(
         static_cast<float>(std::sqrt(area)), 0.10f, 64.0f);
+    const int focus_column = std::clamp(
+        static_cast<int>(std::lround(center.x())),
+        0,
+        view.focusQuality.cols - 1);
+    const int focus_row = std::clamp(
+        static_cast<int>(std::lround(center.y())),
+        0,
+        view.focusQuality.rows - 1);
+    const float local_sharpness = std::max(
+        0.0f,
+        view.focusQuality.at<float>(focus_row, focus_column));
     const float score =
         view.qualityWeight *
-        std::pow(depth_score, 2.0f) *
-        std::pow(angle_score, 2.0f) *
+        depth_score *
+        angle_score *
         projected_resolution *
-        std::sqrt(center_score) *
-        std::clamp(view.sharpnessWeight, 0.20f, 1.5f);
+        std::sqrt(center_score);
     return {view_index,
             score,
             angle_score,
-            resolution_score,
+            std::clamp(projected_resolution / 8.0f, 0.10f, 1.0f),
+            local_sharpness,
+            depth_score,
+            projected_resolution * std::sqrt(view.qualityWeight),
+            0,
             strict,
             require_final_mesh_visibility};
 }
@@ -327,11 +320,11 @@ bool sampleProjectedColor(const PreparedView &view,
     return true;
 }
 
-void rankCandidatesByPhotometricConsistency(const PipelineData &data,
-                                             int face_index,
-                                             int maximum_candidates,
-                                             bool enable_photometric_consistency,
-                                             FaceAssignment *assignment)
+void buildRecoveredUnaryCosts(const PipelineData &data,
+                              int face_index,
+                              int maximum_candidates,
+                              const TextureMappingConfig &config,
+                              FaceAssignment *assignment)
 {
     std::sort(assignment->candidates.begin(),
               assignment->candidates.end(),
@@ -344,11 +337,6 @@ void rankCandidatesByPhotometricConsistency(const PipelineData &data,
     {
         assignment->candidates.resize(maximum_candidates);
     }
-    if (!enable_photometric_consistency)
-    {
-        return;
-    }
-
     struct LumaSample
     {
         int candidateIndex = -1;
@@ -374,7 +362,7 @@ void rankCandidatesByPhotometricConsistency(const PipelineData &data,
                                0.7152f * color[1] +
                                0.2126f * color[2]});
     }
-    if (samples.size() >= 3)
+    if (config.enableGhostFilter && samples.size() >= 3)
     {
         QVector<float> values;
         values.reserve(samples.size());
@@ -398,191 +386,165 @@ void rankCandidatesByPhotometricConsistency(const PipelineData &data,
                 (sample.value - median) / scale;
             const float consistency =
                 std::exp(-0.5f * normalized * normalized);
-            assignment->candidates[sample.candidateIndex].score *=
-                0.35f + 0.65f * consistency;
+            FaceCandidate &candidate =
+                assignment->candidates[sample.candidateIndex];
+            candidate.photometricConsistency *= consistency;
         }
-        std::sort(assignment->candidates.begin(),
-                  assignment->candidates.end(),
-                  [](const auto &left, const auto &right)
-        {
-            return left.score > right.score ||
-                (left.score == right.score && left.viewIndex < right.viewIndex);
-        });
     }
+
+    std::vector<TextureCandidateQuality> qualities;
+    qualities.reserve(static_cast<std::size_t>(assignment->candidates.size()));
+    std::vector<float> resolutions;
+    resolutions.reserve(static_cast<std::size_t>(assignment->candidates.size()));
+    for (const FaceCandidate &candidate : assignment->candidates)
+    {
+        qualities.push_back({candidate.sharpness,
+                             candidate.photometricConsistency,
+                             candidate.projectedResolution,
+                             candidate.angleScore});
+        resolutions.push_back(candidate.projectedResolution);
+    }
+    std::sort(resolutions.begin(), resolutions.end(), std::greater<float>());
+    const float face_weight = resolutions.size() >= 2
+        ? resolutions[1]
+        : resolutions.front();
+    const std::vector<std::int32_t> unary_costs =
+        buildTextureCandidateUnaryCosts(
+            qualities,
+            face_weight,
+            TextureCandidateCostFlags{
+                config.enableOutOfFocusFilter,
+                config.enableGhostFilter,
+                true,
+                true});
+    for (int index = 0; index < assignment->candidates.size(); ++index)
+    {
+        FaceCandidate &candidate = assignment->candidates[index];
+        candidate.unaryCost = unary_costs[static_cast<std::size_t>(index)];
+        candidate.score = 1000.0f /
+            (1000.0f + static_cast<float>(candidate.unaryCost));
+    }
+    std::sort(assignment->candidates.begin(),
+              assignment->candidates.end(),
+              [](const FaceCandidate &left, const FaceCandidate &right)
+    {
+        return left.unaryCost < right.unaryCost ||
+            (left.unaryCost == right.unaryCost &&
+             left.viewIndex < right.viewIndex);
+    });
 }
 
-double seamColorPenalty(const PipelineData &data,
-                        int face_index,
-                        int view_index,
-                        int neighbor,
-                        int neighbor_view)
+bool optimizeCameraLabels(const TextureMappingConfig &config,
+                          PipelineData *data,
+                          TextureMappingResult *result,
+                          std::string *error_msg)
 {
-    std::array<double, 3> midpoint{};
-    for (int axis = 0; axis < 3; ++axis)
+    constexpr TextureLabelCost kNoCameraUnary = 10'000'000;
+    const int no_camera_label = data->views.size();
+    TextureLabelOptimizationProblem problem;
+    problem.nodeCount = data->assignments.size();
+    problem.labelCount = no_camera_label + 1;
+    problem.maximumPasses = std::clamp(config.labelOptimizationPasses, 1, 4);
+    problem.initialLabels.reserve(static_cast<std::size_t>(problem.nodeCount));
+    for (const FaceAssignment &assignment : data->assignments)
     {
-        midpoint[axis] =
-            (data.geometry[face_index].centroid[axis] +
-             data.geometry[neighbor].centroid[axis]) * 0.5;
+        problem.initialLabels.push_back(
+            assignment.candidates.isEmpty()
+            ? no_camera_label
+            : assignment.candidates.front().viewIndex);
     }
-    cv::Vec3f first;
-    cv::Vec3f second;
-    if (!sampleProjectedColor(data.views[view_index], midpoint, &first) ||
-        !sampleProjectedColor(data.views[neighbor_view], midpoint, &second))
+    for (int face_index = 0; face_index < data->geometry.size(); ++face_index)
     {
-        return 1.0;
-    }
-    const cv::Vec3f difference = first - second;
-    return std::clamp(
-        static_cast<double>(std::sqrt(difference.dot(difference))) /
-            (std::sqrt(3.0) * 255.0),
-        0.0,
-        1.0);
-}
-
-double assignmentEnergy(int face_index,
-                        int view_index,
-                        const PipelineData &data,
-                        const TextureMappingConfig &config)
-{
-    const FaceCandidate *candidate =
-        candidateForView(data.assignments[face_index], view_index);
-    if (!candidate || candidate->score <= 0.0f)
-    {
-        return std::numeric_limits<double>::infinity();
-    }
-    double energy = -std::log(candidate->score + 1.0e-12f);
-    const FaceGeometry &face = data.geometry[face_index];
-    for (const int neighbor : face.neighbors)
-    {
-        if (neighbor < 0 || neighbor >= data.assignments.size())
+        for (const int neighbor : data->geometry[face_index].neighbors)
         {
-            continue;
-        }
-        const int neighbor_view = data.assignments[neighbor].primaryView;
-        if (neighbor_view >= 0 && neighbor_view != view_index)
-        {
-            const double edge_weight = std::clamp(
-                face.meanEdgeLength /
-                    std::max(data.geometry[neighbor].meanEdgeLength, 1.0e-12),
+            if (neighbor <= face_index)
+            {
+                continue;
+            }
+            const double relative_edge_length = std::clamp(
+                std::min(data->geometry[face_index].meanEdgeLength,
+                         data->geometry[neighbor].meanEdgeLength) /
+                    std::max(data->medianEdgeLength, 1.0e-12),
                 0.25,
                 4.0);
-            energy += config.labelSmoothness * edge_weight;
-            energy += config.labelColorPenalty *
-                seamColorPenalty(
-                    data, face_index, view_index, neighbor, neighbor_view);
+            const double pairwise_scale =
+                config.labelSmoothness *
+                (1000.0 + 250.0 * config.labelColorPenalty);
+            problem.edges.push_back({
+                face_index,
+                neighbor,
+                static_cast<TextureLabelCost>(std::lround(
+                    pairwise_scale * relative_edge_length))});
         }
     }
-    return energy;
-}
-
-void mergeSmallLabelIslands(const TextureMappingConfig &config,
-                            PipelineData *data)
-{
-    if (config.minimumChartFaces <= 1)
+    problem.unaryCost = [data, no_camera_label](int face_index, int label)
     {
-        return;
-    }
-    QVector<bool> visited(data->assignments.size(), false);
-    for (int seed = 0; seed < data->assignments.size(); ++seed)
+        if (label == no_camera_label)
+        {
+            return kNoCameraUnary;
+        }
+        const FaceCandidate *candidate = candidateForView(
+            data->assignments[face_index], label);
+        return candidate
+            ? static_cast<TextureLabelCost>(candidate->unaryCost)
+            : kForbiddenTextureLabelCost;
+    };
+    problem.isCancelled = config.isCancelled;
+    problem.progressFn = [&config, &problem](int pass, int label)
     {
-        if (visited[seed] || data->assignments[seed].primaryView < 0)
+        if (config.progressFn)
         {
-            continue;
+            config.progressFn("正在执行相机标签图割，第 " + std::to_string(pass + 1) +
+                                  " 轮，标签 " + std::to_string(label + 1) + "/" +
+                                  std::to_string(problem.labelCount) + "...",
+                              46 + static_cast<int>((static_cast<std::int64_t>(pass) * problem.labelCount + label) *
+                                  9 / (static_cast<std::int64_t>(problem.maximumPasses) * problem.labelCount)));
         }
-        const int source_label = data->assignments[seed].primaryView;
-        QVector<int> component;
-        std::queue<int> pending;
-        pending.push(seed);
-        visited[seed] = true;
-        while (!pending.empty())
-        {
-            const int face_index = pending.front();
-            pending.pop();
-            component.push_back(face_index);
-            for (const int neighbor : data->geometry[face_index].neighbors)
-            {
-                if (neighbor >= 0 && neighbor < visited.size() &&
-                    !visited[neighbor] &&
-                    data->assignments[neighbor].primaryView == source_label)
-                {
-                    visited[neighbor] = true;
-                    pending.push(neighbor);
-                }
-            }
-        }
-        if (component.size() >= config.minimumChartFaces)
-        {
-            continue;
-        }
+    };
 
-        std::map<int, int> boundary_votes;
-        for (const int face_index : component)
+    const TextureLabelOptimizationResult optimized =
+        optimizeTextureLabels(problem);
+    if (!optimized.solved)
+    {
+        if (optimized.cancelled)
         {
-            for (const int neighbor : data->geometry[face_index].neighbors)
-            {
-                const int label = data->assignments[neighbor].primaryView;
-                if (label >= 0 && label != source_label)
-                {
-                    ++boundary_votes[label];
-                }
-            }
+            result->cancelled = true;
         }
-        if (boundary_votes.empty())
+        if (error_msg)
         {
-            continue;
+            *error_msg = optimized.cancelled
+                ? "纹理映射已取消"
+                : "Natural 纹理相机图割优化失败: " + optimized.error;
         }
-        QVector<std::pair<int, int>> targets;
-        targets.reserve(static_cast<qsizetype>(boundary_votes.size()));
-        for (const auto &[label, votes] : boundary_votes)
-        {
-            targets.push_back({label, votes});
-        }
-        std::sort(targets.begin(), targets.end(), [](const auto &left,
-                                                     const auto &right)
-        {
-            return left.second > right.second ||
-                (left.second == right.second && left.first < right.first);
-        });
-
-        int target_label = -1;
-        for (const auto &[label, votes] : targets)
-        {
-            static_cast<void>(votes);
-            bool can_merge = true;
-            for (const int face_index : component)
-            {
-                const FaceAssignment &assignment =
-                    data->assignments[face_index];
-                const FaceCandidate *candidate =
-                    candidateForView(assignment, label);
-                if (!candidate || !passesUnaryQualityFloor(
-                        assignment,
-                        *candidate,
-                        config.coherentReplacementRatio))
-                {
-                    can_merge = false;
-                    break;
-                }
-            }
-            if (can_merge)
-            {
-                target_label = label;
-                break;
-            }
-        }
-        if (target_label < 0)
-        {
-            continue;
-        }
-        for (const int face_index : component)
-        {
-            FaceAssignment &assignment = data->assignments[face_index];
-            assignment.primaryView = target_label;
-            assignment.primaryScore =
-                candidateForView(assignment, target_label)->score;
-            assignment.optimized = true;
-        }
+        return false;
     }
+    for (int face_index = 0; face_index < data->assignments.size(); ++face_index)
+    {
+        FaceAssignment &assignment = data->assignments[face_index];
+        const int old_label =
+            problem.initialLabels[static_cast<std::size_t>(face_index)];
+        const int label =
+            optimized.labels[static_cast<std::size_t>(face_index)];
+        assignment.optimized = label != old_label;
+        if (label == no_camera_label)
+        {
+            assignment.primaryView = -1;
+            assignment.primaryScore = -1.0f;
+            continue;
+        }
+        const FaceCandidate *candidate = candidateForView(assignment, label);
+        if (!candidate)
+        {
+            if (error_msg)
+            {
+                *error_msg = "Natural 纹理图割选择了不可用的相机标签";
+            }
+            return false;
+        }
+        assignment.primaryView = label;
+        assignment.primaryScore = candidate->score;
+    }
+    return true;
 }
 
 } // namespace
@@ -638,12 +600,15 @@ bool selectTextureViews(const TextureMappingConfig &config,
                 assignment.candidates.push_back(candidate);
             }
         }
-        rankCandidatesByPhotometricConsistency(
-            *data,
-            face_index,
-            maximum_candidates,
-            config.enableGhostFilter,
-            &assignment);
+        if (!assignment.candidates.isEmpty())
+        {
+            buildRecoveredUnaryCosts(
+                *data,
+                face_index,
+                maximum_candidates,
+                config,
+                &assignment);
+        }
 
         if (assignment.candidates.isEmpty() &&
             config.holeFillMode == TextureHoleFillMode::NeighborViewRecovery)
@@ -664,12 +629,15 @@ bool selectTextureViews(const TextureMappingConfig &config,
                     assignment.candidates.push_back(candidate);
                 }
             }
-            rankCandidatesByPhotometricConsistency(
-                *data,
-                face_index,
-                maximum_candidates,
-                config.enableGhostFilter,
-                &assignment);
+            if (!assignment.candidates.isEmpty())
+            {
+                buildRecoveredUnaryCosts(
+                    *data,
+                    face_index,
+                    maximum_candidates,
+                    config,
+                    &assignment);
+            }
             assignment.relaxed = !assignment.candidates.isEmpty();
         }
         if (!assignment.candidates.isEmpty())
@@ -681,85 +649,12 @@ bool selectTextureViews(const TextureMappingConfig &config,
 
     if (config.progressFn)
     {
-        config.progressFn("正在优化纹理相机连续性...", 46);
+        config.progressFn("正在执行 Natural 相机标签图割...", 46);
     }
-    for (int pass = 0; pass < config.labelOptimizationPasses; ++pass)
+    if (!optimizeCameraLabels(config, data, result, errorMsg))
     {
-        int changed = 0;
-        const int face_count = data->assignments.size();
-        for (int step = 0; step < face_count; ++step)
-        {
-            const int face_index = pass % 2 == 0
-                ? step
-                : face_count - step - 1;
-            FaceAssignment &assignment = data->assignments[face_index];
-            if (assignment.primaryView < 0)
-            {
-                continue;
-            }
-            std::set<int> labels;
-            for (const FaceCandidate &candidate : assignment.candidates)
-            {
-                labels.insert(candidate.viewIndex);
-            }
-            for (const int neighbor : data->geometry[face_index].neighbors)
-            {
-                const int label = data->assignments[neighbor].primaryView;
-                if (candidateForView(assignment, label))
-                {
-                    labels.insert(label);
-                }
-            }
-
-            const int old_label = assignment.primaryView;
-            const double old_energy = assignmentEnergy(
-                face_index,
-                old_label,
-                *data,
-                config);
-            double best_energy = old_energy;
-            int best_label = old_label;
-            for (const int label : labels)
-            {
-                const FaceCandidate *candidate = candidateForView(assignment, label);
-                if (!candidate || !passesUnaryQualityFloor(
-                        assignment,
-                        *candidate,
-                        config.coherentReplacementRatio))
-                {
-                    continue;
-                }
-                const double energy = assignmentEnergy(
-                    face_index,
-                    label,
-                    *data,
-                    config);
-                if (energy + 1.0e-9 < best_energy)
-                {
-                    best_energy = energy;
-                    best_label = label;
-                }
-            }
-            if (best_label != old_label)
-            {
-                assignment.primaryView = best_label;
-                assignment.primaryScore =
-                    candidateForView(assignment, best_label)->score;
-                assignment.optimized = true;
-                ++changed;
-            }
-        }
-        if (changed == 0 ||
-            changed < std::max(
-                1, static_cast<int>(data->assignments.size() / 1000)))
-        {
-            break;
-        }
+        return false;
     }
-    // A second deterministic pass allows components joined by the first pass
-    // to absorb the remaining small islands instead of leaving two-face charts.
-    mergeSmallLabelIslands(config, data);
-    mergeSmallLabelIslands(config, data);
 
     std::set<int> used_views;
     for (const FaceAssignment &assignment : data->assignments)

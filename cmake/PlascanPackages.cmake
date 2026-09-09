@@ -70,6 +70,43 @@ if(PLASCAN_REQUIRE_SOURCE_DEPENDENCIES)
 else()
   find_package(OpenEXR ${PLASCAN_SOURCE_OPENEXR_VERSION} CONFIG REQUIRED)
 endif()
+
+# The Windows OpenEXR and Imath packages export /EHsc as an unconditional
+# interface option. CMake otherwise forwards that host-only switch directly to
+# NVCC for mixed C++/CUDA consumers such as mvs, where it is parsed as another input.
+# Keep the package-provided behavior for C++ without leaking it to CUDA units.
+if(MSVC)
+  foreach(_plascan_openexr_target
+      Imath::Imath
+      OpenEXR::Iex
+      OpenEXR::IlmThread
+      OpenEXR::OpenEXRCore
+      OpenEXR::OpenEXR
+      OpenEXR::OpenEXRUtil)
+    if(TARGET ${_plascan_openexr_target})
+      get_target_property(_plascan_openexr_options
+        ${_plascan_openexr_target} INTERFACE_COMPILE_OPTIONS)
+      if(_plascan_openexr_options)
+        set(_plascan_scoped_openexr_options)
+        foreach(_plascan_openexr_option IN LISTS _plascan_openexr_options)
+          if(_plascan_openexr_option STREQUAL "/EHsc")
+            list(APPEND _plascan_scoped_openexr_options
+              "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+          else()
+            list(APPEND _plascan_scoped_openexr_options
+              "${_plascan_openexr_option}")
+          endif()
+        endforeach()
+        set_property(TARGET ${_plascan_openexr_target} PROPERTY
+          INTERFACE_COMPILE_OPTIONS "${_plascan_scoped_openexr_options}")
+      endif()
+    endif()
+  endforeach()
+  unset(_plascan_openexr_option)
+  unset(_plascan_openexr_options)
+  unset(_plascan_openexr_target)
+  unset(_plascan_scoped_openexr_options)
+endif()
 set(PLASCAN_IMATH_TARGET Imath::Imath CACHE INTERNAL "Imath CMake target")
 set(PLASCAN_OPENEXR_TARGET OpenEXR::OpenEXR CACHE INTERNAL "OpenEXR CMake target")
 message(STATUS "plascan: found OpenEXR ${OpenEXR_VERSION} with Imath ${Imath_VERSION}")

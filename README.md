@@ -134,9 +134,10 @@ CPU 构建的 vcpkg installed tree。可先用 `clinfo -l` 确认 OpenCL ICD 能
 仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`。
 Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI 能为 XCB 窗口创建 surface；
 显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
-CUDA 模型后端还需要 Vulkan 开发库和 `glslangValidator`（Linux 可安装 `glslang-tools`，Windows 使用
-Vulkan SDK 并配置 `VULKAN_SDK`）。七阶段取色 shader 在构建时编译并嵌入核心库，运行时无需源码目录或
-shader 编译器；需同一 GPU 的 Vulkan graphics/compute 驱动。CPU 构建不新增此取色依赖。
+CUDA 模型后端还需要 Vulkan 开发库和 `glslangValidator`。标准 vcpkg manifest 会安装
+`glslang[tools]`；也可在 Linux 使用系统 `glslang-tools`，或在 Windows 配置 Vulkan SDK 的
+`VULKAN_SDK`。七阶段取色 shader 在构建时编译并嵌入核心库，运行时无需源码目录或 shader 编译器；
+需同一 GPU 的 Vulkan graphics/compute 驱动。CPU 构建不新增此取色依赖。
 
 Linux 正式交付建议使用 Ubuntu 24.04 x86_64 基线的一键 DEB 工作流。首次配置会由 vcpkg 构建带
 XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、Ninja、`pkg-config` 和 `patchelf`。
@@ -401,7 +402,17 @@ GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：
 估算焦距的针孔相机。无地面控制点时厂商 RPC 保持固定，连接点通过非线性 RPC 前方交会得到 WGS84
 经纬高，并以带 WGS84 原点记录的局部 ENU 米制稀疏云写入工程；RPC/针孔混合批次会明确拒绝。
 
-“生成纹理”的“色彩校正”默认关闭。显式启用后，v4 相机纹理只比较多个视图中通过深度、掩膜和
+“生成纹理”使用 Recovered Natural 流程：候选照片按三角面内的局部清晰度、光度一致性、投影
+分辨率和正视度构造相对代价，以 alpha-expansion 图割生成连续相机标签，再执行旋转相机 chart
+打包、源影像五层 linear-sRGB 多频段融合和子像素抗锯齿烘焙。默认影像下采样 x2、抗锯齿 1x、
+锐化 1.0；界面不再提供与该固定流程冲突的混合模式和内部 chart 边距选项。输入须具备有效相机、
+深度和掩膜，GUI 支持 1024–8192 单页图集；这是参考算法的 CPU 工程适配，不保证原程序像素级一致。
+参见[生成纹理的参数、迁移及实现边界](docs/texture/NATURAL_TEXTURE_PIPELINE.md)。PlaScan 随
+`plascan_recovered_texture_core` 编译 clean-room 的 Natural CPU 内核；参考 Vulkan exact 页面
+路径仍要求五个 RGBA32F band、shader runner、项目 float32 ABI 与固定编解码，当前 GUI/CLI 不会把
+缺少这些工件的 CPU 结果标为 exact 或静默替代。
+
+“生成纹理”的“色彩校正”默认关闭。显式启用后，Natural 相机纹理只比较多个视图中通过深度、掩膜和
 最终网格可见性检查的同一 3D 面中心，在 linear-sRGB 亮度上以中位数/MAD 鲁棒解算每视图标量
 曝光增益，并把增益硬限制在 `0.90–1.10`。共同样本不足、成对亮度差离散度过高或视图重叠图不
 连通时保持全部单位增益，不再根据整幅影像平均亮度强制校正。单视图、v3 兼容纹理和无相机的

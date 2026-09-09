@@ -362,11 +362,13 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
     TextureMappingResult *result,
     std::string *errorMsg)
 {
-    if (config.enableV4)
-    {
-        return generateCameraTexturedModelV4(
-            meshPath, productsDir, config, views, result, errorMsg);
-    }
+    return generateCameraTexturedModelV4(
+        meshPath, productsDir, config, views, result, errorMsg);
+
+    // The pre-Natural camera atlas implementation below is retained only as
+    // historical source while it is removed in a dedicated cleanup.  It is no
+    // longer selectable by any workflow, CLI, GUI, or public configuration.
+#if 0
     if (result)
     {
         *result = TextureMappingResult();
@@ -724,6 +726,7 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         result->unmappedFaceCount = unmapped_faces;
     }
     return true;
+#endif
 }
 
 } // namespace xjw::mesh

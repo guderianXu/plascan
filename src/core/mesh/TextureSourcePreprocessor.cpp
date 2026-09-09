@@ -77,14 +77,26 @@ std::uint64_t edgeKey(int first, int second)
     return (static_cast<std::uint64_t>(low) << 32U) | high;
 }
 
-float imageSharpness(const cv::Mat &gray)
+cv::Mat buildLocalFocusQuality(const cv::Mat &gray)
 {
     cv::Mat laplacian;
     cv::Laplacian(gray, laplacian, CV_32FC1, 3);
-    cv::Scalar mean;
-    cv::Scalar deviation;
-    cv::meanStdDev(laplacian, mean, deviation);
-    return static_cast<float>(deviation[0] * deviation[0]);
+    cv::multiply(laplacian, laplacian, laplacian);
+    const double image_scale = std::max(
+        1.0,
+        std::min(gray.cols / 640.0, gray.rows / 480.0));
+    int kernel_size = std::max(
+        5,
+        static_cast<int>(std::lround(9.0 * image_scale)) | 1);
+    kernel_size = std::min(kernel_size, 51);
+    cv::GaussianBlur(
+        laplacian,
+        laplacian,
+        cv::Size(kernel_size, kernel_size),
+        0.0,
+        0.0,
+        cv::BORDER_REFLECT101);
+    return laplacian;
 }
 
 bool cancelled(const TextureMappingConfig &config)
@@ -152,7 +164,6 @@ bool prepareInputs(const std::string &meshPath,
     }
 
     data->views.clear();
-    QVector<float> sharpness_values;
     for (int index = 0; index < views.size(); ++index)
     {
         const MeshColorView &source = views[index];
@@ -211,6 +222,7 @@ bool prepareInputs(const std::string &meshPath,
             prepared.colorBgr = source.colorBgr;
         }
         cv::cvtColor(prepared.colorBgr, prepared.gray, cv::COLOR_BGR2GRAY);
+        prepared.focusQuality = buildLocalFocusQuality(prepared.gray);
         cv::Mat color_support;
         cv::resize(source.supportMask,
                    color_support,
@@ -250,9 +262,6 @@ bool prepareInputs(const std::string &meshPath,
         prepared.confidence = &source.confidence;
         prepared.depthValidMask = &source.depthValidMask;
         prepared.supportMask = &source.supportMask;
-        const float sharpness = imageSharpness(prepared.gray);
-        sharpness_values.push_back(sharpness);
-        prepared.sharpnessWeight = sharpness;
         data->views.push_back(std::move(prepared));
     }
     if (data->views.isEmpty())
@@ -262,18 +271,6 @@ bool prepareInputs(const std::string &meshPath,
             *errorMsg = "纹理 v4 没有尺寸和类型均有效的相机影像证据";
         }
         return false;
-    }
-
-    QVector<float> sorted_sharpness = sharpness_values;
-    std::sort(sorted_sharpness.begin(), sorted_sharpness.end());
-    const float median_sharpness =
-        sorted_sharpness[sorted_sharpness.size() / 2];
-    for (PreparedView &view : data->views)
-    {
-        view.sharpnessWeight = std::clamp(
-            view.sharpnessWeight / std::max(median_sharpness, 1.0f),
-            0.20f,
-            2.0f);
     }
 
     auto *faces = data->mesh->faces();
@@ -358,7 +355,7 @@ bool prepareInputs(const std::string &meshPath,
     {
         if (errorMsg)
         {
-            *errorMsg = "纹理大小需要超过 2 GiB 的估算工作内存，请降低纹理大小";
+            *errorMsg = "纹理大小需要超过 3 GiB 的估算工作内存，请降低纹理大小";
         }
         return false;
     }

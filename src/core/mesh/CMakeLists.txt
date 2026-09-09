@@ -3,6 +3,13 @@ cmake_minimum_required(VERSION 3.16)
 include(${CMAKE_SOURCE_DIR}/cmake/PlascanSourceDependencyVersions.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/PlascanVerifySourceCheckout.cmake)
 
+if(NOT TARGET plascan_recovered_texture_core)
+    add_subdirectory(
+        "${CMAKE_SOURCE_DIR}/3rdparty/recovered_texture"
+        "${CMAKE_BINARY_DIR}/3rdparty/recovered_texture"
+        EXCLUDE_FROM_ALL)
+endif()
+
 set(plascan_poisson_recon_SOURCE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/PoissonRecon")
 plascan_verify_source_checkout(
     "PoissonRecon"
@@ -108,6 +115,9 @@ add_library(meshing STATIC
     TextureOverlapExposure.cpp
     TextureOverlapExposureSolver.cpp
     TextureMeshVisibility.cpp
+    TextureCandidateCost.cpp
+    TextureSourcePyramids.cpp
+    TextureLabelOptimizer.cpp
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp
     TextureAtlasSampling.cpp
@@ -195,11 +205,13 @@ target_link_libraries(meshing
         plascan_common_io
         Qt6::Core
         Qt6::Gui
+        plascan_recovered_texture_core
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
 install(FILES
     ${CMAKE_SOURCE_DIR}/docs/third_party/PoissonRecon_NOTICE.md
+    ${CMAKE_SOURCE_DIR}/docs/third_party/recovered_texture_NOTICE.md
     DESTINATION share/plascan/licenses
 )
 

@@ -4750,13 +4750,13 @@ TEST(CodeStyleTest, TextureMappingDialogUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_blendCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_antiAliasingCombo = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_texSizeCombo = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_colorCorrCheck = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_ghostFilterCheck = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_seamsMarginSpin = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_paddingSpin = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_keepUnmappedCheck = nullptr;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("_paddingSpin")));
+    EXPECT_FALSE(header.contains(QStringLiteral("_keepUnmappedCheck")));
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_blendCombo"),

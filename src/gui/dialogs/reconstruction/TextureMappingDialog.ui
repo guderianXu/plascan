@@ -2,7 +2,7 @@
 <ui version="4.0">
  <class>TextureMappingDialog</class>
  <widget class="QDialog" name="TextureMappingDialog">
-  <property name="geometry"><rect><x>0</x><y>0</y><width>520</width><height>600</height></rect></property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>520</width><height>540</height></rect></property>
   <property name="minimumSize"><size><width>520</width><height>0</height></size></property>
   <property name="windowTitle"><string>生成纹理</string></property>
   <layout class="QVBoxLayout" name="mainLayout">
@@ -17,13 +17,13 @@
      <layout class="QFormLayout" name="textureForm">
       <property name="horizontalSpacing"><number>18</number></property>
       <property name="verticalSpacing"><number>9</number></property>
-      <item row="0" column="0" colspan="2"><widget class="QLabel" name="fixedWorkflowLabel"><property name="text"><string>流程固定使用全部已定向影像，并自动生成投影视图 UV。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-      <item row="1" column="0"><widget class="QLabel" name="blendLabel"><property name="text"><string>混合模式:</string></property></widget></item>
-      <item row="1" column="1"><widget class="QComboBox" name="m_blendCombo"><property name="toolTip"><string>多影像重叠区域的纹理融合策略。</string></property><item><property name="text"><string>自然 (Natural)</string></property></item><item><property name="text"><string>加权平均</string></property></item><item><property name="text"><string>最佳视角优先</string></property></item></widget></item>
-      <item row="2" column="0"><widget class="QLabel" name="texSizeLabel"><property name="text"><string>纹理大小:</string></property></widget></item>
-       <item row="2" column="1"><widget class="QComboBox" name="m_texSizeCombo"><property name="toolTip"><string>单张纹理图的边长。8192 会显著增加显存和内存需求。</string></property><property name="currentIndex"><number>3</number></property><item><property name="text"><string>1024</string></property></item><item><property name="text"><string>2048</string></property></item><item><property name="text"><string>4096</string></property></item><item><property name="text"><string>8192</string></property></item><item><property name="text"><string>16384</string></property></item></widget></item>
-      <item row="3" column="0"><widget class="QLabel" name="imageDownscaleLabel"><property name="text"><string>影像下采样:</string></property></widget></item>
-       <item row="3" column="1"><widget class="QComboBox" name="m_imageDownscaleCombo"><property name="currentIndex"><number>0</number></property><property name="toolTip"><string>原始分辨率质量最高；x2/x4 可降低大影像项目的内存占用，但会减少纹理细节。</string></property><item><property name="text"><string>原始分辨率</string></property></item><item><property name="text"><string>x2（节省内存）</string></property></item><item><property name="text"><string>x4（最低内存）</string></property></item></widget></item>
+      <item row="0" column="0" colspan="2"><widget class="QLabel" name="fixedWorkflowLabel"><property name="text"><string>从具备有效相机与深度数据的影像生成纹理。自动选择清晰视角、展开 UV，并用 Natural 多频段融合平滑接缝；不改变模型几何。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel" name="texSizeLabel"><property name="text"><string>纹理大小:</string></property></widget></item>
+       <item row="1" column="1"><widget class="QComboBox" name="m_texSizeCombo"><property name="toolTip"><string>单张纹理图的边长，当前支持 1024–8192。源影像与图集的估算工作内存超过 3 GiB 时会提示调整参数。</string></property><property name="currentIndex"><number>3</number></property><item><property name="text"><string>1024</string></property></item><item><property name="text"><string>2048</string></property></item><item><property name="text"><string>4096</string></property></item><item><property name="text"><string>8192</string></property></item></widget></item>
+      <item row="2" column="0"><widget class="QLabel" name="imageDownscaleLabel"><property name="text"><string>影像下采样:</string></property></widget></item>
+       <item row="2" column="1"><widget class="QComboBox" name="m_imageDownscaleCombo"><property name="currentIndex"><number>1</number></property><property name="toolTip"><string>x2 是 Natural 流程的推荐值；原始分辨率保留更多细节但占用更多内存。</string></property><item><property name="text"><string>原始分辨率</string></property></item><item><property name="text"><string>x2（推荐）</string></property></item><item><property name="text"><string>x4（最低内存）</string></property></item></widget></item>
+      <item row="3" column="0"><widget class="QLabel" name="antiAliasingLabel"><property name="text"><string>抗锯齿:</string></property></widget></item>
+      <item row="3" column="1"><widget class="QComboBox" name="m_antiAliasingCombo"><property name="toolTip"><string>每像素采用 1、2×2 或 4×4 个样本；更高倍率改善边缘，烘焙采样量约增至 4 或 16 倍。</string></property><item><property name="text"><string>1x（推荐）</string></property></item><item><property name="text"><string>2x</string></property></item><item><property name="text"><string>4x</string></property></item></widget></item>
      </layout>
     </widget>
    </item>
@@ -33,16 +33,13 @@
      <layout class="QFormLayout" name="qualityForm">
       <property name="horizontalSpacing"><number>18</number></property>
       <property name="verticalSpacing"><number>8</number></property>
-       <item row="0" column="0" colspan="2"><widget class="QCheckBox" name="m_holeFillCheck"><property name="toolTip"><string>对严格匹配失败的面尝试通过深度证据约束的邻视角恢复，并扩展纹理块边缘以减少黑边。</string></property><property name="text"><string>启用空洞恢复与边缘填充</string></property><property name="checked"><bool>true</bool></property></widget></item>
+       <item row="0" column="0" colspan="2"><widget class="QCheckBox" name="m_holeFillCheck"><property name="toolTip"><string>对严格匹配失败的面放宽深度容差，再尝试邻视角恢复。UV 岛的两像素边缘扩展始终启用。</string></property><property name="text"><string>邻视角空洞恢复</string></property><property name="checked"><bool>true</bool></property></widget></item>
        <item row="1" column="0" colspan="2"><widget class="QCheckBox" name="m_ghostFilterCheck"><property name="toolTip"><string>融合多个视角时剔除偏离中值颜色的样本，减少移动物体与错配造成的重影。</string></property><property name="text"><string>启用重影过滤器</string></property><property name="checked"><bool>true</bool></property></widget></item>
-       <item row="2" column="0" colspan="2"><widget class="QCheckBox" name="m_outOfFocusFilterCheck"><property name="toolTip"><string>根据影像拉普拉斯清晰度降低或过滤明显失焦视角。</string></property><property name="text"><string>启用焦外影像过滤器</string></property></widget></item>
-       <item row="3" column="0" colspan="2"><widget class="QCheckBox" name="m_colorCorrCheck"><property name="toolTip"><string>按整张有效物体区域校正各源影像亮度；仅建议曝光确有差异且光照稳定的数据使用。</string></property><property name="text"><string>全局曝光校正（实验性）</string></property><property name="checked"><bool>false</bool></property></widget></item>
+       <item row="2" column="0" colspan="2"><widget class="QCheckBox" name="m_outOfFocusFilterCheck"><property name="toolTip"><string>根据模型各区域在不同影像中的局部清晰度，降低失焦视角的选择优先级。</string></property><property name="text"><string>局部失焦抑制</string></property></widget></item>
+       <item row="3" column="0" colspan="2"><widget class="QCheckBox" name="m_colorCorrCheck"><property name="toolTip"><string>只用共同可见的三维区域估计影像间曝光差异。</string></property><property name="text"><string>重叠区域曝光校正</string></property><property name="checked"><bool>false</bool></property></widget></item>
       <item row="4" column="0" colspan="2"><widget class="QLabel" name="unsupportedOptionsNote"><property name="text"><string>当前不支持指定部分影像或转移已有纹理。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-      <item row="5" column="0"><widget class="QLabel" name="paddingLabel"><property name="text"><string>纹理填充边距:</string></property></widget></item>
-      <item row="5" column="1"><widget class="QSpinBox" name="m_paddingSpin"><property name="toolTip"><string>纹理图内每个图表外扩的像素数，避免边缘采样出现缝隙。</string></property><property name="minimum"><number>2</number></property><property name="maximum"><number>32</number></property><property name="value"><number>4</number></property></widget></item>
-      <item row="6" column="0"><widget class="QLabel" name="seamsMarginLabel"><property name="text"><string>锐化强度:</string></property></widget></item>
-       <item row="6" column="1"><widget class="QDoubleSpinBox" name="m_seamsMarginSpin"><property name="toolTip"><string>纹理烘焙后的反遮罩锐化强度；过高会强化 chart 接缝和三角块，0 表示不锐化。</string></property><property name="decimals"><number>2</number></property><property name="minimum"><double>0.000000000000000</double></property><property name="maximum"><double>2.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="value"><double>0.350000000000000</double></property></widget></item>
-      <item row="7" column="0" colspan="2"><widget class="QCheckBox" name="m_keepUnmappedCheck"><property name="text"><string>保留无纹理区域（以默认色填充）</string></property><property name="checked"><bool>true</bool></property></widget></item>
+      <item row="5" column="0"><widget class="QLabel" name="seamsMarginLabel"><property name="text"><string>锐化强度:</string></property></widget></item>
+       <item row="5" column="1"><widget class="QDoubleSpinBox" name="m_seamsMarginSpin"><property name="toolTip"><string>多频段融合后的反遮罩锐化强度；1.0 为参考流程默认值。</string></property><property name="decimals"><number>2</number></property><property name="minimum"><double>0.000000000000000</double></property><property name="maximum"><double>2.000000000000000</double></property><property name="singleStep"><double>0.050000000000000</double></property><property name="value"><double>1.000000000000000</double></property></widget></item>
      </layout>
     </widget>
    </item>

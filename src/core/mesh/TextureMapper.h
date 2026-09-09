@@ -37,12 +37,12 @@ enum class TextureHoleFillMode
 struct TextureMappingConfig
 {
     int textureSize = 8192;
-    int imageDownscale = 1;
-    int padding = 8;
+    int imageDownscale = 2;
+    int antiAliasing = 1;
+    int padding = 2;
     int maximumCandidateViews = 16;
     int maximumBlendedViews = 8;
-    int labelOptimizationPasses = 8;
-    int minimumChartFaces = 32;
+    int labelOptimizationPasses = 2;
     float atlasUpscaleLimit = 4.0f;
     float minimumConfidence = 0.25f;
     float minimumViewCosine = 0.20f;
@@ -50,9 +50,8 @@ struct TextureMappingConfig
     float edgeLengthDepthTolerance = 2.0f;
     float labelSmoothness = 0.80f;
     float labelColorPenalty = 1.25f;
-    float coherentReplacementRatio = 0.60f;
     float ghostColorThreshold = 36.0f;
-    float sharpeningStrength = 0.0f;
+    float sharpeningStrength = 1.0f;
     int seamBorderBlendRadiusPixels = 16;
     float seamMaximumLinearCorrection = 0.08f;
     float seamGlobalCorrectionStrength = 0.35f;
@@ -65,9 +64,8 @@ struct TextureMappingConfig
     bool enableSeamLeveling = true;
     bool enableFinalMeshVisibility = true;
     bool keepUnmapped = true;
-    bool enableV4 = true;
     std::string blendMethod = "natural";
-    std::string uvMethod = "auto_projective";
+    std::string uvMethod = "natural_mapping";
     std::function<void(const std::string &, int)> progressFn;
     std::function<bool()> isCancelled;
 };
@@ -90,6 +88,7 @@ struct TextureMappingResult
     int coherenceAdjustedFaceCount = 0;
     int unmappedFaceCount = 0;
     int strictMappedFaceCount = 0;
+    int meshRecoveredFaceCount = 0;
     int chartCount = 0;
     int usedViewCount = 0;
     std::uint64_t candidateEvaluationCount = 0;

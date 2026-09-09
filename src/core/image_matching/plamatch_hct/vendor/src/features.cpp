@@ -771,7 +771,12 @@ std::vector<Candidate> detect_candidates(const std::vector<Octave>& pyramid,
                 // GOMP_loop_nonmonotonic_dynamic_* entry points, changing the
                 // detector's private-vector membership and therefore the
                 // critical-append/HCTree row order.
+#if defined(_MSC_VER)
+                // MSVC's OpenMP frontend does not accept schedule modifiers.
+#pragma omp for schedule(dynamic, 1)
+#else
 #pragma omp for schedule(monotonic : dynamic, 1)
+#endif
                 for (int iteration = 0; iteration < iteration_count; ++iteration) {
                     worker_iterations[worker].push_back(
                         static_cast<std::size_t>(iteration));

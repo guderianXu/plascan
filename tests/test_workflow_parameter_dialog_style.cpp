@@ -357,7 +357,7 @@ TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeep
     auto* unsupported_note = dialog.findChild<QLabel*>(QStringLiteral("unsupportedOptionsNote"));
     ASSERT_NE(fixed_note, nullptr);
     ASSERT_NE(unsupported_note, nullptr);
-    EXPECT_TRUE(fixed_note->text().contains(QStringLiteral("全部已定向影像")));
+    EXPECT_TRUE(fixed_note->text().contains(QStringLiteral("有效相机与深度数据")));
     EXPECT_TRUE(unsupported_note->text().contains(QStringLiteral("不支持")));
 
     QSignalSpy settings_spy(&dialog, &TextureMappingDialog::settingsChanged);
@@ -376,13 +376,14 @@ TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeep
     ASSERT_EQ(run_spy.count(), 1);
     const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
     EXPECT_EQ(settings.value(QStringLiteral("textureType")).toString(), QStringLiteral("texture_mapping"));
-    EXPECT_EQ(settings.value(QStringLiteral("textureMappingSettingsRevision")).toInt(), 2);
+    EXPECT_EQ(settings.value(QStringLiteral("textureMappingSettingsRevision")).toInt(), 3);
     EXPECT_EQ(settings.value(QStringLiteral("sourceData")).toString(), QStringLiteral("images"));
-    EXPECT_EQ(settings.value(QStringLiteral("mappingMode")).toString(), QStringLiteral("auto_projective"));
+    EXPECT_EQ(settings.value(QStringLiteral("mappingMode")).toString(), QStringLiteral("natural_mapping"));
     EXPECT_EQ(settings.value(QStringLiteral("holeFillMode")).toString(), QStringLiteral("neighbor_view_recovery"));
-    EXPECT_EQ(settings.value(QStringLiteral("imageDownscale")).toInt(), 1);
+    EXPECT_EQ(settings.value(QStringLiteral("imageDownscale")).toInt(), 2);
+    EXPECT_EQ(settings.value(QStringLiteral("antiAliasing")).toInt(), 1);
     EXPECT_FALSE(settings.value(QStringLiteral("colorCorrection")).toBool());
-    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("sharpeningStrength")).toDouble(), 0.0);
+    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("sharpeningStrength")).toDouble(), 1.0);
     EXPECT_FALSE(settings.value(QStringLiteral("saveEachStep")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("useAssignedImages")).toBool());
     EXPECT_FALSE(settings.value(QStringLiteral("transferTexture")).toBool());
@@ -391,10 +392,42 @@ TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeep
     auto* legacy_sharpening = legacy_dialog.findChild<QDoubleSpinBox*>(QStringLiteral("m_seamsMarginSpin"));
     ASSERT_NE(legacy_sharpening, nullptr);
     legacy_dialog.applySettings(QJsonObject{{QStringLiteral("sharpeningStrength"), 0.35}});
-    EXPECT_DOUBLE_EQ(legacy_sharpening->value(), 0.0);
+    EXPECT_DOUBLE_EQ(legacy_sharpening->value(), 1.0);
     legacy_dialog.applySettings(QJsonObject{{QStringLiteral("textureMappingSettingsRevision"), 2},
                                             {QStringLiteral("sharpeningStrength"), 0.35}});
     EXPECT_DOUBLE_EQ(legacy_sharpening->value(), 0.35);
+}
+
+TEST(WorkflowParameterDialogStyleTest, TextureMappingMigratesLegacyAlgorithmAndRoundTripsQuality)
+{
+    TextureMappingDialog dialog;
+    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("m_blendCombo")), nullptr);
+    auto* anti_aliasing = dialog.findChild<QComboBox*>(QStringLiteral("m_antiAliasingCombo"));
+    ASSERT_NE(anti_aliasing, nullptr);
+    auto* texture_size = dialog.findChild<QComboBox*>(QStringLiteral("m_texSizeCombo"));
+    ASSERT_NE(texture_size, nullptr);
+    EXPECT_EQ(texture_size->findText(QStringLiteral("16384")), -1);
+    dialog.applySettings(QJsonObject{{QStringLiteral("blendMode"), QStringLiteral("weighted_average")},
+                                     {QStringLiteral("padding"), 64},
+                                     {QStringLiteral("keepUnmapped"), false},
+                                     {QStringLiteral("antiAliasing"), 4},
+                                     {QStringLiteral("imageDownscale"), 4},
+                                     {QStringLiteral("holeFillMode"), QStringLiteral("disabled")},
+                                     {QStringLiteral("outOfFocusFilter"), true}});
+    QSignalSpy run_spy(&dialog, &TextureMappingDialog::runRequested);
+    auto* buttons = dialog.findChild<QDialogButtonBox*>(QStringLiteral("m_buttonBox"));
+    ASSERT_NE(buttons, nullptr);
+    buttons->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(settings.value(QStringLiteral("blendMode")).toString(), QStringLiteral("natural"));
+    EXPECT_EQ(settings.value(QStringLiteral("pipeline")).toString(), QStringLiteral("recovered_natural_v1"));
+    EXPECT_EQ(settings.value(QStringLiteral("padding")).toInt(), 2);
+    EXPECT_EQ(settings.value(QStringLiteral("antiAliasing")).toInt(), 4);
+    EXPECT_EQ(settings.value(QStringLiteral("imageDownscale")).toInt(), 4);
+    EXPECT_TRUE(settings.value(QStringLiteral("keepUnmapped")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("outOfFocusFilter")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("holeFill")).toBool());
 }
 
 TEST(WorkflowParameterDialogStyleTest, TiePointAndAerialDialogsReuseStableControlsAndButtons)

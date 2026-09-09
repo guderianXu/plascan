@@ -4,6 +4,14 @@
   "version-string": "1.1.7",
   "builtin-baseline": "3c5d90a305ff00ca841f085a74a7ce74ee777dee",
   "dependencies": [
+    {
+      "name": "glslang",
+      "features": [
+        "tools"
+      ],
+      "host": true,
+      "platform": "!osx"
+    },
     "gtest",
     "json-c",
     "libgeotiff",

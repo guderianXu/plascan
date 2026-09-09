@@ -3804,8 +3804,7 @@ namespace metmodel
             if (!validated_maximum_level.has_value())
             {
                 std::vector<std::uint8_t> reached(nodes.size(), 0U);
-                std::function<void(std::size_t, std::uint32_t)> inspect_tree =
-                    [&](std::size_t node, std::uint32_t level)
+                const auto inspect_tree = [&](auto&& self, std::size_t node, std::uint32_t level) -> void
                 {
                     if (reached[node]++)
                     {
@@ -3816,9 +3815,9 @@ namespace metmodel
                     if (first == std::numeric_limits<std::size_t>::max())
                         return;
                     for (std::size_t slot = 0U; slot != 8U; ++slot)
-                        inspect_tree(first + slot, level + 1U);
+                        self(self, first + slot, level + 1U);
                 };
-                inspect_tree(0U, 0U);
+                inspect_tree(inspect_tree, 0U, 0U);
                 if (std::find(reached.begin(), reached.end(), 0U) != reached.end())
                 {
                     throw std::runtime_error("OOC marching tree contains unreachable nodes");
@@ -3981,14 +3980,13 @@ namespace metmodel
                 return std::array<std::size_t, 2>{first, first + (1U << axis)};
             };
 
-            std::function<void(
-                std::size_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, const Neighborhood&)>
-                discover = [&](std::size_t node,
-                               std::uint32_t level,
-                               std::uint32_t x,
-                               std::uint32_t y,
-                               std::uint32_t z,
-                               const Neighborhood& neighborhood)
+            const auto discover = [&](auto&& self,
+                                      std::size_t node,
+                                      std::uint32_t level,
+                                      std::uint32_t x,
+                                      std::uint32_t y,
+                                      std::uint32_t z,
+                                      const Neighborhood& neighborhood) -> void
             {
                 const auto first = child_start(node);
                 if (first == std::numeric_limits<std::size_t>::max())
@@ -4010,7 +4008,7 @@ namespace metmodel
                         {
                             throw std::runtime_error("OOC marching child neighborhood lost its center");
                         }
-                        discover(child, child_level, child_x, child_y, child_z, child_neighborhood);
+                        self(self, child, child_level, child_x, child_y, child_z, child_neighborhood);
                         continue;
                     }
 
@@ -4103,14 +4101,13 @@ namespace metmodel
                 }
             };
 
-            std::function<void(
-                std::size_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, const Neighborhood&)>
-                close_neighbors = [&](std::size_t node,
-                                      std::uint32_t level,
-                                      std::uint32_t x,
-                                      std::uint32_t y,
-                                      std::uint32_t z,
-                                      const Neighborhood& neighborhood)
+            const auto close_neighbors = [&](auto&& self,
+                                             std::size_t node,
+                                             std::uint32_t level,
+                                             std::uint32_t x,
+                                             std::uint32_t y,
+                                             std::uint32_t z,
+                                             const Neighborhood& neighborhood) -> void
             {
                 const auto first = child_start(node);
                 if (first == std::numeric_limits<std::size_t>::max())
@@ -4127,12 +4124,13 @@ namespace metmodel
                     {
                         if (!overlaps_bounds(child_x, child_y, child_z, child_level))
                             continue;
-                        close_neighbors(child,
-                                        child_level,
-                                        child_x,
-                                        child_y,
-                                        child_z,
-                                        make_child_neighborhood(neighborhood, child_slot));
+                        self(self,
+                             child,
+                             child_level,
+                             child_x,
+                             child_y,
+                             child_z,
+                             make_child_neighborhood(neighborhood, child_slot));
                     }
                     else if (bit_is_set(neighbor_closure, child))
                     {
@@ -4152,8 +4150,8 @@ namespace metmodel
             Neighborhood root_neighborhood{};
             root_neighborhood.fill(-1);
             root_neighborhood[13] = 0;
-            discover(0U, 0U, 0U, 0U, 0U, root_neighborhood);
-            close_neighbors(0U, 0U, 0U, 0U, 0U, root_neighborhood);
+            discover(discover, 0U, 0U, 0U, 0U, 0U, root_neighborhood);
+            close_neighbors(close_neighbors, 0U, 0U, 0U, 0U, 0U, root_neighborhood);
             return output;
         }
 
