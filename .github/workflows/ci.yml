@@ -119,10 +119,8 @@ jobs:
       - name: Configure pinned vcpkg
         run: |
           vcpkg_root="${RUNNER_TEMP}/plascan-vcpkg"
-          git init "${vcpkg_root}"
-          git -C "${vcpkg_root}" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "${vcpkg_root}" fetch --depth 1 origin 3c5d90a305ff00ca841f085a74a7ce74ee777dee
-          git -C "${vcpkg_root}" checkout --detach FETCH_HEAD
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git "${vcpkg_root}"
+          git -C "${vcpkg_root}" checkout 3c5d90a305ff00ca841f085a74a7ce74ee777dee
           "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
           echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
           echo "VCPKG_DEFAULT_BINARY_CACHE=${RUNNER_TEMP}/vcpkg-binary-cache" >> "${GITHUB_ENV}"
