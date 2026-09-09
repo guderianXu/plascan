@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include <vector>
+
+#include <opencv2/geometry/2d.hpp>
 
 namespace xjw::mesh::texture_v4
 {
@@ -19,12 +22,14 @@ bool cancelled(const TextureMappingConfig &config)
 bool projectedBounds(const PreparedView &view,
                      const QVector<FaceGeometry> &geometry,
                      const QVector<int> &faces,
-                     QRect *bounds)
+                     TextureChart *chart)
 {
     double minimum_x = view.colorBgr.cols;
     double minimum_y = view.colorBgr.rows;
     double maximum_x = -1.0;
     double maximum_y = -1.0;
+    std::vector<cv::Point2f> projected_vertices;
+    projected_vertices.reserve(static_cast<std::size_t>(faces.size()) * 3);
     for (const int face_index : faces)
     {
         for (const auto &vertex : geometry[face_index].vertices)
@@ -42,24 +47,43 @@ bool projectedBounds(const PreparedView &view,
             minimum_y = std::min(minimum_y, pixel[1]);
             maximum_x = std::max(maximum_x, pixel[0]);
             maximum_y = std::max(maximum_y, pixel[1]);
+            projected_vertices.emplace_back(static_cast<float>(pixel[0]), static_cast<float>(pixel[1]));
         }
     }
 
-    const double last_column = static_cast<double>(view.colorBgr.cols - 1);
-    const double last_row = static_cast<double>(view.colorBgr.rows - 1);
-    const int left = static_cast<int>(
-        std::clamp(std::floor(minimum_x), 0.0, last_column));
-    const int top = static_cast<int>(
-        std::clamp(std::floor(minimum_y), 0.0, last_row));
-    const int right = static_cast<int>(
-        std::clamp(std::ceil(maximum_x), 0.0, last_column));
-    const int bottom = static_cast<int>(
-        std::clamp(std::ceil(maximum_y), 0.0, last_row));
-    *bounds = QRect(QPoint(left, top), QPoint(right, bottom));
-    return bounds->isValid() && !bounds->isEmpty();
+    chart->sourceOrigin = QPointF(std::floor(minimum_x), std::floor(minimum_y));
+    double width = std::ceil(maximum_x) - chart->sourceOrigin.x() + 1.0;
+    double height = std::ceil(maximum_y) - chart->sourceOrigin.y() + 1.0;
+    const cv::RotatedRect oriented = cv::minAreaRect(projected_vertices);
+    const double oriented_width = std::ceil(oriented.size.width) + 1.0;
+    const double oriented_height = std::ceil(oriented.size.height) + 1.0;
+    if (oriented_width * oriented_height < width * height * 0.95)
+    {
+        // Rotate the whole camera chart as a rigid 2D patch: no re-unwrapping
+        // distortion, and diagonal/elongated patches waste less atlas space.
+        const double angle = oriented.angle * std::acos(-1.0) / 180.0;
+        chart->sourceAxisU = QPointF(std::cos(angle), std::sin(angle));
+        chart->sourceAxisV = QPointF(-std::sin(angle), std::cos(angle));
+        chart->sourceOrigin = QPointF(oriented.center.x, oriented.center.y) -
+            chart->sourceAxisU * (oriented.size.width * 0.5) -
+            chart->sourceAxisV * (oriented.size.height * 0.5);
+        width = oriented_width;
+        height = oriented_height;
+    }
+    chart->sourceBounds = QRect(0, 0, static_cast<int>(width), static_cast<int>(height));
+    return chart->sourceBounds.isValid() && !chart->sourceBounds.isEmpty();
 }
 
 } // namespace
+
+QPointF sourcePixelToChartAtlas(const TextureChart &chart, const QPointF &pixel)
+{
+    const QPointF delta = pixel - chart.sourceOrigin;
+    return QPointF(chart.atlasContentBounds.x() +
+                       QPointF::dotProduct(delta, chart.sourceAxisU) * chart.atlasScale,
+                   chart.atlasContentBounds.y() +
+                       QPointF::dotProduct(delta, chart.sourceAxisV) * chart.atlasScale);
+}
 
 bool buildAndPackCharts(const TextureMappingConfig &config,
                         PipelineData *data,
@@ -144,7 +168,7 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
         if (!projectedBounds(data->views[chart.primaryView],
                              data->geometry,
                              chart.faces,
-                             &chart.sourceBounds))
+                             &chart))
         {
             if (errorMsg)
             {
@@ -171,8 +195,9 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
             {chart.index, chart.sourceBounds.size(), QRect(), padding});
     }
     const int atlas_size = std::clamp(config.textureSize, 1024, 16384);
-    const int fallback_width = config.keepUnmapped
-        && data->mesh && data->mesh->hasColors()
+    const int fallback_width = config.holeFillMode ==
+            TextureHoleFillMode::NeighborViewRecovery ||
+        (config.keepUnmapped && data->mesh && data->mesh->hasColors())
         ? kFallbackAtlasWidth
         : std::clamp(padding * 2 + 2, 8, kFallbackAtlasWidth);
     if (config.progressFn)

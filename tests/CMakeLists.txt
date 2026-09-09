@@ -1027,6 +1027,9 @@ target_link_libraries(test_mesh_reconstructor PRIVATE
 target_include_directories(test_mesh_reconstructor PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mesh
 )
+target_compile_definitions(test_mesh_reconstructor PRIVATE
+    PLASCAN_TEST_TMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/texture-tests"
+)
 gtest_discover_tests(test_mesh_reconstructor)
 
 add_executable(test_texture_overlap_exposure
@@ -1059,6 +1062,7 @@ add_executable(test_texture_natural_blender
 )
 target_link_libraries(test_texture_natural_blender PRIVATE
     meshing
+    plascan_recovered_texture_core
     GTest::gtest_main
 )
 target_include_directories(test_texture_natural_blender PRIVATE

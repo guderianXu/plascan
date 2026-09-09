@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -695,7 +696,7 @@ unsigned hamming_distance(const Keypoint& first, const Keypoint& second) {
         std::uint64_t b = 0;
         std::memcpy(&a, first.descriptor.data() + i, sizeof(a));
         std::memcpy(&b, second.descriptor.data() + i, sizeof(b));
-        result += static_cast<unsigned>(__builtin_popcountll(a ^ b));
+        result += static_cast<unsigned>(std::popcount(a ^ b));
     }
     return result;
 }

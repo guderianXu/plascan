@@ -2,6 +2,8 @@
 
 #include "TextureMappingV4Internal.h"
 
+#include <exception>
+
 namespace xjw::mesh
 {
 
@@ -18,16 +20,28 @@ bool generateCameraTexturedModelV4(const std::string &meshPath,
     }
 
     texture_v4::PipelineData data;
-    if (!texture_v4::prepareInputs(meshPath, views, config, &data, result, errorMsg) ||
-        !texture_v4::selectTextureViews(config, &data, result, errorMsg) ||
-        !texture_v4::buildAndPackCharts(config, &data, result, errorMsg) ||
-        !texture_v4::bakeAndExport(productsDir, config, &data, result, errorMsg))
+    try
     {
+        if (!texture_v4::prepareInputs(meshPath, views, config, &data, result, errorMsg) ||
+            !texture_v4::selectTextureViews(config, &data, result, errorMsg) ||
+            !texture_v4::buildAndPackCharts(config, &data, result, errorMsg) ||
+            !texture_v4::prepareTextureSourcePyramids(config, &data, result, errorMsg) ||
+            !texture_v4::bakeAndExport(productsDir, config, &data, result, errorMsg))
+        {
+            return false;
+        }
+    }
+    catch (const std::exception &exception)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "Natural 纹理生成失败（网格 " + meshPath + "）: " + exception.what();
+        }
         return false;
     }
 
-    result->textureAlgorithm = "camera_projected_atlas_v4";
-    result->uvMethod = "connected_projective_charts";
+    result->textureAlgorithm = "recovered_natural_texture_v1";
+    result->uvMethod = "natural_mapping_camera_charts";
     switch (config.blendMode)
     {
     case TextureBlendMode::BestView:
@@ -37,7 +51,7 @@ bool generateCameraTexturedModelV4(const std::string &meshPath,
         result->blendMethod = "weighted_average";
         break;
     case TextureBlendMode::Natural:
-        result->blendMethod = "natural_robust";
+        result->blendMethod = "natural_multiband";
         break;
     }
     return true;

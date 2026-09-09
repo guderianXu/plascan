@@ -402,17 +402,20 @@ core/
 │   ├── OrbitalSparseScaffoldSurfaceBuilder.h/cpp # 环拍稀疏全局载体的 fail-closed 编排
 │   ├── MeshIO.cpp              # 网格文件 I/O
 │   ├── TextureMapper.h/cpp     # 纹理配置/结果门面及无相机时的顶点色回退
-│   ├── CameraTextureMapper.cpp # camera_projected_atlas_v3 兼容路径与 v4 调度
-│   ├── CameraTextureMapperV4.h/cpp # 多视图纹理 v4 阶段编排
-│   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度和网格邻接准备
+│   ├── CameraTextureMapper.cpp # 默认 v4 Natural 调度；旧 camera atlas 仅保留为编译期不可达的历史实现
+│   ├── CameraTextureMapperV4.h/cpp # Recovered Natural 多视图纹理阶段编排
+│   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、局部清晰度图和网格邻接准备
 │   ├── TextureOverlapExposure.h/cpp + Solver.cpp # 共同可见 3D 点的 linear-sRGB 鲁棒曝光增益与 fail-closed 诊断
-│   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、光度一致性 top-K 评分、ICM 与小孤岛合并
-│   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
+│   ├── TextureCandidateCost.h/cpp # 输入校验及 recovered Record20 面内相机一元代价适配
+│   ├── TextureLabelOptimizer.h/cpp # 整数容量、多标签 alpha-expansion 图割与取消处理
+│   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、Recovered Natural 一元代价和全局相机标签图割
+│   ├── TextureChartBuilder.cpp # 相机标签连通域、最小面积旋转投影 chart 与图集坐标变换
+│   ├── TextureSourcePyramids.cpp # 从最终网格可见面构建 winner 掩膜（含 recovered CPU 小连通域过滤）及逐相机源金字塔
 │   ├── TextureAtlasPacker.h/cpp # 自适应 MaxRects/shelf chart 图集调度与缩放搜索
 │   ├── TextureAtlasMaxRects.cpp # 有操作预算的确定性无旋转 MaxRects 实现
 │   ├── TextureAtlasSampling.h/cpp # 逐纹素深度/掩膜复核、实样本 medoid 与 Natural 鲁棒融合
-│   ├── TextureNaturalBlender.h/cpp # linear-sRGB 掩膜金字塔的 Natural 低频融合与主视图细节保留
-│   ├── TextureAtlasBaker.cpp   # 图集光栅化、边界填充、锐化及 OBJ/MTL/PNG 输出
+│   ├── TextureNaturalBlender.h/cpp # 源影像五层四倍降采样金字塔、winner 距离权重与线性频带融合
+│   ├── TextureAtlasBaker.cpp   # 子像素抗锯齿光栅化、边界填充、锐化及 OBJ/MTL/PNG 输出
 │   ├── StudioForegroundMask.h/cpp # 黑色摄影背景检测、主体轮廓提取与可复用前景掩模
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色
@@ -1347,14 +1350,20 @@ Marching Cubes 为每个三角形生成三个独立顶点后再依赖坐标焊�
 单波段 TIFF 在请求彩色读取时会由公共 ImageIO 明确扩展为三通道 BGR，避免顶点着色器把有效灰度影像
 误判为无颜色源。顶点色经过网格 z-buffer、深度、
 视角及颜色离群检查；OBJ 纹理使用原始相机影像的逐面投影 UV 图集，不再把顶点色作全局平面烘焙。
-`camera_projected_atlas_v4` 对三顶点、三边中点和质心执行支持掩膜与深度一致性检查，每个面保留至多
-16 个候选视角、逐纹素融合至多 8 个有效样本，再以 ICM 相邻面能量和小孤岛合并生成连续主视角标签。
-相同标签的连通面构成裁剪 chart，经确定性 MaxRects 打包后逐纹素反投影；Natural、加权平均和最佳
-视角模式分别执行真实的多视图采样，Natural 可按中值颜色剔除鬼影。真实共享边建立稳健 chart 偏移
+`recovered_natural_texture_v1` 对三顶点、三边中点和质心执行支持掩膜与深度一致性检查，每个面保留
+至多 16 个候选视角，并按当前面内的局部清晰度、光度一致性、投影分辨率和正视度构造相对一元代价。
+主视角不再由 ICM 扫面和事后小孤岛合并决定，而是以确定性 alpha-expansion 最小化全局 Potts 接缝能量。
+相同标签的连通面构成相机投影 chart，先按最小面积包围矩形旋转，再经确定性 MaxRects/shelf 打包。
+Natural 为每张候选影像构建五层四倍降采样的掩膜归一化 linear-sRGB 图像金字塔及 winner 距离权重，
+逐纹素反投影采样对应的差分频带，保留主视图高频并吸收多视图低频。融合发生在源影像而非打包后的
+UV 图集上，避免相邻无关 chart 的频带串色；光栅化支持 1x/2x/4x 子像素抗锯齿，并在线性空间累计。
+真实共享边建立稳健 chart 偏移
 图，边界带应用完整校正，chart 内部仅应用 0.35 的有界校正；单通道线性校正上限保持 0.08，避免把
 真实亮暗区域全局压平。无可靠视图的面使用安全回退颜色，不能采样照片黑背景。
 输出报告包含严格/宽松映射面、chart/视角数、各类拒绝原因、图集占用率、中位纹素密度、接缝色差
-和峰值内存估算；`camera_projected_atlas_v3` 仅作为配置级兼容回退保留。
+和峰值内存估算；`camera_projected_atlas_v3` 仅作为配置级兼容回退保留。GUI 固定使用这一 Natural
+流程，默认影像下采样 x2、chart 边距 2 像素、抗锯齿 1x、锐化 1.0；工作流异步取消与 OBJ/MTL/PNG
+输出契约保持不变。
 GUI 的生成模型入口默认请求 OBJ，同时始终保留 `model_from_mesh.ply` 作为几何/兼容回退；项目记录保存
 `model_obj`、`model_mtl`、`texture_image`/`texture_png` 和最终显示路径。工作区选择模型时优先异步加载
 OBJ，在后台解析 MTL 与纹理图，并在 QRhi 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；

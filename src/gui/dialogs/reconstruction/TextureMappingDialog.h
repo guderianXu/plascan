@@ -4,14 +4,13 @@
 #include <QJsonObject>
 
 class QComboBox;
-class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 
 /**
  * @brief 纹理映射对话框。
  *
- * 将原始图像纹理投影到网格面上，支持多种混合策略和分辨率选择。
+ * 使用 Natural 映射流程从已定向影像生成网格纹理。
  */
 class TextureMappingDialog : public QDialog
 {
@@ -46,14 +45,12 @@ private:
     /// @return 配置参数 JSON 对象。
     QJsonObject collectSettings() const;
 
-    QComboBox *_blendCombo = nullptr;       ///< 混合方式
     QComboBox *_texSizeCombo = nullptr;     ///< 纹理分辨率
     QComboBox *_imageDownscaleCombo = nullptr; ///< 源影像下采样倍率
+    QComboBox *_antiAliasingCombo = nullptr; ///< 烘焙抗锯齿采样倍率
     QCheckBox *_holeFillCheck = nullptr;    ///< 纹理孔洞填充
     QCheckBox *_colorCorrCheck = nullptr;   ///< 色彩一致性校正
     QCheckBox *_ghostFilterCheck = nullptr; ///< 去除鬼影
     QCheckBox *_outOfFocusFilterCheck = nullptr; ///< 焦外影像过滤
-    QDoubleSpinBox *_seamsMarginSpin = nullptr; ///< 接缝边距
-    QSpinBox *_paddingSpin = nullptr;       ///< 纹理填充边距
-    QCheckBox *_keepUnmappedCheck = nullptr; ///< 保留无纹理区域
+    QDoubleSpinBox *_seamsMarginSpin = nullptr; ///< 锐化强度
 };

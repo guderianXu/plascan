@@ -1,9 +1,15 @@
 # Compile the supplied GLSL sources and embed SPIR-V in the core library, so
 # installed CLI/GUI programs never depend on the source tree or external files.
 find_package(Vulkan REQUIRED)
+set(_plascan_glslang_hints "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    list(APPEND _plascan_glslang_hints
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/glslang")
+endif()
 find_program(PLASCAN_GLSLANG_VALIDATOR NAMES glslangValidator
-    HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin"
+    HINTS ${_plascan_glslang_hints}
     REQUIRED)
+unset(_plascan_glslang_hints)
 
 set(recovered_shader_outputs)
 foreach(shader_spec IN ITEMS

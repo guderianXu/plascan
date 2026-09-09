@@ -7,12 +7,11 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QSignalBlocker>
-#include <QSpinBox>
 
 namespace
 {
 
-constexpr int kTextureMappingSettingsRevision = 2;
+constexpr int kTextureMappingSettingsRevision = 3;
 
 } // namespace
 
@@ -24,28 +23,25 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     xjw::gui::dialogs::configureWorkflowParameterDialog(this);
 
     _texSizeCombo = form.m_texSizeCombo;
-    _blendCombo = form.m_blendCombo;
     _imageDownscaleCombo = form.m_imageDownscaleCombo;
+    _antiAliasingCombo = form.m_antiAliasingCombo;
     _holeFillCheck = form.m_holeFillCheck;
     _colorCorrCheck = form.m_colorCorrCheck;
     _ghostFilterCheck = form.m_ghostFilterCheck;
     _outOfFocusFilterCheck = form.m_outOfFocusFilterCheck;
     _seamsMarginSpin = form.m_seamsMarginSpin;
-    _paddingSpin = form.m_paddingSpin;
-    _keepUnmappedCheck = form.m_keepUnmappedCheck;
 
-    // Quality-first default. Persisted settings applied after construction may
-    // still select x2/x4 explicitly for memory-constrained projects.
-    _imageDownscaleCombo->setCurrentIndex(0);
+    _imageDownscaleCombo->setCurrentIndex(1);
     _colorCorrCheck->setChecked(false);
     _colorCorrCheck->setToolTip(tr(
         "仅用共同可见的同一三维点估计曝光；每个可靠连通分量独立校正，孤立视图保持原值，"
         "每张影像增益限制为 0.90–1.10。"));
-    // Sharpening exaggerates chart boundaries on dense meshes. Keep the
-    // projection neutral by default and leave sharpening as an explicit opt-in.
-    _seamsMarginSpin->setValue(0.0);
+    _seamsMarginSpin->setValue(1.0);
 
-    for (QComboBox *combo_box : {_texSizeCombo, _blendCombo, _imageDownscaleCombo})
+    for (QComboBox *combo_box : {
+             _texSizeCombo,
+             _imageDownscaleCombo,
+             _antiAliasingCombo})
     {
         xjw::gui::dialogs::configureWorkflowComboBox(combo_box);
     }
@@ -53,26 +49,22 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
              _holeFillCheck,
              _colorCorrCheck,
              _ghostFilterCheck,
-             _outOfFocusFilterCheck,
-             _keepUnmappedCheck})
+             _outOfFocusFilterCheck})
     {
         xjw::gui::dialogs::configureWorkflowCheckBox(check_box);
     }
     xjw::gui::dialogs::configureWorkflowInputWidget(_seamsMarginSpin);
-    xjw::gui::dialogs::configureWorkflowInputWidget(_paddingSpin);
     xjw::gui::dialogs::configureWorkflowButtonBox(form.m_buttonBox, tr("生成"));
 
     auto changed = [this]() { emitSettingsNow(); };
     connect(_texSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(_imageDownscaleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_antiAliasingCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(_holeFillCheck, &QCheckBox::toggled, this, changed);
     connect(_colorCorrCheck, &QCheckBox::toggled, this, changed);
     connect(_ghostFilterCheck, &QCheckBox::toggled, this, changed);
     connect(_outOfFocusFilterCheck, &QCheckBox::toggled, this, changed);
     connect(_seamsMarginSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
-    connect(_paddingSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
-    connect(_keepUnmappedCheck, &QCheckBox::toggled, this, changed);
 
     connect(form.m_buttonBox, &QDialogButtonBox::accepted,
             this, &TextureMappingDialog::onRun);
@@ -87,15 +79,13 @@ QJsonObject TextureMappingDialog::collectSettings() const
     o["textureType"] = QStringLiteral("texture_mapping");
     o["sourceData"] = QStringLiteral("images");
     o["textureSize"] = _texSizeCombo->currentText().toInt();
-    o["blendMethod"] = _blendCombo->currentText();
-    o["blendMode"] = _blendCombo->currentIndex() == 1
-        ? QStringLiteral("weighted_average")
-        : (_blendCombo->currentIndex() == 2
-               ? QStringLiteral("best_view")
-               : QStringLiteral("natural"));
-    o["uvMethod"] = QStringLiteral("自动投影（相机 chart）");
-    o["mappingMode"] = QStringLiteral("auto_projective");
+    o["pipeline"] = QStringLiteral("recovered_natural_v1");
+    o["blendMethod"] = QStringLiteral("Natural 多频段融合");
+    o["blendMode"] = QStringLiteral("natural");
+    o["uvMethod"] = QStringLiteral("Natural 映射（相机 chart）");
+    o["mappingMode"] = QStringLiteral("natural_mapping");
     o["imageDownscale"] = 1 << _imageDownscaleCombo->currentIndex();
+    o["antiAliasing"] = 1 << _antiAliasingCombo->currentIndex();
     o["saveEachStep"] = false;
     o["holeFill"] = _holeFillCheck->isChecked();
     o["holeFillMode"] = _holeFillCheck->isChecked()
@@ -107,23 +97,21 @@ QJsonObject TextureMappingDialog::collectSettings() const
     o["useAssignedImages"] = false;
     o["transferTexture"] = false;
     o["sharpeningStrength"] = _seamsMarginSpin->value();
-    o["padding"] = _paddingSpin->value();
-    o["keepUnmapped"] = _keepUnmappedCheck->isChecked();
+    o["padding"] = 2;
+    o["keepUnmapped"] = true;
     return o;
 }
 
 void TextureMappingDialog::applySettings(const QJsonObject &s)
 {
     const QSignalBlocker texture_size_blocker(_texSizeCombo);
-    const QSignalBlocker blend_blocker(_blendCombo);
     const QSignalBlocker downscale_blocker(_imageDownscaleCombo);
+    const QSignalBlocker anti_aliasing_blocker(_antiAliasingCombo);
     const QSignalBlocker hole_fill_blocker(_holeFillCheck);
     const QSignalBlocker color_correction_blocker(_colorCorrCheck);
     const QSignalBlocker ghost_filter_blocker(_ghostFilterCheck);
     const QSignalBlocker focus_filter_blocker(_outOfFocusFilterCheck);
     const QSignalBlocker sharpening_blocker(_seamsMarginSpin);
-    const QSignalBlocker padding_blocker(_paddingSpin);
-    const QSignalBlocker keep_unmapped_blocker(_keepUnmappedCheck);
 
     if (s.contains("textureSize"))
     {
@@ -138,29 +126,11 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
         const int downscale = s["imageDownscale"].toInt(1);
         _imageDownscaleCombo->setCurrentIndex(downscale >= 4 ? 2 : downscale >= 2 ? 1 : 0);
     }
-    if (s.contains("blendMethod"))
+    if (s.contains("antiAliasing"))
     {
-        const int i = _blendCombo->findText(s["blendMethod"].toString());
-        if (i >= 0)
-        {
-            _blendCombo->setCurrentIndex(i);
-        }
-    }
-    if (s.contains("blendMode"))
-    {
-        const QString blend_mode = s["blendMode"].toString();
-        _blendCombo->setCurrentIndex(
-            blend_mode == QStringLiteral("weighted_average")
-            ? 1
-            : (blend_mode == QStringLiteral("best_view") ? 2 : 0));
-    }
-    if (s.contains("padding"))
-    {
-        _paddingSpin->setValue(s["padding"].toInt());
-    }
-    if (s.contains("keepUnmapped"))
-    {
-        _keepUnmappedCheck->setChecked(s["keepUnmapped"].toBool());
+        const int anti_aliasing = s["antiAliasing"].toInt(1);
+        _antiAliasingCombo->setCurrentIndex(
+            anti_aliasing >= 4 ? 2 : anti_aliasing >= 2 ? 1 : 0);
     }
     if (s.contains("holeFill")) _holeFillCheck->setChecked(s["holeFill"].toBool(true));
     if (s.contains("holeFillMode"))
@@ -174,15 +144,14 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
     if (s.contains("sharpeningStrength"))
     {
         double sharpening_strength =
-            s["sharpeningStrength"].toDouble(0.0);
+            s["sharpeningStrength"].toDouble(1.0);
         const int settings_revision =
             s["textureMappingSettingsRevision"].toInt(0);
-        if (settings_revision < kTextureMappingSettingsRevision &&
+        if (settings_revision == 0 &&
             qFuzzyCompare(sharpening_strength, 0.35))
         {
-            // Revision 1 persisted 0.35 as the implicit default. Migrate only
-            // that exact legacy value so current explicit choices stay intact.
-            sharpening_strength = 0.0;
+            // The unversioned dialog persisted 0.35 as an implicit default.
+            sharpening_strength = 1.0;
         }
         _seamsMarginSpin->setValue(sharpening_strength);
     }

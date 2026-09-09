@@ -533,6 +533,8 @@ QJsonObject textureResultToJson(
     object[QStringLiteral("texture_unmapped_face_count")] = result.unmappedFaceCount;
     object[QStringLiteral("texture_strict_mapped_face_count")] =
         result.strictMappedFaceCount;
+    object[QStringLiteral("texture_mesh_recovered_face_count")] =
+        result.meshRecoveredFaceCount;
     object[QStringLiteral("texture_chart_count")] = result.chartCount;
     object[QStringLiteral("texture_used_view_count")] = result.usedViewCount;
     object[QStringLiteral("texture_candidate_evaluation_count")] =
@@ -610,6 +612,8 @@ QJsonObject textureResultToJson(
     {
         object[QStringLiteral("effective_texture_image_downscale")] =
             std::clamp(config->imageDownscale, 1, 8);
+        object[QStringLiteral("effective_texture_anti_aliasing")] =
+            std::clamp(config->antiAliasing, 1, 4);
         object[QStringLiteral("effective_texture_atlas_upscale_limit")] =
             std::clamp(config->atlasUpscaleLimit, 1.0f, 4.0f);
         object[QStringLiteral("effective_texture_padding")] =
@@ -3997,6 +4001,8 @@ xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &set
         config.textureSize = settings.value(QStringLiteral("textureSize")).toInt(config.textureSize);
         config.imageDownscale =
             settings.value(QStringLiteral("imageDownscale")).toInt(config.imageDownscale);
+        config.antiAliasing =
+            settings.value(QStringLiteral("antiAliasing")).toInt(config.antiAliasing);
         config.atlasUpscaleLimit = static_cast<float>(
             settings.value(QStringLiteral("atlasUpscaleLimit"))
                 .toDouble(config.atlasUpscaleLimit));

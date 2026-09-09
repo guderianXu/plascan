@@ -6,6 +6,14 @@
   "dependencies": [
     "apriltag",
     {
+      "name": "glslang",
+      "features": [
+        "tools"
+      ],
+      "host": true,
+      "platform": "!osx"
+    },
+    {
       "name": "gdal",
       "default-features": false,
       "features": [

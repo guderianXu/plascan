@@ -24,6 +24,7 @@
 #include <exception>
 #include <fstream>
 #include <limits>
+#include <queue>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -209,12 +210,170 @@ void expandPadding(cv::Mat *atlas,
             if (mask_roi.at<std::uint8_t>(row, column) == 0 &&
                 expanded_mask.at<std::uint8_t>(row, column) != 0)
             {
-                atlas_roi.at<cv::Vec3b>(row, column) =
-                    colors[labels.at<int>(row, column)];
+                cv::Vec3f color;
+                if (sampleSupportedBilinear(
+                        atlas_roi, mask_roi, column, row, &color))
+                {
+                    atlas_roi.at<cv::Vec3b>(row, column) = cv::Vec3b(
+                        cv::saturate_cast<std::uint8_t>(color[0]),
+                        cv::saturate_cast<std::uint8_t>(color[1]),
+                        cv::saturate_cast<std::uint8_t>(color[2]));
+                }
+                else
+                {
+                    atlas_roi.at<cv::Vec3b>(row, column) =
+                        colors[labels.at<int>(row, column)];
+                }
             }
         }
     }
     expanded_mask.copyTo(mask_roi);
+}
+
+// Save-stage page interpolation adapted from the recovered Natural pipeline.
+// The mask is authoritative: zero-valued colour is never treated as missing.
+void interpolateMaskedPyramid(cv::Mat *image, cv::Mat *mask, bool expandSeed)
+{
+    if (!image || !mask || image->empty() || mask->empty() ||
+        image->type() != CV_8UC3 || mask->type() != CV_8UC1 ||
+        image->size() != mask->size())
+    {
+        return;
+    }
+    if (expandSeed)
+    {
+        cv::Mat expanded_image = image->clone();
+        cv::Mat expanded_mask = mask->clone();
+        for (int row = 0; row < image->rows; ++row)
+        {
+            for (int column = 0; column < image->cols; ++column)
+            {
+                if (mask->at<std::uint8_t>(row, column) != 0)
+                {
+                    continue;
+                }
+                int best_distance = std::numeric_limits<int>::max();
+                cv::Point best(-1, -1);
+                for (int offset_y = -1; offset_y <= 1; ++offset_y)
+                {
+                    for (int offset_x = -1; offset_x <= 1; ++offset_x)
+                    {
+                        const int source_x = column + offset_x;
+                        const int source_y = row + offset_y;
+                        if (source_x < 0 || source_y < 0 ||
+                            source_x >= image->cols || source_y >= image->rows ||
+                            mask->at<std::uint8_t>(source_y, source_x) == 0)
+                        {
+                            continue;
+                        }
+                        const int distance =
+                            offset_x * offset_x + offset_y * offset_y;
+                        if (distance <= best_distance)
+                        {
+                            best_distance = distance;
+                            best = cv::Point(source_x, source_y);
+                        }
+                    }
+                }
+                if (best.x >= 0)
+                {
+                    expanded_image.at<cv::Vec3b>(row, column) =
+                        image->at<cv::Vec3b>(best.y, best.x);
+                    expanded_mask.at<std::uint8_t>(row, column) = 255;
+                }
+            }
+        }
+        *image = std::move(expanded_image);
+        *mask = std::move(expanded_mask);
+    }
+    if (image->cols <= 1 && image->rows <= 1)
+    {
+        return;
+    }
+    const int half_width = (image->cols + 1) / 2;
+    const int half_height = (image->rows + 1) / 2;
+    cv::Mat half_image(half_height, half_width, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat half_mask(half_height, half_width, CV_8UC1, cv::Scalar(0));
+    for (int row = 0; row < half_height; ++row)
+    {
+        for (int column = 0; column < half_width; ++column)
+        {
+            cv::Vec3d sum(0.0, 0.0, 0.0);
+            double normalization = 0.0;
+            for (int offset_y = 0; offset_y < 2; ++offset_y)
+            {
+                for (int offset_x = 0; offset_x < 2; ++offset_x)
+                {
+                    const int source_x = 2 * column + offset_x;
+                    const int source_y = 2 * row + offset_y;
+                    if (source_x >= image->cols || source_y >= image->rows)
+                    {
+                        continue;
+                    }
+                    const float weight = mask->at<std::uint8_t>(source_y, source_x);
+                    if (weight == 0.0f)
+                    {
+                        continue;
+                    }
+                    sum += cv::Vec3d(image->at<cv::Vec3b>(source_y, source_x)) * weight;
+                    normalization += weight;
+                }
+            }
+            if (normalization > 0.0)
+            {
+                half_image.at<cv::Vec3b>(row, column) = cv::Vec3b(
+                    static_cast<std::uint8_t>(sum[0] / normalization),
+                    static_cast<std::uint8_t>(sum[1] / normalization),
+                    static_cast<std::uint8_t>(sum[2] / normalization));
+                half_mask.at<std::uint8_t>(row, column) = 255;
+            }
+        }
+    }
+    interpolateMaskedPyramid(&half_image, &half_mask, false);
+    for (int row = 0; row < image->rows; ++row)
+    {
+        for (int column = 0; column < image->cols; ++column)
+        {
+            if (mask->at<std::uint8_t>(row, column) != 0)
+            {
+                continue;
+            }
+            const double source_x = std::max(0.0, 0.5 * column - 0.25);
+            const double source_y = std::max(0.0, 0.5 * row - 0.25);
+            const int left = static_cast<int>(source_x);
+            const int top = static_cast<int>(source_y);
+            const double fraction_x = source_x - left;
+            const double fraction_y = source_y - top;
+            cv::Vec3d sum(0.0, 0.0, 0.0);
+            double normalization = 0.0;
+            for (int offset_y = 0; offset_y < 2; ++offset_y)
+            {
+                for (int offset_x = 0; offset_x < 2; ++offset_x)
+                {
+                    const int sample_x = left + offset_x;
+                    const int sample_y = top + offset_y;
+                    if (sample_x >= half_image.cols || sample_y >= half_image.rows)
+                    {
+                        continue;
+                    }
+                    const double weight =
+                        (offset_x == 0 ? 1.0 - fraction_x : fraction_x) *
+                        (offset_y == 0 ? 1.0 - fraction_y : fraction_y);
+                    sum += cv::Vec3d(half_image.at<cv::Vec3b>(sample_y, sample_x)) *
+                        weight;
+                    normalization += weight;
+                }
+            }
+            if (normalization > 0.0)
+            {
+                image->at<cv::Vec3b>(row, column) = cv::Vec3b(
+                    static_cast<std::uint8_t>(sum[0] / normalization),
+                    static_cast<std::uint8_t>(sum[1] / normalization),
+                    static_cast<std::uint8_t>(sum[2] / normalization));
+                mask->at<std::uint8_t>(row, column) = 255;
+            }
+        }
+    }
 }
 
 void sharpenTexture(cv::Mat *atlas,
@@ -556,23 +715,19 @@ bool sampleFaceTextureColor(const PipelineData &data,
                             const TextureMappingConfig &config,
                             int padding,
                             TextureMappingResult *result,
-                            cv::Vec3b *color,
-                            cv::Vec3b *primaryColor = nullptr,
-                            bool *hasPrimaryColor = nullptr)
+                            cv::Vec3f *color)
 {
     if (!color)
     {
         return false;
     }
-    if (hasPrimaryColor)
-    {
-        *hasPrimaryColor = false;
-    }
     std::vector<WeightedColor> samples;
+    std::vector<TexturePyramidSample> pyramid_samples;
     const int maximum_samples = config.blendMode == TextureBlendMode::BestView
         ? 1
         : std::clamp(config.maximumBlendedViews, 1, 8);
     WeightedColor missing_primary_sample;
+    TexturePyramidSample missing_primary_pyramid;
     bool has_missing_primary_sample = false;
     auto append_sample = [&](const FaceCandidate &candidate)
     {
@@ -586,28 +741,27 @@ bool sampleFaceTextureColor(const PipelineData &data,
             padding,
             &sample,
             face_index);
+        TexturePyramidSample pyramid_sample;
+        pyramid_sample.pyramid = &data.views[candidate.viewIndex].blendPyramid;
+        pyramid_sample.encodedColor = sample.color;
+        pyramid_sample.confidence = sample.weight;
+        pyramid_sample.primary = candidate.viewIndex == assignment.primaryView;
+        double pixel[2]{};
+        double depth = 0.0;
+        data.views[candidate.viewIndex].colorCamera.projectWorldPointWithDepth(world.data(), pixel, depth);
+        pyramid_sample.pixel = cv::Point2d(pixel[0], pixel[1]);
         if (status == TextureSampleStatus::Sampled)
         {
             samples.push_back(sample);
+            pyramid_samples.push_back(pyramid_sample);
         }
         else if (status == TextureSampleStatus::MissingDepthEvidence &&
                  candidate.strict &&
                  candidate.viewIndex == assignment.primaryView)
         {
             missing_primary_sample = sample;
+            missing_primary_pyramid = pyramid_sample;
             has_missing_primary_sample = true;
-        }
-        if (candidate.viewIndex == assignment.primaryView &&
-            status != TextureSampleStatus::Rejected && primaryColor)
-        {
-            *primaryColor = cv::Vec3b(
-                cv::saturate_cast<std::uint8_t>(sample.color[0]),
-                cv::saturate_cast<std::uint8_t>(sample.color[1]),
-                cv::saturate_cast<std::uint8_t>(sample.color[2]));
-            if (hasPrimaryColor)
-            {
-                *hasPrimaryColor = true;
-            }
         }
     };
     const auto primary_candidate = std::find_if(
@@ -636,12 +790,16 @@ bool sampleFaceTextureColor(const PipelineData &data,
     if (samples.empty() && has_missing_primary_sample)
     {
         samples.push_back(missing_primary_sample);
+        pyramid_samples.push_back(missing_primary_pyramid);
     }
     if (samples.empty())
     {
         return false;
     }
-    *color = blendTextureSamples(std::move(samples), config, result);
+    *color = config.blendMode == TextureBlendMode::Natural
+        ? blendTexturePyramidSamples(pyramid_samples, config.enableGhostFilter,
+                                     config.ghostColorThreshold, &result->rejectedColorOutlierCount)
+        : textureSrgbToLinear(cv::Vec3f(blendTextureSamples(std::move(samples), config, result)));
     return true;
 }
 
@@ -690,11 +848,10 @@ bool bakeAndExport(const std::string &productsDir,
         return false;
     }
     const int atlas_size = std::clamp(config.textureSize, 1024, 16384);
+    const int anti_aliasing = std::clamp(config.antiAliasing, 1, 4);
     const int padding = std::clamp(config.padding, 2, 64);
     cv::Mat atlas(atlas_size, atlas_size, CV_8UC3, cv::Scalar(0, 0, 0));
     cv::Mat filled_mask(atlas_size, atlas_size, CV_8UC1, cv::Scalar(0));
-    cv::Mat primary_atlas(atlas_size, atlas_size, CV_8UC3, cv::Scalar(0, 0, 0));
-    cv::Mat primary_mask(atlas_size, atlas_size, CV_8UC1, cv::Scalar(0));
     cv::Mat chart_index_map(atlas_size, atlas_size, CV_32SC1, cv::Scalar(-1));
     const int fallback_size = std::clamp(padding * 2, 6, 128);
     const cv::Vec3b fallback = config.keepUnmapped
@@ -784,6 +941,168 @@ bool bakeAndExport(const std::string &productsDir,
         }
     }
 
+    // Keep support separate from colour, then recover only unassigned faces
+    // through mesh adjacency.  This follows the recovered Natural page-fill
+    // rule: a valid black texel remains valid, while an unsupported island is
+    // seeded from a neighbouring observed face and propagated over topology.
+    // Each recovered face receives its own compact atlas triangle, so it does
+    // not collapse into the common white fallback UV.
+    if (config.holeFillMode == TextureHoleFillMode::NeighborViewRecovery)
+    {
+        struct VertexField
+        {
+            cv::Vec3f sum{};
+            float denominator = 0.0f;
+            bool processed = false;
+        };
+
+        int maximum_vertex_index = -1;
+        for (const FaceGeometry& face : data->geometry)
+        {
+            for (const int vertex_index : face.vertexIndices)
+            {
+                maximum_vertex_index = std::max(maximum_vertex_index, vertex_index);
+            }
+        }
+        std::vector<VertexField> vertex_fields(static_cast<std::size_t>(maximum_vertex_index + 1));
+        std::vector<std::vector<int>> vertex_adjacency(vertex_fields.size());
+        const auto add_adjacency = [&vertex_adjacency](int from, int to)
+        {
+            if (from < 0 || to < 0 || from >= static_cast<int>(vertex_adjacency.size()) ||
+                to >= static_cast<int>(vertex_adjacency.size()))
+            {
+                return;
+            }
+            std::vector<int>& neighbors = vertex_adjacency[static_cast<std::size_t>(from)];
+            if (std::find(neighbors.begin(), neighbors.end(), to) == neighbors.end())
+            {
+                neighbors.push_back(to);
+            }
+        };
+        for (int face_index = 0; face_index < face_count; ++face_index)
+        {
+            const FaceGeometry& face = data->geometry[face_index];
+            for (int corner = 0; corner < 3; ++corner)
+            {
+                const int first = face.vertexIndices[corner];
+                const int second = face.vertexIndices[(corner + 1) % 3];
+                add_adjacency(first, second);
+                add_adjacency(second, first);
+            }
+            if (data->assignments[face_index].primaryView < 0)
+            {
+                continue;
+            }
+            for (int corner = 0; corner < 3; ++corner)
+            {
+                const int vertex_index = face.vertexIndices[corner];
+                if (vertex_index < 0 || vertex_index >= static_cast<int>(vertex_fields.size()))
+                {
+                    continue;
+                }
+                cv::Vec3f color;
+                if (!sampleFaceTextureColor(*data,
+                                            data->assignments[face_index],
+                                            face_index,
+                                            face.vertices[corner],
+                                            config,
+                                            padding,
+                                            result,
+                                            &color))
+                {
+                    continue;
+                }
+                // Sampling success, rather than colour magnitude, defines a
+                // seed: a valid black texel is a legitimate Natural sample.
+                VertexField& field = vertex_fields[static_cast<std::size_t>(vertex_index)];
+                field.sum += color;
+                field.denominator += 1.0f;
+            }
+        }
+
+        std::queue<int> pending;
+        for (int vertex_index = 0; vertex_index < static_cast<int>(vertex_fields.size()); ++vertex_index)
+        {
+            const VertexField& field = vertex_fields[static_cast<std::size_t>(vertex_index)];
+            if (field.denominator > 0.0f && !vertex_adjacency[static_cast<std::size_t>(vertex_index)].empty())
+            {
+                pending.push(vertex_index);
+            }
+        }
+        while (!pending.empty())
+        {
+            const int vertex_index = pending.front();
+            pending.pop();
+            VertexField& source = vertex_fields[static_cast<std::size_t>(vertex_index)];
+            if (source.processed || source.denominator <= 0.0f)
+            {
+                continue;
+            }
+            source.sum /= source.denominator;
+            source.processed = true;
+            for (const int neighbor_index : vertex_adjacency[static_cast<std::size_t>(vertex_index)])
+            {
+                VertexField& neighbor = vertex_fields[static_cast<std::size_t>(neighbor_index)];
+                if (neighbor.processed)
+                {
+                    continue;
+                }
+                if (neighbor.denominator == 0.0f)
+                {
+                    pending.push(neighbor_index);
+                }
+                neighbor.sum += source.sum;
+                neighbor.denominator += 1.0f;
+            }
+        }
+        for (int face_index = 0; face_index < face_count && fallback_tile_index < fallback_tile_capacity; ++face_index)
+        {
+            if (data->assignments[face_index].primaryView >= 0)
+            {
+                continue;
+            }
+            const FaceGeometry& face = data->geometry[face_index];
+            std::array<cv::Vec3b, 3> colors;
+            bool recovered = true;
+            for (int corner = 0; corner < 3; ++corner)
+            {
+                const int vertex_index = face.vertexIndices[corner];
+                if (vertex_index < 0 || vertex_index >= static_cast<int>(vertex_fields.size()))
+                {
+                    recovered = false;
+                    break;
+                }
+                const VertexField& field = vertex_fields[static_cast<std::size_t>(vertex_index)];
+                if (field.denominator <= 0.0f)
+                {
+                    recovered = false;
+                    break;
+                }
+                const cv::Vec3f linear = field.processed ? field.sum : field.sum / field.denominator;
+                colors[corner] = textureLinearToSrgb(linear);
+            }
+            if (!recovered)
+            {
+                continue;
+            }
+            const int left = 1 + (fallback_tile_index % fallback_columns) * kFallbackTileSize;
+            const int top = fallback_first_row + (fallback_tile_index / fallback_columns) * kFallbackTileSize;
+            bakeVertexColorTile(&atlas, &filled_mask, left, top, colors);
+            const std::array<QPointF, 3> centers{
+                QPointF(left + 1.5, top + 1.5), QPointF(left + 2.5, top + 1.5), QPointF(left + 1.5, top + 2.5)};
+            for (int corner = 0; corner < 3; ++corner)
+            {
+                const int texture_index = static_cast<int>(texture_coordinate_values.size());
+                texture_coordinate_values.push_back(
+                    {atlasCoordinateToNormalizedUv(centers[corner].x(), atlas_size),
+                     1.0f - atlasCoordinateToNormalizedUv(centers[corner].y(), atlas_size)});
+                texture_indices.setValue(face_index, corner, texture_index);
+            }
+            ++fallback_tile_index;
+            ++result->meshRecoveredFaceCount;
+        }
+    }
+
     if (config.progressFn)
     {
         config.progressFn("正在烘焙多视角纹理...", 66);
@@ -830,11 +1149,7 @@ bool bakeAndExport(const std::string &productsDir,
                     }
                     return false;
                 }
-                atlas_triangle[corner] = QPointF(
-                    chart.atlasContentBounds.x() +
-                        (pixel[0] - chart.sourceBounds.x()) * chart.atlasScale,
-                    chart.atlasContentBounds.y() +
-                        (pixel[1] - chart.sourceBounds.y()) * chart.atlasScale);
+                atlas_triangle[corner] = sourcePixelToChartAtlas(chart, QPointF(pixel[0], pixel[1]));
                 const std::uint64_t key =
                     (static_cast<std::uint64_t>(
                          static_cast<std::uint32_t>(chart.index)) << 32U) |
@@ -891,54 +1206,79 @@ bool bakeAndExport(const std::string &productsDir,
                 atlas_size - 1);
             for (int row = top; row <= bottom; ++row)
             {
+                if ((row - top) % 16 == 0 && cancelled(config))
+                {
+                    result->cancelled = true;
+                    if (errorMsg)
+                    {
+                        *errorMsg = "纹理映射已取消";
+                    }
+                    return false;
+                }
                 for (int column = left; column <= right; ++column)
                 {
-                    std::array<double, 3> weights{};
-                    if (!barycentric(
-                            column + 0.5, row + 0.5, atlas_triangle, &weights))
+                    cv::Vec3f color_sum(0.0f, 0.0f, 0.0f);
+                    int color_sample_count = 0;
+                    for (int sample_y = 0;
+                         sample_y < anti_aliasing;
+                         ++sample_y)
+                    {
+                        for (int sample_x = 0;
+                             sample_x < anti_aliasing;
+                             ++sample_x)
+                        {
+                            const double x = column +
+                                (sample_x + 0.5) / anti_aliasing;
+                            const double y = row +
+                                (sample_y + 0.5) / anti_aliasing;
+                            std::array<double, 3> weights{};
+                            if (!barycentric(x, y, atlas_triangle, &weights))
+                            {
+                                continue;
+                            }
+                            std::array<double, 3> corrected_weights{};
+                            if (!perspectiveCorrectBarycentricWeights(
+                                    weights,
+                                    primary_camera_depths,
+                                    &corrected_weights))
+                            {
+                                continue;
+                            }
+                            std::array<double, 3> world{};
+                            for (int axis = 0; axis < 3; ++axis)
+                            {
+                                world[axis] =
+                                    corrected_weights[0] *
+                                        face.vertices[0][axis] +
+                                    corrected_weights[1] *
+                                        face.vertices[1][axis] +
+                                    corrected_weights[2] *
+                                        face.vertices[2][axis];
+                            }
+                            cv::Vec3f color;
+                            if (!sampleFaceTextureColor(
+                                    *data,
+                                    assignment,
+                                    face_index,
+                                    world,
+                                    config,
+                                    padding,
+                                    result,
+                                    &color))
+                            {
+                                continue;
+                            }
+                            color_sum += color;
+                            ++color_sample_count;
+                        }
+                    }
+                    if (color_sample_count == 0)
                     {
                         continue;
                     }
-                    std::array<double, 3> corrected_weights{};
-                    if (!perspectiveCorrectBarycentricWeights(
-                            weights,
-                            primary_camera_depths,
-                            &corrected_weights))
-                    {
-                        continue;
-                    }
-                    std::array<double, 3> world{};
-                    for (int axis = 0; axis < 3; ++axis)
-                    {
-                        world[axis] =
-                            corrected_weights[0] * face.vertices[0][axis] +
-                            corrected_weights[1] * face.vertices[1][axis] +
-                            corrected_weights[2] * face.vertices[2][axis];
-                    }
-                    cv::Vec3b color;
-                    cv::Vec3b primary_color;
-                    bool has_primary_color = false;
-                    if (!sampleFaceTextureColor(
-                            *data,
-                            assignment,
-                            face_index,
-                            world,
-                            config,
-                            padding,
-                            result,
-                            &color,
-                            &primary_color,
-                            &has_primary_color))
-                    {
-                        continue;
-                    }
-                    atlas.at<cv::Vec3b>(row, column) = color;
+                    atlas.at<cv::Vec3b>(row, column) = textureLinearToSrgb(
+                        color_sum / static_cast<float>(color_sample_count));
                     filled_mask.at<std::uint8_t>(row, column) = 255;
-                    if (has_primary_color)
-                    {
-                        primary_atlas.at<cv::Vec3b>(row, column) = primary_color;
-                        primary_mask.at<std::uint8_t>(row, column) = 255;
-                    }
                     chart_index_map.at<int>(row, column) = chart.index;
                     wrote_face_texel = true;
                 }
@@ -975,9 +1315,7 @@ bool bakeAndExport(const std::string &productsDir,
                             corrected_weights[2] * face.vertices[2][axis];
                     }
                 }
-                cv::Vec3b color;
-                cv::Vec3b primary_color;
-                bool has_primary_color = false;
+                cv::Vec3f color;
                 if (has_world && sampleFaceTextureColor(
                         *data,
                         assignment,
@@ -986,17 +1324,10 @@ bool bakeAndExport(const std::string &productsDir,
                         config,
                         padding,
                         result,
-                        &color,
-                        &primary_color,
-                        &has_primary_color))
+                        &color))
                 {
-                    atlas.at<cv::Vec3b>(row, column) = color;
+                    atlas.at<cv::Vec3b>(row, column) = textureLinearToSrgb(color);
                     filled_mask.at<std::uint8_t>(row, column) = 255;
-                    if (has_primary_color)
-                    {
-                        primary_atlas.at<cv::Vec3b>(row, column) = primary_color;
-                        primary_mask.at<std::uint8_t>(row, column) = 255;
-                    }
                     chart_index_map.at<int>(row, column) = chart.index;
                     ++result->centerRecoveredFaceCount;
                 }
@@ -1080,35 +1411,10 @@ bool bakeAndExport(const std::string &productsDir,
     {
         config.progressFn("正在扩展纹理块边界并执行局部锐化...", 88);
     }
-    const bool use_natural_multiband =
-        config.blendMode == TextureBlendMode::Natural &&
-        result->usedViewCount > 1;
-    const int expansion_radius = config.blendMode == TextureBlendMode::Natural
-        ? std::max(padding, 32)
-        : padding;
     for (const TextureChart &chart : data->charts)
     {
         expandPadding(
-            &atlas, &filled_mask, chart.atlasBounds, expansion_radius);
-        if (use_natural_multiband)
-        {
-            expandPadding(
-                &primary_atlas,
-                &primary_mask,
-                chart.atlasBounds,
-                expansion_radius);
-        }
-    }
-    if (use_natural_multiband)
-    {
-        applyTextureNaturalBlend(
-            &atlas,
-            primary_atlas,
-            filled_mask,
-            primary_mask,
-            cv::Rect(0, 0, atlas.cols, atlas.rows),
-            5,
-            1.0f);
+            &atlas, &filled_mask, chart.atlasBounds, padding);
     }
     for (const TextureChart &chart : data->charts)
     {
@@ -1118,6 +1424,7 @@ bool bakeAndExport(const std::string &productsDir,
             chart.atlasBounds,
             std::clamp(config.sharpeningStrength, 0.0f, 2.0f));
     }
+    interpolateMaskedPyramid(&atlas, &filled_mask, true);
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
         static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
     for (std::size_t index = 0;
@@ -1132,6 +1439,23 @@ bool bakeAndExport(const std::string &productsDir,
             static_cast<plamatrix::Index>(index),
             1,
             texture_coordinate_values[index][1]);
+    }
+    // An imported OBJ can retain face UV indices whose range is valid only for
+    // its source UV table.  PointCloud validates those existing indices when a
+    // UV table is replaced, so make the retained table a valid bridge before
+    // installing the Natural atlas table and its replacement indices.
+    if (data->mesh->hasFaceTextureIndices())
+    {
+        auto *existing_indices = data->mesh->faceTextureIndices();
+        for (plamatrix::Index row = 0; row < existing_indices->rows(); ++row)
+        {
+            for (plamatrix::Index column = 0;
+                 column < existing_indices->cols();
+                 ++column)
+            {
+                existing_indices->setValue(row, column, 0);
+            }
+        }
     }
     data->mesh->setTextureCoords(std::move(texture_coordinates));
     data->mesh->setFaceTextureIndices(std::move(texture_indices));

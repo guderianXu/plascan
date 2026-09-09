@@ -2,6 +2,7 @@
 
 #include "MeshColorizer.h"
 #include "TextureMapper.h"
+#include "TextureNaturalBlender.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plamatrix/dense/dense_matrix.h>
@@ -34,11 +35,12 @@ struct PreparedView
     FramePinholeCamera colorCamera;
     cv::Mat colorBgr;
     cv::Mat gray;
+    cv::Mat focusQuality;
+    TextureSourcePyramid blendPyramid;
     cv::Mat supportDistance;
     cv::Mat finalMeshFaceIds;
     std::vector<std::uint8_t> finalMeshVisibleFaces;
     float qualityWeight = 1.0f;
-    float sharpnessWeight = 1.0f;
     float exposureGain = 1.0f;
     const cv::Mat *depth = nullptr;
     const cv::Mat *confidence = nullptr;
@@ -63,6 +65,10 @@ struct FaceCandidate
     float score = -1.0f;
     float angleScore = 0.0f;
     float resolutionScore = 0.0f;
+    float sharpness = 0.0f;
+    float photometricConsistency = 0.0f;
+    float projectedResolution = 0.0f;
+    std::int32_t unaryCost = 0;
     bool strict = false;
     bool finalMeshVisibilityRequired = false;
 };
@@ -76,16 +82,15 @@ struct FaceAssignment
     bool optimized = false;
 };
 
-bool passesUnaryQualityFloor(const FaceAssignment &assignment,
-                             const FaceCandidate &candidate,
-                             float replacement_ratio);
-
 struct TextureChart
 {
     int index = -1;
     int primaryView = -1;
     QVector<int> faces;
     QRect sourceBounds;
+    QPointF sourceOrigin;
+    QPointF sourceAxisU{1.0, 0.0};
+    QPointF sourceAxisV{0.0, 1.0};
     QRect atlasBounds;
     QRect atlasContentBounds;
     float atlasScale = 1.0f;
@@ -135,6 +140,13 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
                         PipelineData *data,
                         TextureMappingResult *result,
                         std::string *errorMsg);
+
+QPointF sourcePixelToChartAtlas(const TextureChart &chart, const QPointF &pixel);
+
+bool prepareTextureSourcePyramids(const TextureMappingConfig &config,
+                                  PipelineData *data,
+                                  TextureMappingResult *result,
+                                  std::string *errorMsg);
 
 bool bakeAndExport(const std::string &productsDir,
                    const TextureMappingConfig &config,

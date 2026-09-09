@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -99,6 +100,8 @@ void match_unrolled_cached_16x16_hamming_i32(
             ? reduced_best_index : -1;
     }
 }
+)CLC"
+R"CLC(
 
 typedef struct {
     float x;
@@ -332,6 +335,8 @@ void locate_extrema_device(
     output[index].level = (uint)center_level;
     output[index].flag = refined > 0.0f ? 1U : 0U;
 }
+)CLC"
+R"CLC(
 
 __kernel void orientation_peaks_device(
         __global const float* image, const int width, const int height,
@@ -515,7 +520,7 @@ unsigned hamming_distance(const Keypoint& first, const Keypoint& second) {
         std::uint64_t b = 0;
         std::memcpy(&a, first.descriptor.data() + i, sizeof(a));
         std::memcpy(&b, second.descriptor.data() + i, sizeof(b));
-        result += static_cast<unsigned>(__builtin_popcountll(a ^ b));
+        result += static_cast<unsigned>(std::popcount(a ^ b));
     }
     return result;
 }

@@ -29,6 +29,8 @@
 #include "TextureMapper.h"
 #include "TextureAtlasPacker.h"
 #include "TextureAtlasSampling.h"
+#include "TextureCandidateCost.h"
+#include "TextureLabelOptimizer.h"
 #include "TextureMappingV4Internal.h"
 #include "TriangleDistanceIndex.h"
 #include "VisualHullReconstructor.h"
@@ -115,20 +117,66 @@ std::filesystem::path writeTextureTestTriangle(
     return path;
 }
 
-xjw::mesh::MeshColorView makeTextureTestView(const cv::Scalar &color)
+std::filesystem::path writeTextureRecoveryQuad(const std::filesystem::path& root)
+{
+    const std::filesystem::path path = root / "texture_recovery_quad.ply";
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    points(0, 0) = -0.4f;
+    points(0, 1) = -0.3f;
+    points(0, 2) = 2.0f;
+    points(1, 0) = 0.4f;
+    points(1, 1) = -0.3f;
+    points(1, 2) = 2.0f;
+    points(2, 0) = -0.4f;
+    points(2, 1) = 0.3f;
+    points(2, 2) = 2.0f;
+    points(3, 0) = 0.4f;
+    points(3, 1) = 0.3f;
+    points(3, 2) = 2.0f;
+    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    faces(0, 0) = 0;
+    faces(0, 1) = 1;
+    faces(0, 2) = 2;
+    faces(1, 0) = 1;
+    faces(1, 1) = 3;
+    faces(1, 2) = 2;
+    mesh.setFaces(std::move(faces));
+    plapoint::io::writePly<float>(path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+    return path;
+}
+
+xjw::mesh::MeshColorView makeTextureTestView(const cv::Scalar& color)
 {
     xjw::mesh::MeshColorView view;
     view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-    view.camera.setPose(
-        std::array<double, 9>{1.0, 0.0, 0.0,
-                              0.0, 1.0, 0.0,
-                              0.0, 0.0, 1.0},
-        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
+                        std::array<double, 3>{0.0, 0.0, 0.0});
     view.colorBgr = cv::Mat(36, 48, CV_8UC3, color);
     view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
     view.depthValidMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
     view.supportMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
+    return view;
+}
+
+xjw::mesh::MeshColorView makeTextureRecoveryView()
+{
+    xjw::mesh::MeshColorView view = makeTextureTestView(cv::Scalar());
+    for (int row = 0; row < view.colorBgr.rows; ++row)
+    {
+        for (int column = 0; column < view.colorBgr.cols; ++column)
+        {
+            view.colorBgr.at<cv::Vec3b>(row, column) =
+                cv::Vec3b(static_cast<std::uint8_t>(column * 5), static_cast<std::uint8_t>(row * 7), 32);
+        }
+    }
+    view.supportMask.setTo(0);
+    const std::vector<cv::Point> mapped_triangle{
+        cv::Point(16, 12), cv::Point(32, 12), cv::Point(16, 24)};
+    cv::fillConvexPoly(view.supportMask, mapped_triangle, cv::Scalar(255));
+    view.depthValidMask = view.supportMask.clone();
+    view.colorForegroundMask = view.supportMask.clone();
     return view;
 }
 
@@ -1233,9 +1281,13 @@ TEST(MeshQuadricSimplifierTest, ReducesPlanarInteriorWithoutMovingOpenBoundary)
             const int third = first + side;
             const int fourth = third + 1;
             xjw::mesh::Triangle left;
-            left.v[0] = first; left.v[1] = second; left.v[2] = third;
+            left.v[0] = first;
+            left.v[1] = second;
+            left.v[2] = third;
             xjw::mesh::Triangle right;
-            right.v[0] = second; right.v[1] = fourth; right.v[2] = third;
+            right.v[0] = second;
+            right.v[1] = fourth;
+            right.v[2] = third;
             mesh.faces.push_back(left);
             mesh.faces.push_back(right);
         }
@@ -10860,6 +10912,7 @@ TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)
     QJsonObject settings;
     settings[QStringLiteral("textureSize")] = 4096;
     settings[QStringLiteral("imageDownscale")] = 4;
+    settings[QStringLiteral("antiAliasing")] = 4;
     settings[QStringLiteral("atlasUpscaleLimit")] = 2.5;
     settings[QStringLiteral("blendMode")] = QStringLiteral("weighted_average");
     settings[QStringLiteral("holeFill")] = false;
@@ -10880,6 +10933,7 @@ TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)
         xjw::mesh::workflow::textureConfigFromSettings(settings);
     EXPECT_EQ(config.textureSize, 4096);
     EXPECT_EQ(config.imageDownscale, 4);
+    EXPECT_EQ(config.antiAliasing, 4);
     EXPECT_FLOAT_EQ(config.atlasUpscaleLimit, 2.5f);
     EXPECT_EQ(config.blendMode, xjw::mesh::TextureBlendMode::WeightedAverage);
     EXPECT_EQ(config.holeFillMode, xjw::mesh::TextureHoleFillMode::Disabled);
@@ -10936,9 +10990,9 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     ASSERT_TRUE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
         ply_path.string(), root.string(), config, QVector<xjw::mesh::MeshColorView>{view},
         &result, &error)) << error;
-    EXPECT_EQ(result.textureAlgorithm, "camera_projected_atlas_v4");
-    EXPECT_EQ(result.uvMethod, "connected_projective_charts");
-    EXPECT_EQ(result.blendMethod, "natural_robust");
+    EXPECT_EQ(result.textureAlgorithm, "recovered_natural_texture_v1");
+    EXPECT_EQ(result.uvMethod, "natural_mapping_camera_charts");
+    EXPECT_EQ(result.blendMethod, "natural_multiband");
     EXPECT_EQ(result.sourceViewCount, 1);
     EXPECT_EQ(result.mappedFaceCount, 2);
     EXPECT_EQ(result.fallbackMappedFaceCount, 0);
@@ -11113,9 +11167,9 @@ TEST(TextureMapperTest, TexturePreparationRejectsDarkStudioBackground)
         &error)) << error;
     ASSERT_EQ(data.views.size(), 1);
     const cv::Mat &distance = data.views.front().supportDistance;
-    ASSERT_EQ(distance.size(), view.colorBgr.size());
+    ASSERT_EQ(distance.size(), cv::Size(320, 240));
     EXPECT_FLOAT_EQ(distance.at<float>(0, 0), 0.0f);
-    EXPECT_GT(distance.at<float>(240, 320), 80.0f);
+    EXPECT_GT(distance.at<float>(120, 160), 40.0f);
 }
 
 TEST(TextureMapperTest, FinalMeshVisibilityDoesNotLeakAcrossNeighborPixels)
@@ -11236,8 +11290,10 @@ TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
     EXPECT_EQ(result.mappedFaceCount, 1);
     EXPECT_EQ(result.unmappedFaceCount, 0);
     EXPECT_EQ(result.rejectedResolutionCount, 0U);
-    EXPECT_EQ(result.noTexelFaceCount, 1U);
-    EXPECT_EQ(result.centerRecoveredFaceCount, 1U);
+    // The oriented chart can directly cover a sample even at this density.
+    // Any triangle that still misses the sample grid must be center-recovered.
+    EXPECT_LE(result.noTexelFaceCount, 1U);
+    EXPECT_EQ(result.centerRecoveredFaceCount, result.noTexelFaceCount);
     EXPECT_EQ(result.unresolvedBakeFaceCount, 0U);
     const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
     ASSERT_FALSE(atlas.empty());
@@ -11263,7 +11319,7 @@ TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
             &upscaled_result,
             &error)) << error;
     EXPECT_GT(upscaled_result.medianTexelDensity, result.medianTexelDensity);
-    EXPECT_LT(upscaled_result.noTexelFaceCount, result.noTexelFaceCount);
+    EXPECT_LE(upscaled_result.noTexelFaceCount, result.noTexelFaceCount);
     EXPECT_EQ(upscaled_result.centerRecoveredFaceCount, 0U);
 
     const auto textured_mesh =
@@ -11494,27 +11550,150 @@ TEST(TextureMapperTest, PerTexelSamplingRechecksDepthAndBilinearSupport)
               TextureSampleStatus::Sampled);
 }
 
-TEST(TextureMapperTest, CoherenceQualityFloorDoesNotCascadeAcrossPasses)
+TEST(TextureMapperTest, RecoveredCandidateUnaryPrefersConsistentSharpView)
 {
-    xjw::mesh::texture_v4::FaceAssignment assignment;
-    for (const auto &[view_index, score] :
-         std::array<std::pair<int, float>, 3>{{
-             {0, 1.0f},
-             {1, 0.70f},
-             {2, 0.46f}}})
-    {
-        xjw::mesh::texture_v4::FaceCandidate candidate;
-        candidate.viewIndex = view_index;
-        candidate.score = score;
-        assignment.candidates.push_back(candidate);
-    }
-    assignment.primaryView = 1;
-    assignment.primaryScore = 0.70f;
+    using xjw::mesh::texture_v4::TextureCandidateCostFlags;
+    using xjw::mesh::texture_v4::TextureCandidateQuality;
+    const std::vector<TextureCandidateQuality> qualities{
+        {2.0f, 0.95f, 12.0f, 0.95f},
+        {0.2f, 0.30f, 5.0f, 0.45f}};
 
-    EXPECT_TRUE(xjw::mesh::texture_v4::passesUnaryQualityFloor(
-        assignment, assignment.candidates[1], 0.65f));
-    EXPECT_FALSE(xjw::mesh::texture_v4::passesUnaryQualityFloor(
-        assignment, assignment.candidates[2], 0.65f));
+    const std::vector<std::int32_t> costs =
+        xjw::mesh::texture_v4::buildTextureCandidateUnaryCosts(
+            qualities,
+            8.0f,
+            TextureCandidateCostFlags{true, true, true, true});
+
+    ASSERT_EQ(costs.size(), 2U);
+    EXPECT_LT(costs[0], costs[1]);
+    EXPECT_GE(costs[0], 0);
+}
+
+TEST(TextureMapperTest, AlphaExpansionChoosesGloballyCoherentCameraLabel)
+{
+    using xjw::mesh::texture_v4::TextureLabelOptimizationProblem;
+    TextureLabelOptimizationProblem problem;
+    problem.nodeCount = 2;
+    problem.labelCount = 2;
+    problem.maximumPasses = 2;
+    problem.initialLabels = {0, 1};
+    problem.edges = {{0, 1, 25}};
+    problem.unaryCost = [](int node, int label)
+    {
+        if (node == 0)
+        {
+            return static_cast<xjw::mesh::texture_v4::TextureLabelCost>(
+                label == 0 ? 0 : 10);
+        }
+        return static_cast<xjw::mesh::texture_v4::TextureLabelCost>(
+            label == 0 ? 10 : 0);
+    };
+
+    const auto result =
+        xjw::mesh::texture_v4::optimizeTextureLabels(problem);
+
+    ASSERT_TRUE(result.solved) << result.error;
+    ASSERT_EQ(result.labels.size(), 2U);
+    EXPECT_EQ(result.labels[0], result.labels[1]);
+    EXPECT_EQ(result.energy, 10);
+    EXPECT_EQ(result.changedNodeCount, 1);
+}
+
+TEST(TextureMapperTest, BinaryTextureGraphCutMatchesExhaustiveEnergy)
+{
+    using namespace xjw::mesh::texture_v4;
+    std::uint32_t seed = 42;
+    const auto random_cost = [&seed]()
+    {
+        seed = seed * 1664525U + 1013904223U;
+        return static_cast<TextureLabelCost>((seed >> 16) % 31);
+    };
+    for (int trial = 0; trial < 40; ++trial)
+    {
+        std::array<std::array<TextureLabelCost, 2>, 6> costs;
+        TextureLabelOptimizationProblem problem;
+        problem.nodeCount = 6;
+        problem.labelCount = 2;
+        problem.maximumPasses = 3;
+        for (int node = 0; node < 6; ++node)
+        {
+            costs[node] = {random_cost(), random_cost()};
+            problem.initialLabels.push_back(costs[node][0] <= costs[node][1] ? 0 : 1);
+            if (node > 0)
+            {
+                problem.edges.push_back({node - 1, node, random_cost()});
+            }
+        }
+        problem.edges.push_back({0, 5, random_cost()});
+        problem.edges.push_back({1, 4, random_cost()});
+        problem.unaryCost = [&costs](int node, int label) { return costs[node][label]; };
+        TextureLabelCost optimum = kForbiddenTextureLabelCost;
+        for (int bits = 0; bits < 64; ++bits)
+        {
+            TextureLabelCost energy = 0;
+            for (int node = 0; node < 6; ++node)
+            {
+                energy += costs[node][(bits >> node) & 1];
+            }
+            for (const auto& edge : problem.edges)
+            {
+                if (((bits >> edge.first) & 1) != ((bits >> edge.second) & 1))
+                {
+                    energy += edge.cost;
+                }
+            }
+            optimum = std::min(optimum, energy);
+        }
+        const auto result = optimizeTextureLabels(problem);
+        ASSERT_TRUE(result.solved) << result.error;
+        EXPECT_EQ(result.energy, optimum) << "trial " << trial;
+    }
+}
+
+TEST(TextureMapperTest, TextureGraphCutHonorsForbiddenLabelsAndCancellation)
+{
+    using namespace xjw::mesh::texture_v4;
+    TextureLabelOptimizationProblem problem;
+    problem.nodeCount = 3;
+    problem.labelCount = 3;
+    problem.initialLabels = {0, 1, 2};
+    problem.edges = {{0, 1, 1000}, {1, 2, 1000}};
+    problem.unaryCost = [](int node, int label)
+    {
+        return node == label ? TextureLabelCost(100) : kForbiddenTextureLabelCost;
+    };
+    const auto result = optimizeTextureLabels(problem);
+    ASSERT_TRUE(result.solved) << result.error;
+    EXPECT_EQ(result.labels, problem.initialLabels);
+    problem.isCancelled = []() { return true; };
+    const auto cancelled_result = optimizeTextureLabels(problem);
+    EXPECT_TRUE(cancelled_result.cancelled);
+    EXPECT_FALSE(cancelled_result.solved);
+    EXPECT_TRUE(cancelled_result.labels.empty());
+}
+
+TEST(TextureMapperTest, TextureCandidateCostRejectsNonFiniteInput)
+{
+    using namespace xjw::mesh::texture_v4;
+    std::vector<TextureCandidateQuality> qualities{{1.0f, 1.0f, 1.0f, 1.0f}};
+    qualities[0].resolution = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(buildTextureCandidateUnaryCosts(qualities, 1.0f, {}), std::invalid_argument);
+}
+
+TEST(TextureMapperTest, NaturalChartRotationPreservesSourceDistances)
+{
+    using namespace xjw::mesh::texture_v4;
+    TextureChart chart;
+    chart.sourceOrigin = QPointF(40, 60);
+    chart.sourceAxisU = QPointF(0.6, 0.8);
+    chart.sourceAxisV = QPointF(-0.8, 0.6);
+    chart.atlasScale = 2.0f;
+    chart.atlasContentBounds = QRect(120, 240, 100, 100);
+    EXPECT_EQ(sourcePixelToChartAtlas(chart, chart.sourceOrigin), QPointF(120, 240));
+    const QPointF source = chart.sourceOrigin + chart.sourceAxisU * 10.0 + chart.sourceAxisV * 20.0;
+    const QPointF packed = sourcePixelToChartAtlas(chart, source);
+    EXPECT_NEAR(packed.x(), 140.0, 1.0e-9);
+    EXPECT_NEAR(packed.y(), 280.0, 1.0e-9);
 }
 
 TEST(TextureMapperTest, NaturalBlendRejectsColorOutlier)
@@ -11692,6 +11871,50 @@ TEST(TextureMapperTest, CameraAtlasFallsBackForMissingLocalDepthEvidence)
     EXPECT_TRUE(textureAtlasContainsBluePatch(result.texturePngPath));
 }
 
+TEST(TextureMapperTest, NeighborViewRecoveryPropagatesVertexColorsIntoGradientTile)
+{
+    namespace fs = std::filesystem;
+    const QString temp_root = QStringLiteral(PLASCAN_TEST_TMP_ROOT);
+    ASSERT_TRUE(QDir().mkpath(temp_root));
+    QTemporaryDir temp_directory(temp_root + QStringLiteral("/vertex-recovery-XXXXXX"));
+    ASSERT_TRUE(temp_directory.isValid());
+    const fs::path root = temp_directory.path().toStdString();
+    const fs::path mesh_path = writeTextureRecoveryQuad(root);
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.blendMode = xjw::mesh::TextureBlendMode::BestView;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::NeighborViewRecovery;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+        mesh_path.string(),
+        root.string(),
+        config,
+        QVector<xjw::mesh::MeshColorView>{makeTextureRecoveryView()},
+        &result,
+        &error))
+        << error;
+
+    ASSERT_EQ(result.meshRecoveredFaceCount, 1);
+    const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(atlas.empty());
+    const int fallback_size = std::clamp(config.padding * 2, 6, 128);
+    const int tile_top = fallback_size + 2;
+    std::set<std::array<std::uint8_t, 3>> recovered_colors;
+    for (int row = tile_top; row < tile_top + 4; ++row)
+    {
+        for (int column = 1; column < 5; ++column)
+        {
+            const cv::Vec3b color = atlas.at<cv::Vec3b>(row, column);
+            recovered_colors.insert({color[0], color[1], color[2]});
+        }
+    }
+    EXPECT_GT(recovered_colors.size(), 1U);
+}
+
 TEST(TextureMapperTest, CameraTextureMappingHonorsCancellation)
 {
     namespace fs = std::filesystem;
@@ -11795,7 +12018,7 @@ TEST(TextureMapperTest, CameraAtlasSuppressesIsolatedFaceCameraSwitches)
         ply_path.string(), root.string(), config,
         QVector<xjw::mesh::MeshColorView>{primary, alternate}, &result, &error)) << error;
 
-    EXPECT_EQ(result.textureAlgorithm, "camera_projected_atlas_v4");
+    EXPECT_EQ(result.textureAlgorithm, "recovered_natural_texture_v1");
     EXPECT_EQ(result.chartCount, 1);
     EXPECT_EQ(result.usedViewCount, 1);
     EXPECT_EQ(result.unmappedFaceCount, 0);
