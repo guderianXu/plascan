@@ -1,0 +1,110 @@
+#version 450
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Positions {
+    float positions[];
+};
+struct PackedFace {
+    uint vertices[3];
+};
+layout(set = 0, binding = 1, std430) readonly buffer Faces {
+    PackedFace faces[];
+};
+layout(set = 0, binding = 2, std430) readonly buffer Projected {
+    vec2 projected[];
+};
+layout(set = 0, binding = 3, std430) buffer Weighted {
+    uvec2 weighted[];
+};
+layout(set = 0, binding = 4, std430) buffer Geometry0 {
+    uint geometry0[];
+};
+layout(set = 0, binding = 5, std430) buffer Geometry1 {
+    uint geometry1[];
+};
+layout(push_constant) uniform Push {
+    vec3 camera_center;
+    uint face_count;
+} push_data;
+
+vec3 position_at(uint vertex) {
+    uint base = 3u * vertex;
+    return vec3(positions[base], positions[base + 1u],
+                positions[base + 2u]);
+}
+
+void main() {
+    uint face_index = gl_GlobalInvocationID.x;
+    if (face_index >= push_data.face_count) return;
+    uvec3 face = uvec3(faces[face_index].vertices[0],
+                       faces[face_index].vertices[1],
+                       faces[face_index].vertices[2]);
+    vec2 image[3] = vec2[3](projected[face.x], projected[face.y],
+                            projected[face.z]);
+    if (all(equal(image[0], vec2(-1.0))) ||
+        all(equal(image[1], vec2(-1.0))) ||
+        all(equal(image[2], vec2(-1.0)))) return;
+    vec3 world[3] = vec3[3](position_at(face.x), position_at(face.y),
+                            position_at(face.z));
+    vec2 p20 = image[2] - image[0];
+    vec2 p10 = image[1] - image[0];
+    float projected_area = max(0.0, 0.5 *
+        (p20.x * p10.y - p20.y * p10.x));
+    vec3 normal = cross(world[2] - world[0], world[1] - world[0]) * 0.5;
+    float world_area = length(normal);
+    float projected_weight[3];
+    float geometry_weight[3];
+    for (int corner = 0; corner != 3; ++corner) {
+        float cosine = dot(normalize(world[corner] - push_data.camera_center),
+                           normal) / world_area;
+        if (!(cosine > 0.0)) return;
+        projected_weight[corner] = projected_area * cosine;
+        geometry_weight[corner] = world_area * exp(3.0 * cosine - 3.0);
+    }
+    vec2 shared_coordinate = (image[0] + image[1] + image[2]) * 7.0;
+    vec2 weighted_coordinate[3];
+    for (int corner = 0; corner != 3; ++corner)
+        weighted_coordinate[corner] =
+            (shared_coordinate + image[corner] * 15.0) *
+            (projected_weight[corner] * 0.02777777798473835);
+    uint vertices[3] = uint[3](face.x, face.y, face.z);
+    for (int corner = 0; corner != 3; ++corner) {
+        uint vertex = vertices[corner];
+        uint old_bits = geometry0[vertex];
+        for (;;) {
+            uint observed = atomicCompSwap(
+                geometry0[vertex], old_bits,
+                floatBitsToUint(uintBitsToFloat(old_bits) +
+                                projected_weight[corner]));
+            if (observed == old_bits) break;
+            old_bits = observed;
+        }
+        old_bits = geometry1[vertex];
+        for (;;) {
+            uint observed = atomicCompSwap(
+                geometry1[vertex], old_bits,
+                floatBitsToUint(uintBitsToFloat(old_bits) +
+                                geometry_weight[corner]));
+            if (observed == old_bits) break;
+            old_bits = observed;
+        }
+        old_bits = weighted[vertex].x;
+        for (;;) {
+            uint observed = atomicCompSwap(
+                weighted[vertex].x, old_bits,
+                floatBitsToUint(uintBitsToFloat(old_bits) +
+                                weighted_coordinate[corner].x));
+            if (observed == old_bits) break;
+            old_bits = observed;
+        }
+        old_bits = weighted[vertex].y;
+        for (;;) {
+            uint observed = atomicCompSwap(
+                weighted[vertex].y, old_bits,
+                floatBitsToUint(uintBitsToFloat(old_bits) +
+                                weighted_coordinate[corner].y));
+            if (observed == old_bits) break;
+            old_bits = observed;
+        }
+    }
+}

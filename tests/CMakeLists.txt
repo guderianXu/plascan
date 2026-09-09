@@ -536,6 +536,16 @@ target_link_libraries(test_mvs_source_pair_quality_loader PRIVATE
 )
 gtest_discover_tests(test_mvs_source_pair_quality_loader)
 
+add_executable(test_point_cloud_input_preparation
+    test_point_cloud_input_preparation.cpp
+)
+target_link_libraries(test_point_cloud_input_preparation PRIVATE
+    project_workflows
+    Qt6::Core
+    GTest::gtest_main
+)
+gtest_discover_tests(test_point_cloud_input_preparation)
+
 # ==============================================================================
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
@@ -976,6 +986,17 @@ endforeach()
 # ==============================================================================
 # test_mesh_reconstructor — 点云到网格重建降级路径
 # ==============================================================================
+add_executable(test_recovered_model
+    test_recovered_model_reference.cpp
+    test_recovered_model_input.cpp
+)
+target_link_libraries(test_recovered_model PRIVATE meshing mvs Qt6::Core GTest::gtest_main)
+target_include_directories(test_recovered_model PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mvs/recovered_depth/include)
+target_compile_definitions(test_recovered_model PRIVATE
+    RECOVERED_MODEL_TEST_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/recovered-model-tests")
+gtest_discover_tests(test_recovered_model)
+
 add_executable(test_mesh_reconstructor
     test_mesh_reconstructor.cpp
     test_surface_reconstructor_height_grid.cpp

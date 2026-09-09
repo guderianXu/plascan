@@ -2452,6 +2452,9 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     QJsonObject legacy_settings;
     legacy_settings[QStringLiteral("source_data")] = QStringLiteral("tie_points");
     legacy_settings[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/sparse.ply");
+    legacy_settings[QStringLiteral("interpolation")] = QStringLiteral("disabled");
+    legacy_settings[QStringLiteral("strictVolumetricMasks")] = true;
+    legacy_settings[QStringLiteral("splitIntoBlocks")] = true;
 
     GenerateModelDialog dialog;
     dialog.applySettings(legacy_settings);
@@ -2488,6 +2491,9 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     EXPECT_TRUE(submitted.value(QStringLiteral("automatic_depth_maps")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("depthMapSourcePath")).toString().isEmpty());
+    EXPECT_EQ(submitted.value(QStringLiteral("interpolation")).toString(), QStringLiteral("enabled"));
+    EXPECT_FALSE(submitted.value(QStringLiteral("strictVolumetricMasks")).toBool(true));
+    EXPECT_FALSE(submitted.value(QStringLiteral("splitIntoBlocks")).toBool(true));
 }
 
 TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
@@ -2502,6 +2508,10 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     GenerateModelDialog dialog;
     dialog.applySettings(QJsonObject());
     dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    const auto* algorithm_label = dialog.findChild<QLabel*>(QStringLiteral("effectiveModelAlgorithmLabel"));
+    ASSERT_NE(algorithm_label, nullptr);
+    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("历史深度")));
 
     QCheckBox* reuse_check = nullptr;
     for (QCheckBox* check : dialog.findChildren<QCheckBox*>())
@@ -4968,28 +4978,22 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
+TEST(DepthMapPersistenceTest, PersistsRecoveredFramesAfterThreeLevelVoting)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int workerSave =
-        source.indexOf(QStringLiteral("std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
-    const int waitBeforeConsistency = source.indexOf(QStringLiteral("saveQueue.waitUntilIdle(&_cancelled)"));
-    const int consistencyPass = source.indexOf(QStringLiteral("crossCheckDepthConsistency();"));
-    const int finalSave =
-        source.indexOf(QStringLiteral("std::move(saveReservation), i, res, QStringLiteral(\"过滤后\")"));
+    const int recoveredRun = source.indexOf(QStringLiteral("runRecoveredDepthScene("));
+    const int recoveredSave = source.indexOf(QStringLiteral("QStringLiteral(\"recovered三层投票\")"));
+    const int completedSignal = source.indexOf(QStringLiteral("emit depthMapReady("), recoveredSave);
 
-    ASSERT_GE(workerSave, 0);
-    ASSERT_GE(waitBeforeConsistency, 0);
-    ASSERT_GE(consistencyPass, 0);
-    ASSERT_GE(finalSave, 0);
-    EXPECT_LT(workerSave, consistencyPass)
-        << "Each completed depth frame should be persisted before the all-frame consistency pass.";
-    EXPECT_LT(waitBeforeConsistency, consistencyPass)
-        << "Initial async saves must drain before the consistency pass mutates depth maps.";
-    EXPECT_LT(consistencyPass, finalSave)
-        << "The final consistency-filtered depth maps should still overwrite the provisional artifacts.";
+    ASSERT_GE(recoveredRun, 0);
+    ASSERT_GE(recoveredSave, 0);
+    ASSERT_GE(completedSignal, 0);
+    EXPECT_LT(recoveredRun, recoveredSave)
+        << "Recovered depth frames must be published only after scene-wide PatchMatch and voting complete.";
+    EXPECT_LT(recoveredSave, completedSignal)
+        << "A frame must reach durable artifact storage before the GUI receives depthMapReady.";
 }
 
 TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
@@ -8885,8 +8889,8 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnQrhiGpu)
     EXPECT_TRUE(source.contains(QStringLiteral("use_prepared_point_buffer")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
     EXPECT_TRUE(source.contains(QStringLiteral("9 * sizeof(float),")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("QRhiVertexInputBinding(sizeof(float), QRhiVertexInputBinding::PerInstance)")));
+    EXPECT_TRUE(
+        source.contains(QStringLiteral("QRhiVertexInputBinding(sizeof(float), QRhiVertexInputBinding::PerInstance)")));
     EXPECT_TRUE(source.contains(QStringLiteral("cb->draw(6, quint32(instanceCount))")));
     EXPECT_TRUE(source.contains(QStringLiteral("planPointRenderChunks(")));
     EXPECT_TRUE(header.contains(QStringLiteral("_pointChunks")));

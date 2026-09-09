@@ -28,17 +28,17 @@ class GenerateModelDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit GenerateModelDialog(QWidget *parent = nullptr);
+    explicit GenerateModelDialog(QWidget* parent = nullptr);
 
-    void applySettings(const QJsonObject &settings);
-    void setSourceCandidates(const QJsonArray &candidates);
+    void applySettings(const QJsonObject& settings);
+    void setSourceCandidates(const QJsonArray& candidates);
 
 signals:
-    void runRequested(const QJsonObject &settings);
-    void settingsChanged(const QJsonObject &settings);
+    void runRequested(const QJsonObject& settings);
+    void settingsChanged(const QJsonObject& settings);
 
 protected:
-    void showEvent(QShowEvent *event) override;
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     void emitSettingsNow();
@@ -48,10 +48,11 @@ private slots:
 private:
     QJsonObject collectSettings() const;
     QJsonObject currentCandidate() const;
+    bool usesRecoveredModelPipeline() const;
     void refreshSourceTypes();
     void refreshSourceItems();
     void setAdvancedExpanded(bool expanded);
-    void bindScreenGeometryUpdates(QScreen *targetScreen);
+    void bindScreenGeometryUpdates(QScreen* targetScreen);
     void refreshScrollableDialogSize();
     void updateAvailability();
     void updateBlockControlsAvailability();
@@ -64,28 +65,29 @@ private:
     bool _hasReusableDepthMaps = false;
     bool _reuseDepthMapsRequested = true;
 
-    QComboBox *_sourceCombo = nullptr;
-    QComboBox *_sourceItemCombo = nullptr;
-    QComboBox *_surfaceTypeCombo = nullptr;
-    QComboBox *_qualityCombo = nullptr;
-    QLabel *_effectiveDepthQualityLabel = nullptr;
-    QComboBox *_faceCountCombo = nullptr;
-    QCheckBox *_saveEachStepCheck = nullptr;
-    QCheckBox *_splitRegionCheck = nullptr;
-    QLabel *_coordinateLabel = nullptr;
-    QDoubleSpinBox *_blockSizeSpin = nullptr;
-    QLabel *_originLabel = nullptr;
-    QCheckBox *_skipBoundaryBlocksCheck = nullptr;
-    QScrollArea *_contentScrollArea = nullptr;
+    QComboBox* _sourceCombo = nullptr;
+    QComboBox* _sourceItemCombo = nullptr;
+    QComboBox* _surfaceTypeCombo = nullptr;
+    QComboBox* _qualityCombo = nullptr;
+    QLabel* _effectiveDepthQualityLabel = nullptr;
+    QLabel* _modelAlgorithmLabel = nullptr;
+    QComboBox* _faceCountCombo = nullptr;
+    QCheckBox* _saveEachStepCheck = nullptr;
+    QCheckBox* _splitRegionCheck = nullptr;
+    QLabel* _coordinateLabel = nullptr;
+    QDoubleSpinBox* _blockSizeSpin = nullptr;
+    QLabel* _originLabel = nullptr;
+    QCheckBox* _skipBoundaryBlocksCheck = nullptr;
+    QScrollArea* _contentScrollArea = nullptr;
     QMetaObject::Connection _screenGeometryConnection;
     bool _screenChangeConnected = false;
-    QToolButton *_advancedToggle = nullptr;
-    QWidget *_advancedContent = nullptr;
-    QComboBox *_interpolationCombo = nullptr;
-    QComboBox *_depthFilterCombo = nullptr;
-    QCheckBox *_calculateColorsCheck = nullptr;
-    QCheckBox *_strictMasksCheck = nullptr;
-    QCheckBox *_reuseDepthMapsCheck = nullptr;
-    QCheckBox *_replaceDefaultCheck = nullptr;
-    QPushButton *_okButton = nullptr;
+    QToolButton* _advancedToggle = nullptr;
+    QWidget* _advancedContent = nullptr;
+    QComboBox* _interpolationCombo = nullptr;
+    QComboBox* _depthFilterCombo = nullptr;
+    QCheckBox* _calculateColorsCheck = nullptr;
+    QCheckBox* _strictMasksCheck = nullptr;
+    QCheckBox* _reuseDepthMapsCheck = nullptr;
+    QCheckBox* _replaceDefaultCheck = nullptr;
+    QPushButton* _okButton = nullptr;
 };

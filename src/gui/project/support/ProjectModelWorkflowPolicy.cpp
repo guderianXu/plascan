@@ -556,7 +556,7 @@ StoredDepthBatchRequirements depthBatchRequirementsForModelSettings(
             ? QStringLiteral("poisson_legacy")
             : QStringLiteral("depth_tsdf");
     }
-    if (mode == QStringLiteral("depth_tsdf"))
+    if (mode == QStringLiteral("depth_tsdf") || mode == QStringLiteral("recovered_ooc"))
     {
         return kDepthTsdfDepthBatchRequirements;
     }

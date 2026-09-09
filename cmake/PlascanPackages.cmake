@@ -209,6 +209,16 @@ else()
 endif()
 message(STATUS "plascan: found TIFF, target=${PLASCAN_TIFF_TARGET}")
 
+# libjpeg-turbo is used directly by recovered PatchMatch so JPEG decoding
+# follows the reference's explicit accurate-IDCT path instead of OpenCV flags.
+find_package(JPEG REQUIRED)
+if(TARGET JPEG::JPEG)
+  set(PLASCAN_JPEG_TARGET JPEG::JPEG CACHE INTERNAL "JPEG CMake target")
+else()
+  set(PLASCAN_JPEG_TARGET ${JPEG_LIBRARIES} CACHE INTERNAL "JPEG CMake target")
+endif()
+message(STATUS "plascan: found JPEG, target=${PLASCAN_JPEG_TARGET}")
+
 # ── libzip ────────────────────────────────────────────────────────────────────
 find_package(libzip CONFIG REQUIRED)
 if(TARGET libzip::zip)

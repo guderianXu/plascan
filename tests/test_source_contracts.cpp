@@ -1268,19 +1268,23 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSett
                       {
                           "_splitRegionCheck",
                           "_blockSizeSpin",
-                          R"(settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked())",
+                          R"(settings[QStringLiteral("splitIntoBlocks")])",
+                          R"(settings[QStringLiteral("splitIntoBlocks")] = recovered_model)",
                           R"(settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value())",
                           "updateBlockControlsAvailability",
                       });
 }
 
-TEST(MvsSchedulerContractTest, UsesDedicatedVisibilityBuilderAndBudget)
+TEST(MvsSchedulerContractTest, RecoveredProductionUsesTrackRankedSceneSelection)
 {
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString visibilityHeader = readSourceFile(QStringLiteral("src/core/mvs/MvsVisibilityGraphBuilder.h"));
-    const QString visibilityBuilder = readSourceFile(QStringLiteral("src/core/mvs/MvsVisibilityGraphBuilder.cpp"));
-    const QString memoryPolicy = readSourceFile(QStringLiteral("src/core/mvs/DepthMemoryPolicy.cpp"));
+    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString adapter = readSourceFile(QStringLiteral("src/core/mvs/RecoveredDepthScene.cpp"));
+    const QString selector = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/neighbor_selection.cpp"));
+    const QString orchestrator =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
+    const QString run =
+        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
 
     expectContainsAll(header,
                       {
@@ -1289,83 +1293,65 @@ TEST(MvsSchedulerContractTest, UsesDedicatedVisibilityBuilderAndBudget)
                           "_visibilityBits",
                           "sourceSharedPointIndices",
                       });
-    expectContainsAll(scheduler,
+    expectContainsAll(run,
                       {
-                          "prepareFrameCaches();",
-                          "MvsVisibilityGraphBuilder::build",
-                          "estimateMvsVisibilityGraphMemory",
-                          "plannedVisibilityMemory",
-                          "sourceViewIndicesForFrame",
-                          "visibleSparsePointIndicesForFrame",
-                          "sourceSharedPointIndices.reserve",
-                          "sourceSharedPointIndices.push_back",
-                          "sourceIndicesMatchCachedPrefix",
+                          "_effectiveDepthFilterMode = DepthFilterMode::Mild",
+                          "_configuredSourceViewCount = 16",
+                          "runRecoveredDepthScene(",
+                          "recovered_workspace_root",
                       });
-    expectNotContainsAll(scheduler, {"selectMvsSourceViewIndices(_views, _sparse, refIdx, numSrc)"});
-
-    expectContainsAll(visibilityHeader,
-                      {
-                          "MvsVisibilityGraphBuildOptions",
-                          "requiredPairs",
-                          "geometryPreferredPeersByView",
-                          "cancelFlag",
-                          "cooperativeCheckpointHook",
-                          "buildGeometryPeerShortlist",
-                      });
-    expectContainsAll(visibilityBuilder,
-                      {
-                          "buildCompletePairs = viewCount <= fullPairLimit",
-                          "cancellationRequested(options)",
-                          "(pointIndex & 255U)",
-                          "(viewIndex & 255U)",
-                          "(word & 255U)",
-                          "std::popcount",
-                          "buildGeometryPeerShortlist",
-                      });
-    expectNotContainsAll(visibilityBuilder,
+    expectNotContainsAll(run,
                          {
-                             "visibleViews.size() <= fullPairLimit",
+                             "prepareFrameCaches();",
+                             "selectMvsSourceViewIndices(_views, _sparse, refIdx, numSrc)",
                          });
-    expectContainsAll(memoryPolicy,
+    expectContainsAll(adapter,
                       {
-                          "estimateMvsVisibilityGraphMemory",
-                          "visibilityEstimate.totalBytes",
-                          "estimate.visibility = visibilityEstimate",
+                          "views.size() < 2",
+                          "select_recovered_neighbors(scene, 16)",
+                          "neighbors[index].empty() || neighbors[index].size() > 16",
                       });
-
-    const QString visibleBlock =
-        sectionBetween(scheduler,
-                       "std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame",
-                       "// =============================================================================");
-    expectContainsAll(visibleBlock, {"return cache.sourceSharedPointIndices;"});
-    EXPECT_LT(indexOfOrFail(visibleBlock, "return cache.sourceSharedPointIndices;"),
-              indexOfOrFail(visibleBlock, "std::vector<size_t> filtered;"));
-
-    const QString frameCacheBlock = sectionBetween(scheduler,
-                                                   "void DepthMapGenerator::prepareFrameCaches()",
-                                                   "std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame");
-    expectContainsAll(frameCacheBlock,
+    expectContainsAll(selector,
                       {
-                          "visibilityOptions.cancelFlag = &_cancelled",
-                          "MvsVisibilityGraphBuilder::build",
-                          "visibilityGraph.cancelled",
-                          "visibilityGraph.neighborsByView",
-                          "rankedSourceCandidates",
-                          "desiredSourceCount",
+                          "common_track_count",
+                          "pair_score",
+                          "records.front().common_count / 10U",
+                      });
+    expectContainsAll(orchestrator,
+                      {
+                          "neighbor_count == 0U || neighbor_count > 16U",
+                          "evidence-backed 1..16-neighbor domain",
                       });
 }
 
-TEST(MvsSchedulerContractTest, LargeHybridBatchKeepsBoundedOpenClFullFrame)
+TEST(MvsSchedulerContractTest, RecoveredVotingUsesBoundedFileBackedBatches)
 {
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString adapter = readSourceFile(QStringLiteral("src/core/mvs/RecoveredDepthScene.cpp"));
+    const QString orchestrator =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
+    const QString api = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/include/metmodel/patchmatch.hpp"));
 
-    expectContainsAll(scheduler,
+    expectContainsAll(adapter,
                       {
-                          "recommendedOpenClFullFrameFloorPerDevice(",
-                          "schedulingPolicy.guaranteedOpenClFullFramesPerDevice",
-                          "schedulingPolicy.maximumOpenClInFlightTasksPerDevice",
-                          "!claim.requiresFullFrame",
-                          "OpenCL完整帧 %1/%2",
+                          "uniquePatchMatchStoreRoot",
+                          "QUuid::createUuid()",
+                          "qScopeGuard",
+                          "false,",
+                          "patchmatch_store_root))",
+                          "read_recovered_patchmatch_store_camera(",
+                          "std::filesystem::remove_all(patchmatch_store_root",
+                          "writeRecoveredModelInput(model_root, scene, recovered, true)",
+                      });
+    expectContainsAll(api,
+                      {
+                          "std::size_t voting_batch_size = 16U",
+                      });
+    expectContainsAll(orchestrator,
+                      {
+                          "result.voting_batch_size =",
+                          "patchmatch_store_root.empty() ? reference_camera_indices.size() : voting_batch_size;",
+                          "plan_recovered_patchmatch_store_batches(",
+                          "for (const auto& voting_batch : voting_batches)",
                       });
 }
 
@@ -1481,162 +1467,38 @@ TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
     EXPECT_LT(manifestPersist, emitArtifact);
 }
 
-TEST(MvsDepthArtifactContractTest, StreamingPublicationPreservesGuidedDataAndRequiredPhotometricEvidence)
+TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvidence)
 {
-    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString streamingConsistency = sectionBetween(source,
-                                                        "bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()",
-                                                        "bool DepthMapGenerator::saveDepthFrameArtifacts");
-    const QString finalAssembly =
-        sectionBetween(source,
-                       "DepthFrameResult artifact_result = _depthFrames[replacement.frameIndex]",
-                       "const QString targeted_recovered_path = storage_dir.filePath(");
-    expectContainsAll(finalAssembly,
-                      {
-                          "depth_%1_photometric_source_mask.bin",
-                          "loadDepthMatStorage(",
-                          "photometric_source_mask.type() != CV_32SC1",
-                          "photometric_source_mask.size() != filtered_depth.size()",
-                          "artifact_result.photometricSourceMask =",
-                          "return false;",
-                      });
+    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString adapter = readSourceFile(QStringLiteral("src/core/mvs/RecoveredDepthScene.cpp"));
+    const QString run =
+        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
 
-    const QString streamingTargetedMaskLoad = sectionBetween(
-        streamingConsistency, "const QString targeted_recovered_path =", "const FramePinholeCamera reference_camera");
-    expectContainsAll(streamingTargetedMaskLoad,
+    expectContainsAll(adapter,
                       {
-                          "targetedGapRecoveredMaskExpected",
-                          "if (!QFileInfo::exists(targeted_recovered_path))",
-                          "else if (QFileInfo::exists(targeted_recovered_path))",
-                          "xjw::common::io::readImage(",
-                          "targeted_gap_recovered_mask.type() != CV_8UC1",
-                          "targeted_gap_recovered_mask.size() != filtered_depth.size()",
-                          "return false;",
+                          "frame.photometricSourceMask = cv::Mat::zeros(height, width, CV_32S)",
+                          "unpack_recovered_patchmatch_inlier_mask(",
+                          "destination[column] |= source_bit",
+                          "frame.photometricSourceMask.setTo(0, frame.validMask == 0)",
                       });
-    EXPECT_EQ(countOccurrences(streamingConsistency, "_depthFrames[frame_index].targetedGapRecoveredMask"), 1);
-    EXPECT_GE(countOccurrences(streamingConsistency, "targeted_gap_recovered_mask"), 4);
-
-    const QString committedDepthReload =
-        sectionBetween(streamingConsistency, "cv::Mat filtered_depth;", "cv::Mat filtered_confidence;");
-    expectContainsAll(committedDepthReload,
+    expectContainsAll(run,
                       {
-                          "!load_result.ok",
-                          "filtered_depth.empty()",
-                          "filtered_depth.type() != CV_32FC1",
-                          "filtered_depth.size() != replacement.expectedDepthSize",
-                          "remove_pending_files()",
-                          "markManifestFrameFailed(replacement.frameIndex, message)",
-                          "return false;",
-                      });
-    EXPECT_FALSE(committedDepthReload.contains(QStringLiteral("if (load_result.ok &&")));
-
-    const QString streamingMissingReasonLoad =
-        sectionBetween(streamingConsistency,
-                       "const QString reason_path =",
-                       "const cv::Mat consistent_mask = makeDepthConsistencyMask(");
-    expectContainsAll(streamingMissingReasonLoad,
-                      {
-                          "reason_map.empty()",
-                          "reason_map.type() != CV_8UC1",
-                          "reason_map.size() != filtered_depth.size()",
-                          "remove_pending_files()",
-                          "emit errorOccurred(message)",
-                          "return false;",
-                      });
-    EXPECT_FALSE(streamingMissingReasonLoad.contains(QStringLiteral("initializeDepthMissingReasonMap(")));
-
-    const QString targetedMaskSave = sectionBetween(
-        source, "bool targetedGapRecoveredMaskSaved = false", "bool residualReestimatedMaskSaved = false");
-    expectContainsAll(targetedMaskSave,
-                      {
-                          "targeted_gap_recovered_mask_expected",
-                          "result.targetedGapRecoveredMaskExpected",
-                          "result.targetedGapRecoveredMask && !result.targetedGapRecoveredMask->empty()",
-                          "targetedGapRecoveredMaskSaved",
-                          "QFileInfo::exists(stale_path)",
-                          "QFile::remove(stale_path)",
-                          "markManifestFrameFailed(frameIndex, message)",
-                          "return false;",
-                      });
-
-    const QString initialCompletion = sectionBetween(
-        source, "else if (res.success && claim.requiresFullFrame", "DepthFrameResult storedResult = res;");
-    expectContainsAll(initialCompletion,
-                      {
-                          "res.geometricGuidancePassExpected =",
-                          "_config.patchMatch.enableGeometricGuidancePass",
-                          "res.sourceViewIndices.size() >= 2",
-                          "res.geometricGuidancePassApplied = false",
-                      });
-
-    const QString streamingTransition =
-        sectionBetween(source,
-                       "if (keepDepthFramesInMemory.load() && _config.adaptiveDepthCacheMemory)",
-                       "// ── 阶段 1.5：双视图深度图左右一致性检查");
-    expectContainsAll(streamingTransition,
-                      {
+                          "frame.photometricSourceMask =",
+                          "std::move(recovered_frame.photometricSourceMask)",
                           "saveDepthFrameArtifacts(",
-                          "QStringLiteral(\"初始\")",
-                          "keepDepthFramesInMemory = false",
-                          "releaseStoredDepthFrameStreamingPixelStorage(_depthFrames)",
-                      });
-    EXPECT_LT(indexOfOrFail(streamingTransition, "saveDepthFrameArtifacts("),
-              indexOfOrFail(streamingTransition, "keepDepthFramesInMemory = false"));
-    EXPECT_LT(indexOfOrFail(streamingTransition, "saveDepthFrameArtifacts("),
-              indexOfOrFail(streamingTransition, "releaseStoredDepthFrameStreamingPixelStorage(_depthFrames)"));
-
-    const QString workerStore = sectionBetween(source, "DepthFrameResult storedResult = res;", "if (!res.success)");
-    expectContainsAll(workerStore,
-                      {
-                          "std::lock_guard<std::mutex> lock(depthFramesMutex)",
-                          "if (!keepDepthFramesInMemory.load())",
-                          "storedResult.releaseStreamingPixelStorage()",
-                          "_depthFrames[i] = storedResult",
-                      });
-    EXPECT_LT(indexOfOrFail(workerStore, "std::lock_guard<std::mutex> lock(depthFramesMutex)"),
-              indexOfOrFail(workerStore, "if (!keepDepthFramesInMemory.load())"));
-    EXPECT_LT(indexOfOrFail(workerStore, "if (!keepDepthFramesInMemory.load())"),
-              indexOfOrFail(workerStore, "_depthFrames[i] = storedResult"));
-
-    const QString terminalPublisher = sectionBetween(source,
-                                                     "bool DepthMapGenerator::publishTerminalDepthCheckpoints()",
-                                                     "bool DepthMapGenerator::ensurePreparedRasterArtifact");
-    expectContainsAll(terminalPublisher,
-                      {
-                          "terminal.consistencyPublicationExpected =",
-                          "terminal.geometricGuidancePassExpected = frame.geometricGuidancePassExpected",
-                          "terminal.geometricGuidancePassApplied = frame.geometricGuidancePassApplied",
-                          "MvsWorkspaceManifest publication_validation = _workspaceManifest",
-                          "cache_reusable",
+                          "QStringLiteral(\"recovered三层投票\")",
+                          "markManifestFrameRunning(frame_index)",
                       });
 
     const QString artifactSaver = sectionBetween(
-        source, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
+        generator, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
     expectContainsAll(artifactSaver,
                       {
-                          "const bool durable_publication = !_workspaceManifestPath.isEmpty()",
-                          "durable_publication ? _config.intermediateDir",
-                          "_streamConsistencyStorageEnabled || durable_publication",
-                          "preview_directory + \"/depth_\"",
+                          "photometricSourceMaskSaved",
+                          "markManifestFrameFailed(frameIndex, message)",
+                          "_workspaceManifest.markCompleted(record)",
+                          "emit depthMapArtifactSaved(artifact)",
                       });
-
-    const QString initialCheckpointGate = sectionBetween(
-        source, "if (!saveQueue.waitUntilIdle(&_cancelled))", "// ── 阶段 1.25：冻结来源深度引导的第二轮 PatchMatch");
-    expectContainsAll(initialCheckpointGate,
-                      {
-                          "if (saveQueue.failed())",
-                          "saveQueue.cancel()",
-                          "saveQueue.stop()",
-                          "emitFinishedOnce(false)",
-                          "return;",
-                      });
-    const int initialSaveFailureGate = indexOfOrFail(initialCheckpointGate, "if (saveQueue.failed())");
-    EXPECT_LT(initialSaveFailureGate, indexOfOrFail(initialCheckpointGate, "return;", initialSaveFailureGate));
-
-    EXPECT_LT(indexOfOrFail(terminalPublisher, "persistWorkspaceManifest(&manifest_error)"),
-              indexOfOrFail(terminalPublisher, "emit depthMapSaved("));
-    EXPECT_LT(indexOfOrFail(terminalPublisher, "emit depthMapSaved("),
-              indexOfOrFail(terminalPublisher, "emit depthMapArtifactSaved("));
 }
 
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
@@ -1661,7 +1523,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
                           "buildHintDepthFromProjectedSamples",
                           "makeDepthPyramidConfig",
                           "pyramid_sparse_hints",
-                          "const cv::Size hint_size = patchMatchWorkSize",
+                          "const cv::Size hint_size =",
+                          "patchMatchWorkSize(workRefImg",
                           "hint_size.width",
                           "hint_size.height",
                           "workRefSparseSamples",
@@ -1691,10 +1554,9 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
                       });
     expectNotContainsAll(supportBlock, {"patchMatchWorkSize(refImg, pmCfg)"});
 
-    const QString projectedBlock =
-        sectionBetween(scheduler,
-                       "std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSparseDepthSamples",
-                       "cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples");
+    const QString projectedBlock = sectionBetween(scheduler,
+                                                  "DepthMapGenerator::collectProjectedSparseDepthSamples(",
+                                                  "cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples");
     expectContainsAll(scheduler, {"kMaxProjectedDepthQuantileSamples"});
     expectContainsAll(projectedBlock,
                       {
@@ -1818,169 +1680,53 @@ TEST(MvsSchedulerContractTest, FinalPyramidLevelKeepsConfiguredIterationBudget)
                          });
 }
 
-TEST(MvsHeterogeneousSchedulingContractTest, AutoCombinesDistinctCudaAndOpenClButKeepsExplicitRequestsStrict)
+TEST(MvsHeterogeneousSchedulingContractTest, RecoveredProductionIsStrictlyCudaOnly)
 {
     const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString scheduler_header = readSourceFile(QStringLiteral("src/core/mvs/DepthComputeScheduler.h"));
-    const QString scheduler_source = readSourceFile(QStringLiteral("src/core/mvs/DepthComputeScheduler.cpp"));
-    const QString opencl_source = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchOpenCL.cpp"));
-    const QString gui_main = readSourceFile(QStringLiteral("src/gui/main.cpp"));
+    const QString run =
+        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
 
-    expectContainsAll(generator,
+    expectContainsAll(run,
                       {
-                          "const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||",
-                          "selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity)",
-                          "shouldSkipUnstableOpenClCudaAlias",
-                          "const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto",
-                          "_config.patchMatch.backend = heterogeneousAuto",
-                          "_config.patchMatch.cudaFallbackToCpu = false",
-                          "_config.patchMatch.openClFallbackToCpu = false",
+                          "configuredBackend == PatchMatchBackend::Cpu ||",
+                          "configuredBackend == PatchMatchBackend::OpenCl",
+                          "仅支持 CUDA；CPU/OpenCL 不会回退到旧 PatchMatch",
+                          "const bool probeOpenCl = false",
+                          "recovered 多视深度需要可用 CUDA 设备；未执行旧算法回退",
+                          "runRecoveredDepthScene(",
                       });
-    expectNotContainsAll(generator,
+    expectNotContainsAll(run,
                          {
-                             "(automaticAcceleration && !cudaAvailable)",
-                             "Auto resolves to one backend before this pool is built",
-                             "显式 OpenCL 模式已忽略 NVIDIA",
+                             "DepthComputeScheduler computeScheduler",
+                             "computeDepthForView(",
                          });
-    EXPECT_GE(countOccurrences(generator, "selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity)"), 2);
-
-    const QString scheduler_wiring = sectionBetween(
-        generator, "const std::vector<DepthComputeWorker> acceleratorWorkers", "const int gpuFrameWorkers");
-    expectContainsAll(scheduler_wiring,
-                      {
-                          "const bool benefitAwareScheduling = heterogeneousAuto",
-                          "DepthComputeScheduler computeScheduler",
-                          "acceleratorWorkers,\n        schedulingPolicy",
-                      });
-
-    expectContainsAll(scheduler_header + scheduler_source,
-                      {
-                          "enableBenefitAwareScheduling",
-                          "emaElapsedMilliseconds",
-                          "DepthTaskClaimStatus",
-                          "DepthTaskClaim",
-                          "claimNext",
-                          "waitForStateChange",
-                          "shouldPauseAtQueueTail",
-                          "DepthTaskCompletionResult",
-                          "retryScheduled",
-                          "findPendingCrossBackendRetry",
-                      });
-    expectContainsAll(opencl_source,
-                      {
-                          "cudaPhysicalIdentityForOpenClName",
-                          "normalizedGpuDeviceName",
-                          "fallbackGpuPhysicalIdentity",
-                      });
-    expectContainsAll(gui_main,
-                      {
-                          "configureOpenClDevicePolicy",
-                          "PLAMATRIX_OPENCL_DEVICE_INDEX",
-                          "isNvidiaOpenClVendor(device.vendor)",
-                          "preferred == devices.cend() ? devices.cbegin() : preferred",
-                      });
 }
 
-TEST(MvsHeterogeneousSchedulingContractTest, StreamingHybridUsesByteBoundedParallelArtifactSaving)
+TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloatingPointSemantics)
 {
+    const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
     const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString run =
+        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
 
-    expectContainsAll(generator,
+    expectContainsAll(cmake,
                       {
-                          "depthFrameResultResidentBytes",
-                          "_maxResidentTasks",
-                          "_maxResidentBytes",
-                          "ProducerReservation",
-                          "reserveProducer(",
-                          "_producerReservations",
-                          "_peakResidentTasks",
-                          "_maxEnqueueWait",
-                          "const size_t saveWorkerCount = !retainDepthFrames",
-                          "physicalGpuCount >= 2",
-                          "深度产物保存队列统计",
+                          "recovered_depth/src/gpu_cuda.cu",
+                          "recovered_depth/src/recovered_cuda_source.cu",
+                          "--ftz=false;--prec-div=true;--prec-sqrt=true",
                       });
-
-    expectContainsAll(generator,
+    expectContainsAll(run,
                       {
-                          "activeFrameWorkerCount",
-                          "minimumCpuThreadsPerWorker",
-                          "cpuThreadRemainder",
-                          "assigned_cpu_threads",
-                          "cpu_thread_budget=%9",
-                          "workerConfig.cpuWorkerCount = std::max(1, assignedCpuThreadCount)",
-                          "omp_set_num_threads(std::max(1, assignedCpuThreadCount))",
-                          "fusionCfg.workerCount    = resolvedTotalCpuThreadBudget(_config)",
+                          "for (RecoveredDepthFrame& recovered_frame : recovered_result.frames)",
+                          "saveDepthFrameArtifacts(",
+                          "emit depthMapReady(_depthFrames",
                       });
-
-    const QString capacity_policy =
-        sectionBetween(generator, "uint64_t adaptiveSaveQueueResidentByteCapacity", "int preloadImagesWorkerCount");
-    expectContainsAll(capacity_policy,
-                      {
-                          "estimatedSaveQueueProducerBytes(largestFrameBytes)",
-                          "if (snapshot.valid)",
-                          "byteCapacity = std::min(byteCapacity, memoryBudget)",
-                      });
-    expectNotContainsAll(capacity_policy,
+    expectNotContainsAll(run,
                          {
-                             "if (memoryBudget > 0)",
+                             "DepthFrameArtifactSaveQueue",
+                             "saveQueue.reserveProducer",
+                             "computeDepthForView(",
                          });
-
-    const QString save_queue =
-        sectionBetween(generator, "class DepthFrameArtifactSaveQueue", "bool writeFastDepthMatStorage");
-    expectContainsAll(save_queue,
-                      {
-                          "canAcceptLocked(_producerReservationBytes)",
-                          "++_producerReservations",
-                          "++_residentTasks",
-                          "_residentBytes += _producerReservationBytes",
-                          "return taskResidentBytes <= _maxResidentBytes - _residentBytes;",
-                          "releaseProducerReservationLocked",
-                          "resident_bytes > reserved_bytes",
-                          "catch (const std::exception &exception)",
-                          "saved = _saveFn(task.frameIndex, task.result, task.stageLabel)",
-                          "save_exception_occurred",
-                          "waitUntilIdle(const std::atomic<bool> *cancelFlag",
-                      });
-    const int queue_insert = save_queue.indexOf(QStringLiteral("_tasks.push_back(std::move(task))"));
-    const int reservation_transfer = save_queue.indexOf(QStringLiteral("reservation.disarm()"), queue_insert);
-    ASSERT_GE(queue_insert, 0);
-    ASSERT_GE(reservation_transfer, 0);
-    EXPECT_LT(queue_insert, reservation_transfer)
-        << "Queue insertion must commit before producer reservation accounting transfers.";
-    const int save_call = save_queue.indexOf(QStringLiteral("saved = _saveFn("));
-    const int active_release = save_queue.indexOf(QStringLiteral("--_activeTasks"), save_call);
-    const int exception_log = save_queue.indexOf(QStringLiteral("if (save_exception_occurred)"), active_release);
-    ASSERT_GE(save_call, 0);
-    ASSERT_GE(active_release, 0);
-    ASSERT_GE(exception_log, 0);
-    EXPECT_LT(active_release, exception_log)
-        << "Saver accounting must complete before exception diagnostics are formatted.";
-
-    const QString worker = sectionBetween(generator, "auto workerFunc =", "std::vector<std::thread> workers");
-    const int reservation = worker.indexOf(QStringLiteral("saveQueue.reserveProducer(&_cancelled)"));
-    const int compute = worker.indexOf(QStringLiteral("DepthFrameResult res = computeDepthForView("));
-    const int enqueue = worker.indexOf(QStringLiteral("std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
-    ASSERT_GE(reservation, 0);
-    ASSERT_GE(compute, 0);
-    ASSERT_GE(enqueue, 0);
-    EXPECT_LT(reservation, compute)
-        << "A complete producer result must be reserved before depth computation allocates it.";
-    EXPECT_LT(compute, enqueue);
-
-    expectContainsAll(worker,
-                      {
-                          "catch (const std::exception &exception)",
-                          "computeScheduler.complete(",
-                          "saveQueue.cancel()",
-                          "workerExceptionReported.exchange(true)",
-                      });
-    expectContainsAll(generator,
-                      {
-                          "!saveQueue.waitUntilIdle(&_cancelled)",
-                          "allOk = !anyFailure.load() && !_cancelled.load()",
-                          "fusionCfg.cancelFlag = std::shared_ptr<std::atomic_bool>",
-                          "[MVS][深度融合] 收到取消请求",
-                      });
 }
 
 TEST(MvsAdaptivePatchMatchContractTest, AuxiliaryEvidenceCrossesEveryAdaptiveBackendBranch)
@@ -2002,8 +1748,8 @@ TEST(MvsAdaptivePatchMatchContractTest, AuxiliaryEvidenceCrossesEveryAdaptiveBac
 
     expectContainsAll(adaptive_backend,
                       {
-                          "auxiliary_input.sourceDepthMaps = request.sourceDepthMaps.empty()",
-                          ": &request.sourceDepthMaps",
+                          "auxiliary_input.sourceDepthMaps =",
+                          "request.sourceDepthMaps.empty() ? nullptr : &request.sourceDepthMaps;",
                           "auxiliary_output.photometricSourceMask =",
                           "&result.photometricSourceMask",
                           "&auxiliary_input",

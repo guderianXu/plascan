@@ -23,13 +23,14 @@ struct PointCloudInputPreparationResult
 };
 
 /**
- * @brief 加载并过滤正式 SfM 稀疏点云，为 MVS 深度范围估计提供输入。
+ * @brief 加载正式 SfM 稀疏点和逐点观测 track，供 recovered 深度场景使用。
  *
- * 设备选择与后续点云阶段保持一致；Auto 按 CUDA、OpenCL、CPU 逐级选择。
+ * 必须提供正式点观测 sidecar，以保持点与 track 身份；只有 PLY 时明确失败。
  */
 PointCloudInputPreparationResult preparePointCloudInput(
     const QString &sparseCloudPath,
     const std::vector<xjw::mvs::CameraView> &views,
-    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto,
+    const QString &sparsePointSidecarPath = {});
 
 } // namespace xjw::core::project

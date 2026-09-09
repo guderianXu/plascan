@@ -134,6 +134,9 @@ CPU 构建的 vcpkg installed tree。可先用 `clinfo -l` 确认 OpenCL ICD 能
 仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`。
 Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI 能为 XCB 窗口创建 surface；
 显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
+CUDA 模型后端还需要 Vulkan 开发库和 `glslangValidator`（Linux 可安装 `glslang-tools`，Windows 使用
+Vulkan SDK 并配置 `VULKAN_SDK`）。七阶段取色 shader 在构建时编译并嵌入核心库，运行时无需源码目录或
+shader 编译器；需同一 GPU 的 Vulkan graphics/compute 驱动。CPU 构建不新增此取色依赖。
 
 Linux 正式交付建议使用 Ubuntu 24.04 x86_64 基线的一键 DEB 工作流。首次配置会由 vcpkg 构建带
 XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、Ninja、`pkg-config` 和 `patchelf`。
@@ -386,6 +389,13 @@ GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：
 | `生成正射影像` | 带覆盖 Alpha 的 DOM GeoTIFF/PNG | 常规模式支持 DEM/彩色点云；RPC 模式按地理 DEM 网格反投影 RPC GeoTIFF 并输出 GeoTIFF |
 
 旧版 `工作流程 -> 三维重建` 一键对话框已移除；空三、密集处理、模型和地形产品由各自入口显式启动。
+
+新生成的深度图同时保存 `recovered_model_input/` 三层投票数据；任意三维模型默认据此进入内部 OOC
+融合、自适应网格和 QEM/裁剪主链，输出顶点 confidence。显式 `reconstruction_mode=recovered_ooc` 可要求
+该路径；缺失三层输入时需重新生成深度图。几何使用 CUDA，顶点取色使用参考七阶段 Vulkan 链，
+并按 UUID 与选择的 CUDA 物理设备绑定；PLY 保留 double XYZ、RGB 和 confidence。
+参考生产链尚无完整 UV/纹理实现，新建模路径不会自动混用旧纹理算法；独立“生成纹理”仍是 PlaScan 实现。
+支持层计划、能力范围与 JSON 设置见 [模型后端说明](src/core/mesh/recovered_model/README.md)。
 
 当参与空三的影像全部带有有效 RPC00B 时，工作流会自动进入 RPC 空三分支，不再将 RPC 静默降级为
 估算焦距的针孔相机。无地面控制点时厂商 RPC 保持固定，连接点通过非线性 RPC 前方交会得到 WGS84

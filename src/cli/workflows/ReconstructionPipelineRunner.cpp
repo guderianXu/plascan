@@ -25,10 +25,10 @@
 #include "ModelWorkflowService.h"
 #include "MvsSourcePairQualityLoader.h"
 #include "MvsSceneClassifier.h"
+#include "PointCloudInputPreparation.h"
 #include "PointCloudWorkflowConfig.h"
 #include "PointCloudArtifactIO.h"
 #include "workflow/AerialTriangulationWorkflow.h"
-#include "SparseCloudPreprocessor.h"
 #include "StreamingDepthFusionService.h"
 #ifndef PLASCAN_THREE_D_ONLY
 #include "TerrainPipeline.h"
@@ -1549,7 +1549,7 @@ xjw::cli::ReconstructionCliOptions options;
         return cli::EXIT_OK;
     }
 
-    constexpr int kMinimumRegisteredImagesForDenseWorkflow = 2;
+    constexpr int kMinimumRegisteredImagesForDenseWorkflow = 7;
     constexpr int kMinimumSparsePointsForDenseWorkflow = 20;
     if (sfmResult.numPoints3D < kMinimumSparsePointsForDenseWorkflow)
     {
@@ -1681,32 +1681,37 @@ xjw::cli::ReconstructionCliOptions options;
         return cli::EXIT_ALGO_ERR;
     }
 
+    const QString sparse_points_json =
+        sfmResult.resultRecordExtra.value(QStringLiteral("files"))
+            .toObject()
+            .value(QStringLiteral("sparse_cloud_points_json"))
+            .toString();
     xjw::mvs::SparseCloud sparse;
     QString sparse_preprocess_exception;
     {
-        xjw::mvs::SparseCloudPreprocessor preprocessor(point_cloud_processing_device);
-        xjw::mvs::PreprocessResult preprocessResult;
-        std::string preprocessError;
         try
         {
-            if (preprocessor.run(xjw::common::io::toUtf8Path(sfmResult.sparseCloudPath),
-                                 views,
-                                 preprocessResult,
-                                 &preprocessError))
+            const xjw::core::project::PointCloudInputPreparationResult prepared =
+                xjw::core::project::preparePointCloudInput(
+                    sfmResult.sparseCloudPath,
+                    views,
+                    point_cloud_processing_device,
+                    sparse_points_json);
+            if (prepared.ok)
             {
-                sparse = preprocessResult.cloud;
+                sparse = prepared.cloud;
             }
             else
             {
-                std::fprintf(stderr,
-                             "稀疏点云预处理失败，继续尝试 MVS: %s\n",
-                             preprocessError.c_str());
+                sparse_preprocess_exception = prepared.errorMessage.isEmpty()
+                    ? QStringLiteral("正式 SfM track 输入准备失败")
+                    : prepared.errorMessage;
             }
         }
         catch (const std::exception &exception)
         {
             sparse_preprocess_exception =
-                QStringLiteral("稀疏点云预处理异常: %1")
+                QStringLiteral("SfM track 输入准备异常: %1")
                     .arg(QString::fromUtf8(exception.what()));
         }
     }

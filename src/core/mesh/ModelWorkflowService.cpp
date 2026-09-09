@@ -1,4 +1,5 @@
 #include "ModelWorkflowService.h"
+#include "RecoveredModelBuilder.h"
 
 #include "DepthMapMeshBuilder.h"
 #include "DepthConstrainedSurfaceRefiner.h"
@@ -777,7 +778,8 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
                                           const xjw::mesh::TextureMappingConfig &texture,
                                           const std::function<void(const QString &, int)> &progress,
                                           const std::function<bool()> &isCancelled,
-                                          const QVector<MeshColorView> *camera_views = nullptr)
+                                          const QVector<MeshColorView> *camera_views = nullptr,
+                                          const RecoveredModelResult *recovered_model = nullptr)
 {
     if (cancellationRequested(isCancelled))
     {
@@ -796,7 +798,10 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
     {
         return cancelledWorkflowResult();
     }
-    if (!mesh.savePLY(xjw::common::io::toUtf8Path(mesh_ply_path), &mesh_error))
+    const bool mesh_saved = recovered_model
+        ? writeRecoveredModelPly(*recovered_model, mesh_ply_path, &mesh_error)
+        : mesh.savePLY(xjw::common::io::toUtf8Path(mesh_ply_path), &mesh_error);
+    if (!mesh_saved)
     {
         result.errorMessage = QStringLiteral("网格保存失败: %1").arg(QString::fromStdString(mesh_error));
         return result;
@@ -4214,6 +4219,134 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                ? depth_source_info.absoluteFilePath()
                : depth_source_info.absolutePath())
         : request.outputRoot;
+
+    const QDir depth_directory(depth_source_info.isDir()
+                                   ? depth_source_info.absoluteFilePath()
+                                   : depth_source_info.absolutePath());
+    const QString recovered_input = depth_directory.filePath(
+        QStringLiteral("recovered_model_input"));
+    const bool use_recovered = mode == QStringLiteral("recovered_ooc") ||
+        (mode == QStringLiteral("depth_tsdf") &&
+         QFileInfo::exists(recovered_input));
+    if (use_recovered)
+    {
+        result.payload[QStringLiteral("actual_mesh_algorithm")] =
+            QStringLiteral("recovered_ooc");
+        if (request.exportObj)
+        {
+            result.errorMessage = QStringLiteral(
+                "参考 recovered 生产链尚未实现 UV/纹理导出；请选择 PLY。不会自动混用旧 PlaScan 纹理算法。");
+            return result;
+        }
+        try
+        {
+            const auto artifacts = DepthMapMeshBuilder::discoverDepthFrames(
+                request.depthMapSourcePath);
+            if (artifacts.isEmpty() ||
+                std::any_of(
+                    artifacts.begin(),
+                    artifacts.end(),
+                    [](const auto &artifact)
+                    {
+                        return artifact.status != QStringLiteral("completed") ||
+                            !xjw::mvs::isPrimaryFusionFrame(artifact.role);
+                    }))
+            {
+                result.errorMessage = QStringLiteral(
+                    "Recovered 模型需要完整、已完成的主深度帧批次，请重新生成深度图。");
+                return result;
+            }
+            QJsonObject settings = request.settings;
+            settings[QStringLiteral("interpolation")] = QStringLiteral("enabled");
+            settings[QStringLiteral("strictVolumetricMasks")] = false;
+            settings[QStringLiteral("splitIntoBlocks")] = false;
+            settings[QStringLiteral("recovered_expected_camera_count")] =
+                artifacts.size();
+            QJsonArray expected_poses;
+            QJsonArray source_images;
+            for (qsizetype index = 0; index < artifacts.size(); ++index)
+            {
+                expected_poses.append(QJsonValue());
+                source_images.append(QJsonValue());
+            }
+            for (const auto &artifact : artifacts)
+            {
+                if (!artifact.hasCameraModel || artifact.refIndex < 0 ||
+                    artifact.refIndex >= artifacts.size() ||
+                    !expected_poses[artifact.refIndex].isNull())
+                {
+                    result.errorMessage = QStringLiteral(
+                        "Recovered 模型深度帧的相机索引不完整或重复。");
+                    return result;
+                }
+                QJsonArray pose;
+                for (const auto value :
+                     artifact.cameraModel.worldToCameraRotation())
+                {
+                    pose.append(value);
+                }
+                for (const auto value :
+                     artifact.cameraModel.worldToCameraTranslation())
+                {
+                    pose.append(value);
+                }
+                expected_poses[artifact.refIndex] = pose;
+                source_images[artifact.refIndex] = artifact.sourceImage;
+            }
+            settings[QStringLiteral("recovered_expected_camera_poses")] =
+                expected_poses;
+            settings[QStringLiteral("recovered_source_images")] =
+                source_images;
+            auto recovered = buildRecoveredModel(
+                recovered_input,
+                settings,
+                request.reconstruction.simplifyTargetFaces,
+                request.isCancelled,
+                request.progress);
+            recovered.diagnostics[QStringLiteral("configured_interpolation")] =
+                request.settings.value(QStringLiteral("interpolation"))
+                    .toString(QStringLiteral("enabled"));
+            recovered.diagnostics[QStringLiteral("effective_interpolation")] =
+                QStringLiteral("enabled");
+            recovered.diagnostics[QStringLiteral(
+                "effective_strict_volumetric_masks")] = false;
+            recovered.diagnostics[QStringLiteral("effective_split_into_blocks")] =
+                false;
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
+            result = saveMeshAndOptionalTexture(
+                recovered.mesh,
+                "recovered_ooc",
+                output_root,
+                request.exportObj,
+                request.texture,
+                request.progress,
+                request.isCancelled,
+                nullptr,
+                &recovered);
+            mergePayload(recovered.diagnostics, &result.payload);
+            result.payload[QStringLiteral("reconstruction_mode")] =
+                QStringLiteral("recovered_ooc");
+            result.payload[QStringLiteral("source_data")] =
+                QStringLiteral("depth_maps");
+            result.payload[QStringLiteral("depth_map_source_path")] =
+                request.depthMapSourcePath;
+            return result;
+        }
+        catch (const std::exception &exception)
+        {
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
+            result.errorMessage = QStringLiteral(
+                "Recovered 模型生成失败：%1")
+                                      .arg(QString::fromUtf8(exception.what()));
+            return result;
+        }
+    }
 
     const bool retain_model_stage_snapshots = request.settings.value(
         QStringLiteral("retainModelStageSnapshots")).toBool(false);

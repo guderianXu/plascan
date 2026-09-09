@@ -1,0 +1,41 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Positions {
+    float positions[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer Camera {
+    uint camera_words[];
+};
+layout(set = 0, binding = 2, std430) buffer NearFar {
+    uint near_bits;
+    uint far_bits;
+};
+layout(push_constant) uniform Push { uint vertex_count; } push_data;
+
+#include "recovered_camera.glsl"
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= push_data.vertex_count) return;
+    uint base = 3u * index;
+    vec2 pixel;
+    float depth;
+    if (!camera_project(vec3(positions[base], positions[base + 1u],
+                             positions[base + 2u]), pixel, depth)) return;
+    uint old_bits = near_bits;
+    while (uintBitsToFloat(old_bits) > depth) {
+        uint observed = atomicCompSwap(near_bits, old_bits,
+                                       floatBitsToUint(depth));
+        if (observed == old_bits) break;
+        old_bits = observed;
+    }
+    old_bits = far_bits;
+    while (uintBitsToFloat(old_bits) < depth) {
+        uint observed = atomicCompSwap(far_bits, old_bits,
+                                       floatBitsToUint(depth));
+        if (observed == old_bits) break;
+        old_bits = observed;
+    }
+}

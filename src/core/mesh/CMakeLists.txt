@@ -116,9 +116,13 @@ add_library(meshing STATIC
     TextureAtlasBaker.cpp
     ModelOutputPolicy.cpp
     ModelWorkflowService.cpp
+    RecoveredModelBuilder.cpp
+    RecoveredModelPly.cpp
+    recovered_model/mesh.cpp
 )
 
 if(MESH_HAS_CUDA)
+    add_subdirectory(recovered_model)
     set_target_properties(meshing PROPERTIES
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
         CUDA_SEPARABLE_COMPILATION ON
@@ -169,6 +173,15 @@ target_include_directories(meshing PUBLIC
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/mvs
 )
+target_include_directories(meshing PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mvs/recovered_depth/include)
+
+# Preserve the reference operation order across GCC and MSVC.
+if(MSVC)
+    set_property(SOURCE recovered_model/mesh.cpp RecoveredModelBuilder.cpp APPEND PROPERTY COMPILE_OPTIONS /fp:strict)
+else()
+    set_property(SOURCE recovered_model/mesh.cpp RecoveredModelBuilder.cpp APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
+endif()
 
 target_link_libraries(meshing
     PUBLIC

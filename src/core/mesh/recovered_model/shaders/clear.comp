@@ -1,0 +1,19 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, std430) writeonly buffer Weighted {
+    uvec2 weighted[];
+};
+layout(set = 0, binding = 1, std430) writeonly buffer Geometry0 {
+    uint geometry0[];
+};
+layout(set = 0, binding = 2, std430) writeonly buffer Geometry1 {
+    uint geometry1[];
+};
+layout(push_constant) uniform Push { uint vertex_count; } push_data;
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= push_data.vertex_count) return;
+    weighted[index] = uvec2(0u);
+    geometry0[index] = 0u;
+    geometry1[index] = 0u;
+}

@@ -3,13 +3,6 @@ project(mvs LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
 
-if(NOT TARGET recovered_depth)
-    add_subdirectory(
-        "${CMAKE_SOURCE_DIR}/3rdparty/recovered_depth"
-        "${CMAKE_BINARY_DIR}/3rdparty/recovered_depth"
-        EXCLUDE_FROM_ALL)
-endif()
-
 # ── CUDA（可选）──────────────────────────────────────────────────────────────
 # CUDA 已在根 CMakeLists 中全局启用, 直接判断即可
 if(PLASCAN_ENABLE_CUDA AND DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
@@ -81,7 +74,20 @@ set(MVS_CXX_SOURCES
     SparseCloudPreprocessor.cpp
     DisparityTriangulator.cpp
     PointCloudArtifactIO.cpp
+    RecoveredDepthScene.cpp
+    RecoveredModelInput.cpp
     StreamingDepthFusionService.cpp
+    recovered_depth/src/metalign_compat.cpp
+    recovered_depth/src/target_svd.cpp
+    recovered_depth/src/target_polynomial.cpp
+    recovered_depth/src/fusion.cpp
+    recovered_depth/src/octree_prepare.cpp
+    recovered_depth/src/ooc_pyramid_io.cpp
+    recovered_depth/src/model_pipeline.cpp
+    recovered_depth/src/patchmatch.cpp
+    recovered_depth/src/neighbor_selection.cpp
+    recovered_depth/src/patchmatch_orchestrator.cpp
+    recovered_depth/src/patchmatch_store.cpp
 )
 
 set(MVS_HEADERS
@@ -139,6 +145,7 @@ set(MVS_HEADERS
     SparseCloudPreprocessor.h
     DisparityTriangulator.h
     PointCloudArtifactIO.h
+    RecoveredDepthScene.h
     StreamingDepthFusionService.h
 )
 
@@ -154,6 +161,8 @@ if(MVS_HAS_CUDA)
     set(MVS_CUDA_SOURCES
         PatchMatchCUDA.cu
         DensePointCloudCUDA.cu
+        recovered_depth/src/gpu_cuda.cu
+        recovered_depth/src/recovered_cuda_source.cu
     )
 else()
     set(MVS_CUDA_SOURCES
@@ -186,9 +195,20 @@ if(MVS_HAS_CUDA)
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
-    target_compile_definitions(mvs PUBLIC MVS_ENABLE_CUDA=1)
+    target_compile_definitions(mvs
+        PUBLIC
+            MVS_ENABLE_CUDA=1
+        PRIVATE
+            METMODEL_HAS_CUDA=1
+    )
     target_compile_options(mvs PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
+    )
+    set_source_files_properties(
+        recovered_depth/src/gpu_cuda.cu
+        recovered_depth/src/recovered_cuda_source.cu
+        PROPERTIES
+            COMPILE_OPTIONS "--ftz=false;--prec-div=true;--prec-sqrt=true"
     )
     if(MSVC)
         # NVCC misdiagnoses Qt6 comparison conversion operators and exported
@@ -209,6 +229,22 @@ target_include_directories(mvs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_SOURCE_DIR}/src/common
 )
+target_include_directories(mvs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/recovered_depth/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/recovered_depth/src
+)
+
+if(MSVC)
+    set_property(SOURCE recovered_depth/src/fusion.cpp recovered_depth/src/octree_prepare.cpp
+        recovered_depth/src/model_pipeline.cpp recovered_depth/src/target_svd.cpp
+        recovered_depth/src/target_polynomial.cpp recovered_depth/src/neighbor_selection.cpp
+        APPEND PROPERTY COMPILE_OPTIONS /fp:strict)
+else()
+    set_property(SOURCE recovered_depth/src/fusion.cpp recovered_depth/src/octree_prepare.cpp
+        recovered_depth/src/model_pipeline.cpp recovered_depth/src/target_svd.cpp
+        recovered_depth/src/target_polynomial.cpp recovered_depth/src/neighbor_selection.cpp
+        APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
+endif()
 
 if(GDAL_INCLUDE_DIRS)
     target_include_directories(mvs PRIVATE ${GDAL_INCLUDE_DIRS})
@@ -217,7 +253,6 @@ endif()
 target_link_libraries(mvs
     PUBLIC
         camera
-        recovered_depth
         plascan_common_log
         plascan_common_io
         plapoint::plapoint
@@ -227,9 +262,16 @@ target_link_libraries(mvs
         plascan_common_string_utils
         Qt6::Concurrent
         ${OpenCV_LIBS}
+        ${PLASCAN_JPEG_TARGET}
+        ${PLASCAN_OPENEXR_TARGET}
+        ZLIB::ZLIB
         ${PLASCAN_GDAL_TARGET}
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
+
+if(MVS_HAS_CUDA)
+    target_link_libraries(mvs PRIVATE CUDA::cudart CUDA::cuda_driver)
+endif()
 
 if(OpenMP_CXX_FOUND)
     target_compile_definitions(mvs PRIVATE HAS_OPENMP)

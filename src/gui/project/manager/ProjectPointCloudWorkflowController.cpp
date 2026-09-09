@@ -44,6 +44,7 @@ struct PointCloudWorkflowContext
     DenseGenerationSettings request;
     QJsonObject settings;
     QString sparseCloudPath;
+    QString sparsePointSidecarPath;
     QStringList selectedImages;
     QString outputDir;
     QString projectInputSignature;
@@ -174,6 +175,20 @@ QString sparseCloudPathFromRecord(const QJsonObject &record)
         path = record.value(QStringLiteral("sparse_cloud_xyz")).toString();
     }
     return QDir::cleanPath(path.trimmed());
+}
+
+QString sparsePointSidecarPathFromRecord(const QJsonObject &record)
+{
+    QString path = record.value(QStringLiteral("files"))
+                       .toObject()
+                       .value(QStringLiteral("sparse_cloud_points_json"))
+                       .toString();
+    if (path.isEmpty())
+    {
+        path = record.value(QStringLiteral("sparse_cloud_points_json")).toString();
+    }
+    path = path.trimmed();
+    return path.isEmpty() ? QString() : QDir::cleanPath(path);
 }
 
 QStringList selectedImagesFromRecord(const QJsonObject &record)
@@ -459,6 +474,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
         effective_settings);
     context->atIndex = at_index;
     context->sparseCloudPath = sparseCloudPathFromRecord(at_record);
+    context->sparsePointSidecarPath = sparsePointSidecarPathFromRecord(at_record);
     context->selectedImages = selectedImagesFromRecord(at_record);
     context->projectInputSignature =
         xjw::gui::project::projectDepthInputSignature(metadata, at_index);
@@ -483,9 +499,17 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
                  dialog_title);
         return false;
     }
-    if (context->selectedImages.size() < 2)
+    if (!QFileInfo::exists(context->sparsePointSidecarPath))
     {
-        failTask(QStringLiteral("正式空三结果中的注册影像不足 2 张。"),
+        failTask(QStringLiteral("正式空三逐点观测 sidecar 不存在：%1")
+                     .arg(context->sparsePointSidecarPath),
+                 dialog_title);
+        return false;
+    }
+    if (context->selectedImages.size() < 7)
+    {
+        failTask(QStringLiteral("recovered 深度要求至少 7 张注册影像，当前只有 %1 张。")
+                     .arg(context->selectedImages.size()),
                  dialog_title);
         return false;
     }
@@ -608,7 +632,8 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
             result.pointCloudInput = xjw::core::project::preparePointCloudInput(
                 context->sparseCloudPath,
                 context->views,
-                context->request.processingDevice);
+                context->request.processingDevice,
+                context->sparsePointSidecarPath);
             if (result.pointCloudInput.ok)
             {
                 result.sourcePairQuality =
@@ -1148,7 +1173,6 @@ void ProjectPointCloudWorkflowController::cancelActiveTask()
         generator->requestCancel();
     }
 }
-
 bool ProjectPointCloudWorkflowController::isRunning() const
 {
     return _isRunning;

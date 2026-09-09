@@ -305,13 +305,13 @@ core/
 │   ├── TriangulationService.h/cpp  # 项目级预览三角化服务
 │   └── test/                   # SfM 模块自有 GTest
 │
-├── mvs/                        # Multi-View Stereo：深度图 manifest、source planning、流式融合
+├── mvs/                        # Multi-View Stereo：recovered scene 深度生产、manifest 与流式融合
 │   ├── MvsTypes.h              # MVS 公共类型
 │   ├── DenseCloudRefinementService.h/cpp # 流式 PLY 多轮细化与内存回退，供 CLI/工作流复用
 │   ├── StreamingDepthFusionService.h/cpp # 融合窗口、帧缓存、共识配置和分批聚合编排
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash、source plan 与几何来源位序
-│   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源及严格失败像对复核
+│   ├── MvsSourcePlanner.h/cpp  # 旧深度工件重放/诊断兼容；不参与 recovered 正式选源
 │   ├── MvsImagePreprocessor.h/cpp # 原图与 valid mask 共用去畸变映射，并生成正深度、零畸变工作相机
 │   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
 │   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
@@ -334,7 +334,7 @@ core/
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
 │   ├── DepthPoseAlignmentRefiner.h/cpp # 锚定尺度的鲁棒点到平面局部 SE(3) 派生位姿细化
 │   ├── DepthPoseRefinementStage.h/cpp # 默认关闭的跨视深度候选采样、安全门与派生相机输出
-│   ├── PatchMatchEstimator.cpp  # PatchMatch 公共校验、后端选择和回退
+│   ├── PatchMatchEstimator.cpp  # 旧 PatchMatch 工件与后端诊断兼容；不再是正式深度生产器
 │   ├── PatchMatchHostUtils.h/cpp # 三后端共享的 double 局部相对位姿与无效值感知、尺度稳定深度滤波
 │   ├── PatchMatchPhotometricCost.h # 曝光鲁棒强度 NCC、梯度 NCC 与 Census 组合代价
 │   ├── PatchMatchCPU.cpp        # 可独立构建的 CPU 组合代价 PatchMatch 实现
@@ -346,6 +346,9 @@ core/
 │   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker、文件名自然顺序与异构帧调度
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
+│   ├── RecoveredDepthScene.h/cpp # 正式 SfM track/相机到 scene-wide recovered d4 深度生产与三层 voting 的适配
+│   ├── RecoveredModelInput.h/cpp # 三层 voting-after-components、Brown 相机、region 的原子持久化与 SHA-256 校验
+│   ├── recovered_depth/        # 内部区域过滤/track 选邻、PatchMatch/OOC 金字塔、Morton 树、变分融合；直接编译 .cu
 │   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
 │   ├── DepthMapFusion.h/cpp    # 深度图融合；流式窗口可用 CUDA/OpenCL 反投影，几何一致性仍在 CPU
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
@@ -366,7 +369,7 @@ core/
 │
 ├── project_workflows/          # GUI/CLI 共享的项目级摄影测量工作流配置与资源适配
 │   ├── MvsSourcePairQualityLoader.h/cpp # `.pimatch` 几何审计到 MVS source pair 质量的统一桥接
-│   ├── PointCloudInputPreparation.h/cpp # 正式稀疏点云加载、过滤与 MVS 输入准备
+│   ├── PointCloudInputPreparation.h/cpp # 从正式 SfM sidecar 保留 track observations；无 sidecar 的旧流程才读取并过滤 PLY
 │   ├── PointCloudWorkflowConfig.h/cpp # 点云/深度质量档位到核心配置的统一转换
 │   └── ProjectWorkflowOperations.h/cpp # 稀疏点后处理与地形产品等项目工作流入口
 │
@@ -427,6 +430,11 @@ core/
 │   ├── ConsistentIsoSurfaceExtractor.h/cpp # 默认共享网格边顶点的一致等值面提取器；避免组件过滤误删三角面
 │   ├── Mc33IsoSurfaceExtractor.h/cpp # 可选 MC33 拓扑无歧义等值面适配器
 │   ├── DepthMapMeshBuilder.h/cpp # 深度帧 manifest/相机产物加载；缺最终层时按清单安全回退最高可用金字塔层
+│   ├── RecoveredModelBuilder.h/cpp # 三层深度→OOC 直方图/200 轮多层求解→自适应网格→QEM/trim/region clip
+│   ├── RecoveredModelPly.cpp  # 参考 double XYZ / uchar RGB / float confidence PLY，事务式发布
+│   ├── recovered_model/       # 内部 QEM/修复/裁剪，以及 RecoveredModelColorizer 完整 Brown/RGB 适配
+│   │   ├── vertex_color_vulkan.cpp # 参考七阶段顶点取色；CUDA/Vulkan UUID 绑定，边界取消
+│   │   └── shaders/          # 参考 GLSL；构建时编译为 SPIR-V 并嵌入 Qt 资源
 │   ├── DepthFusionFramePolicy.h/cpp # 环拍视角覆盖度量及防连续视角缺口的帧准入策略
 │   ├── DepthMeshCompleteness.h/cpp # 深度观测到最终网格的逐帧召回率与完整性质量门
 │   ├── TriangleDistanceIndex.h/cpp # BVH 加速的精确点到三角形距离查询，供网格完整性评估使用
@@ -932,7 +940,7 @@ DOM 输入；模型支持 OBJ、PLY，OBJ 的 MTL 与其引用纹理会一起复
   │
   ├─ 4. 密集重建
   │     ├─ 密集匹配 (dense_match)          → 逐像素视差图
-  │     ├─ 深度图估计 (PatchMatch)          → 深度图（生成模型缺失时自动执行）
+  │     ├─ recovered scene CUDA PatchMatch → d4 深度图（三层 voting 后输出）
   │     ├─ 深度图融合                       → 密集点云
   │     └─ 密集点云后处理
   │
@@ -974,13 +982,16 @@ MenuWorkflowController
 会进入 GeoTIFF/PNG Alpha；当前 `ortho_projector_v1` 尚未建立逐相机地形遮挡深度缓冲，
 因此陡峭地形仍需质量复核，不能把 Alpha 当作遮挡正确性的证明。
 
-新增计算后端统一接受 Auto、CPU、CUDA 和 OpenCL：只有 Auto 会按 CUDA → OpenCL GPU → CPU
-顺序降级；显式 CUDA/OpenCL 在构建未包含后端、设备不可用、索引非法或执行失败时直接报错，
-不静默替换为 CPU。MVS 与 terrain 的执行报告保存实际后端、设备和 Auto 回退原因。各路径的设备边界如下：
+通用计算后端仍统一接受 Auto、CPU、CUDA 和 OpenCL，但正式多视深度是例外：recovered scene
+生产器只接受 CUDA，Auto 只能选择 CUDA，设备不可用时直接失败，不会回退旧 CPU/OpenCL PatchMatch。
+新生成的三层深度可直接供 recovered OOC 模型使用；其直方图与变分求解需要 CUDA。密集云、历史网格
+与 terrain 保持各自独立后端策略。各路径的设备边界如下：
 
 | 模块 | CUDA/OpenCL 执行范围 | 当前 CPU 边界 |
 |---|---|---|
 | `dense_match` | Block Match 的代价卷、WTA、置信度和抛物线子像素保持设备驻留；SGM 负责代价卷和最终选择 | SGM/MGM 路径递推，以及 L-R、中值、Speckle 和影像支持验证；OpenCV SGBM 也是 CPU-only |
+| MVS 深度生产 | `src/core/mvs/recovered_depth` 的 `.cu` 源码直接编译；scene-wide d4/d8/d16 PatchMatch、1..16 track 邻图和三层 voting | 输入 track/相机适配与深度工件写盘；无 CPU/OpenCL 算法回退，也不分发或加载 PTX 文件 |
+| Recovered OOC 模型 | CUDA 多相机直方图、每支持层 200 轮变分求解；同一 GPU 的 Vulkan 七阶段取色 | 各相机 OOC 深度/采样尺度金字塔确定性并行，随后按 ordinal 串行发布；Morton 归并/26 邻域平衡、自适应 marching、QEM、5 轮修复、支持度/区域裁剪；double XYZ/RGB/confidence PLY；无隐式旧 UV 回退 |
 | MVS 密集云/融合 | `DenseCloudBuilder` 深度反投影；流式窗口融合可显式用 GPU 预计算参考帧世界坐标图 | 重投影一致性与观测融合；融合 `Auto` 保持 CPU 以避免额外全图缓冲，全局多帧 BFS 的显式 GPU 请求会失败 |
 | Mesh Visual Hull | 规则网格上的轮廓、连续距离场和深度自由空间体素评估 | 输入准备、拓扑闭运算、MC33/Marching Cubes 表面提取和后处理 |
 | Terrain | DEM 正射逐像元投影、候选融合和同网格 DEM mosaic | `ghost_filter`、孔洞连通域与颜色传播；显式 GPU + `ghost_filter` 会失败，Auto 回退 CPU |
@@ -998,13 +1009,31 @@ Terrain OpenCL 正射投影使用双精度世界坐标，设备须支持 `cl_khr
 可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与
 非零顶点数检查。
 
-MVS 深度统一表示与工件 `camera_model` 对应相机坐标系的正向 `Z_cam`，无效值为 0。原始畸变域、
-去畸变工作域和极线校正域不能混用：影像及 valid mask 使用同一去畸变映射；校正域深度返回工作域时，
-按校正相机反投影并重新计算原工作相机的轴向深度，confidence/support 等标量属性只做最近邻重映射。
-极线校正的搜索范围也先转换到校正相机的 `Z_cam`。PatchMatch 的 CPU/CUDA/OpenCL 相对位姿统一在
-double 世界坐标中形成局部基线后再降为 float，深度后处理只统计有效邻域并使用对数深度范围权重，
-避免无效零值污染以及米/毫米单位改变滤波结果。跨视几何尚未计算时，质量门把该指标标记为不可用，
-不得由光度置信度推算伪造的一致性分数。
+正式深度输入必须来自空三的 `sfm_sparse_points.json`，每个稀疏点保留稳定 track ID 与观测相机集合；
+只有 PLY 而没有逐点观测 sidecar 时会明确失败。场景至少需要 2 台注册相机，每台参考相机按共同 track、
+精确角度带与投影 Jacobian 条件数选择 1～16 个邻居。生产参数固定为 Mild、最多 16 邻居，并在 d4、d8、
+d16 三层 PatchMatch 全部完成后执行三层 voting。公开工件保存 d4 深度，仍表示对应 `camera_model` 相机
+坐标系的正向 `Z_cam`，无效值为 0；当前 confidence 是 voting 后有效性的二值桥接值，而不是旧算法的
+光度置信度。N=1 已有 strict-CUDA 数值捕获，N=6～16 已有 South Building 数值回归；N=2～5 复用相同的
+selector、packed mask、CUDA cost 与 voting 实现，但尚未分别建立目标数值闭合。revision 53 以前的深度批次
+不会被新入口复用。
+
+PatchMatch 金字塔以临时 `MPMD401` 文件存储并按 16 个参考相机一批回读投票，发布光度来源掩码后删除
+临时目录，以保持与 recovered 参考程序相同的分批边界并限制常驻内存。每次运行使用带 UUID 的独立
+`.recovered_patchmatch_store-*`，作用域清理覆盖成功、失败和取消；旧版固定目录残留不会阻塞后续任务，
+也不会被新任务误删。三层模型输入先写入同级 staging，完整校验后再以备份/重命名事务替换
+`recovered_model_input`，因此重复重算不会混用新旧文件，写入失败也不会破坏上一份可用输入。
+recovered 的两个 CUDA 编译单元
+显式覆盖 MVS target 的 fast-math 选项，使用标准 FTZ、除法和平方根语义；否则同一输入会出现边界掩码及
+浮点末位差异，不能保证与参考生成模型逐位一致。源码 filter kernel 对最后一个不足 128 线程的 block 使用
+活动项边界门，使 640×480 等合法输入无需额外补边；完整 block 的参考运算顺序不变。
+
+recovered OOC 模型入口会在 GUI 和核心服务边界同时把插值归一为 enabled，并关闭分块与严格体积掩模。
+支持层计划按平衡树实际最大层生成：不大于 6 时单层，更深时保持步长 2 并以实际最大层结尾；例如 Dino
+最大层 8 使用 `[6,8]`，不再套用只适用于最大层 12 的固定 `[6,8,10,12]`。
+
+后续关于逐帧几何修复、旧 source plan 和 CPU/CUDA/OpenCL PatchMatch 的说明用于读取历史工件、诊断工具
+及仍保留的下游融合兼容代码，不代表 revision 53 的正式深度生产路径。
 
 从 MVS revision 37 起，逐像素 `geometry_source_mask` 的 bit 位序由独立的
 `geometry_source_indices` 持久化；它表示一致性与跨视修复实际使用的来源序列，不能用较短的 PatchMatch
@@ -1067,7 +1096,8 @@ MVS 源规划优先使用从当前存储匹配结果经 USAC/MAGSAC 验证的像
 安全上限约束。1024 级高质量影像的深度金字塔保留 `4→2→1` 全分辨率末层；大图继续使用配置的
 最终降采样以控制显存和运行时间。默认仍把最终结果放大到 prepared raster 尺寸；
 CLI 可显式开启默认关闭的原生最终网格实验，但仅 `custom` 且未极线校正的帧会生效。
-深度相机按实际网格尺寸以半像素约定缩放，同时继续保留全分辨率 prepared raster/camera 供纹理和重放。
+历史深度相机按实际网格尺寸以半像素约定缩放；新的 recovered public d4 则遵循参考直接 `f/cx/cy ÷ 4`
+并清零 Brown/仿射项，不使用该半像素约定。同时保留全分辨率 prepared raster/camera 供兼容纹理和重放。
 所有像素域后处理配置仍解释为 prepared full-raster 像素，并按实际 grid/raster 的线性或面积比例量化；
 ds4 上不足一个网格像素的 3x3 局部核会变为 identity，而不是扩大为约 12 个原图像素。
 融合会先在 full-raster 域应用少视图/流式运行时覆盖，再按每个目标帧各自的实际网格独立缩放重投影阈值与局部梯度半径；

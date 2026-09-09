@@ -1,0 +1,42 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Positions {
+    float positions[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer Camera {
+    uint camera_words[];
+};
+layout(set = 0, binding = 2, r32f) uniform readonly image2D rendered_depth;
+layout(set = 0, binding = 3, std430) writeonly buffer Projected {
+    vec2 projected[];
+};
+layout(push_constant) uniform Push {
+    uint vertex_count;
+    int raster_downscale;
+} push_data;
+
+#include "recovered_camera.glsl"
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= push_data.vertex_count) return;
+    projected[index] = vec2(-1.0);
+    uint base = 3u * index;
+    vec2 pixel;
+    float depth;
+    if (!camera_project(vec3(positions[base], positions[base + 1u],
+                             positions[base + 2u]), pixel, depth)) return;
+    if (pixel.x < 0.0 || pixel.y < 0.0 ||
+        pixel.x >= float(camera_int(524)) ||
+        pixel.y >= float(camera_int(528))) return;
+    float visible_depth = imageLoad(
+        rendered_depth,
+        ivec2(int(pixel.x / float(push_data.raster_downscale)),
+              int(pixel.y / float(push_data.raster_downscale)))).x;
+    if (visible_depth == 0.0) return;
+    if (abs(visible_depth - depth) >
+        0.01 * max(visible_depth, depth)) return;
+    projected[index] = pixel;
+}

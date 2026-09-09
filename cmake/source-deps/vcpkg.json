@@ -35,5 +35,11 @@
     },
     "zlib",
     "zstd"
+  ],
+  "overrides": [
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.1.2"
+    }
   ]
 }

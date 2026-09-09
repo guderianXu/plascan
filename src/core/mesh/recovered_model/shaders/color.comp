@@ -1,0 +1,70 @@
+#version 450
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform sampler2DArray color_image;
+layout(set = 0, binding = 1, std430) buffer Projected {
+    vec2 projected[];
+};
+layout(set = 0, binding = 2, std430) buffer Weighted {
+    vec2 weighted[];
+};
+layout(set = 0, binding = 3, std430) readonly buffer Geometry2 {
+    float geometry2[];
+};
+layout(set = 0, binding = 4, std430) buffer Geometry0 {
+    float geometry0[];
+};
+layout(set = 0, binding = 5, std430) buffer Geometry1 {
+    float geometry1[];
+};
+layout(set = 0, binding = 6, std430) buffer Output {
+    float output_values[];
+};
+layout(push_constant) uniform Push {
+    int vertex_count;
+    int image_width;
+    int image_height;
+    int channels;
+} push_data;
+
+void main() {
+    uint vertex = gl_GlobalInvocationID.x;
+    if (vertex >= uint(push_data.vertex_count)) return;
+    if (all(equal(projected[vertex], vec2(-1.0)))) {
+        geometry0[vertex] = 0.0;
+        geometry1[vertex] = 0.0;
+        return;
+    }
+    float contribution_weight;
+    vec2 sample_position;
+    float footprint;
+    if (geometry0[vertex] != 0.0) {
+        contribution_weight = geometry2[vertex] > 0.0
+            ? geometry1[vertex] / geometry2[vertex] : 0.0;
+        sample_position = weighted[vertex] / geometry0[vertex];
+        footprint = sqrt(geometry0[vertex] * 0.10610329359769821);
+    } else {
+        contribution_weight = 1.1754943508222875e-38;
+        sample_position = projected[vertex];
+        footprint = 0.0;
+    }
+    float lod = footprint <= 0.6770275235176086
+        ? 0.0
+        : min(log2(footprint * 1.4770448207855225),
+              float(textureQueryLevels(color_image) - 1));
+    vec2 coordinate = sample_position /
+        vec2(float(push_data.image_width), float(push_data.image_height));
+    uint stride = uint(push_data.channels + 1);
+    for (int channel = 0; channel < push_data.channels; ++channel) {
+        output_values[vertex * stride + uint(channel)] +=
+            textureLod(color_image,
+                       vec3(coordinate, float(channel)), lod).x *
+            contribution_weight;
+    }
+    output_values[vertex * stride + uint(push_data.channels)] +=
+        contribution_weight;
+    geometry0[vertex] = 0.0;
+    geometry1[vertex] = 0.0;
+    projected[vertex] = vec2(-1.0);
+    weighted[vertex] = vec2(0.0);
+}

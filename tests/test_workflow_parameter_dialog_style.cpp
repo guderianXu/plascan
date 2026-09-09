@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QFile>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -18,6 +19,7 @@
 #include <QSlider>
 #include <QStandardItemModel>
 #include <QToolButton>
+#include <QTemporaryDir>
 
 #include "reconstruction/AerialTriangulationDialog.h"
 #include "reconstruction/CreatePointCloudDialog.h"
@@ -210,6 +212,7 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehav
     GenerateModelDialog dialog;
     dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
 
+    auto* source = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceCombo"));
     auto* toggle = dialog.findChild<QToolButton*>(QStringLiteral("workflowAdvancedToggle"));
     auto* advanced = dialog.findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup"));
     auto* split = dialog.findChild<QCheckBox*>(QStringLiteral("splitRegionCheck"));
@@ -218,6 +221,7 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehav
     auto* origin = dialog.findChild<QLabel*>(QStringLiteral("gridOriginLabel"));
     auto* scrollArea = dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea"));
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(source, nullptr);
     ASSERT_NE(toggle, nullptr);
     ASSERT_NE(advanced, nullptr);
     ASSERT_NE(split, nullptr);
@@ -226,6 +230,10 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehav
     ASSERT_NE(origin, nullptr);
     ASSERT_NE(scrollArea, nullptr);
     ASSERT_NE(buttonBox, nullptr);
+
+    const int pointCloudIndex = source->findData(QStringLiteral("point_cloud"));
+    ASSERT_GE(pointCloudIndex, 0);
+    source->setCurrentIndex(pointCloudIndex);
 
     EXPECT_FALSE(toggle->isChecked());
     EXPECT_TRUE(advanced->isHidden());
@@ -312,6 +320,27 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelRestoresDepthPostProcessingS
     const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
     EXPECT_EQ(settings.value(QStringLiteral("interpolation")).toString(), QStringLiteral("disabled"));
     EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("aggressive"));
+}
+
+TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsAlgorithmAndFixedInterpolation)
+{
+    const QString root = QStringLiteral(PLASCAN_SOURCE_DIR "/build/tmp/recovered-model-tests");
+    ASSERT_TRUE(QDir().mkpath(root));
+    QTemporaryDir temporary(root + QStringLiteral("/dialog-XXXXXX"));
+    ASSERT_TRUE(temporary.isValid());
+    ASSERT_TRUE(QDir().mkpath(temporary.filePath(QStringLiteral("recovered_model_input"))));
+    GenerateModelDialog dialog;
+    dialog.applySettings({{"source_data", "depth_maps"}, {"source_path", temporary.path()},
+                          {"interpolation", "disabled"}, {"surface_type", "arbitrary_3d"}});
+    dialog.setSourceCandidates({QJsonObject{{"source_data", "depth_maps"}, {"source_path", temporary.path()},
+                                           {"display", "Recovered input"}, {"supported", true}}});
+    auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveModelAlgorithmLabel"));
+    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    ASSERT_NE(label, nullptr);
+    ASSERT_NE(interpolation, nullptr);
+    EXPECT_TRUE(label->text().contains(QStringLiteral("OOC")));
+    EXPECT_FALSE(interpolation->isEnabled());
+    EXPECT_EQ(interpolation->currentData().toString(), QStringLiteral("enabled"));
 }
 
 TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeepsStableSchema)

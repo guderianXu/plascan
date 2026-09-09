@@ -5,8 +5,8 @@
 #include "MvsSourcePlanner.h"
 #include "MvsWorkspaceManifest.h"
 #include "MvsWorkspaceReplay.h"
+#include "PointCloudInputPreparation.h"
 #include "PointCloudWorkflowConfig.h"
-#include "SparseCloudPreprocessor.h"
 #include "io/PathIO.h"
 
 #include <QCoreApplication>
@@ -256,6 +256,7 @@ int main(int argc, char **argv)
     std::string inputManifest;
     std::string pairAuditReport;
     std::string sparseCloudPath;
+    std::string sparsePointsJsonPath;
     std::string maskDirectory;
     std::string outputDirectory;
     std::string quality = "highest";
@@ -294,9 +295,11 @@ int main(int argc, char **argv)
                    "可选：mvs_pair_audit_cli 生成的 JSON 报告；缺失时复用 manifest source_plan")
         ->check(CLI::ExistingFile);
     app.add_option("--sparse-cloud", sparseCloudPath,
-                   "用于深度范围与可见性预处理的 SFM 稀疏点云 PLY")
+                   "正式 SFM 稀疏点云 PLY")
         ->required()
         ->check(CLI::ExistingFile);
+    app.add_option("--sparse-points-json", sparsePointsJsonPath,
+                   "带逐点观测 track 的 sfm_sparse_points.json；未指定时从稀疏点云同目录查找");
     app.add_option("--mask-dir", maskDirectory,
                    "可选项目排除蒙版目录，要求每张影像均有 <stem>_mask.png");
     app.add_option("-o,--output-dir", outputDirectory,
@@ -437,6 +440,11 @@ int main(int argc, char **argv)
         : QFileInfo(QString::fromUtf8(pairAuditReport.c_str())).absoluteFilePath();
     const QString sparsePath = QFileInfo(
         QString::fromUtf8(sparseCloudPath.c_str())).absoluteFilePath();
+    const QString sparsePointsJson = sparsePointsJsonPath.empty()
+        ? QDir(QFileInfo(sparsePath).absolutePath())
+              .filePath(QStringLiteral("sfm_sparse_points.json"))
+        : QFileInfo(QString::fromUtf8(sparsePointsJsonPath.c_str()))
+              .absoluteFilePath();
     const QString maskDir = maskDirectory.empty()
         ? QString()
         : QFileInfo(QString::fromUtf8(maskDirectory.c_str())).absoluteFilePath();
@@ -561,18 +569,17 @@ int main(int argc, char **argv)
                  verifiedCurrentPairs);
     std::fflush(stdout);
 
-    xjw::mvs::SparseCloudPreprocessor preprocessor(
-        plapoint::ProcessingDevice::CPU);
-    xjw::mvs::PreprocessResult preprocessResult;
-    std::string preprocessError;
-    if (!preprocessor.run(xjw::common::io::toUtf8Path(sparsePath),
-                          views,
-                          preprocessResult,
-                          &preprocessError))
+    const xjw::core::project::PointCloudInputPreparationResult prepared =
+        xjw::core::project::preparePointCloudInput(
+            sparsePath,
+            views,
+            plapoint::ProcessingDevice::CPU,
+            sparsePointsJson);
+    if (!prepared.ok)
     {
         std::fprintf(stderr,
-                     "稀疏点云预处理失败：%s\n",
-                     preprocessError.c_str());
+                     "SfM track 输入准备失败：%s\n",
+                     qUtf8Printable(prepared.errorMessage));
         return cli::EXIT_ALGO_ERR;
     }
 
@@ -700,7 +707,7 @@ int main(int argc, char **argv)
         }
         generator.setSkippedFrameIndices(skipped_indices);
     }
-    generator.setSparseCloud(preprocessResult.cloud);
+    generator.setSparseCloud(prepared.cloud);
     generator.setConfig(config);
     generator.setOutputDir(xjw::common::io::toUtf8Path(outputDir));
 

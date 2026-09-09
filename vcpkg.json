@@ -16,6 +16,7 @@
       ]
     },
     "gtest",
+    "libjpeg-turbo",
     "libzip",
     "openexr",
     "opencl",
@@ -83,6 +84,12 @@
         "xcb"
       ],
       "platform": "linux"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.1.2"
     }
   ],
   "default-features": []

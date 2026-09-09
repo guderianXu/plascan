@@ -445,6 +445,8 @@ TEST(MvsDepthReprocessCliContractTest,
         QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
     const QString generator = readSourceFile(
         QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString production_generator = generator.mid(
+        generator.indexOf(QStringLiteral("void DepthMapGenerator::runInBackgroundImpl()")));
 
     expectContainsAll(source, {
         "--stage-snapshot-refs",
@@ -455,14 +457,14 @@ TEST(MvsDepthReprocessCliContractTest,
         "stage_snapshot_status",
     });
     expectContainsAll(generator, {
-        "MvsStageSnapshotStage::PatchMatchOutput",
-        "MvsStageSnapshotStage::CrossViewConsistency",
-        "MvsStageSnapshotStage::ConfidencePostprocess",
-        "MvsStageSnapshotStage::FinalAdmission",
+        "runRecoveredDepthScene",
+        "recovered三层投票",
+        "recovered_scene_d4",
+        "binary_valid_after_three_level_voting",
+    });
+    expectNotContainsAll(production_generator, {
         "single_frame_output_after_sparse_prior_and_local_filter",
         "after_cross_view_filter_and_repair_before_confidence_postprocess",
-        "after_confidence_postprocess_and_anchored_repair",
-        "after_final_quality_evaluation_before_artifact_publication",
     });
 
     const QString default_report_initializer = sectionBetween(
@@ -528,7 +530,7 @@ TEST(MvsDepthReprocessCliContractTest, UsesVerifiedManifestSourcePlanWithoutPair
         "pair_evidence_provenance=manifest_source_plan",
         "verified_pairs=1",
     });
-    expectContainsAll(result.stderrText, {"稀疏点云预处理失败"});
+    expectContainsAll(result.stderrText, {"SfM track 输入准备失败", "sidecar 不存在"});
     expectNotContainsAll(combinedOutput(result), {
         "不含当前影像集合的已验证 MVS 源像对",
     });
@@ -589,7 +591,7 @@ TEST(MvsDepthReprocessCliContractTest, ResolvesUnicodeRelativeManifestPaths)
         "pair_evidence_provenance=manifest_source_plan",
         "verified_pairs=1",
     });
-    expectContainsAll(result.stderrText, {"稀疏点云预处理失败"});
+    expectContainsAll(result.stderrText, {"SfM track 输入准备失败", "sidecar 不存在"});
     expectNotContainsAll(result.stderrText, {
         "MVS replay 影像不存在",
         "不含当前影像集合的已验证 MVS 源像对",
@@ -884,7 +886,9 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         "config.pointCloudProcessingDevice = settings.processingDevice",
     });
     expectContainsAll(workflow, {
-        "SparseCloudPreprocessor preprocessor(point_cloud_processing_device)",
+        "preparePointCloudInput(",
+        "point_cloud_processing_device",
+        "sparse_points_json",
         "denseSettings.processingDevice = point_cloud_processing_device",
         "input, leafSize, processingDevice, processingReport",
         "refineSettings.processingDevice = denseSettings.processingDevice",
@@ -904,16 +908,16 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
     });
     expectContainsAll(mvs, {
         "pointCloudProcessingDevice",
-        "_config.pointCloudProcessingDevice",
-        "workerConfig.patchMatch.cudaFallbackToCpu = false",
         "_config.patchMatch.cudaFallbackToCpu = false",
-        "prepareOpenClDevice",
+        "const bool probeOpenCl = false",
         "acceleratorDeviceLeases",
         "acquire_device_lease",
-        "CUDA 重试失败，配置禁止回退 CPU",
+        "runRecoveredDepthScene",
+        "CPU/OpenCL 不会回退到旧 PatchMatch",
     });
     expectContainsAll(gui_workflow, {
-        "SparseCloudPreprocessor preprocessor(processingDevice)",
+        "loadTrackedSparseCloud",
+        "sparsePointSidecarPath",
         "context->request.processingDevice",
         "processingDeviceUnavailableReason",
         "DenseCloudBuilder::statisticalOutlierRemoval",
@@ -1364,7 +1368,7 @@ TEST(ThreeDReconstructionCliContractTest, StopsBeforeMvsWhenSfmOutputsAreInsuffi
 
     expectMatches(source,
                   R"(kMinimumSparsePointsForDenseWorkflow\s*=\s*20.*?if\s*\(\s*sfmResult\.numPoints3D\s*<\s*kMinimumSparsePointsForDenseWorkflow\s*\).*?SFM 稀疏点云点数过少.*?return cli::EXIT_ALGO_ERR)");
-    expectContainsAll(source, {"kMinimumRegisteredImagesForDenseWorkflow = 2"});
+    expectContainsAll(source, {"kMinimumRegisteredImagesForDenseWorkflow = 7"});
     expectMatches(source,
                   R"(if\s*\(\s*views\.size\(\)\s*<\s*static_cast<size_t>\(kMinimumRegisteredImagesForDenseWorkflow\)\s*\).*?SFM 后可用于 MVS 的相机不足.*?return cli::EXIT_ALGO_ERR)");
     expectMatches(source,

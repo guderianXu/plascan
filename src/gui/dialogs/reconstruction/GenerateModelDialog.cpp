@@ -6,6 +6,8 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QDir>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
@@ -180,6 +182,10 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     generalForm->addRow(tr("表面类型:"), _surfaceTypeCombo);
     generalForm->addRow(tr("质量:"), _qualityCombo);
     generalForm->addRow(tr("深度质量:"), _effectiveDepthQualityLabel);
+    _modelAlgorithmLabel = new QLabel(generalGroup);
+    _modelAlgorithmLabel->setObjectName(QStringLiteral("effectiveModelAlgorithmLabel"));
+    _modelAlgorithmLabel->setWordWrap(true);
+    generalForm->addRow(tr("模型算法:"), _modelAlgorithmLabel);
     generalForm->addRow(tr("面数:"), _faceCountCombo);
     generalForm->addRow(QString(), _saveEachStepCheck);
     contentLayout->addWidget(generalGroup);
@@ -477,6 +483,7 @@ QJsonObject GenerateModelDialog::collectSettings() const
     const QJsonObject candidate = currentCandidate();
     const QString sourceData = candidate.value(QLatin1String(kSourceData)).toString();
     const QString sourcePath = candidate.value(QLatin1String(kSourcePath)).toString();
+    const bool recovered_model = usesRecoveredModelPipeline();
     QString quality = _qualityCombo->currentData().toString();
     if (quality.isEmpty())
     {
@@ -525,13 +532,19 @@ QJsonObject GenerateModelDialog::collectSettings() const
     // 模型生成只负责网格；OBJ/MTL/纹理图由独立的“生成纹理”流程创建。
     settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
     settings[QStringLiteral("saveAfterEachStep")] = _saveEachStepCheck->isChecked();
-    settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked();
+    settings[QStringLiteral("splitIntoBlocks")] = recovered_model
+        ? false
+        : _splitRegionCheck->isChecked();
     settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value();
     settings[QStringLiteral("skipBoundaryBlocks")] = _skipBoundaryBlocksCheck->isChecked();
-    settings[QStringLiteral("interpolation")] = _interpolationCombo->currentData().toString();
+    settings[QStringLiteral("interpolation")] = recovered_model
+        ? QStringLiteral("enabled")
+        : _interpolationCombo->currentData().toString();
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
-    settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
+    settings[QStringLiteral("strictVolumetricMasks")] = recovered_model
+        ? false
+        : _strictMasksCheck->isChecked();
     const bool selected_depth_batch_compatible =
         candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
     const bool reuse_depth_maps =
@@ -573,6 +586,29 @@ QJsonObject GenerateModelDialog::collectSettings() const
 QJsonObject GenerateModelDialog::currentCandidate() const
 {
     return _sourceItemCombo->currentData().toJsonObject();
+}
+
+bool GenerateModelDialog::usesRecoveredModelPipeline() const
+{
+    const auto candidate = currentCandidate();
+    if (candidate.value(QLatin1String(kSourceData)).toString() != QStringLiteral("depth_maps") ||
+        _surfaceTypeCombo->currentData().toString() != QStringLiteral("arbitrary_3d"))
+    {
+        return false;
+    }
+    if (candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false))
+    {
+        return true;
+    }
+    const QFileInfo source(candidate.value(QLatin1String(kSourcePath)).toString());
+    const QDir directory(source.isDir() ? source.absoluteFilePath() : source.absolutePath());
+    if (QFileInfo::exists(directory.filePath(QStringLiteral("recovered_model_input"))))
+    {
+        return true;
+    }
+    const bool selected_depth_batch_compatible = candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
+    const bool reuse_depth_maps = _hasReusableDepthMaps && selected_depth_batch_compatible && _reuseDepthMapsRequested;
+    return !reuse_depth_maps;
 }
 
 void GenerateModelDialog::refreshSourceTypes()
@@ -804,14 +840,32 @@ void GenerateModelDialog::updateAvailability()
     }
 
     updateBlockControlsAvailability();
+    const bool recovered = usesRecoveredModelPipeline();
+    _modelAlgorithmLabel->setText(recovered
+        ? tr("OOC 自适应融合 + QEM；CUDA；每层 200 轮；支持层按实际树深自动规划")
+        : tr("新三层深度批次使用 OOC；历史深度和点云使用各自重建路径"));
+    _interpolationCombo->setEnabled(!recovered);
+    _strictMasksCheck->setEnabled(!recovered);
+    if (recovered)
+    {
+        const QSignalBlocker interpolation_blocker(_interpolationCombo);
+        const QSignalBlocker masks_blocker(_strictMasksCheck);
+        const QSignalBlocker split_blocker(_splitRegionCheck);
+        _interpolationCombo->setCurrentIndex(
+            _interpolationCombo->findData(QStringLiteral("enabled")));
+        _strictMasksCheck->setChecked(false);
+        _splitRegionCheck->setChecked(false);
+        updateBlockControlsAvailability();
+    }
     _okButton->setEnabled(hasCandidate && supported);
 }
 
 void GenerateModelDialog::updateBlockControlsAvailability()
 {
     const QString sourceData = _sourceCombo->currentData().toString();
-    const bool blockCapable =
-        sourceData == QStringLiteral("depth_maps") || sourceData == QStringLiteral("point_cloud");
+    const bool blockCapable = !usesRecoveredModelPipeline() &&
+        (sourceData == QStringLiteral("depth_maps") ||
+         sourceData == QStringLiteral("point_cloud"));
     const bool splitEnabled = blockCapable && _splitRegionCheck->isChecked();
 
     _splitRegionCheck->setEnabled(blockCapable);
