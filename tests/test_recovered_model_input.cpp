@@ -15,6 +15,8 @@
 #include <QJsonArray>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <limits>
 #include <opencv2/imgcodecs.hpp>
@@ -88,6 +90,74 @@ namespace
         EXPECT_EQ(distortion.radialK3, 0);
         EXPECT_EQ(distortion.tangentialP1, 0);
         EXPECT_EQ(distortion.tangentialP2, 0);
+    }
+
+    TEST_F(RecoveredModelInputTest, PreparedMaskPreservesRecoveredZeroNonZeroConvention)
+    {
+        const QString mask_path = _directory->filePath("prepared-mask.png");
+        cv::Mat mask(2, 4, CV_8UC1);
+        const std::array<std::uint8_t, 8> values{0U, 1U, 2U, 255U, 0U, 3U, 4U, 5U};
+        std::copy(values.begin(), values.end(), mask.ptr<std::uint8_t>());
+        ASSERT_TRUE(cv::imwrite(mask_path.toStdString(), mask));
+
+        xjw::mvs::CameraView view;
+        view.imageWidth = 4;
+        view.imageHeight = 2;
+        view.preparedValidMaskPath = mask_path.toStdString();
+        view.preparedValidMaskSource = "project";
+        xjw::mvs::RecoveredSourceMask recovered;
+        std::string error;
+        ASSERT_TRUE(xjw::mvs::prepareRecoveredSourceMask(view, &recovered, &error)) << error;
+        EXPECT_EQ(recovered.bytes, std::vector<std::uint8_t>(values.begin(), values.end()));
+        EXPECT_EQ(recovered.source, "project");
+        EXPECT_FLOAT_EQ(recovered.coverage, 0.75f);
+    }
+
+    TEST_F(RecoveredModelInputTest, ProjectExclusionMaskIsInvertedAndResizedForRecoveredCuda)
+    {
+        const QString mask_path = _directory->filePath("project-mask.png");
+        cv::Mat mask(1, 2, CV_8UC1);
+        mask.at<std::uint8_t>(0, 0) = 0U;
+        mask.at<std::uint8_t>(0, 1) = 255U;
+        ASSERT_TRUE(cv::imwrite(mask_path.toStdString(), mask));
+
+        xjw::mvs::CameraView view;
+        view.imageWidth = 4;
+        view.imageHeight = 2;
+        view.validRegionMaskPath = mask_path.toStdString();
+        xjw::mvs::RecoveredSourceMask recovered;
+        std::string error;
+        ASSERT_TRUE(xjw::mvs::prepareRecoveredSourceMask(view, &recovered, &error)) << error;
+        EXPECT_EQ(recovered.bytes, std::vector<std::uint8_t>({255U, 255U, 0U, 0U, 255U, 255U, 0U, 0U}));
+        EXPECT_EQ(recovered.source, "project");
+        EXPECT_FLOAT_EQ(recovered.coverage, 0.5f);
+    }
+
+    TEST_F(RecoveredModelInputTest, PreparedMaskDimensionMismatchFailsClosed)
+    {
+        const QString mask_path = _directory->filePath("wrong-mask.png");
+        ASSERT_TRUE(cv::imwrite(mask_path.toStdString(), cv::Mat(1, 2, CV_8UC1, cv::Scalar(255))));
+
+        xjw::mvs::CameraView view;
+        view.imageWidth = 4;
+        view.imageHeight = 2;
+        view.preparedValidMaskPath = mask_path.toStdString();
+        xjw::mvs::RecoveredSourceMask recovered;
+        std::string error;
+        EXPECT_FALSE(xjw::mvs::prepareRecoveredSourceMask(view, &recovered, &error));
+        EXPECT_NE(error.find("dimensions"), std::string::npos);
+    }
+
+    TEST_F(RecoveredModelInputTest, RecoveredHalfReducerPropagatesRejectionMask)
+    {
+        metmodel::RecoveredPatchMatchImageU8 level;
+        level.width = 3;
+        level.height = 3;
+        level.image = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U};
+        level.rejection_mask = {255U, 0U, 255U, 0U, 0U, 0U, 0U, 0U, 255U};
+        const auto reduced = metmodel::reduce_recovered_patchmatch_image_half(level);
+        EXPECT_EQ(reduced.image, std::vector<std::uint8_t>({3U, 5U, 8U, 9U}));
+        EXPECT_EQ(reduced.rejection_mask, std::vector<std::uint8_t>({64U, 128U, 0U, 255U}));
     }
 
     TEST_F(RecoveredModelInputTest, RoundTripPreservesVotedLevelsAndBrownCamera)

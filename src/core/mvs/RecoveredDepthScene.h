@@ -14,15 +14,29 @@ namespace xjw::mvs
     /// This is not OpenCV half-pixel image resizing.
     FramePinholeCamera recoveredPublicD4Camera(const FramePinholeCamera& source);
 
+    struct RecoveredSourceMask
+    {
+        std::vector<std::uint8_t> bytes;
+        std::string source = "full_image";
+        float coverage = 1.0f;
+    };
+
+    /// Converts PlaScan's project/prepared mask conventions to the recovered
+    /// PatchMatch convention (zero rejects, non-zero permits).
+    bool prepareRecoveredSourceMask(const CameraView& view, RecoveredSourceMask* result, std::string* errorMessage);
+
     struct RecoveredDepthFrame
     {
         int viewIndex = -1;
         cv::Mat depth;
         cv::Mat confidence;
         cv::Mat validMask;
+        cv::Mat supportRegionMask;
         cv::Mat photometricSourceMask;
         FramePinholeCamera camera;
         std::vector<int> sourceViewIndices;
+        std::string maskSource = "full_image";
+        float maskCoverage = 1.0f;
     };
 
     struct RecoveredDepthSceneResult

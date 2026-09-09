@@ -738,65 +738,78 @@ DepthVotingCalibrationCu make_recovered_patchmatch_undistorted_calibration(
     return result;
 }
 
-RecoveredPatchMatchImageU8 reduce_recovered_patchmatch_image_half(
-    const RecoveredPatchMatchImageU8& source) {
-    const std::size_t pixels =
-        static_cast<std::size_t>(source.width) * source.height;
+RecoveredPatchMatchImageU8 reduce_recovered_patchmatch_image_half(const RecoveredPatchMatchImageU8& source)
+{
+    const std::size_t pixels = static_cast<std::size_t>(source.width) * source.height;
     if (source.width == 0 || source.height == 0 || source.image.size() != pixels ||
-        (!source.rejection_mask.empty() &&
-         source.rejection_mask.size() != pixels))
-        throw std::invalid_argument(
-            "PatchMatch uint8 half reducer input dimensions do not match buffers");
+        (!source.rejection_mask.empty() && source.rejection_mask.size() != pixels))
+        throw std::invalid_argument("PatchMatch uint8 half reducer input dimensions do not match buffers");
     RecoveredPatchMatchImageU8 result;
     result.width = (source.width + 1U) / 2U;
     result.height = (source.height + 1U) / 2U;
     result.image.resize(static_cast<std::size_t>(result.width) * result.height);
-    for (std::uint32_t y = 0; y < result.height; ++y) {
+    if (!source.rejection_mask.empty())
+    {
+        result.rejection_mask.resize(result.image.size());
+    }
+    for (std::uint32_t y = 0; y < result.height; ++y)
+    {
         const std::uint32_t y0 = y * 2U;
         const std::uint32_t y1 = std::min(y0 + 1U, source.height - 1U);
-        for (std::uint32_t x = 0; x < result.width; ++x) {
+        for (std::uint32_t x = 0; x < result.width; ++x)
+        {
             const std::uint32_t x0 = x * 2U;
             const std::uint32_t x1 = std::min(x0 + 1U, source.width - 1U);
-            const auto index = [width = source.width](std::uint32_t px,
-                                                       std::uint32_t py) {
-                return static_cast<std::size_t>(py) * width + px;
-            };
-            const unsigned int sum =
-                static_cast<unsigned int>(source.image[index(x0, y0)]) +
-                static_cast<unsigned int>(source.image[index(x1, y0)]) +
-                static_cast<unsigned int>(source.image[index(x0, y1)]) +
-                static_cast<unsigned int>(source.image[index(x1, y1)]);
-            const std::size_t destination =
-                static_cast<std::size_t>(y) * result.width + x;
+            const auto index = [width = source.width](std::uint32_t px, std::uint32_t py)
+            { return static_cast<std::size_t>(py) * width + px; };
+            const unsigned int sum = static_cast<unsigned int>(source.image[index(x0, y0)]) +
+                                     static_cast<unsigned int>(source.image[index(x1, y0)]) +
+                                     static_cast<unsigned int>(source.image[index(x0, y1)]) +
+                                     static_cast<unsigned int>(source.image[index(x1, y1)]);
+            const std::size_t destination = static_cast<std::size_t>(y) * result.width + x;
             result.image[destination] = static_cast<std::uint8_t>((sum + 2U) >> 2U);
+            if (!source.rejection_mask.empty())
+            {
+                // The recovered path applies the same ceil-half uint8 reducer
+                // to rejection bytes. Any non-zero descendant is rejected by
+                // PatchMatch, preserving mask boundaries through the pyramid.
+                const unsigned int rejection_sum = static_cast<unsigned int>(source.rejection_mask[index(x0, y0)]) +
+                                                   static_cast<unsigned int>(source.rejection_mask[index(x1, y0)]) +
+                                                   static_cast<unsigned int>(source.rejection_mask[index(x0, y1)]) +
+                                                   static_cast<unsigned int>(source.rejection_mask[index(x1, y1)]);
+                result.rejection_mask[destination] = static_cast<std::uint8_t>((rejection_sum + 2U) >> 2U);
+            }
         }
     }
     return result;
 }
 
-std::array<float, 16> patchmatch_reference_to_neighbor_transform(
-    const Camera& reference, const Camera& neighbor) {
+std::array<float, 16> patchmatch_reference_to_neighbor_transform(const Camera& reference, const Camera& neighbor)
+{
     // 0x25A1070 does not compose the original double poses directly.  It
     // rounds the neighbor world->camera matrix and the reference
     // camera->world matrix (R transpose plus the stored camera center) to
     // float independently, promotes both matrices to double for the explicit
     // row-major product, and rounds the product back to float.  Those two
     // input rounding boundaries are required for byte-exact South records.
-    const auto packed_world_to_camera = [](const Camera& camera) {
-        return std::array<float, 16>{
-            static_cast<float>(camera.pose.rotation(0, 0)),
-            static_cast<float>(camera.pose.rotation(0, 1)),
-            static_cast<float>(camera.pose.rotation(0, 2)),
-            static_cast<float>(camera.pose.translation.x),
-            static_cast<float>(camera.pose.rotation(1, 0)),
-            static_cast<float>(camera.pose.rotation(1, 1)),
-            static_cast<float>(camera.pose.rotation(1, 2)),
-            static_cast<float>(camera.pose.translation.y),
-            static_cast<float>(camera.pose.rotation(2, 0)),
-            static_cast<float>(camera.pose.rotation(2, 1)),
-            static_cast<float>(camera.pose.rotation(2, 2)),
-            static_cast<float>(camera.pose.translation.z),
-            0.0F, 0.0F, 0.0F, 1.0F};
+    const auto packed_world_to_camera = [](const Camera& camera)
+    {
+        return std::array<float, 16>{static_cast<float>(camera.pose.rotation(0, 0)),
+                                     static_cast<float>(camera.pose.rotation(0, 1)),
+                                     static_cast<float>(camera.pose.rotation(0, 2)),
+                                     static_cast<float>(camera.pose.translation.x),
+                                     static_cast<float>(camera.pose.rotation(1, 0)),
+                                     static_cast<float>(camera.pose.rotation(1, 1)),
+                                     static_cast<float>(camera.pose.rotation(1, 2)),
+                                     static_cast<float>(camera.pose.translation.y),
+                                     static_cast<float>(camera.pose.rotation(2, 0)),
+                                     static_cast<float>(camera.pose.rotation(2, 1)),
+                                     static_cast<float>(camera.pose.rotation(2, 2)),
+                                     static_cast<float>(camera.pose.translation.z),
+                                     0.0F,
+                                     0.0F,
+                                     0.0F,
+                                     1.0F};
     };
     const std::array<float, 16> neighbor_base =
         packed_world_to_camera(neighbor);
@@ -1506,8 +1519,8 @@ bool make_recovered_patchmatch_unmasked_camera_preparation(
                     std::string(exception.what());
             return false;
         }
-        if (decoded_image->width != camera.image.width ||
-            decoded_image->height != camera.image.height) {
+        if (decoded_image->width != camera.image.width || decoded_image->height != camera.image.height)
+        {
             error = "lazy PatchMatch image dimensions changed after scene load";
             return false;
         }
@@ -1517,16 +1530,19 @@ bool make_recovered_patchmatch_unmasked_camera_preparation(
     PatchMatchUndistortU8Input undistort;
     undistort.width = static_cast<std::uint32_t>(source_image->width);
     undistort.height = static_cast<std::uint32_t>(source_image->height);
-    try {
+    try
+    {
         undistort.source_image = make_recovered_patchmatch_source_u8(*source_image);
-    } catch (const std::exception& exception) {
+    }
+    catch (const std::exception& exception)
+    {
         error = exception.what();
         return false;
     }
-    // South and the currently proven frame path have no explicit source mask.
-    // This must remain an empty allocation: the target ABI passes with_mask=0
-    // and a null source-mask pointer.  A zero-filled allocation would instead
-    // mean with_mask=1 and reject every pixel whose mask byte is zero.
+    // Empty is semantically distinct from an all-zero source mask: it carries
+    // the target null-pointer/with_mask=0 ABI, while a present zero byte
+    // rejects its source pixel.
+    undistort.source_mask = camera.source_mask;
     undistort.source_calibration = prepared.source_calibration;
     undistort.target_calibration = prepared.undistorted_calibration;
     undistort.device_index = device_index;
@@ -1534,30 +1550,27 @@ bool make_recovered_patchmatch_unmasked_camera_preparation(
     RecoveredPatchMatchImageU8 level;
     if (!run_recovered_patchmatch_undistort_u8_cuda(undistort, level, error))
         return false;
-    try {
-        for (std::uint32_t downscale = 1U;; downscale *= 2U) {
-            if (downscale >= minimum_retained_downscale) {
+    try
+    {
+        for (std::uint32_t downscale = 1U;; downscale *= 2U)
+        {
+            if (downscale >= minimum_retained_downscale)
+            {
                 RecoveredPatchMatchPreparedLevel entry;
                 entry.downscale = downscale;
-                entry.deviation_ratio =
-                    reduce_recovered_patchmatch_deviation_multiplier(
-                        level.image);
+                entry.deviation_ratio = reduce_recovered_patchmatch_deviation_multiplier(level.image);
                 entry.data = level;
                 prepared.image_levels.push_back(std::move(entry));
-            } else if (std::any_of(
-                           level.rejection_mask.begin(),
-                           level.rejection_mask.end(),
-                           [](std::uint8_t value) { return value != 0U; })) {
-                error = "PatchMatch preparation cannot discard a pre-base level with a non-zero rejection mask";
-                return false;
             }
-            if (downscale == 32U) break;
+            if (downscale == 32U)
+                break;
             level = reduce_recovered_patchmatch_image_half(level);
         }
-        prepared.camera = make_patchmatch_perspective_camera(
-            camera, static_cast<int>(target_downscale));
+        prepared.camera = make_patchmatch_perspective_camera(camera, static_cast<int>(target_downscale));
         prepared.valid = true;
-    } catch (const std::exception& exception) {
+    }
+    catch (const std::exception& exception)
+    {
         error = exception.what();
         return false;
     }
@@ -2661,56 +2674,39 @@ static bool make_recovered_patchmatch_unmasked_neighbor_resources_impl(
         const std::size_t mask_bytes = (base_pixels + 7U) / 8U;
         const std::size_t old_mask_size = group.mask.size();
         group.mask.resize(old_mask_size + mask_bytes, 0U);
-        if (!base.source->data.rejection_mask.empty()) {
+        if (!base.source->data.rejection_mask.empty())
+        {
             const std::size_t source_pixels =
-                static_cast<std::size_t>(base.source->data.width) *
-                base.source->data.height;
-            if (base.source->data.rejection_mask.size() != source_pixels) {
+                static_cast<std::size_t>(base.source->data.width) * base.source->data.height;
+            if (base.source->data.rejection_mask.size() != source_pixels)
+            {
                 error = "PatchMatch base rejection mask dimensions are invalid";
                 return false;
             }
-            for (std::uint32_t row = 0; row < base.height; ++row) {
-                for (std::uint32_t column = 0; column < base.width; ++column) {
+            for (std::uint32_t row = 0; row < base.height; ++row)
+            {
+                for (std::uint32_t column = 0; column < base.width; ++column)
+                {
                     const std::size_t source_pixel =
-                        static_cast<std::size_t>(base.top + row) *
-                            base.source->data.width +
-                        base.left + column;
-                    const std::size_t pixel =
-                        static_cast<std::size_t>(row) * base.width + column;
+                        static_cast<std::size_t>(base.top + row) * base.source->data.width + base.left + column;
+                    const std::size_t pixel = static_cast<std::size_t>(row) * base.width + column;
                     if (base.source->data.rejection_mask[source_pixel] != 0U)
-                        group.mask[old_mask_size + (pixel >> 3U)] |=
-                            static_cast<std::uint8_t>(1U << (pixel & 7U));
-                }
-            }
-        } else {
-            // Current ceil-half image reducer deliberately does not invent a
-            // mask transition.  An all-valid directly undistorted source
-            // proves all-valid descendants; any non-zero source rejection
-            // requires the still-unrecovered transition and must fail closed.
-            for (const RecoveredPatchMatchPreparedLevel& level :
-                 prepared.image_levels) {
-                if (level.downscale >= base_downscale) break;
-                if (std::any_of(level.data.rejection_mask.begin(),
-                                level.data.rejection_mask.end(),
-                                [](std::uint8_t value) { return value != 0U; })) {
-                    error = "non-zero PatchMatch rejection-mask scale transition is not recovered";
-                    return false;
+                        group.mask[old_mask_size + (pixel >> 3U)] |= static_cast<std::uint8_t>(1U << (pixel & 7U));
                 }
             }
         }
 
         PatchMatchCostNeighbor neighbor;
         neighbor.camera = layout.camera;
-        neighbor.camera.transform = patchmatch_reference_to_neighbor_transform(
-            scene.cameras[reference_camera_index],
-            scene.cameras[prepared.camera_index]);
+        neighbor.camera.transform = patchmatch_reference_to_neighbor_transform(scene.cameras[reference_camera_index],
+                                                                               scene.cameras[prepared.camera_index]);
         neighbor.resource_group = static_cast<std::uint32_t>(group_index);
         neighbor.resource_index = static_cast<std::uint32_t>(resource_index);
         neighbor.output_index = static_cast<std::uint32_t>(rank);
         neighbor.texture_source_grouped = !materialize_full_atlases;
-        if (materialize_full_atlases) {
-            neighbor.texture.assign(
-                static_cast<std::size_t>(atlas_width) * atlas_height, 0U);
+        if (materialize_full_atlases)
+        {
+            neighbor.texture.assign(static_cast<std::size_t>(atlas_width) * atlas_height, 0U);
             neighbor.texture_write_mask.assign(neighbor.texture.size(), 0U);
         }
         std::uint32_t bottom_x = 0U;

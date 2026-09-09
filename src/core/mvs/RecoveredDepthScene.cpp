@@ -6,6 +6,9 @@
 #include <QScopeGuard>
 #include <QUuid>
 
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
 #include "metmodel/patchmatch.hpp"
 #include "metmodel/neighbor_selection.hpp"
 #include "metmodel/patchmatch_store.hpp"
@@ -22,6 +25,17 @@
 
 namespace xjw::mvs
 {
+    namespace
+    {
+        void setError(std::string* errorMessage, std::string message)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = std::move(message);
+            }
+        }
+    } // namespace
+
     FramePinholeCamera recoveredPublicD4Camera(const FramePinholeCamera& source)
     {
         const auto original = source.normalizedForPositiveDepth();
@@ -35,6 +49,74 @@ namespace xjw::mvs
         return result;
     }
 
+    bool prepareRecoveredSourceMask(const CameraView& view, RecoveredSourceMask* result, std::string* errorMessage)
+    {
+        if (!result || view.imageWidth <= 0 || view.imageHeight <= 0)
+        {
+            setError(errorMessage, "recovered source mask requires valid output and raster dimensions");
+            return false;
+        }
+
+        RecoveredSourceMask converted;
+        cv::Mat valid_mask;
+        if (!view.preparedValidMaskPath.empty())
+        {
+            const cv::Mat prepared_mask = xjw::common::io::readImage(view.preparedValidMaskPath, cv::IMREAD_GRAYSCALE);
+            if (prepared_mask.empty())
+            {
+                setError(errorMessage, "cannot read recovered prepared valid mask: " + view.preparedValidMaskPath);
+                return false;
+            }
+            if (prepared_mask.cols != view.imageWidth || prepared_mask.rows != view.imageHeight)
+            {
+                setError(errorMessage, "recovered prepared valid mask dimensions do not match the source raster");
+                return false;
+            }
+            valid_mask = prepared_mask;
+            converted.source = view.preparedValidMaskSource == "project"
+                                   ? "project"
+                                   : (view.preparedValidMaskSource == "content" ? "content" : "technical");
+        }
+        else if (!view.validRegionMaskPath.empty())
+        {
+            cv::Mat project_mask = xjw::common::io::readImage(view.validRegionMaskPath, cv::IMREAD_GRAYSCALE);
+            if (project_mask.empty())
+            {
+                setError(errorMessage, "cannot read recovered project mask: " + view.validRegionMaskPath);
+                return false;
+            }
+            const cv::Size target_size(view.imageWidth, view.imageHeight);
+            if (project_mask.size() != target_size)
+            {
+                cv::resize(project_mask, project_mask, target_size, 0.0, 0.0, cv::INTER_NEAREST);
+            }
+            cv::compare(project_mask, 0, valid_mask, cv::CMP_EQ);
+            converted.source = "project";
+        }
+
+        if (!valid_mask.empty())
+        {
+            if (valid_mask.type() != CV_8UC1)
+            {
+                valid_mask.convertTo(valid_mask, CV_8U);
+            }
+            if (!valid_mask.isContinuous())
+            {
+                valid_mask = valid_mask.clone();
+            }
+            const std::size_t pixels = static_cast<std::size_t>(view.imageWidth) * view.imageHeight;
+            converted.bytes.assign(valid_mask.ptr<std::uint8_t>(), valid_mask.ptr<std::uint8_t>() + pixels);
+            converted.coverage = static_cast<float>(cv::countNonZero(valid_mask)) / static_cast<float>(pixels);
+        }
+
+        *result = std::move(converted);
+        if (errorMessage)
+        {
+            errorMessage->clear();
+        }
+        return true;
+    }
+
     namespace
     {
 
@@ -42,14 +124,6 @@ namespace xjw::mvs
         using metmodel::ReconstructionRegion;
         using metmodel::Scene;
         using metmodel::SparsePoint;
-
-        void setError(std::string* errorMessage, std::string message)
-        {
-            if (errorMessage)
-            {
-                *errorMessage = std::move(message);
-            }
-        }
 
         std::filesystem::path uniquePatchMatchStoreRoot(const std::filesystem::path& workspaceRoot)
         {
@@ -116,6 +190,12 @@ namespace xjw::mvs
                 output.center = *output.pose.center;
                 output.image.width = static_cast<std::size_t>(view.imageWidth);
                 output.image.height = static_cast<std::size_t>(view.imageHeight);
+                RecoveredSourceMask source_mask;
+                if (!prepareRecoveredSourceMask(view, &source_mask, errorMessage))
+                {
+                    return false;
+                }
+                output.source_mask = std::move(source_mask.bytes);
                 converted.cameras.push_back(std::move(output));
             }
             converted.sparse_points.reserve(sparseCloud.points.size());
@@ -258,6 +338,13 @@ namespace xjw::mvs
             RecoveredDepthFrame frame;
             frame.viewIndex = static_cast<int>(camera_index);
             frame.depth = cv::Mat(height, width, CV_32F, const_cast<float*>(camera_output.public_depth.data())).clone();
+            if (camera_output.support_masks[0].size() != camera_output.public_depth.size())
+            {
+                setError(errorMessage, "recovered public support dimensions do not match the d4 camera grid");
+                return false;
+            }
+            frame.supportRegionMask =
+                cv::Mat(height, width, CV_8U, const_cast<std::uint8_t*>(camera_output.support_masks[0].data())).clone();
             frame.validMask = frame.depth > 0.0F;
             frame.confidence = cv::Mat::zeros(height, width, CV_32F);
             frame.confidence.setTo(1.0F, frame.validMask);
@@ -305,6 +392,18 @@ namespace xjw::mvs
             }
             frame.photometricSourceMask.setTo(0, frame.validMask == 0);
             frame.camera = recoveredPublicD4Camera(views[camera_index].camera);
+            if (!views[camera_index].preparedValidMaskPath.empty())
+            {
+                const std::string& prepared_source = views[camera_index].preparedValidMaskSource;
+                frame.maskSource =
+                    prepared_source == "project" ? "project" : (prepared_source == "content" ? "content" : "technical");
+            }
+            else if (!views[camera_index].validRegionMaskPath.empty())
+            {
+                frame.maskSource = "project";
+            }
+            frame.maskCoverage = static_cast<float>(cv::countNonZero(frame.supportRegionMask)) /
+                                 static_cast<float>(frame.supportRegionMask.total());
             for (const std::size_t source : neighbors[camera_index])
             {
                 frame.sourceViewIndices.push_back(static_cast<int>(source));

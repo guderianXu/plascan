@@ -553,13 +553,13 @@ namespace metmodel
                                                                RecoveredPatchMatchImageU8& output,
                                                                std::string& error);
 
-    // Evidence-backed composition of the recovered unmasked perspective-camera
+    // Evidence-backed composition of the recovered perspective-camera
     // preparation path.  It performs exact RGB8->uint8 conversion, target CUDA
     // undistortion/rejection-mask generation, and enum-2 ceil-half pyramid
     // reduction through downscale 32.  A deviation ratio is retained for every
     // prepared level so the still-being-recovered host state can select it without
-    // recomputation.  Explicit source masks and non-frame camera models are not
-    // silently approximated by this API.
+    // recomputation. Camera::source_mask is optional; its empty/non-empty state
+    // preserves the recovered null-pointer/with_mask ABI exactly.
     struct RecoveredPatchMatchPreparedLevel
     {
         std::uint32_t downscale = 1;
@@ -1288,10 +1288,9 @@ namespace metmodel
                                            bool all_neighbors_state = false,
                                            bool materialize_cumulative_atlas = true);
 
-    // Evidence-backed unmasked perspective path.  For a base level below the
-    // directly undistorted level, a non-zero rejection mask is rejected until the
-    // target's scale-transition producer is recovered; all-zero South masks are
-    // packed exactly rather than assigned a guessed 2x2 rule.
+    // Evidence-backed perspective path. Rejection masks use the recovered
+    // ceil-half transition before their non-zero bytes are packed for the CUDA
+    // cost stage.
     bool make_recovered_patchmatch_unmasked_neighbor_resources(
         const Scene& scene,
         std::size_t reference_camera_index,
@@ -1928,6 +1927,11 @@ namespace metmodel
     {
         RecoveredPatchMatchD4PyramidOutput patchmatch;
         DepthVotingChainOutput voting;
+        // Prepared d4/d8/d16 support in output-camera coordinates. A non-zero
+        // byte is eligible for depth; zero covers source-mask and technical
+        // undistortion rejection. This is retained after the preparation cache
+        // is released so adapters can publish the exact processed domain.
+        std::array<std::vector<std::uint8_t>, 3> support_masks;
         // Metashape DepthMap.image() default view.  This is not the persisted
         // level-0 image: valid coarse triangles are projected coarse-to-fine and
         // fill only zero-valued pixels.  BuildModel keeps the three persisted

@@ -2345,6 +2345,40 @@ namespace metmodel
             result.camera_preparation_seconds =
                 std::chrono::duration<double>(Clock::now() - camera_preparation_started).count();
             result.cameras.resize(reference_camera_indices.size());
+            constexpr std::array<std::uint32_t, 3> output_downscales{4U, 8U, 16U};
+            for (std::size_t ordinal = 0; ordinal < reference_camera_indices.size(); ++ordinal)
+            {
+                const std::size_t camera_index = reference_camera_indices[ordinal];
+                const auto& prepared = prepared_camera_cache[camera_index];
+                for (std::size_t level_index = 0; level_index < output_downscales.size(); ++level_index)
+                {
+                    const auto prepared_level = std::find_if(
+                        prepared.image_levels.begin(),
+                        prepared.image_levels.end(),
+                        [downscale = output_downscales[level_index]](const RecoveredPatchMatchPreparedLevel& level)
+                        { return level.downscale == downscale; });
+                    if (prepared_level == prepared.image_levels.end())
+                    {
+                        error = "recovered d4 scene prepared support pyramid is incomplete";
+                        return false;
+                    }
+                    const std::size_t pixels = prepared_level->data.image.size();
+                    auto& support_mask = result.cameras[ordinal].support_masks[level_index];
+                    support_mask.assign(pixels, 255U);
+                    if (!prepared_level->data.rejection_mask.empty())
+                    {
+                        if (prepared_level->data.rejection_mask.size() != pixels)
+                        {
+                            error = "recovered d4 scene prepared support dimensions are inconsistent";
+                            return false;
+                        }
+                        for (std::size_t pixel = 0; pixel < pixels; ++pixel)
+                        {
+                            support_mask[pixel] = prepared_level->data.rejection_mask[pixel] == 0U ? 255U : 0U;
+                        }
+                    }
+                }
+            }
             result.patchmatch_worker_count = std::min<std::size_t>(2U, reference_camera_indices.size());
             std::vector<std::size_t> prepared_camera_consumers(scene.cameras.size(), 0U);
             for (const std::size_t camera_index : reference_camera_indices)
@@ -2779,17 +2813,46 @@ namespace metmodel
                                 }
                                 else
                                 {
+                                    for (std::size_t level = 0; level < 3U; ++level)
+                                    {
+                                        auto& depth = camera_output.voting.depth_after_components[level];
+                                        const auto& support_mask = camera_output.support_masks[level];
+                                        if (support_mask.size() != depth.size())
+                                        {
+                                            local_error =
+                                                "recovered d4 scene voting support dimensions are inconsistent";
+                                            break;
+                                        }
+                                        for (std::size_t pixel = 0; pixel < depth.size(); ++pixel)
+                                        {
+                                            if (support_mask[pixel] == 0U)
+                                            {
+                                                depth[pixel] = 0.0F;
+                                            }
+                                        }
+                                    }
                                     std::array<std::span<const float>, 3> persisted_levels{};
                                     for (std::size_t level = 0; level < 3U; ++level)
                                         persisted_levels[level] = camera_output.voting.depth_after_components[level];
-                                    if (!compose_recovered_depthmap_default_image_d4(
-                                            scene.cameras[patchmatch.camera_index],
-                                            persisted_levels,
-                                            camera_output.public_depth,
-                                            local_error))
+                                    if (local_error.empty() && !compose_recovered_depthmap_default_image_d4(
+                                                                   scene.cameras[patchmatch.camera_index],
+                                                                   persisted_levels,
+                                                                   camera_output.public_depth,
+                                                                   local_error))
                                     {
                                         local_error = "recovered d4 scene public depth camera " +
                                                       std::to_string(patchmatch.camera_index) + ": " + local_error;
+                                    }
+                                    if (local_error.empty())
+                                    {
+                                        const auto& support_mask = camera_output.support_masks[0];
+                                        for (std::size_t pixel = 0; pixel < camera_output.public_depth.size(); ++pixel)
+                                        {
+                                            if (support_mask[pixel] == 0U)
+                                            {
+                                                camera_output.public_depth[pixel] = 0.0F;
+                                            }
+                                        }
                                     }
                                 }
                                 if (local_error.empty() && !retain_voting_diagnostics)

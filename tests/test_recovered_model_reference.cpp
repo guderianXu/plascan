@@ -1292,6 +1292,10 @@ namespace
     }
     TEST(RecoveredModelReference, ooc_histogram_cuda_camera_pack)
     {
+        if (!metmodel::ooc_pyramid_exact_encoder_available())
+        {
+            GTEST_SKIP() << "target-exact OOC serialization requires OpenEXR 3.2.2 and zlib 1.3.2";
+        }
         EXPECT_NO_THROW(test_ooc_histogram_cuda_camera_pack());
     }
     void test_ooc_marching_bridge()
@@ -1791,6 +1795,10 @@ namespace
     }
     TEST(RecoveredModelReference, recovered_d4_voting_to_ooc_bridge)
     {
+        if (!metmodel::ooc_pyramid_exact_encoder_available())
+        {
+            GTEST_SKIP() << "target-exact OOC serialization requires OpenEXR 3.2.2 and zlib 1.3.2";
+        }
         EXPECT_NO_THROW(test_recovered_d4_voting_to_ooc_bridge());
     }
 } // namespace

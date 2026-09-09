@@ -22,6 +22,10 @@ struct Camera {
     metalign::Pose pose;
     metalign::Vec3 center;
     metalign::Image image;
+    // Optional source raster mask in the exact PatchMatch convention: zero
+    // rejects a source pixel and every non-zero byte permits it. An empty
+    // vector preserves the null-pointer/with_mask=0 CUDA ABI.
+    std::vector<std::uint8_t> source_mask;
     metalign::CameraModel working_model;
     metalign::Image working_image;
     std::vector<std::uint32_t> track_ids;

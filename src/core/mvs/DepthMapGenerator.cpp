@@ -3376,14 +3376,32 @@ namespace xjw
             if (!_imageCache)
             {
                 // The recovered scene owns image decoding and does not initialize the
-                // legacy per-frame provider. Persist its equivalent unmasked Brown
-                // camera raster directly so durable depth publication remains usable.
+                // legacy per-frame provider. Persist the same source mask passed into
+                // recovered CUDA so replay cannot silently widen the processed domain.
+                RecoveredSourceMask recovered_source_mask;
+                std::string recovered_mask_error;
+                if (!prepareRecoveredSourceMask(view, &recovered_source_mask, &recovered_mask_error))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("准备第 %1 帧 recovered 蒙版失败：%2")
+                                            .arg(frameIndex)
+                                            .arg(QString::fromStdString(recovered_mask_error));
+                    }
+                    return false;
+                }
+                cv::Mat recovered_valid_mask;
+                if (!recovered_source_mask.bytes.empty())
+                {
+                    recovered_valid_mask =
+                        cv::Mat(view.imageHeight, view.imageWidth, CV_8U, recovered_source_mask.bytes.data()).clone();
+                }
                 MvsPreparedRasterArtifact saved;
                 std::string save_error;
                 if (!saveMvsPreparedRasterArtifact(
                         mvsRasterPath(view),
                         view.camera,
-                        cv::Mat(),
+                        recovered_valid_mask,
                         xjw::common::io::toUtf8Path(QFileInfo(_workspaceManifestPath).absolutePath()),
                         frameIndex,
                         &saved,
@@ -11122,8 +11140,7 @@ namespace xjw
                 frame.validMask = QSharedPointer<cv::Mat>::create(std::move(recovered_frame.validMask));
                 frame.photometricSourceMask =
                     QSharedPointer<cv::Mat>::create(std::move(recovered_frame.photometricSourceMask));
-                frame.supportRegionMask =
-                    QSharedPointer<cv::Mat>::create(frame.depthMap->size(), CV_8U, cv::Scalar(255));
+                frame.supportRegionMask = QSharedPointer<cv::Mat>::create(std::move(recovered_frame.supportRegionMask));
                 frame.qualityMetrics = analyzeDepthMapQuality(
                     *frame.depthMap, *frame.confidence, static_cast<int>(frame.sourceViewIndices.size()));
                 frame.depthCompleteness.finalMetrics =
@@ -11144,8 +11161,8 @@ namespace xjw
                 frame.qualityDecision.acceptance = DepthFrameAcceptance::Accepted;
                 frame.initialQualityAcceptanceAvailable = false;
                 frame.initialQualityAcceptance = DepthFrameAcceptance::Accepted;
-                frame.maskSource = "full_image";
-                frame.maskCoverage = 1.0f;
+                frame.maskSource = std::move(recovered_frame.maskSource);
+                frame.maskCoverage = recovered_frame.maskCoverage;
                 frame.selectedLevel = 1;
                 frame.pyramidRequestedLevelCount = 3;
                 frame.pyramidActiveLevelCount = 3;
