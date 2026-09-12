@@ -277,19 +277,75 @@ namespace metmodel
         {
         public:
             explicit RecoveredCudaTransferPhaseScope(RecoveredCudaTransferPhase phase)
-                : previous_(recovered_cuda_transfer_phase)
+                : phase_(phase), previous_(recovered_cuda_transfer_phase), started_(std::chrono::steady_clock::now())
             {
                 recovered_cuda_transfer_phase = phase;
             }
             ~RecoveredCudaTransferPhaseScope()
             {
+                const auto elapsed = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started_)
+                        .count());
                 recovered_cuda_transfer_phase = previous_;
+                std::lock_guard lock(recovered_cuda_module_session_mutex);
+                if (!recovered_cuda_module_session.active)
+                    return;
+                auto& stats = recovered_cuda_module_session.stats;
+                std::uint64_t* calls = nullptr;
+                std::uint64_t* nanoseconds = nullptr;
+                switch (phase_)
+                {
+                case RecoveredCudaTransferPhase::undistort:
+                    calls = &stats.undistort_phase_calls;
+                    nanoseconds = &stats.undistort_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::producer:
+                    calls = &stats.producer_phase_calls;
+                    nanoseconds = &stats.producer_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::cost:
+                    calls = &stats.cost_phase_calls;
+                    nanoseconds = &stats.cost_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::wta:
+                    calls = &stats.wta_phase_calls;
+                    nanoseconds = &stats.wta_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::inlier:
+                    calls = &stats.inlier_phase_calls;
+                    nanoseconds = &stats.inlier_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::coarse_to_precise:
+                    calls = &stats.coarse_to_precise_phase_calls;
+                    nanoseconds = &stats.coarse_to_precise_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::bilateral:
+                    calls = &stats.bilateral_phase_calls;
+                    nanoseconds = &stats.bilateral_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::filter:
+                    calls = &stats.filter_phase_calls;
+                    nanoseconds = &stats.filter_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::voting:
+                    calls = &stats.voting_phase_calls;
+                    nanoseconds = &stats.voting_phase_nanoseconds;
+                    break;
+                case RecoveredCudaTransferPhase::uncategorized:
+                    calls = &stats.uncategorized_phase_calls;
+                    nanoseconds = &stats.uncategorized_phase_nanoseconds;
+                    break;
+                }
+                ++*calls;
+                *nanoseconds += elapsed;
             }
             RecoveredCudaTransferPhaseScope(const RecoveredCudaTransferPhaseScope&) = delete;
             RecoveredCudaTransferPhaseScope& operator=(const RecoveredCudaTransferPhaseScope&) = delete;
 
         private:
+            RecoveredCudaTransferPhase phase_;
             RecoveredCudaTransferPhase previous_;
+            std::chrono::steady_clock::time_point started_;
         };
 
         void record_recovered_cuda_h2d_phase(RecoveredCudaModuleSessionStats& stats, std::uint64_t bytes)
@@ -1376,8 +1432,17 @@ namespace metmodel
 
         cudaError_t recovered_cuda_set_device(int device)
         {
+            const auto started = std::chrono::steady_clock::now();
             const cudaError_t status = ::cudaSetDevice(device);
-            record_recovered_cuda_session([](RecoveredCudaModuleSessionStats& stats) { ++stats.set_device_calls; });
+            const auto elapsed = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+                    .count());
+            record_recovered_cuda_session(
+                [elapsed](RecoveredCudaModuleSessionStats& stats)
+                {
+                    ++stats.set_device_calls;
+                    stats.set_device_nanoseconds += elapsed;
+                });
             return status;
         }
 
@@ -1400,13 +1465,21 @@ namespace metmodel
 
         cudaError_t recovered_cuda_free(void* pointer)
         {
+            const auto started = std::chrono::steady_clock::now();
             const cudaError_t status = ::cudaFree(pointer);
+            const auto elapsed = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+                    .count());
             record_recovered_cuda_session(
-                [pointer](RecoveredCudaModuleSessionStats& stats)
+                [pointer, elapsed](RecoveredCudaModuleSessionStats& stats)
                 {
                     ++stats.cuda_free_calls;
+                    stats.cuda_free_nanoseconds += elapsed;
                     if (pointer == nullptr)
+                    {
                         ++stats.cuda_free_null_calls;
+                        stats.cuda_free_null_nanoseconds += elapsed;
+                    }
                 });
             return status;
         }

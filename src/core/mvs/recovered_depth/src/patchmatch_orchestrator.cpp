@@ -2005,10 +2005,9 @@ namespace metmodel
             if (!cuda_session.open(device_index, error))
                 return false;
             const Camera& camera = scene.cameras[reference_camera_index];
-            if (camera.index != reference_camera_index || camera.image.width == 0U || camera.image.height == 0U ||
-                camera.image.width % 16U != 0U || camera.image.height % 16U != 0U)
+            if (camera.index != reference_camera_index || camera.image.width == 0U || camera.image.height == 0U)
             {
-                error = "recovered d4 PatchMatch pyramid requires index-stable dimensions divisible by 16";
+                error = "recovered d4 PatchMatch pyramid requires an index-stable non-empty camera";
                 return false;
             }
 
@@ -2115,7 +2114,9 @@ namespace metmodel
                 return false;
             const double x8_seconds = std::chrono::duration<double>(Clock::now() - x8_started).count();
 
-            const std::size_t x16_pixels = (camera.image.width / 16U) * (camera.image.height / 16U);
+            const std::size_t x16_width = (camera.image.width + 15U) / 16U;
+            const std::size_t x16_height = (camera.image.height + 15U) / 16U;
+            const std::size_t x16_pixels = x16_width * x16_height;
             const std::size_t inlier_groups = (neighbor_count + 7U) / 8U;
             const std::size_t x16_packed_bytes = inlier_groups * x16_pixels;
             if (x16.boundary.filter.depth_allocation.size() < x16_pixels ||

@@ -1984,10 +1984,13 @@ namespace metmodel
         std::uint64_t function_cache_hits = 0;
         std::uint64_t physical_function_lookups = 0;
         std::uint64_t set_device_calls = 0;
+        std::uint64_t set_device_nanoseconds = 0;
         std::uint64_t cuda_malloc_calls = 0;
         std::uint64_t cuda_malloc_bytes = 0;
         std::uint64_t cuda_free_calls = 0;
         std::uint64_t cuda_free_null_calls = 0;
+        std::uint64_t cuda_free_nanoseconds = 0;
+        std::uint64_t cuda_free_null_nanoseconds = 0;
         std::uint64_t host_to_device_copy_calls = 0;
         std::uint64_t host_to_device_copy_bytes = 0;
         std::uint64_t host_to_device_copy_nanoseconds = 0;
@@ -2014,6 +2017,29 @@ namespace metmodel
         std::uint64_t context_synchronizations = 0;
         std::uint64_t stream_synchronizations = 0;
         std::uint64_t stream_synchronization_nanoseconds = 0;
+        // Inclusive wall time spent inside each recovered CUDA backend. These
+        // counters include kernels, transfers and synchronization and are the
+        // stable denominator for locating host orchestration cost.
+        std::uint64_t undistort_phase_calls = 0;
+        std::uint64_t undistort_phase_nanoseconds = 0;
+        std::uint64_t producer_phase_calls = 0;
+        std::uint64_t producer_phase_nanoseconds = 0;
+        std::uint64_t cost_phase_calls = 0;
+        std::uint64_t cost_phase_nanoseconds = 0;
+        std::uint64_t wta_phase_calls = 0;
+        std::uint64_t wta_phase_nanoseconds = 0;
+        std::uint64_t inlier_phase_calls = 0;
+        std::uint64_t inlier_phase_nanoseconds = 0;
+        std::uint64_t coarse_to_precise_phase_calls = 0;
+        std::uint64_t coarse_to_precise_phase_nanoseconds = 0;
+        std::uint64_t bilateral_phase_calls = 0;
+        std::uint64_t bilateral_phase_nanoseconds = 0;
+        std::uint64_t filter_phase_calls = 0;
+        std::uint64_t filter_phase_nanoseconds = 0;
+        std::uint64_t voting_phase_calls = 0;
+        std::uint64_t voting_phase_nanoseconds = 0;
+        std::uint64_t uncategorized_phase_calls = 0;
+        std::uint64_t uncategorized_phase_nanoseconds = 0;
         // First O2 optimization boundary: the role-stable linear buffers and
         // texture backing used by a complete PatchMatch cost batch are retained
         // for the enclosing CUDA session.  These counters distinguish logical

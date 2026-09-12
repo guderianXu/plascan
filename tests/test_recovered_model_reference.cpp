@@ -176,6 +176,57 @@ namespace
         EXPECT_EQ(depth[isolated], 0.0F);
     }
 
+    TEST(RecoveredModelReference, PreparedCropKeepsOwnerDeviationMultiplier)
+    {
+        metmodel::Camera camera;
+        camera.index = 0U;
+        camera.aligned = true;
+        camera.image.width = 16U;
+        camera.image.height = 16U;
+        camera.model.f = 16.0;
+        camera.model.cx = 8.0;
+        camera.model.cy = 8.0;
+
+        metmodel::RecoveredPatchMatchPreparedCamera prepared;
+        prepared.camera_index = 0U;
+        prepared.target_downscale = 4U;
+        prepared.valid = true;
+        metmodel::RecoveredPatchMatchPreparedLevel level;
+        level.downscale = 4U;
+        level.data.width = 4U;
+        level.data.height = 4U;
+        level.data.image = {
+            2U, 9U, 20U, 255U,
+            9U, 10U, 21U, 254U,
+            11U, 12U, 22U, 253U,
+            13U, 14U, 23U, 252U};
+        level.deviation_ratio =
+            metmodel::reduce_recovered_patchmatch_deviation_multiplier(level.data.image);
+        prepared.image_levels.push_back(level);
+
+        metmodel::RecoveredPatchMatchCropDescriptor crop;
+        crop.camera_index = 0;
+        crop.left = 0U;
+        crop.right = 2U;
+        crop.top = 0U;
+        crop.bottom = 4U;
+        crop.width = 2U;
+        crop.height = 4U;
+        crop.full_width = 4U;
+        crop.full_height = 4U;
+
+        std::string error;
+        ASSERT_TRUE(metmodel::apply_recovered_patchmatch_neighbor_crop(
+            camera, 4U, crop, prepared, error)) << error;
+        ASSERT_EQ(prepared.image_levels.size(), 1U);
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(prepared.image_levels[0].deviation_ratio),
+                  std::bit_cast<std::uint32_t>(level.deviation_ratio));
+        EXPECT_NE(std::bit_cast<std::uint32_t>(prepared.image_levels[0].deviation_ratio),
+                  std::bit_cast<std::uint32_t>(
+                      metmodel::reduce_recovered_patchmatch_deviation_multiplier(
+                          prepared.image_levels[0].data.image)));
+    }
+
     TEST(RecoveredModelReference, CudaOocNeighborsMatchCpuReference)
     {
         std::vector<metmodel::OocOctreeRecord> records(9U);

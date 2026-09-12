@@ -1860,15 +1860,24 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPa
     expectContainsAll(cmake, {"recovered_depth/src/ooc_neighbors_cuda.cu"});
     expectContainsAll(patchmatchHeader, {"std::span<const float> depth_view;",
                                          "std::span<const std::uint8_t> normal_view;",
-                                         "std::span<const float> cost_view;"});
+                                         "std::span<const float> cost_view;",
+                                         "std::uint64_t set_device_nanoseconds = 0;",
+                                         "std::uint64_t cuda_free_nanoseconds = 0;",
+                                         "std::uint64_t cost_phase_nanoseconds = 0;",
+                                         "std::uint64_t voting_phase_nanoseconds = 0;"});
     expectContainsAll(patchmatch,
                       {"parallel_for_recovered_patchmatch_rows(",
                        "pixels < 131072U",
-                       "std::max(1U, logical_cpus / 2U)"});
+                       "std::max(1U, logical_cpus / 2U)",
+                       "METMODEL_PM_HOST_TIMING",
+                       "PATCHMATCH_HOST_SPECKLES",
+                       "PATCHMATCH_HOST_CROSS_LEVEL"});
     expectContainsAll(orchestrator,
                       {"c2p.depth_view = state.depth;",
                        "c2p.normal_view = state.normal;",
-                       "c2p.cost_view = state.cost;"});
+                       "c2p.cost_view = state.cost;",
+                       "const std::size_t x16_width = (camera.image.width + 15U) / 16U;",
+                       "const std::size_t x16_height = (camera.image.height + 15U) / 16U;"});
     expectContainsAll(octree,
                       {"run_recovered_ooc_neighbors_cuda_source(",
                        "bool same_index_space = records.size() == balanced_records.size();",

@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <numeric>
@@ -1904,6 +1907,7 @@ bool filter_recovered_patchmatch_cuda_speckle_components(
     std::vector<float>& depth,
     std::uint32_t component_size_threshold,
     std::string& error) {
+    const auto timing_started = std::chrono::steady_clock::now();
     if (width == 0U || height == 0U) {
         error = "PatchMatch CUDA speckle component grid is empty";
         return false;
@@ -2013,6 +2017,13 @@ bool filter_recovered_patchmatch_cuda_speckle_components(
         if (component_size[root] <= component_size_threshold)
             depth[index] = 0.0F;
     }
+    if (std::getenv("METMODEL_PM_HOST_TIMING") != nullptr) {
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - timing_started).count();
+        std::fprintf(stderr,
+                     "PATCHMATCH_HOST_SPECKLES width=%u height=%u pixels=%zu seconds=%.9f\n",
+                     width, height, pixels, seconds);
+    }
     error.clear();
     return true;
 }
@@ -2026,6 +2037,7 @@ bool make_recovered_patchmatch_cross_level_state(
     std::span<const std::uint8_t> previous_normal,
     RecoveredPatchMatchCrossLevelState& output,
     std::string& error) {
+    const auto timing_started = std::chrono::steady_clock::now();
     if (!camera.aligned || camera.image.width == 0U ||
         camera.image.height == 0U) {
         error = "PatchMatch cross-level state requires an aligned non-empty camera";
@@ -2152,6 +2164,7 @@ bool make_recovered_patchmatch_cross_level_state(
     }
     });
 
+    const auto resample_finished = std::chrono::steady_clock::now();
     state.coarse_depth = state.depth;
     std::vector<CrossLevelPoint3f> points;
     if (!make_recovered_patchmatch_host_geometry(
@@ -2159,6 +2172,17 @@ bool make_recovered_patchmatch_cross_level_state(
             state.depth, points, state.coarse_radius, error))
         return false;
 
+    const auto geometry_finished = std::chrono::steady_clock::now();
+    if (std::getenv("METMODEL_PM_HOST_TIMING") != nullptr) {
+        const double resample_seconds = std::chrono::duration<double>(
+            resample_finished - timing_started).count();
+        const double geometry_seconds = std::chrono::duration<double>(
+            geometry_finished - resample_finished).count();
+        std::fprintf(stderr,
+                     "PATCHMATCH_HOST_CROSS_LEVEL downscale=%u pixels=%zu resample_seconds=%.9f geometry_seconds=%.9f\n",
+                     depth_downscale, pixels, resample_seconds,
+                     geometry_seconds);
+    }
     output = std::move(state);
     error.clear();
     return true;
