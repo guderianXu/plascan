@@ -2460,18 +2460,11 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     dialog.applySettings(legacy_settings);
     dialog.setSourceCandidates(QJsonArray{tie_points, model});
 
-    QComboBox* source_combo = nullptr;
-    for (QComboBox* combo : dialog.findChildren<QComboBox*>())
-    {
-        if (combo->findData(QStringLiteral("tie_points")) >= 0 && combo->findData(QStringLiteral("model")) >= 0)
-        {
-            source_combo = combo;
-            break;
-        }
-    }
-
+    auto* source_combo = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceCombo"));
     ASSERT_NE(source_combo, nullptr);
     EXPECT_GE(source_combo->findData(QStringLiteral("depth_maps")), 0);
+    EXPECT_LT(source_combo->findData(QStringLiteral("tie_points")), 0);
+    EXPECT_LT(source_combo->findData(QStringLiteral("model")), 0);
     EXPECT_EQ(source_combo->currentData().toString(), QStringLiteral("depth_maps"));
 
     auto* source_items = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceItemCombo"));
@@ -2491,12 +2484,12 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     EXPECT_TRUE(submitted.value(QStringLiteral("automatic_depth_maps")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("depthMapSourcePath")).toString().isEmpty());
-    EXPECT_EQ(submitted.value(QStringLiteral("interpolation")).toString(), QStringLiteral("enabled"));
-    EXPECT_FALSE(submitted.value(QStringLiteral("strictVolumetricMasks")).toBool(true));
-    EXPECT_FALSE(submitted.value(QStringLiteral("splitIntoBlocks")).toBool(true));
+    EXPECT_FALSE(submitted.contains(QStringLiteral("interpolation")));
+    EXPECT_FALSE(submitted.contains(QStringLiteral("strictVolumetricMasks")));
+    EXPECT_FALSE(submitted.contains(QStringLiteral("splitIntoBlocks")));
 }
 
-TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
+TEST(GenerateModelDialogTest, ReusesCompatibleDepthMapsByDefault)
 {
     QJsonObject depth_maps;
     depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
@@ -2509,9 +2502,10 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     dialog.applySettings(QJsonObject());
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    const auto* algorithm_label = dialog.findChild<QLabel*>(QStringLiteral("effectiveModelAlgorithmLabel"));
+    const auto* algorithm_label = dialog.findChild<QLabel*>(QStringLiteral("effectiveSurfaceQualityLabel"));
     ASSERT_NE(algorithm_label, nullptr);
-    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("历史深度")));
+    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("recovered_ooc")));
+    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("参考已验证链")));
 
     QCheckBox* reuse_check = nullptr;
     for (QCheckBox* check : dialog.findChildren<QCheckBox*>())
@@ -2527,7 +2521,7 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     EXPECT_TRUE(reuse_check->isChecked());
 }
 
-TEST(GenerateModelDialogTest, UltraModelQualityRequestsHighestDepthQuality)
+TEST(GenerateModelDialogTest, LegacyQualityCannotOverrideCanonicalDepthQuality)
 {
     QJsonObject depth_maps;
     depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
@@ -2543,8 +2537,9 @@ TEST(GenerateModelDialogTest, UltraModelQualityRequestsHighestDepthQuality)
 
     auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveDepthQualityLabel"));
     ASSERT_NE(label, nullptr);
-    EXPECT_TRUE(label->text().contains(QStringLiteral("超高")));
-    EXPECT_TRUE(label->text().contains(QStringLiteral("16 轮")));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("中")));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("d4")));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("参考已验证")));
 
     QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
     auto* button_box = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
@@ -2552,12 +2547,14 @@ TEST(GenerateModelDialogTest, UltraModelQualityRequestsHighestDepthQuality)
     button_box->button(QDialogButtonBox::Ok)->click();
     ASSERT_EQ(run_spy.count(), 1);
     const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
-    EXPECT_EQ(submitted.value(QStringLiteral("modelQualityProfile")).toString(), QStringLiteral("detail"));
-    EXPECT_EQ(submitted.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("highest"));
+    EXPECT_EQ(submitted.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 1);
+    EXPECT_FALSE(submitted.contains(QStringLiteral("modelQualityProfile")));
+    EXPECT_EQ(submitted.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(submitted.value(QStringLiteral("surfaceQualityProfile")).toString(), QStringLiteral("recovered_ooc"));
     EXPECT_TRUE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool());
 }
 
-TEST(GenerateModelDialogTest, RejectsLowerQualityReusableDepthBatch)
+TEST(GenerateModelDialogTest, LegacyQualityDoesNotRejectCanonicalReusableDepthBatch)
 {
     QJsonObject depth_maps;
     depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
@@ -2573,9 +2570,9 @@ TEST(GenerateModelDialogTest, RejectsLowerQualityReusableDepthBatch)
 
     auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
     ASSERT_NE(reuse_check, nullptr);
-    EXPECT_FALSE(reuse_check->isEnabled());
-    EXPECT_FALSE(reuse_check->isChecked());
-    EXPECT_TRUE(reuse_check->toolTip().contains(QStringLiteral("低于当前请求")));
+    EXPECT_TRUE(reuse_check->isEnabled());
+    EXPECT_TRUE(reuse_check->isChecked());
+    EXPECT_TRUE(reuse_check->toolTip().contains(QStringLiteral("复用兼容深度图")));
 
     QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
     auto* button_box = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
@@ -2583,8 +2580,8 @@ TEST(GenerateModelDialogTest, RejectsLowerQualityReusableDepthBatch)
     button_box->button(QDialogButtonBox::Ok)->click();
     ASSERT_EQ(run_spy.count(), 1);
     const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
-    EXPECT_FALSE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool(true));
-    EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
+    EXPECT_TRUE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool());
+    EXPECT_FALSE(submitted.value(QStringLiteral("force_depth_recompute")).toBool(true));
 }
 
 TEST(GenerateModelDialogTest, RecomputesIncompatibleDepthBatch)
@@ -3136,18 +3133,18 @@ TEST(CodeStyleTest, ProjectDataUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("QString _projectPath;"),
-        QStringLiteral("mutable ProjectFilesManager _filesManager;"),
-        QStringLiteral("ProjectConfigManager _configManager;"),
-        QStringLiteral("bool _isDirty = false;"),
-        QStringLiteral("mutable bool _resultsLoaded = false;"),
-        QStringLiteral("QTimer *_archiveSyncTimer{};"),
-        QStringLiteral("bool _resultsDirtyForArchive{false};"),
-        QStringLiteral("bool _coreFileDirtyForArchive{false};"),
+        QStringLiteral(R"(QString\s+_projectPath\s*;)") ,
+        QStringLiteral(R"(mutable\s+ProjectFilesManager\s+_filesManager\s*;)") ,
+        QStringLiteral(R"(ProjectConfigManager\s+_configManager\s*;)") ,
+        QStringLiteral(R"(bool\s+_isDirty\s*=\s*false\s*;)") ,
+        QStringLiteral(R"(mutable\s+bool\s+_resultsLoaded\s*=\s*false\s*;)") ,
+        QStringLiteral(R"(QTimer\s*\*\s*_archiveSyncTimer\s*\{\s*\}\s*;)") ,
+        QStringLiteral(R"(bool\s+_resultsDirtyForArchive\s*\{\s*false\s*\}\s*;)") ,
+        QStringLiteral(R"(bool\s+_coreFileDirtyForArchive\s*\{\s*false\s*\}\s*;)") ,
     };
     for (const QString& expectedMember : expectedMembers)
     {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+        EXPECT_TRUE(QRegularExpression(expectedMember).match(header).hasMatch()) << qPrintable(expectedMember);
     }
 
     const QStringList oldMemberNames = {
@@ -4316,14 +4313,14 @@ TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("QWidget *_parent = nullptr;"),
-        QStringLiteral("ProjectData *_projectData = nullptr;"),
-        QStringLiteral("FileDialogStateManager *_fileDialogState = nullptr;"),
-        QStringLiteral("ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;"),
-        QStringLiteral("ProjectModelManager *_modelManager = nullptr;"),
-        QStringLiteral("ProjectTerrainProductsManager *_terrainProductsManager = nullptr;"),
-        QStringLiteral("ProjectCameraSetupManager *_cameraSetupManager = nullptr;"),
-        QStringLiteral("ProjectUiCommands *_uiCommands = nullptr;"),
+        QStringLiteral(R"(QWidget\s*\*\s*_parent\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectData\s*\*\s*_projectData\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(FileDialogStateManager\s*\*\s*_fileDialogState\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectSparseReconstructionManager\s*\*\s*_sparseReconstructionManager\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectModelManager\s*\*\s*_modelManager\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectTerrainProductsManager\s*\*\s*_terrainProductsManager\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectCameraSetupManager\s*\*\s*_cameraSetupManager\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(ProjectUiCommands\s*\*\s*_uiCommands\s*=\s*nullptr\s*;)") ,
         QStringLiteral("std::shared_ptr<std::atomic<bool>> _atCancelFlag;"),
         QStringLiteral("QMap<QString, QJsonObject> _pendingBaCameraMeta;"),
         QStringLiteral("QMap<QString, QJsonObject> _pendingBaBeforeCameraMeta;"),
@@ -4332,7 +4329,7 @@ TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
     };
     for (const QString& expectedMember : expectedMembers)
     {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+        EXPECT_TRUE(QRegularExpression(expectedMember).match(header).hasMatch()) << qPrintable(expectedMember);
     }
 
     const QStringList oldMemberNames = {
@@ -4978,22 +4975,29 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(DepthMapPersistenceTest, PersistsRecoveredFramesAfterThreeLevelVoting)
+TEST(DepthMapPersistenceTest, PersistsRecoveredFramesAfterReferenceThreeLevelVoting)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const int recoveredRun = source.indexOf(QStringLiteral("runRecoveredDepthScene("));
-    const int recoveredSave = source.indexOf(QStringLiteral("QStringLiteral(\"recovered三层投票\")"));
+    const int recoveredSave = source.indexOf(QStringLiteral("QStringLiteral(\"recovered三层投票\")"), recoveredRun);
     const int completedSignal = source.indexOf(QStringLiteral("emit depthMapReady("), recoveredSave);
+    const int recoveredEnd = source.indexOf(QStringLiteral("emitFinishedOnce(true);"), completedSignal);
 
     ASSERT_GE(recoveredRun, 0);
     ASSERT_GE(recoveredSave, 0);
     ASSERT_GE(completedSignal, 0);
+    ASSERT_GE(recoveredEnd, 0);
     EXPECT_LT(recoveredRun, recoveredSave)
-        << "Recovered depth frames must be published only after scene-wide PatchMatch and voting complete.";
+        << "Recovered depth frames must be published only after reference PatchMatch and voting complete.";
     EXPECT_LT(recoveredSave, completedSignal)
         << "A frame must reach durable artifact storage before the GUI receives depthMapReady.";
+    const QString recoveredTail = source.mid(recoveredRun, recoveredEnd - recoveredRun);
+    EXPECT_FALSE(recoveredTail.contains(QStringLiteral("crossCheckDepthConsistencyStreaming()")))
+        << "Recovered output must not enter PlaScan's legacy quality/consistency filter.";
+    EXPECT_FALSE(recoveredTail.contains(QStringLiteral("runDepthPoseRefinementCandidateStage")))
+        << "Recovered output must not enter PlaScan's pose/quality post-stage.";
 }
 
 TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
@@ -8053,8 +8057,10 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     ASSERT_GT(end, start);
     const QString block = managerSource.mid(start, end - start);
 
-    EXPECT_TRUE(managerHeader.contains(
-        QStringLiteral("void maskGenerationProgressChanged(const QString &stage, int done, int total);")));
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral(R"(void\s+maskGenerationProgressChanged\s*\(\s*const\s+QString\s*&\s*stage\s*,\s*int\s+done\s*,\s*int\s+total\s*\)\s*;)"))
+                    .match(managerHeader)
+                    .hasMatch());
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
     EXPECT_TRUE(block.contains(QStringLiteral("emit self->progressChanged")));
@@ -9028,14 +9034,22 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
     ASSERT_FALSE(commandsHeader.isEmpty());
     ASSERT_FALSE(commandsSource.isEmpty());
 
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void projectOpenStarted(const QString &projectPath);")));
-    EXPECT_TRUE(managerHeader.contains(
-        QStringLiteral("void projectOpenProgressChanged(const QString &message, int percent);")));
-    EXPECT_TRUE(
-        managerHeader.contains(QStringLiteral("void projectOpenFinished(bool success, const QString &message);")));
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void loadProjectResultsAsync(const QString &projectPath);")));
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenStarted\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
+                    .match(managerHeader)
+                    .hasMatch());
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenProgressChanged\s*\(\s*const\s+QString\s*&\s*message\s*,\s*int\s+percent\s*\)\s*;)"))
+                    .match(managerHeader)
+                    .hasMatch());
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenFinished\s*\(\s*bool\s+success\s*,\s*const\s+QString\s*&\s*message\s*\)\s*;)"))
+                    .match(managerHeader)
+                    .hasMatch());
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+loadProjectResultsAsync\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
+                    .match(managerHeader)
+                    .hasMatch());
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("bool _openInProgress")));
-    EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectProjectByDialog(QString *selectedPath) const;")));
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectProjectByDialog\s*\(\s*QString\s*\*\s*selectedPath\s*\)\s*const\s*;)"))
+                    .match(commandsHeader)
+                    .hasMatch());
 
     const int openStart = managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::openProjectFromPath"));
     const int saveStart =
@@ -9071,9 +9085,13 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
     ASSERT_FALSE(commandsHeader.isEmpty());
     ASSERT_FALSE(commandsSource.isEmpty());
 
-    EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectImageFolder(QString *selectedFolder) const;")))
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectImageFolder\s*\(\s*QString\s*\*\s*selectedFolder\s*\)\s*const\s*;)"))
+                    .match(commandsHeader)
+                    .hasMatch())
         << "Folder selection should be separated from the potentially slow folder scan.";
-    EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectPhotos(QStringList *selectedFiles) const;")))
+    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectPhotos\s*\(\s*QStringList\s*\*\s*selectedFiles\s*\)\s*const\s*;)"))
+                    .match(commandsHeader)
+                    .hasMatch())
         << "File selection should be separated from slow image hashing and copying.";
     EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectImageFolder")))
         << "The UI command layer should keep the directory dialog logic reusable.";
@@ -9086,21 +9104,22 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
     const QString addBlock = managerSource.mid(addStart, nextStart - addStart);
 
     EXPECT_TRUE(addBlock.contains(QStringLiteral("selectImageFolder(&folder)")));
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("xjw::gui::tasks::runGuardedWithOutcome")))
         << "Directory scanning can touch slow disks or large folders and must not run on the GUI thread.";
     EXPECT_TRUE(addBlock.contains(QStringLiteral("scanImageFolder(folder)")));
     EXPECT_TRUE(addBlock.contains(QStringLiteral("startImageImport(scan.imagePaths")))
         << "The scanned files should continue through the asynchronous import path.";
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("importImagesToSharedStore(")))
-        << "Hashing and copying image content must happen in the worker.";
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("addImagesFromSharedStore(")))
-        << "Only the metadata commit should run back on the GUI thread.";
     EXPECT_TRUE(addBlock.contains(QStringLiteral("imageImportProgressChanged")))
         << "Large image imports should report determinate GUI progress.";
     EXPECT_TRUE(managerSource.contains(QStringLiteral("QtConcurrent::blockingMapped(")))
-        << "Image hashing and copying should use the dedicated parallel import pool.";
+        << "External-image validation should use the dedicated parallel import pool.";
     EXPECT_TRUE(managerSource.contains(QStringLiteral("importPool.setMaxThreadCount(")))
         << "Parallel imports must use bounded concurrency instead of flooding the global pool.";
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("validateExternalImages(")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("parseRpcCameraRaster(")));
+    EXPECT_FALSE(addBlock.contains(QStringLiteral("importImagesToSharedStore(")));
+    EXPECT_FALSE(addBlock.contains(QStringLiteral("prepareImport(")));
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("addImagesFromSharedStore(batch.projectImagePaths")));
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_projectData->addImages(scan.imagePaths")))
         << "The GUI thread must not hash and copy every image.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
@@ -13216,6 +13235,46 @@ TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAnd
     {
         EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\"%1\")").arg(operation))) << qPrintable(operation);
     }
+}
+
+TEST(TiePointResultIntegrationTest, PortableExportGuardsGeneratedDataDeletionAndManagerDestruction)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+    const int methodStart = source.indexOf(QStringLiteral("void ProjectManager::deleteGeneratedData"));
+    const int methodEnd = source.indexOf(QStringLiteral("void ProjectManager::packResource"), methodStart);
+    ASSERT_GE(methodStart, 0);
+    ASSERT_GT(methodEnd, methodStart);
+    const QString method = source.mid(methodStart, methodEnd - methodStart);
+    const QString guard = QStringLiteral("rejectLifecycleChangeDuringResourceCleanup(QStringLiteral(\"删除数据\"))");
+    const int confirmation = method.indexOf(QStringLiteral("QMessageBox::question"));
+    const int firstGuard = method.indexOf(guard);
+    const int secondGuard = method.indexOf(guard, firstGuard + guard.size());
+    ASSERT_GE(confirmation, 0);
+    EXPECT_GE(firstGuard, 0);
+    EXPECT_LT(firstGuard, confirmation);
+    EXPECT_GT(secondGuard, confirmation);
+
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString projectPath = QDir(temporary.path()).filePath(QStringLiteral("source.plascan"));
+    const QString imagePath = QDir(temporary.path()).filePath(QStringLiteral("image.tif"));
+    const QString outputPath = QDir(temporary.path()).filePath(QStringLiteral("portable.zip"));
+    QFile image(imagePath);
+    ASSERT_TRUE(image.open(QIODevice::WriteOnly));
+    ASSERT_EQ(image.write("image"), 5);
+    image.close();
+
+    auto project = std::make_unique<ProjectData>();
+    ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("source")));
+    ASSERT_TRUE(project->addImages({imagePath}));
+    QString error;
+    ASSERT_TRUE(project->saveProject(&error)) << qPrintable(error);
+    auto manager = std::make_unique<ProjectManager>(project.get(), nullptr);
+    ASSERT_TRUE(project->exportPortableProjectAsync(outputPath, &error)) << qPrintable(error);
+    manager.reset();
+    project.reset();
+    EXPECT_TRUE(QFileInfo::exists(outputPath));
 }
 
 TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudPrefersCleanedProductionCloudForMeshing)

@@ -127,6 +127,7 @@ add_library(meshing STATIC
     ModelOutputPolicy.cpp
     ModelWorkflowService.cpp
     RecoveredModelBuilder.cpp
+    RpcPlaneSweepModelBuilder.cpp
     RecoveredModelPly.cpp
     recovered_model/mesh.cpp
 )

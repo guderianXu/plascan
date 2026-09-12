@@ -5556,7 +5556,8 @@ namespace metmodel
                                             const std::vector<std::uint32_t>& selected_indices,
                                             const std::vector<std::uint8_t>& active,
                                             const std::vector<float>& scalar_lut,
-                                            const std::vector<std::uint8_t>& partition_excluded)
+                                            const std::vector<std::uint8_t>& partition_excluded,
+                                            std::optional<std::size_t> cuda_device_index)
     {
         const std::size_t count = selected_indices.size();
         if (count > std::numeric_limits<std::uint32_t>::max())
@@ -5586,8 +5587,77 @@ namespace metmodel
         state.v_old.assign(count * 3U, 0U);
         state.q.assign(count * 9U, 0U);
 
-        std::vector<CellKey> cells;
-        cells.reserve(count);
+        if (cuda_device_index.has_value())
+        {
+#if defined(METMODEL_HAS_CUDA)
+            std::vector<std::uint32_t> morton_words(count * 3U);
+            std::vector<std::uint8_t> levels(count);
+            for (std::size_t output_index = 0; output_index < count; ++output_index)
+            {
+                const auto record_index = selected_indices[output_index];
+                if (record_index >= records.size())
+                {
+                    throw std::runtime_error("OOC selected index is outside the record table");
+                }
+                const auto& record = records[record_index];
+                if (record.scalar_lut_index >= scalar_lut.size())
+                {
+                    throw std::runtime_error("OOC scalar LUT index is outside the table");
+                }
+                if (output_index != 0U)
+                {
+                    const auto& previous = records[selected_indices[output_index - 1U]];
+                    if (previous.level > record.level ||
+                        (previous.level == record.level && !(previous.morton_words < record.morton_words)))
+                    {
+                        throw std::runtime_error("OOC CUDA neighbor input is not level/Morton ordered");
+                    }
+                }
+            }
+#pragma omp parallel for schedule(static)
+            for (std::ptrdiff_t signed_index = 0; signed_index < static_cast<std::ptrdiff_t>(count); ++signed_index)
+            {
+                const std::size_t output_index = static_cast<std::size_t>(signed_index);
+                const auto& record = records[selected_indices[output_index]];
+                state.weights[output_index] = record.weight;
+                for (std::size_t bin = 0; bin < 10U; ++bin)
+                {
+                    state.histogram[10U * output_index + bin] = record.histogram[bin];
+                }
+                state.u[output_index] = scalar_lut[record.scalar_lut_index];
+                state.u_old[output_index] = state.u[output_index];
+                std::uint8_t flags = active[output_index] == 0U ? 4U : 0U;
+                if (!partition_excluded.empty() && partition_excluded[output_index] != 0U)
+                {
+                    flags |= 2U;
+                }
+                state.flags[output_index] = flags;
+                for (std::size_t word = 0U; word < 3U; ++word)
+                {
+                    morton_words[word * count + output_index] = record.morton_words[word];
+                }
+                levels[output_index] = record.level;
+            }
+
+            std::string cuda_error;
+            if (!run_recovered_ooc_neighbors_cuda_source(morton_words,
+                                                         levels,
+                                                         state.neighbors,
+                                                         state.connectivity,
+                                                         state.refinement,
+                                                         *cuda_device_index,
+                                                         cuda_error))
+            {
+                throw std::runtime_error(cuda_error);
+            }
+            state.validate();
+            return state;
+#else
+            throw std::runtime_error("OOC CUDA neighbor search requested in a CUDA-disabled build");
+#endif
+        }
+
+        std::vector<CellKey> cells(count);
         FlatCellMap<std::uint32_t> lookup(count);
 
         for (std::size_t output_index = 0; output_index < count; ++output_index)
@@ -5602,6 +5672,18 @@ namespace metmodel
             {
                 throw std::runtime_error("OOC scalar LUT index is outside the table");
             }
+            const auto cell = decode_cell(record);
+            cells[output_index] = cell;
+            const auto [unused, inserted] = lookup.emplace(cell, static_cast<std::uint32_t>(output_index));
+            if (!inserted)
+                throw std::runtime_error("duplicate selected OOC cell");
+        }
+
+#pragma omp parallel for schedule(static)
+        for (std::ptrdiff_t signed_index = 0; signed_index < static_cast<std::ptrdiff_t>(count); ++signed_index)
+        {
+            const std::size_t output_index = static_cast<std::size_t>(signed_index);
+            const auto& record = records[selected_indices[output_index]];
             state.weights[output_index] = record.weight;
             for (std::size_t bin = 0; bin < 10U; ++bin)
             {
@@ -5609,18 +5691,12 @@ namespace metmodel
             }
             state.u[output_index] = scalar_lut[record.scalar_lut_index];
             state.u_old[output_index] = state.u[output_index];
-            if (active[output_index] == 0U)
-                state.flags[output_index] |= 4U;
+            std::uint8_t flags = active[output_index] == 0U ? 4U : 0U;
             if (!partition_excluded.empty() && partition_excluded[output_index] != 0U)
             {
-                state.flags[output_index] |= 2U;
+                flags |= 2U;
             }
-
-            const auto cell = decode_cell(record);
-            cells.push_back(cell);
-            const auto [unused, inserted] = lookup.emplace(cell, static_cast<std::uint32_t>(output_index));
-            if (!inserted)
-                throw std::runtime_error("duplicate selected OOC cell");
+            state.flags[output_index] = flags;
         }
 
         constexpr std::array<int, 6> axes{0, 0, 1, 1, 2, 2};
@@ -5812,6 +5888,55 @@ namespace metmodel
                                             const std::vector<std::uint32_t>& selected_indices,
                                             std::span<const OocWeightedNodeRecord> balanced_records)
     {
+        // The production scheduler preserves the persistent balanced-record
+        // index space. Verify that invariant for every record before taking
+        // the direct projection; synthetic or reordered callers retain the
+        // generic CellKey join below.
+        bool same_index_space = records.size() == balanced_records.size();
+        if (same_index_space)
+        {
+            std::atomic<bool> mismatch{false};
+#pragma omp parallel for schedule(static)
+            for (std::ptrdiff_t signed_index = 0; signed_index < static_cast<std::ptrdiff_t>(records.size());
+                 ++signed_index)
+            {
+                if (mismatch.load(std::memory_order_relaxed))
+                    continue;
+                const std::size_t index = static_cast<std::size_t>(signed_index);
+                if (records[index].level != balanced_records[index].level ||
+                    records[index].morton_words != balanced_records[index].morton_words)
+                {
+                    mismatch.store(true, std::memory_order_relaxed);
+                }
+            }
+            same_index_space = !mismatch.load(std::memory_order_relaxed);
+        }
+        if (same_index_space)
+        {
+            std::vector<std::uint8_t> result(selected_indices.size(), 0U);
+            std::atomic<bool> invalid_index{false};
+#pragma omp parallel for schedule(static)
+            for (std::ptrdiff_t signed_index = 0; signed_index < static_cast<std::ptrdiff_t>(selected_indices.size());
+                 ++signed_index)
+            {
+                const std::size_t index = static_cast<std::size_t>(signed_index);
+                const std::uint32_t record_index = selected_indices[index];
+                if (record_index >= balanced_records.size())
+                {
+                    invalid_index.store(true, std::memory_order_relaxed);
+                }
+                else
+                {
+                    result[index] = balanced_records[record_index].weight_denominator;
+                }
+            }
+            if (invalid_index.load(std::memory_order_relaxed))
+            {
+                throw std::runtime_error("OOC marching index is outside the record table");
+            }
+            return result;
+        }
+
         FlatCellMap<std::uint8_t> denominators(balanced_records.size());
         for (const OocWeightedNodeRecord& source : balanced_records)
         {
@@ -5875,36 +6000,37 @@ namespace metmodel
         {
             throw std::runtime_error("OOC marching-node count exceeds uint32 index range");
         }
-        std::vector<CellKey> cells;
-        cells.reserve(nodes.size());
-        FlatCellMap<std::uint32_t> lookup(nodes.size());
-        for (std::size_t index = 0; index < nodes.size(); ++index)
+        const auto node_less = [](const OocMarchingNode& left, const OocMarchingNode& right) noexcept
         {
-            const auto cell = decode_cell(nodes[index]);
-            cells.push_back(cell);
-            const auto [unused, inserted] = lookup.emplace(cell, static_cast<std::uint32_t>(index));
-            if (!inserted)
-                throw std::runtime_error("duplicate OOC marching cell");
+            if (left.level != right.level)
+                return left.level < right.level;
+            return left.morton_words < right.morton_words;
+        };
+        if (!std::is_sorted(nodes.begin(), nodes.end(), node_less))
+        {
+            throw std::runtime_error("OOC marching nodes are not level/Morton ordered");
         }
 
         std::vector<OocMarchingExtractNode> result(nodes.size());
-        const auto& read_only_lookup = std::as_const(lookup);
         std::atomic<int> extract_error{0};
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(dynamic, 1024)
         for (std::ptrdiff_t signed_index = 0; signed_index < static_cast<std::ptrdiff_t>(nodes.size()); ++signed_index)
         {
             const std::size_t index = static_cast<std::size_t>(signed_index);
             auto& target = result[index];
             target.weighted_cell_scale = nodes[index].weighted_cell_scale;
             target.scalar = nodes[index].scalar;
-            const auto& cell = cells[index];
+            const CellKey cell = decode_cell(nodes[index]);
             if (cell.level == 32U)
                 continue;
-            const auto found = read_only_lookup.find(
-                CellKey{static_cast<std::uint8_t>(cell.level + 1U), 2U * cell.x, 2U * cell.y, 2U * cell.z});
-            if (found == nullptr)
+            OocMarchingNode child_key{};
+            child_key.morton_words = encode_cell_words(child_cell(cell, 0U));
+            child_key.level = static_cast<std::uint8_t>(cell.level + 1U);
+            const auto found = std::lower_bound(nodes.begin(), nodes.end(), child_key, node_less);
+            if (found == nodes.end() || found->level != child_key.level ||
+                found->morton_words != child_key.morton_words)
                 continue;
-            const std::uint32_t first_child = *found;
+            const std::uint32_t first_child = static_cast<std::uint32_t>(found - nodes.begin());
             if ((first_child & 7U) != 1U)
             {
                 extract_error.store(1, std::memory_order_relaxed);
@@ -5915,6 +6041,16 @@ namespace metmodel
                 extract_error.store(2, std::memory_order_relaxed);
                 continue;
             }
+            for (unsigned slot = 1U; slot != 8U; ++slot)
+            {
+                const auto& candidate = nodes[first_child + slot];
+                const CellKey expected = child_cell(cell, slot);
+                if (candidate.level != expected.level || candidate.morton_words != encode_cell_words(expected))
+                {
+                    extract_error.store(3, std::memory_order_relaxed);
+                    break;
+                }
+            }
             target.child_group = (first_child - 1U) >> 3U;
         }
         if (extract_error.load(std::memory_order_relaxed) == 1)
@@ -5924,6 +6060,10 @@ namespace metmodel
         if (extract_error.load(std::memory_order_relaxed) == 2)
         {
             throw std::runtime_error("truncated OOC child group");
+        }
+        if (extract_error.load(std::memory_order_relaxed) == 3)
+        {
+            throw std::runtime_error("non-contiguous OOC child group");
         }
         return result;
     }
@@ -6163,7 +6303,8 @@ namespace metmodel
                                      std::chrono::duration<double>(topology_at - filtered_at).count()});
 
             {
-                OocFusionState fusion = prepare_ooc_fusion_state(local_records, selected, active, scalar_values);
+                OocFusionState fusion =
+                    prepare_ooc_fusion_state(local_records, selected, active, scalar_values, {}, cuda_device_index);
                 const auto prepared_at = std::chrono::steady_clock::now();
                 output.stages.back().preparation_seconds =
                     std::chrono::duration<double>(prepared_at - topology_at).count();
@@ -6299,13 +6440,15 @@ namespace metmodel
             }
             return expanded_bounds;
         };
-        const auto parallel_parts = [&](auto&& function)
+        const auto parallel_indices = [&](const std::size_t count, auto&& function)
         {
+            if (count == 0U)
+                return;
             std::atomic<std::size_t> next{0U};
             std::atomic<bool> stopped{false};
             std::exception_ptr failure;
             std::mutex failure_mutex;
-            const std::size_t worker_count = std::min<std::size_t>(8U, output.marching_work_cells.size());
+            const std::size_t worker_count = std::min<std::size_t>(8U, count);
             std::vector<std::thread> workers;
             workers.reserve(worker_count);
             for (std::size_t worker = 0U; worker != worker_count; ++worker)
@@ -6316,7 +6459,7 @@ namespace metmodel
                         while (!stopped.load(std::memory_order_relaxed))
                         {
                             const std::size_t index = next.fetch_add(1U, std::memory_order_relaxed);
-                            if (index >= output.marching_work_cells.size())
+                            if (index >= count)
                                 return;
                             try
                             {
@@ -6340,6 +6483,8 @@ namespace metmodel
             if (failure)
                 std::rethrow_exception(failure);
         };
+        const auto parallel_parts = [&](auto&& function)
+        { parallel_indices(output.marching_work_cells.size(), function); };
 
         std::vector<OocMarchingActiveCells> active_parts(output.marching_work_cells.size());
         const auto active_started = std::chrono::steady_clock::now();
@@ -6403,106 +6548,169 @@ namespace metmodel
         initial_parts.clear();
         initial_parts.shrink_to_fit();
 
-        for (std::size_t work_index = 0U; work_index != output.marching_work_cells.size(); ++work_index)
+        struct LocalMarchingRawPart
         {
-            const auto& work_cell = output.marching_work_cells[work_index];
-            const std::uint32_t shift = marching_maximum_level - work_cell.level;
-            const std::array<std::uint32_t, 3> ownership_lower{
-                work_cell.x << shift, work_cell.y << shift, work_cell.z << shift};
-            const std::array<std::uint32_t, 3> ownership_upper{
-                (work_cell.x + 1U) << shift, (work_cell.y + 1U) << shift, (work_cell.z + 1U) << shift};
+            OocMarchingRawOutput raw;
+            std::vector<std::array<double, 3>> root_grid_positions;
+            std::array<std::uint32_t, 3> ownership_lower{};
+            std::array<std::uint32_t, 3> ownership_upper{};
+            double edge_seconds{};
+            double raw_seconds{};
+        };
+        std::vector<std::optional<LocalMarchingRawPart>> raw_parts(output.marching_work_cells.size());
+        parallel_parts(
+            [&](const std::size_t work_index)
+            {
+                const auto& work_cell = output.marching_work_cells[work_index];
+                const std::uint32_t shift = marching_maximum_level - work_cell.level;
+                const std::array<std::uint32_t, 3> ownership_lower{
+                    work_cell.x << shift, work_cell.y << shift, work_cell.z << shift};
+                const std::array<std::uint32_t, 3> ownership_upper{
+                    (work_cell.x + 1U) << shift, (work_cell.y + 1U) << shift, (work_cell.z + 1U) << shift};
+                LocalMarchingRawPart local;
+                local.ownership_lower = ownership_lower;
+                local.ownership_upper = ownership_upper;
+
+                if (root_states[work_index] == std::numeric_limits<std::uint64_t>::max())
+                {
+                    raw_parts[work_index] = std::move(local);
+                    return;
+                }
+                auto closed_cells = std::move(closed_parts[work_index]);
+                const std::uint64_t root_state = root_states[work_index];
+                const auto edges_started = std::chrono::steady_clock::now();
+                auto edges = build_ooc_marching_edge_mesh(
+                    std::move(closed_cells), root_state, marching_maximum_level, root_scale, root_grid_to_world);
+                local.edge_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - edges_started).count();
+                const auto raw_started = std::chrono::steady_clock::now();
+                const auto part = build_ooc_marching_raw_mesh(edges, root_state, marching_maximum_level, true);
+                if (edges.vertex_root_grid_position.size() != part.vertices.size())
+                {
+                    throw std::runtime_error("OOC bounded marching lost root-grid vertex coordinates");
+                }
+                const auto source_overlaps_ownership = [&](const std::uint32_t source)
+                {
+                    if (source >= source_grid.size())
+                    {
+                        throw std::runtime_error("OOC bounded marching source exceeds source tree");
+                    }
+                    const auto& cell = source_grid[source];
+                    const std::uint32_t source_shift = marching_maximum_level - cell.level;
+                    const std::uint32_t width = std::uint32_t{1} << source_shift;
+                    for (std::size_t axis = 0U; axis != 3U; ++axis)
+                    {
+                        const std::uint32_t lower = cell.coordinate[axis] << source_shift;
+                        if (ownership_lower[axis] >= lower + width || ownership_upper[axis] <= lower)
+                            return false;
+                    }
+                    return true;
+                };
+                std::vector<std::uint32_t> remap(part.vertices.size(), std::numeric_limits<std::uint32_t>::max());
+                const double root_grid_unit = root_scale / static_cast<double>(grid_domain);
+                for (std::size_t index = 0U; index != part.vertices.size(); ++index)
+                {
+                    bool owned = true;
+                    for (std::size_t axis = 0U; axis != 3U; ++axis)
+                    {
+                        const double coordinate = edges.vertex_root_grid_position[index][axis];
+                        owned = owned && coordinate >= root_grid_unit * ownership_lower[axis] &&
+                                coordinate <= root_grid_unit * ownership_upper[axis];
+                    }
+                    if (!owned)
+                        continue;
+                    if (local.raw.vertices.size() >= std::numeric_limits<std::uint32_t>::max())
+                    {
+                        throw std::runtime_error("OOC bounded marching vertex index exceeds uint32");
+                    }
+                    remap[index] = static_cast<std::uint32_t>(local.raw.vertices.size());
+                    local.raw.vertices.push_back(part.vertices[index]);
+                    local.raw.vertex_scale.push_back(part.vertex_scale[index]);
+                    const std::uint32_t source = part.vertex_source[index];
+                    local.raw.vertex_source.push_back(source);
+                    if (source >= node_trim_attributes.size())
+                    {
+                        throw std::runtime_error("OOC raw vertex trim source exceeds marching nodes");
+                    }
+                    local.raw.vertex_trim_attribute.push_back(node_trim_attributes[source]);
+                    local.root_grid_positions.push_back(edges.vertex_root_grid_position[index]);
+                }
+                for (std::size_t index = 0U; index != part.triangles.size(); ++index)
+                {
+                    const auto& source_triangle = part.triangles[index].vertices;
+                    if (remap[source_triangle[0]] == std::numeric_limits<std::uint32_t>::max() ||
+                        remap[source_triangle[1]] == std::numeric_limits<std::uint32_t>::max() ||
+                        remap[source_triangle[2]] == std::numeric_limits<std::uint32_t>::max() ||
+                        !source_overlaps_ownership(part.face_source[index]))
+                    {
+                        continue;
+                    }
+                    local.raw.triangles.push_back(
+                        {{remap[source_triangle[0]], remap[source_triangle[1]], remap[source_triangle[2]]}});
+                    local.raw.face_source.push_back(part.face_source[index]);
+                }
+                local.raw_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - raw_started).count();
+                raw_parts[work_index] = std::move(local);
+            });
+
+        std::size_t total_raw_vertices = 0U;
+        std::size_t total_raw_faces = 0U;
+        for (const auto& local : raw_parts)
+        {
+            if (!local.has_value())
+            {
+                throw std::runtime_error("OOC bounded marching worker omitted a raw part");
+            }
+            total_raw_vertices += local->raw.vertices.size();
+            total_raw_faces += local->raw.triangles.size();
+        }
+        if (total_raw_vertices > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw std::runtime_error("OOC bounded marching vertex index exceeds uint32");
+        }
+        output.raw_mesh.vertices.reserve(total_raw_vertices);
+        output.raw_mesh.vertex_scale.reserve(total_raw_vertices);
+        output.raw_mesh.vertex_source.reserve(total_raw_vertices);
+        output.raw_mesh.vertex_trim_attribute.reserve(total_raw_vertices);
+        raw_root_grid_positions.reserve(total_raw_vertices);
+        output.raw_mesh.triangles.reserve(total_raw_faces);
+        output.raw_mesh.face_source.reserve(total_raw_faces);
+        for (std::size_t work_index = 0U; work_index != raw_parts.size(); ++work_index)
+        {
+            auto& local = *raw_parts[work_index];
             const std::size_t part_vertex_begin = output.raw_mesh.vertices.size();
             const std::size_t part_face_begin = output.raw_mesh.triangles.size();
-
-            if (root_states[work_index] == std::numeric_limits<std::uint64_t>::max())
+            output.raw_mesh.vertices.insert(output.raw_mesh.vertices.end(),
+                                            std::make_move_iterator(local.raw.vertices.begin()),
+                                            std::make_move_iterator(local.raw.vertices.end()));
+            output.raw_mesh.vertex_scale.insert(
+                output.raw_mesh.vertex_scale.end(), local.raw.vertex_scale.begin(), local.raw.vertex_scale.end());
+            output.raw_mesh.vertex_source.insert(
+                output.raw_mesh.vertex_source.end(), local.raw.vertex_source.begin(), local.raw.vertex_source.end());
+            output.raw_mesh.vertex_trim_attribute.insert(
+                output.raw_mesh.vertex_trim_attribute.end(),
+                std::make_move_iterator(local.raw.vertex_trim_attribute.begin()),
+                std::make_move_iterator(local.raw.vertex_trim_attribute.end()));
+            raw_root_grid_positions.insert(
+                raw_root_grid_positions.end(), local.root_grid_positions.begin(), local.root_grid_positions.end());
+            for (auto triangle : local.raw.triangles)
             {
-                seam_parts.push_back({ownership_lower,
-                                      ownership_upper,
-                                      part_vertex_begin,
-                                      part_vertex_begin,
-                                      part_face_begin,
-                                      part_face_begin});
-                continue;
+                for (auto& vertex : triangle.vertices)
+                    vertex += static_cast<std::uint32_t>(part_vertex_begin);
+                output.raw_mesh.triangles.push_back(triangle);
             }
-            auto closed_cells = std::move(closed_parts[work_index]);
-            const std::uint64_t root_state = root_states[work_index];
-            const auto edges_started = std::chrono::steady_clock::now();
-            auto edges = build_ooc_marching_edge_mesh(
-                std::move(closed_cells), root_state, marching_maximum_level, root_scale, root_grid_to_world);
-            edge_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - edges_started).count();
-            const auto raw_started = std::chrono::steady_clock::now();
-            const auto part = build_ooc_marching_raw_mesh(edges, root_state, marching_maximum_level, true);
-            if (edges.vertex_root_grid_position.size() != part.vertices.size())
-            {
-                throw std::runtime_error("OOC bounded marching lost root-grid vertex coordinates");
-            }
-            const auto source_overlaps_ownership = [&](const std::uint32_t source)
-            {
-                if (source >= source_grid.size())
-                {
-                    throw std::runtime_error("OOC bounded marching source exceeds source tree");
-                }
-                const auto& cell = source_grid[source];
-                const std::uint32_t source_shift = marching_maximum_level - cell.level;
-                const std::uint32_t width = std::uint32_t{1} << source_shift;
-                for (std::size_t axis = 0U; axis != 3U; ++axis)
-                {
-                    const std::uint32_t lower = cell.coordinate[axis] << source_shift;
-                    if (ownership_lower[axis] >= lower + width || ownership_upper[axis] <= lower)
-                        return false;
-                }
-                return true;
-            };
-            std::vector<std::uint32_t> remap(part.vertices.size(), std::numeric_limits<std::uint32_t>::max());
-            const double root_grid_unit = root_scale / static_cast<double>(grid_domain);
-            for (std::size_t index = 0U; index != part.vertices.size(); ++index)
-            {
-                bool owned = true;
-                for (std::size_t axis = 0U; axis != 3U; ++axis)
-                {
-                    const double coordinate = edges.vertex_root_grid_position[index][axis];
-                    owned = owned && coordinate >= root_grid_unit * ownership_lower[axis] &&
-                            coordinate <= root_grid_unit * ownership_upper[axis];
-                }
-                if (!owned)
-                    continue;
-                if (output.raw_mesh.vertices.size() >= std::numeric_limits<std::uint32_t>::max())
-                {
-                    throw std::runtime_error("OOC bounded marching vertex index exceeds uint32");
-                }
-                remap[index] = static_cast<std::uint32_t>(output.raw_mesh.vertices.size());
-                output.raw_mesh.vertices.push_back(part.vertices[index]);
-                output.raw_mesh.vertex_scale.push_back(part.vertex_scale[index]);
-                const std::uint32_t source = part.vertex_source[index];
-                output.raw_mesh.vertex_source.push_back(source);
-                if (source >= node_trim_attributes.size())
-                {
-                    throw std::runtime_error("OOC raw vertex trim source exceeds marching nodes");
-                }
-                output.raw_mesh.vertex_trim_attribute.push_back(node_trim_attributes[source]);
-                raw_root_grid_positions.push_back(edges.vertex_root_grid_position[index]);
-            }
-            for (std::size_t index = 0U; index != part.triangles.size(); ++index)
-            {
-                const auto& source_triangle = part.triangles[index].vertices;
-                if (remap[source_triangle[0]] == std::numeric_limits<std::uint32_t>::max() ||
-                    remap[source_triangle[1]] == std::numeric_limits<std::uint32_t>::max() ||
-                    remap[source_triangle[2]] == std::numeric_limits<std::uint32_t>::max() ||
-                    !source_overlaps_ownership(part.face_source[index]))
-                {
-                    continue;
-                }
-                output.raw_mesh.triangles.push_back(
-                    {{remap[source_triangle[0]], remap[source_triangle[1]], remap[source_triangle[2]]}});
-                output.raw_mesh.face_source.push_back(part.face_source[index]);
-            }
-            seam_parts.push_back({ownership_lower,
-                                  ownership_upper,
+            output.raw_mesh.face_source.insert(
+                output.raw_mesh.face_source.end(), local.raw.face_source.begin(), local.raw.face_source.end());
+            seam_parts.push_back({local.ownership_lower,
+                                  local.ownership_upper,
                                   part_vertex_begin,
                                   output.raw_mesh.vertices.size(),
                                   part_face_begin,
                                   output.raw_mesh.triangles.size()});
-            raw_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - raw_started).count();
+            edge_seconds += local.edge_seconds;
+            raw_seconds += local.raw_seconds;
+            raw_parts[work_index].reset();
         }
         // sub_1EA0680 does not pass the concatenated per-part surface straight to
         // QEM.  It first joins vertices on touching part boundaries.  The worker
@@ -6568,64 +6776,69 @@ namespace metmodel
             // per part: a global positional test alone over-merges vertices that
             // are close to a partition face but are not on a local boundary edge.
             std::vector<std::uint8_t> seam_eligible(output.raw_mesh.vertices.size(), 0U);
-            for (const auto& part : seam_parts)
-            {
-                std::vector<std::uint64_t> edges;
-                edges.reserve(3U * (part.face_end - part.face_begin));
-                for (std::size_t face = part.face_begin; face != part.face_end; ++face)
-                {
-                    const auto& triangle = output.raw_mesh.triangles[face].vertices;
-                    for (std::size_t edge = 0U; edge != 3U; ++edge)
-                    {
-                        const std::uint32_t a = triangle[edge];
-                        const std::uint32_t b = triangle[(edge + 1U) % 3U];
-                        const std::uint32_t lower = std::min(a, b);
-                        const std::uint32_t upper = std::max(a, b);
-                        edges.push_back((static_cast<std::uint64_t>(lower) << 32U) | static_cast<std::uint64_t>(upper));
-                    }
-                }
-                std::sort(edges.begin(), edges.end());
-                for (std::size_t begin = 0U; begin != edges.size();)
-                {
-                    std::size_t end = begin + 1U;
-                    while (end != edges.size() && edges[end] == edges[begin])
-                        ++end;
-                    if (end == begin + 1U)
-                    {
-                        seam_eligible[static_cast<std::uint32_t>(edges[begin] >> 32U)] = 1U;
-                        seam_eligible[static_cast<std::uint32_t>(edges[begin])] = 1U;
-                    }
-                    begin = end;
-                }
-            }
+            parallel_indices(seam_parts.size(),
+                             [&](const std::size_t part_index)
+                             {
+                                 const auto& part = seam_parts[part_index];
+                                 std::vector<std::uint64_t> edges;
+                                 edges.reserve(3U * (part.face_end - part.face_begin));
+                                 for (std::size_t face = part.face_begin; face != part.face_end; ++face)
+                                 {
+                                     const auto& triangle = output.raw_mesh.triangles[face].vertices;
+                                     for (std::size_t edge = 0U; edge != 3U; ++edge)
+                                     {
+                                         const std::uint32_t a = triangle[edge];
+                                         const std::uint32_t b = triangle[(edge + 1U) % 3U];
+                                         const std::uint32_t lower = std::min(a, b);
+                                         const std::uint32_t upper = std::max(a, b);
+                                         edges.push_back((static_cast<std::uint64_t>(lower) << 32U) |
+                                                         static_cast<std::uint64_t>(upper));
+                                     }
+                                 }
+                                 std::sort(edges.begin(), edges.end());
+                                 for (std::size_t begin = 0U; begin != edges.size();)
+                                 {
+                                     std::size_t end = begin + 1U;
+                                     while (end != edges.size() && edges[end] == edges[begin])
+                                         ++end;
+                                     if (end == begin + 1U)
+                                     {
+                                         seam_eligible[static_cast<std::uint32_t>(edges[begin] >> 32U)] = 1U;
+                                         seam_eligible[static_cast<std::uint32_t>(edges[begin])] = 1U;
+                                     }
+                                     begin = end;
+                                 }
+                             });
 
             std::vector<std::uint8_t> boundary_mask(output.raw_mesh.vertices.size(), 0U);
             const double finest_scale = root_scale / static_cast<double>(std::uint32_t{1} << marching_maximum_level);
             const double boundary_epsilon = finest_scale * 0.0625;
-            for (const auto& part : seam_parts)
-            {
-                for (std::size_t vertex = part.vertex_begin; vertex != part.vertex_end; ++vertex)
-                {
-                    if (seam_eligible[vertex] == 0U)
-                        continue;
-                    std::uint8_t mask = 0U;
-                    for (std::size_t axis = 0U; axis != 3U; ++axis)
-                    {
-                        const double minimum = finest_scale * part.lower[axis];
-                        const double maximum = finest_scale * part.upper[axis];
-                        const double coordinate = raw_root_grid_positions[vertex][axis];
-                        if (minimum + boundary_epsilon > coordinate)
-                        {
-                            mask |= static_cast<std::uint8_t>(1U << (2U * axis));
-                        }
-                        else if (coordinate > maximum - boundary_epsilon)
-                        {
-                            mask |= static_cast<std::uint8_t>(1U << (2U * axis + 1U));
-                        }
-                    }
-                    boundary_mask[vertex] = mask;
-                }
-            }
+            parallel_indices(seam_parts.size(),
+                             [&](const std::size_t part_index)
+                             {
+                                 const auto& part = seam_parts[part_index];
+                                 for (std::size_t vertex = part.vertex_begin; vertex != part.vertex_end; ++vertex)
+                                 {
+                                     if (seam_eligible[vertex] == 0U)
+                                         continue;
+                                     std::uint8_t mask = 0U;
+                                     for (std::size_t axis = 0U; axis != 3U; ++axis)
+                                     {
+                                         const double minimum = finest_scale * part.lower[axis];
+                                         const double maximum = finest_scale * part.upper[axis];
+                                         const double coordinate = raw_root_grid_positions[vertex][axis];
+                                         if (minimum + boundary_epsilon > coordinate)
+                                         {
+                                             mask |= static_cast<std::uint8_t>(1U << (2U * axis));
+                                         }
+                                         else if (coordinate > maximum - boundary_epsilon)
+                                         {
+                                             mask |= static_cast<std::uint8_t>(1U << (2U * axis + 1U));
+                                         }
+                                     }
+                                     boundary_mask[vertex] = mask;
+                                 }
+                             });
 
             std::vector<std::uint32_t> parent(output.raw_mesh.vertices.size());
             for (std::size_t index = 0U; index != parent.size(); ++index)
@@ -6639,40 +6852,41 @@ namespace metmodel
                 const float dz = static_cast<float>(b[2] - a[2]);
                 return static_cast<float>(static_cast<float>(dx * dx + dy * dy) + dz * dz);
             };
-            for (std::size_t part_index = 0U; part_index != seam_parts.size(); ++part_index)
-            {
-                const auto& part = seam_parts[part_index];
-                for (std::size_t vertex = part.vertex_begin; vertex != part.vertex_end; ++vertex)
-                {
-                    if (boundary_mask[vertex] == 0U)
-                        continue;
-                    float best_distance = std::numeric_limits<float>::max();
-                    std::uint32_t best = static_cast<std::uint32_t>(vertex);
-                    bool found = false;
-                    for (const auto& neighbor : neighbors[part_index])
-                    {
-                        if ((boundary_mask[vertex] & neighbor.boundary_mask) == 0U)
-                            continue;
-                        const auto& candidate_part = seam_parts[neighbor.part];
-                        for (std::size_t candidate = candidate_part.vertex_begin;
-                             candidate != candidate_part.vertex_end;
-                             ++candidate)
-                        {
-                            if (boundary_mask[candidate] == 0U)
-                                continue;
-                            const float distance = squared_distance(vertex, candidate);
-                            if (!found || best_distance > distance)
-                            {
-                                best_distance = distance;
-                                best = static_cast<std::uint32_t>(candidate);
-                                found = true;
-                            }
-                        }
-                    }
-                    if (found)
-                        parent[vertex] = best;
-                }
-            }
+            parallel_indices(seam_parts.size(),
+                             [&](const std::size_t part_index)
+                             {
+                                 const auto& part = seam_parts[part_index];
+                                 for (std::size_t vertex = part.vertex_begin; vertex != part.vertex_end; ++vertex)
+                                 {
+                                     if (boundary_mask[vertex] == 0U)
+                                         continue;
+                                     float best_distance = std::numeric_limits<float>::max();
+                                     std::uint32_t best = static_cast<std::uint32_t>(vertex);
+                                     bool found = false;
+                                     for (const auto& neighbor : neighbors[part_index])
+                                     {
+                                         if ((boundary_mask[vertex] & neighbor.boundary_mask) == 0U)
+                                             continue;
+                                         const auto& candidate_part = seam_parts[neighbor.part];
+                                         for (std::size_t candidate = candidate_part.vertex_begin;
+                                              candidate != candidate_part.vertex_end;
+                                              ++candidate)
+                                         {
+                                             if (boundary_mask[candidate] == 0U)
+                                                 continue;
+                                             const float distance = squared_distance(vertex, candidate);
+                                             if (!found || best_distance > distance)
+                                             {
+                                                 best_distance = distance;
+                                                 best = static_cast<std::uint32_t>(candidate);
+                                                 found = true;
+                                             }
+                                         }
+                                     }
+                                     if (found)
+                                         parent[vertex] = best;
+                                 }
+                             });
             const auto nearest = parent;
             for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
                 parent[vertex] = static_cast<std::uint32_t>(vertex);

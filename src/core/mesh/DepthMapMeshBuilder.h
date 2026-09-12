@@ -39,6 +39,7 @@ struct DepthFrameArtifact
     QString status;
     QString acceptance;
     QString sceneProfile;
+    QString depthProducer; ///< pixel_domain_diagnostics.producer；区分 recovered 与 PlaScan 深度契约
     int algorithmRevision = 0;
     bool fusionEligible = false;
     bool fusionEligibilityKnown = false;

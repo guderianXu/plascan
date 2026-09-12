@@ -16,6 +16,8 @@
 #include <QMainWindow>
 #include <QSignalBlocker>
 
+#include <cmath>
+
 ReconstructionWorkflowController::ReconstructionWorkflowController(
     QMainWindow *mainWindow,
     QObject *parent)
@@ -80,6 +82,71 @@ QString modelPathFromRecord(const QJsonObject &record)
         path = record.value(QStringLiteral("mesh_ply")).toString();
     }
     return existingCleanPath(path);
+}
+
+void appendModelSourceCandidate(QJsonArray *candidates,
+                                const QString &sourceData,
+                                const QString &sourceLabel,
+                                const QString &path,
+                                const QString &displayPrefix,
+                                bool supported,
+                                const QString &note,
+                                const QJsonObject &properties);
+
+bool hasValidRpc00bCamera(const QJsonObject &metadata, const QString &imagePath)
+{
+    const QString normalized_path = QDir::cleanPath(imagePath.trimmed());
+    for (const QJsonValue &value : metadata.value(QStringLiteral("images")).toArray())
+    {
+        const QJsonObject image = value.toObject();
+        if (QDir::cleanPath(image.value(QStringLiteral("path")).toString().trimmed()) != normalized_path)
+        {
+            continue;
+        }
+        const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
+        const QJsonValue height_offset = camera.value(QStringLiteral("height_off"));
+        const QJsonValue height_scale = camera.value(QStringLiteral("height_scale"));
+        return camera.value(QStringLiteral("model")).toString().compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0 &&
+               height_offset.isDouble() && height_scale.isDouble() && std::isfinite(height_offset.toDouble()) &&
+               std::isfinite(height_scale.toDouble()) && height_scale.toDouble() > 0.0;
+    }
+    return false;
+}
+
+void appendRpcHeightPlaneSweepCandidate(QJsonArray *candidates, const QJsonObject &metadata)
+{
+    const QJsonArray at_results = metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
+    const int production_index = xjw::core::project::findLatestProductionAtResultIndex(metadata);
+    if (production_index < 0 || production_index >= at_results.size())
+    {
+        return;
+    }
+    const QJsonArray selected_images = at_results.at(production_index)
+                                         .toObject()
+                                         .value(QStringLiteral("selected_images"))
+                                         .toArray();
+    if (selected_images.size() != 2 || !selected_images.at(0).isString() || !selected_images.at(1).isString())
+    {
+        return;
+    }
+    const QString left_image = existingCleanPath(selected_images.at(0).toString());
+    const QString right_image = existingCleanPath(selected_images.at(1).toString());
+    if (left_image.isEmpty() || right_image.isEmpty() || !hasValidRpc00bCamera(metadata, left_image) ||
+        !hasValidRpc00bCamera(metadata, right_image))
+    {
+        return;
+    }
+
+    QJsonObject properties;
+    properties[QStringLiteral("rpcImagePaths")] = QJsonArray{left_image, right_image};
+    appendModelSourceCandidate(candidates,
+                               QStringLiteral("rpc_height_plane_sweep"),
+                               QStringLiteral("RPC 高程平面扫描"),
+                               left_image,
+                               QStringLiteral("RPC 像对"),
+                               true,
+                               QStringLiteral("请明确输入两景之间的物理高程范围后生成模型。"),
+                               properties);
 }
 
 void appendModelSourceCandidate(QJsonArray *candidates,
@@ -210,6 +277,8 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
                       .arg(compatibility.reason),
             depth_properties);
     }
+
+    appendRpcHeightPlaneSweepCandidate(&candidates, metadata);
 
     const QJsonArray denseResults =
         metadata.value(QStringLiteral("dense_cloud_results")).toArray();

@@ -214,11 +214,42 @@ QJsonObject WorkflowSettingsDialog::modelGenerationSettings(const QJsonObject& s
     const QJsonObject source = workflows.value(QString::fromLatin1(kModelGenerationWorkflowId)).toObject();
 
     QJsonObject model_settings = defaultModelGenerationSettings();
+    model_settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    model_settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    model_settings[QStringLiteral("surfaceQualityProfile")] = QStringLiteral("recovered_ooc");
+    model_settings[QStringLiteral("faceCountMode")] = QStringLiteral("high");
+    model_settings[QStringLiteral("faceCountCustom")] = 200000;
     const QString compute_mode = source.value(QStringLiteral("compute_mode")).toString().trimmed().toLower();
     if (compute_mode == QLatin1String(kCudaComputeMode) || compute_mode == QLatin1String(kOpenClComputeMode) ||
         compute_mode == QLatin1String(kHybridComputeMode))
     {
         model_settings[QStringLiteral("compute_mode")] = compute_mode;
+    }
+    const QString face_count_mode = source.value(QStringLiteral("faceCountMode")).toString().trimmed();
+    if (face_count_mode == QStringLiteral("low") || face_count_mode == QStringLiteral("medium") ||
+        face_count_mode == QStringLiteral("high") || face_count_mode == QStringLiteral("custom"))
+    {
+        model_settings[QStringLiteral("faceCountMode")] = face_count_mode;
+    }
+    const int legacy_faces =
+        source.value(QStringLiteral("targetFaces")).toInt(source.value(QStringLiteral("simplifyTargetFaces")).toInt(0));
+    if (!face_count_mode.isEmpty())
+    {
+        model_settings[QStringLiteral("faceCountCustom")] =
+            qBound(1, source.value(QStringLiteral("faceCountCustom")).toInt(200000), 2000000);
+    }
+    else if (legacy_faces > 0)
+    {
+        model_settings[QStringLiteral("faceCountMode")] = legacy_faces <= 20000    ? QStringLiteral("low")
+                                                          : legacy_faces <= 100000 ? QStringLiteral("medium")
+                                                          : legacy_faces <= 200000 ? QStringLiteral("high")
+                                                                                   : QStringLiteral("custom");
+        model_settings[QStringLiteral("faceCountCustom")] = qBound(1, legacy_faces, 2000000);
+    }
+    if (source.contains(QStringLiteral("rpcHeightMinMeters")) && source.contains(QStringLiteral("rpcHeightMaxMeters")))
+    {
+        model_settings[QStringLiteral("rpcHeightMinMeters")] = source.value(QStringLiteral("rpcHeightMinMeters"));
+        model_settings[QStringLiteral("rpcHeightMaxMeters")] = source.value(QStringLiteral("rpcHeightMaxMeters"));
     }
     return model_settings;
 }

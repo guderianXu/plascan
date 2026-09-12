@@ -43,6 +43,7 @@ add_library(plascan_common_project STATIC
   project/ProjectChunkStore.cpp
   project/ProjectChunkIndex.cpp
   project/ProjectDocumentModel.cpp
+  project/ProjectExporter.cpp
   project/ProjectConfigManager.cpp
   project/ProjectIO.cpp
   project/ProjectLock.cpp

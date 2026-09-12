@@ -550,6 +550,25 @@ gtest_discover_tests(test_point_cloud_input_preparation)
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
 if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
+add_executable(test_project_depth_batch_lineage
+    test_project_depth_batch_lineage.cpp
+)
+target_link_libraries(test_project_depth_batch_lineage PRIVATE
+    gui_project
+    mvs
+    Qt6::Core
+    GTest::gtest_main
+    ${OpenCV_LIBS}
+)
+target_include_directories(test_project_depth_batch_lineage PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/mvs
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_depth_batch_lineage)
+
 add_executable(test_camera_scene_image_cache
     test_camera_scene_image_cache.cpp
 )
@@ -693,6 +712,29 @@ gtest_discover_tests(test_gui_project_utils
     # This target links most GUI and photogrammetry modules. Its first launch
     # can exceed one minute on a cold Windows runner while binaries are scanned.
     DISCOVERY_TIMEOUT 180
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "${PLASCAN_GUI_TEST_QT_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "${PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS}")
+
+add_executable(test_photo_strip_widget_refresh
+    test_photo_strip_widget_refresh.cpp
+)
+target_link_libraries(test_photo_strip_widget_refresh PRIVATE
+    gui_runtime
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    Qt6::Widgets
+    GTest::gtest
+)
+target_include_directories(test_photo_strip_widget_refresh PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+)
+plascan_import_qt_offscreen_plugin(test_photo_strip_widget_refresh)
+gtest_discover_tests(test_photo_strip_widget_refresh
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT

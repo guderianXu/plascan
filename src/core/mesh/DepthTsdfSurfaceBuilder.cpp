@@ -2248,8 +2248,16 @@ namespace xjw::mesh
                 result.errorMessage = frameArtifactError(artifact, QStringLiteral("raw depth path is empty"));
                 return result;
             }
+            const bool uses_recovered_reference_filter =
+                artifact.depthProducer.compare(QStringLiteral("recovered_scene_d4"), Qt::CaseInsensitive) == 0;
+            // recovered_scene_d4 has already completed the reference model's
+            // PatchMatch filter and three-level voting chain.  Its contract does
+            // not contain PlaScan's post-estimation geometry/support products, so
+            // requiring those files would incorrectly reintroduce the removed
+            // PlaScan quality gate at consumption time.
             const bool requires_current_orbital_evidence =
-                artifact.algorithmRevision >= 11 && xjw::mvs::isOrbitalDepthSceneProfile(artifact.sceneProfile);
+                !uses_recovered_reference_filter && artifact.algorithmRevision >= 11 &&
+                xjw::mvs::isOrbitalDepthSceneProfile(artifact.sceneProfile);
             const bool requires_adaptive_orbital_evidence =
                 requires_current_orbital_evidence && artifact.algorithmRevision >= 13;
             const bool requires_conflict_ratio = requires_adaptive_orbital_evidence && artifact.algorithmRevision >= 14;

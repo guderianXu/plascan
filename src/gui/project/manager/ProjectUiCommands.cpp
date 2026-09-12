@@ -8,31 +8,28 @@
 #include <QFileInfo>
 #include <QMessageBox>
 
-namespace {
-
-void configureDialog(QFileDialog &dialog)
+namespace
 {
-    dialog.setFilter(QDir::AllEntries
-                     | QDir::Hidden
-                     | QDir::AllDirs
-                     | QDir::NoDotAndDotDot);
-}
+
+    void configureDialog(QFileDialog& dialog)
+    {
+        dialog.setFilter(QDir::AllEntries | QDir::Hidden | QDir::AllDirs | QDir::NoDotAndDotDot);
+    }
 } // namespace
 
-ProjectUiCommands::ProjectUiCommands(ProjectData *projectData, QWidget *parentWidget)
-    : _projectData(projectData)
-    , _parentWidget(parentWidget)
+ProjectUiCommands::ProjectUiCommands(ProjectData* projectData, QWidget* parentWidget)
+    : _projectData(projectData), _parentWidget(parentWidget)
 {
 }
 
-void ProjectUiCommands::setDirectoryAccessors(std::function<QString(const QString &key)> getLastDir,
-                                              std::function<void(const QString &key, const QString &dir)> saveLastDir)
+void ProjectUiCommands::setDirectoryAccessors(std::function<QString(const QString& key)> getLastDir,
+                                              std::function<void(const QString& key, const QString& dir)> saveLastDir)
 {
     _getLastDir = std::move(getLastDir);
     _saveLastDir = std::move(saveLastDir);
 }
 
-bool ProjectUiCommands::createNewProject(QString *createdPath) const
+bool ProjectUiCommands::createNewProject(QString* createdPath) const
 {
     QFileDialog dialog(_parentWidget,
                        QStringLiteral("创建新项目"),
@@ -62,9 +59,7 @@ bool ProjectUiCommands::createNewProject(QString *createdPath) const
     const QString projectName = QFileInfo(plascanPath).baseName();
     if (!_projectData || !_projectData->createProject(plascanPath, projectName))
     {
-        QMessageBox::critical(_parentWidget,
-                              QStringLiteral("错误"),
-                              QStringLiteral("创建项目失败"));
+        QMessageBox::critical(_parentWidget, QStringLiteral("错误"), QStringLiteral("创建项目失败"));
         return false;
     }
 
@@ -75,7 +70,7 @@ bool ProjectUiCommands::createNewProject(QString *createdPath) const
     return true;
 }
 
-bool ProjectUiCommands::selectProjectByDialog(QString *selectedPath) const
+bool ProjectUiCommands::selectProjectByDialog(QString* selectedPath) const
 {
     QFileDialog dialog(_parentWidget,
                        QStringLiteral("打开项目"),
@@ -102,7 +97,7 @@ bool ProjectUiCommands::selectProjectByDialog(QString *selectedPath) const
     return true;
 }
 
-bool ProjectUiCommands::openProjectFromPath(const QString &plascanPath) const
+bool ProjectUiCommands::openProjectFromPath(const QString& plascanPath) const
 {
     QString error;
     if (_projectData && _projectData->openProject(plascanPath, &error))
@@ -110,9 +105,7 @@ bool ProjectUiCommands::openProjectFromPath(const QString &plascanPath) const
         return true;
     }
 
-    QMessageBox::critical(_parentWidget,
-                          QStringLiteral("错误"),
-                          QStringLiteral("打开项目失败: %1").arg(error));
+    QMessageBox::critical(_parentWidget, QStringLiteral("错误"), QStringLiteral("打开项目失败: %1").arg(error));
     return false;
 }
 
@@ -129,10 +122,34 @@ bool ProjectUiCommands::saveProject() const
         return true;
     }
 
-    QMessageBox::critical(_parentWidget,
-                          QStringLiteral("错误"),
-                          QStringLiteral("保存项目失败: %1").arg(error));
+    QMessageBox::critical(_parentWidget, QStringLiteral("错误"), QStringLiteral("保存项目失败: %1").arg(error));
     return false;
+}
+
+bool ProjectUiCommands::selectPortableExportPath(QString* selectedPath) const
+{
+    if (!selectedPath)
+    {
+        return false;
+    }
+    QFileDialog dialog(_parentWidget,
+                       QStringLiteral("导出便携项目"),
+                       readLastDir(QStringLiteral("project_export")),
+                       QStringLiteral("便携项目 ZIP (*.zip)"));
+    configureDialog(dialog);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+    {
+        return false;
+    }
+    QString path = dialog.selectedFiles().constFirst();
+    if (!path.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive))
+    {
+        path += QStringLiteral(".zip");
+    }
+    writeLastDir(QStringLiteral("project_export"), QFileInfo(path).absolutePath());
+    *selectedPath = path;
+    return true;
 }
 
 void ProjectUiCommands::closeProject() const
@@ -145,20 +162,16 @@ void ProjectUiCommands::closeProject() const
     QString error;
     if (!_projectData->closeProject(&error))
     {
-        QMessageBox::critical(
-            _parentWidget,
-            QStringLiteral("关闭项目失败"),
-            error.isEmpty()
-                ? QStringLiteral("无法安全持久化当前项目，项目仍保持打开。")
-                : QStringLiteral("无法安全关闭项目：%1\n项目仍保持打开。")
-                      .arg(error));
+        QMessageBox::critical(_parentWidget,
+                              QStringLiteral("关闭项目失败"),
+                              error.isEmpty() ? QStringLiteral("无法安全持久化当前项目，项目仍保持打开。")
+                                              : QStringLiteral("无法安全关闭项目：%1\n项目仍保持打开。").arg(error));
     }
 }
 
-bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
+bool ProjectUiCommands::selectPhotos(QStringList* selectedFiles) const
 {
-    if (!xjw::gui::project::requireOpenProject(
-            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
     {
         return false;
     }
@@ -189,17 +202,14 @@ bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
     return true;
 }
 
-bool ProjectUiCommands::selectImageFolder(QString *selectedFolder) const
+bool ProjectUiCommands::selectImageFolder(QString* selectedFolder) const
 {
-    if (!xjw::gui::project::requireOpenProject(
-            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
     {
         return false;
     }
 
-    QFileDialog dialog(_parentWidget,
-                       QStringLiteral("选择文件夹"),
-                       readLastDir(QStringLiteral("images")));
+    QFileDialog dialog(_parentWidget, QStringLiteral("选择文件夹"), readLastDir(QStringLiteral("images")));
     configureDialog(dialog);
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::Directory);
@@ -221,7 +231,7 @@ bool ProjectUiCommands::selectImageFolder(QString *selectedFolder) const
     return true;
 }
 
-QString ProjectUiCommands::readLastDir(const QString &key) const
+QString ProjectUiCommands::readLastDir(const QString& key) const
 {
     if (_getLastDir)
     {
@@ -234,7 +244,7 @@ QString ProjectUiCommands::readLastDir(const QString &key) const
     return QDir::homePath();
 }
 
-void ProjectUiCommands::writeLastDir(const QString &key, const QString &dir) const
+void ProjectUiCommands::writeLastDir(const QString& key, const QString& dir) const
 {
     if (_saveLastDir)
     {

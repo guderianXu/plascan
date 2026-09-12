@@ -11,24 +11,25 @@ class ProjectData;
 class ProjectUiCommands
 {
 public:
-    ProjectUiCommands(ProjectData *projectData, QWidget *parentWidget);
+    ProjectUiCommands(ProjectData* projectData, QWidget* parentWidget);
 
-    void setDirectoryAccessors(std::function<QString(const QString &key)> getLastDir,
-                               std::function<void(const QString &key, const QString &dir)> saveLastDir);
+    void setDirectoryAccessors(std::function<QString(const QString& key)> getLastDir,
+                               std::function<void(const QString& key, const QString& dir)> saveLastDir);
 
-    bool createNewProject(QString *createdPath = nullptr) const;
-    bool selectProjectByDialog(QString *selectedPath) const;
-    bool openProjectFromPath(const QString &plascanPath) const;
+    bool createNewProject(QString* createdPath = nullptr) const;
+    bool selectProjectByDialog(QString* selectedPath) const;
+    bool openProjectFromPath(const QString& plascanPath) const;
     bool saveProject() const;
+    bool selectPortableExportPath(QString* selectedPath) const;
     void closeProject() const;
-    bool selectPhotos(QStringList *selectedFiles) const;
-    bool selectImageFolder(QString *selectedFolder) const;
+    bool selectPhotos(QStringList* selectedFiles) const;
+    bool selectImageFolder(QString* selectedFolder) const;
 
 private:
-    QString readLastDir(const QString &key) const;
-    void writeLastDir(const QString &key, const QString &dir) const;
-    ProjectData *_projectData = nullptr;
-    QWidget *_parentWidget = nullptr;
-    std::function<QString(const QString &key)> _getLastDir;
-    std::function<void(const QString &key, const QString &dir)> _saveLastDir;
+    QString readLastDir(const QString& key) const;
+    void writeLastDir(const QString& key, const QString& dir) const;
+    ProjectData* _projectData = nullptr;
+    QWidget* _parentWidget = nullptr;
+    std::function<QString(const QString& key)> _getLastDir;
+    std::function<void(const QString& key, const QString& dir)> _saveLastDir;
 };

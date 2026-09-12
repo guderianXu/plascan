@@ -9,6 +9,7 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -1587,6 +1588,35 @@ struct CrossLevelPoint3f {
     float z = 0.0F;
 };
 
+template <class Function>
+void parallel_for_recovered_patchmatch_rows(
+    std::uint32_t height,
+    std::size_t pixels,
+    Function&& function) {
+    const unsigned int logical_cpus =
+        std::max(1U, std::thread::hardware_concurrency());
+    const std::uint32_t workers = pixels < 131072U
+        ? 1U
+        : static_cast<std::uint32_t>(std::min<std::size_t>(
+              height, std::max(1U, logical_cpus / 2U)));
+    if (workers <= 1U) {
+        function(0U, height);
+        return;
+    }
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (std::uint32_t worker = 0U; worker < workers; ++worker) {
+        const std::uint32_t begin = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(height) * worker / workers);
+        const std::uint32_t end = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(height) * (worker + 1U) / workers);
+        threads.emplace_back([begin, end, &function]() {
+            function(begin, end);
+        });
+    }
+    for (auto& thread : threads) thread.join();
+}
+
 std::array<float, 3> decode_recovered_patchmatch_normal(
     const std::uint8_t* encoded) {
     std::array<float, 3> result{};
@@ -1650,8 +1680,11 @@ bool make_recovered_patchmatch_host_geometry(
     points.assign(pixels, {});
     const double downscale = static_cast<double>(depth_downscale);
     const float downscale_float = static_cast<float>(depth_downscale);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
+    parallel_for_recovered_patchmatch_rows(
+        height, pixels,
+        [&](std::uint32_t row_begin, std::uint32_t row_end) {
+        for (std::uint32_t y = row_begin; y < row_end; ++y) {
+          for (std::uint32_t x = 0; x < width; ++x) {
             const std::size_t index =
                 static_cast<std::size_t>(y) * width + x;
             const float current_depth = depth[index];
@@ -1684,12 +1717,16 @@ bool make_recovered_patchmatch_host_geometry(
             points[index] = {
                 static_cast<float>(world_x), static_cast<float>(world_y),
                 static_cast<float>(world_z)};
+          }
         }
-    }
+    });
 
     radius.assign(pixels, 0.0F);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
+    parallel_for_recovered_patchmatch_rows(
+        height, pixels,
+        [&](std::uint32_t row_begin, std::uint32_t row_end) {
+        for (std::uint32_t y = row_begin; y < row_end; ++y) {
+          for (std::uint32_t x = 0; x < width; ++x) {
             const std::size_t center_index =
                 static_cast<std::size_t>(y) * width + x;
             if (cross_level_point_invalid(points[center_index])) continue;
@@ -1741,8 +1778,9 @@ bool make_recovered_patchmatch_host_geometry(
                                      static_cast<std::ptrdiff_t>(count));
                 radius[center_index] = std::sqrt(distances[selected]);
             }
+          }
         }
-    }
+    });
     error.clear();
     return true;
 }
@@ -1901,11 +1939,18 @@ bool filter_recovered_patchmatch_cuda_speckle_components(
         if (rank[first] == rank[second]) ++rank[first];
     };
 
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
+    const unsigned int logical_cpus =
+        std::max(1U, std::thread::hardware_concurrency());
+    const std::uint32_t workers = pixels < 131072U
+        ? 1U
+        : static_cast<std::uint32_t>(std::min<std::size_t>(
+              height, std::max(1U, logical_cpus / 2U)));
+    const auto join_edges = [&](std::uint32_t y, std::uint32_t x,
+                                std::int64_t minimum_neighbor_y,
+                                std::int64_t maximum_neighbor_y) {
             const std::size_t index = static_cast<std::size_t>(y) * width + x;
             const std::uint8_t edges = filtered_mask[index];
-            if (edges == 0U) continue;
+            if (edges == 0U) return;
             unsigned int bit = 0U;
             for (int dy = -1; dy <= 1; ++dy) {
                 const std::int64_t neighbor_y =
@@ -1918,7 +1963,9 @@ bool filter_recovered_patchmatch_cuda_speckle_components(
                         neighbor_x >= static_cast<std::int64_t>(width) ||
                         neighbor_y >= static_cast<std::int64_t>(height))
                         continue;
-                    if ((edges & static_cast<std::uint8_t>(1U << bit)) != 0U) {
+                    if (neighbor_y >= minimum_neighbor_y &&
+                        neighbor_y < maximum_neighbor_y &&
+                        (edges & static_cast<std::uint8_t>(1U << bit)) != 0U) {
                         const std::size_t neighbor_index =
                             static_cast<std::size_t>(neighbor_y) * width +
                             static_cast<std::size_t>(neighbor_x);
@@ -1926,6 +1973,34 @@ bool filter_recovered_patchmatch_cuda_speckle_components(
                              static_cast<std::uint32_t>(neighbor_index));
                     }
                     ++bit;
+                }
+            }
+    };
+    if (workers == 1U) {
+        for (std::uint32_t y = 0U; y < height; ++y) {
+            for (std::uint32_t x = 0U; x < width; ++x)
+                join_edges(y, x, 0, height);
+        }
+    } else {
+        parallel_for_recovered_patchmatch_rows(
+            height, pixels,
+            [&](std::uint32_t row_begin, std::uint32_t row_end) {
+                for (std::uint32_t y = row_begin; y < row_end; ++y) {
+                    for (std::uint32_t x = 0U; x < width; ++x)
+                        join_edges(y, x, row_begin, row_end);
+                }
+            });
+        for (std::uint32_t worker = 1U; worker < workers; ++worker) {
+            const std::uint32_t boundary = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(height) * worker / workers);
+            for (const std::uint32_t y : {boundary - 1U, boundary}) {
+                for (std::uint32_t x = 0U; x < width; ++x) {
+                    const std::int64_t minimum_neighbor_y = y < boundary
+                        ? static_cast<std::int64_t>(boundary) : 0;
+                    const std::int64_t maximum_neighbor_y = y < boundary
+                        ? static_cast<std::int64_t>(height)
+                        : static_cast<std::int64_t>(boundary);
+                    join_edges(y, x, minimum_neighbor_y, maximum_neighbor_y);
                 }
             }
         }
@@ -2001,7 +2076,10 @@ bool make_recovered_patchmatch_cross_level_state(
     state.normal.resize(pixels * 3U);
     state.cost.assign(pixels, -1.0F);
 
-    for (std::uint32_t y = 0; y < state.height; ++y) {
+    parallel_for_recovered_patchmatch_rows(
+        state.height, pixels,
+        [&](std::uint32_t row_begin, std::uint32_t row_end) {
+    for (std::uint32_t y = row_begin; y < row_end; ++y) {
         const double source_y =
             (static_cast<double>(y) + 0.5) * 0.5 - 0.5;
         const auto floor_y = static_cast<std::int64_t>(std::floor(source_y));
@@ -2072,6 +2150,7 @@ bool make_recovered_patchmatch_cross_level_state(
                       state.normal.begin() + static_cast<std::ptrdiff_t>(index * 3U));
         }
     }
+    });
 
     state.coarse_depth = state.depth;
     std::vector<CrossLevelPoint3f> points;

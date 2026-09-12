@@ -3093,14 +3093,12 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     const auto auxiliary_mesh =
         xjw::mesh::workflow::buildMeshFromDepthMaps(mesh_request);
     EXPECT_FALSE(auxiliary_mesh.ok);
-    EXPECT_EQ(auxiliary_mesh.payload.value(
-                  QStringLiteral("loaded_primary_depth_frame_count")).toInt(),
-              0);
-    EXPECT_EQ(auxiliary_mesh.payload.value(
-                  QStringLiteral("loaded_auxiliary_depth_frame_count")).toInt(),
-              5);
     EXPECT_TRUE(auxiliary_mesh.errorMessage.contains(
-        QStringLiteral("没有可用的主融合深度帧")));
+        QStringLiteral("仅接受显式 recovered_ooc")));
+    EXPECT_FALSE(auxiliary_mesh.payload.contains(
+        QStringLiteral("loaded_primary_depth_frame_count")));
+    EXPECT_FALSE(auxiliary_mesh.payload.contains(
+        QStringLiteral("loaded_auxiliary_depth_frame_count")));
     EXPECT_TRUE(mesh_progress_stages.isEmpty());
 
     const std::filesystem::path texture_mesh = writeTextureTestTriangle(
@@ -3204,17 +3202,10 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     const auto orbital_quorum_model =
         xjw::mesh::workflow::buildMeshFromDepthMaps(mesh_request);
     EXPECT_FALSE(orbital_quorum_model.ok);
-    EXPECT_EQ(orbital_quorum_model.payload.value(
-                  QStringLiteral("loaded_primary_depth_frame_count"))
-                  .toInt(),
-              2);
-    EXPECT_EQ(orbital_quorum_model.payload.value(
-                  QStringLiteral(
-                      "minimum_orbital_primary_depth_frame_count"))
-                  .toInt(),
-              3);
     EXPECT_TRUE(orbital_quorum_model.errorMessage.contains(
-        QStringLiteral("环拍 TSDF 实际载入的主融合深度帧不足")));
+        QStringLiteral("仅接受显式 recovered_ooc")));
+    EXPECT_FALSE(orbital_quorum_model.payload.contains(
+        QStringLiteral("minimum_orbital_primary_depth_frame_count")));
 
     EXPECT_EQ(loaded.frames.front().depth.type(), CV_32FC1);
     EXPECT_EQ(loaded.frames.front().confidence.type(), CV_32FC1);
@@ -4446,6 +4437,55 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_TRUE(loaded.errorMessage.contains(
         QStringLiteral("depth evidence is incomplete")));
     EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("ref_index=0")));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     AcceptsReferenceFilteredRecoveredFramesWithoutPlascanGeometryEvidence)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    QVector<xjw::mesh::DepthFrameArtifact> artifacts;
+    for (int index = 0; index < 3; ++index)
+    {
+        const QString depth_path = directory.filePath(
+            QStringLiteral("depth_%1.bin").arg(index));
+        const cv::Mat depth(8, 8, CV_32FC1, cv::Scalar(2.0f));
+        ASSERT_TRUE(
+            xjw::core::project::writeDepthMatStorage(depth_path, depth).ok);
+
+        xjw::mesh::DepthFrameArtifact artifact;
+        artifact.refIndex = index;
+        artifact.status = QStringLiteral("completed");
+        artifact.acceptance = QStringLiteral("accepted");
+        artifact.fusionEligible = true;
+        artifact.fusionEligibilityKnown = true;
+        artifact.role = xjw::mvs::DepthFrameRole::Primary;
+        artifact.sceneProfile = QStringLiteral("orbital_object");
+        artifact.depthProducer = QStringLiteral("recovered_scene_d4");
+        artifact.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
+        artifact.depthPath = depth_path;
+        artifact.cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
+        artifact.cameraModel.setPose(
+            std::array<double, 9>{1.0, 0.0, 0.0,
+                                  0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0},
+            std::array<double, 3>{static_cast<double>(index), 0.0, 0.0});
+        artifact.hasCameraModel = true;
+        artifacts.push_back(std::move(artifact));
+    }
+
+    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+
+    ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
+    ASSERT_EQ(loaded.frames.size(), 3);
+    EXPECT_EQ(loaded.primaryFrameCount, 3);
+    for (const xjw::mesh::DepthTsdfFrame& frame : loaded.frames)
+    {
+        EXPECT_EQ(frame.geometrySupportCount.type(), CV_16UC1);
+        EXPECT_EQ(cv::countNonZero(frame.geometrySupportCount), 0);
+        EXPECT_FALSE(frame.useAdaptiveGeometryEvidence);
+    }
 }
 
 TEST(MeshTopologyQualityTest, StrictGateRejectsOpenAndSkinnyMesh)
@@ -8056,7 +8096,7 @@ TEST(MeshWorkflowServiceTest, RecordsActualFallbackAlgorithmInPayload)
     EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("model_ply")).toString().toStdString()));
 }
 
-TEST(MeshWorkflowServiceTest, SharedModelEntryMapsSettingsAndBuildsPointCloudSource)
+TEST(MeshWorkflowServiceTest, SharedModelEntryRejectsLegacyPointCloudSource)
 {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "plascan_shared_model_entry_test";
@@ -8078,15 +8118,13 @@ TEST(MeshWorkflowServiceTest, SharedModelEntryMapsSettingsAndBuildsPointCloudSou
 
     const auto result = xjw::mesh::workflow::buildModel(request);
 
-    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
-    EXPECT_EQ(result.payload.value(QStringLiteral("source_data")).toString(),
-              QStringLiteral("point_cloud"));
-    EXPECT_EQ(result.payload.value(QStringLiteral("source_point_cloud_path")).toString(),
-              request.sourcePointCloudPath);
-    EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("mesh_ply")).toString().toStdString()));
-    EXPECT_EQ(result.payload.value(QStringLiteral("final_model_format")).toString(),
-              QStringLiteral("PLY"));
-    EXPECT_TRUE(result.payload.value(QStringLiteral("model_obj")).toString().isEmpty());
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
+              QStringLiteral("none"));
+    EXPECT_TRUE(result.errorMessage.contains(
+        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(result.payload.value(QStringLiteral("model_ply")).toString().isEmpty());
+    EXPECT_FALSE(fs::exists(root / "model" / "model_runs"));
 }
 
 TEST(MeshWorkflowSettingsTest, HeightFieldSourceDisablesPoissonAndMapsFiltering)
@@ -9786,6 +9824,8 @@ TEST(DepthMapMeshBuilderTest,
             {QStringLiteral("status"), QStringLiteral(" Completed ")},
             {QStringLiteral("acceptance"), QStringLiteral(" accepted ")},
             {QStringLiteral("fusion_eligible"), true},
+            {QStringLiteral("pixel_domain_diagnostics"),
+             QJsonObject{{QStringLiteral("producer"), QStringLiteral("recovered_scene_d4")}}},
             {QStringLiteral("raw_depth_path"), QStringLiteral("depth_0.bin")}},
         QJsonObject{
             {QStringLiteral("ref_index"), 1},
@@ -9813,6 +9853,7 @@ TEST(DepthMapMeshBuilderTest,
 
     ASSERT_EQ(frames.size(), 3);
     EXPECT_EQ(frames.at(0).role, xjw::mvs::DepthFrameRole::Primary);
+    EXPECT_EQ(frames.at(0).depthProducer, QStringLiteral("recovered_scene_d4"));
     EXPECT_EQ(frames.at(1).role, xjw::mvs::DepthFrameRole::Excluded);
     EXPECT_EQ(frames.at(2).role,
               xjw::mvs::DepthFrameRole::CoverageAuxiliary);
@@ -9918,7 +9959,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSur
 }
 
 TEST(DepthMapMeshBuilderTest,
-     ModelWorkflowRejectsManifestBeforeCurrentCompatibilityRevision)
+     CanonicalRecoveredWorkflowRejectsLegacyManifestWithoutRecoveredInput)
 {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() /
@@ -9943,19 +9984,24 @@ TEST(DepthMapMeshBuilderTest,
     xjw::mesh::workflow::DepthMapMeshBuildRequest request;
     request.depthMapSourcePath = QString::fromStdString(root.string());
     request.outputRoot = QString::fromStdString((root / "model").string());
+    request.settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    request.settings[QStringLiteral("depthQualityProfile")] =
+        QStringLiteral("medium");
+    request.settings[QStringLiteral("surfaceQualityProfile")] =
+        QStringLiteral("recovered_ooc");
+    request.settings[QStringLiteral("faceCountMode")] = QStringLiteral("high");
     request.settings[QStringLiteral("reconstruction_mode")] =
-        QStringLiteral("depth_tsdf");
+        QStringLiteral("recovered_ooc");
 
     const auto result = xjw::mesh::workflow::buildMeshFromDepthMaps(request);
 
     EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.payload.value(QStringLiteral(
-                  "incompatible_depth_frame_count")).toInt(),
-              1);
-    EXPECT_TRUE(result.errorMessage.contains(QString::number(old_revision)));
-    EXPECT_TRUE(result.errorMessage.contains(QString::number(
-        xjw::mvs::kMvsMinimumModelCompatibleRevision)));
     EXPECT_TRUE(result.errorMessage.contains(
+        QStringLiteral("recovered_model_input")));
+    EXPECT_FALSE(result.payload.contains(
+        QStringLiteral("incompatible_depth_frame_count")));
+    EXPECT_FALSE(result.errorMessage.contains(QString::number(old_revision)));
+    EXPECT_FALSE(result.errorMessage.contains(
         QStringLiteral("不兼容的算法版本")));
 }
 
@@ -10390,7 +10436,7 @@ TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)
 }
 
 TEST(DepthMapMeshBuilderTest,
-     PoissonLegacyRejectsManifestlessDepthFramesDespiteReusableDenseCloud)
+     CanonicalEntryRejectsLegacyPoissonBeforeInspectingManifestlessDepthFrames)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
@@ -10413,16 +10459,14 @@ TEST(DepthMapMeshBuilderTest,
         xjw::mesh::workflow::buildMeshFromDepthMaps(request);
 
     EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.payload.value(
-                  QStringLiteral("qualified_primary_depth_frame_count"))
-                  .toInt(),
-              0);
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("主融合深度帧")));
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("无清单")));
+    EXPECT_EQ(result.payload.value(QStringLiteral("actual_mesh_algorithm")).toString(),
+              QStringLiteral("poisson_legacy"));
+    EXPECT_FALSE(result.payload.contains(QStringLiteral("qualified_primary_depth_frame_count")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("仅接受显式 recovered_ooc")));
 }
 
 TEST(DepthMapMeshBuilderTest,
-     PoissonLegacyRejectsAuxiliaryOnlyManifestDespiteReusableDenseCloud)
+     CanonicalEntryRejectsLegacyPoissonBeforeInspectingManifestFrames)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
@@ -10466,15 +10510,9 @@ TEST(DepthMapMeshBuilderTest,
         xjw::mesh::workflow::buildMeshFromDepthMaps(request);
 
     EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.payload.value(
-                  QStringLiteral("discovered_depth_frame_count"))
-                  .toInt(),
-              3);
-    EXPECT_EQ(result.payload.value(
-                  QStringLiteral("qualified_primary_depth_frame_count"))
-                  .toInt(),
-              0);
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("仅辅助验证")));
+    EXPECT_FALSE(result.payload.contains(QStringLiteral("discovered_depth_frame_count")));
+    EXPECT_FALSE(result.payload.contains(QStringLiteral("qualified_primary_depth_frame_count")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("仅接受显式 recovered_ooc")));
 
     QJsonObject aerial_primary = frame_records.at(0).toObject();
     aerial_primary[QStringLiteral("acceptance")] =
@@ -10499,17 +10537,13 @@ TEST(DepthMapMeshBuilderTest,
     const auto mixed_result =
         xjw::mesh::workflow::buildMeshFromDepthMaps(request);
     EXPECT_FALSE(mixed_result.ok);
-    EXPECT_EQ(mixed_result.payload.value(
-                  QStringLiteral("qualified_primary_depth_frame_count"))
-                  .toInt(),
-              2);
     EXPECT_TRUE(mixed_result.errorMessage.contains(
-        QStringLiteral("scene_profile")));
-    EXPECT_TRUE(mixed_result.errorMessage.contains(
-        QStringLiteral("批次不一致")));
+        QStringLiteral("仅接受显式 recovered_ooc")));
+    EXPECT_FALSE(mixed_result.payload.contains(
+        QStringLiteral("qualified_primary_depth_frame_count")));
 }
 
-TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFrameMetadataIsMissing)
+TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenRecoveredInputDirectoryIsMissing)
 {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_no_dense_test";
@@ -10521,13 +10555,15 @@ TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFrameMetadataIsMiss
     request.depthMapSourcePath = QString::fromStdString(root.string());
     request.outputRoot = QString::fromStdString(root.string());
     request.reconstruction = fallbackMeshConfig();
+    request.settings[QStringLiteral("reconstruction_mode")] =
+        QStringLiteral("recovered_ooc");
 
     const auto result = xjw::mesh::workflow::buildMeshFromDepthMaps(request);
 
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.payload.value(QStringLiteral("actual_mesh_algorithm")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("loaded=0")));
+              QStringLiteral("recovered_ooc"));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("recovered_model_input")));
     const QVector<xjw::mesh::DepthFrameArtifact> frames =
         xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
             request.depthMapSourcePath);

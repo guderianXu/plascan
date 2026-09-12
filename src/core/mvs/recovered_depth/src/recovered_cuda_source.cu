@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
+#include <bit>
 #include <cfloat>
 
 namespace metmodel
@@ -3983,6 +3984,10 @@ namespace metmodel
             return __fmaf_rn(dz, dz, __fmaf_rn(dx, dx, __fmul_rn(dy, dy)));
         }
 
+        // Production camera-to-world transforms are affine.  Keep the generic
+        // projective form for captured or synthetic camera ABIs whose last row
+        // is not exactly [0, 0, 0, 1].
+        template <bool AffineTransform>
         __device__ __forceinline__ bool recovered_unproject_perspective(const PatchMatchCamera& camera,
                                                                         std::uint32_t pixel_x,
                                                                         std::uint32_t pixel_y,
@@ -4019,13 +4024,22 @@ namespace metmodel
             const float transformed_y = row(1U);
             const float transformed_z = row(2U);
             const float transformed_w = row(3U);
-            output.x = __fdiv_rn(transformed_x, transformed_w);
-            output.y = __fdiv_rn(transformed_y, transformed_w);
-            output.z = __fdiv_rn(transformed_z, transformed_w);
+            if constexpr (AffineTransform)
+            {
+                output.x = transformed_x;
+                output.y = transformed_y;
+                output.z = transformed_z;
+            }
+            else
+            {
+                output.x = __fdiv_rn(transformed_x, transformed_w);
+                output.y = __fdiv_rn(transformed_y, transformed_w);
+                output.z = __fdiv_rn(transformed_z, transformed_w);
+            }
             return true;
         }
 
-        template <std::uint32_t CameraType>
+        template <std::uint32_t CameraType, bool AffineTransform = false>
         __device__ __forceinline__ bool recovered_filter_unproject(const PatchMatchCamera& camera,
                                                                    std::uint32_t pixel_x,
                                                                    std::uint32_t pixel_y,
@@ -4035,7 +4049,8 @@ namespace metmodel
         {
             if constexpr (CameraType == 0U)
             {
-                return recovered_unproject_perspective(camera, pixel_x, pixel_y, depth, downscale, output);
+                return recovered_unproject_perspective<AffineTransform>(
+                    camera, pixel_x, pixel_y, depth, downscale, output);
             }
             else
             {
@@ -4295,7 +4310,7 @@ namespace metmodel
                 values[index] = value;
         }
 
-        template <std::uint32_t CameraType>
+        template <std::uint32_t CameraType, bool AffineTransform = false>
         __device__ __forceinline__ float recovered_estimate_sample_radius(const PatchMatchCamera& camera,
                                                                           const float* depth,
                                                                           std::int32_t center_x,
@@ -4320,12 +4335,12 @@ namespace metmodel
                         depth[static_cast<std::uint32_t>(y) * width + static_cast<std::uint32_t>(x)];
                     if (sample_depth == 0.0F)
                         continue;
-                    recovered_filter_unproject<CameraType>(camera,
-                                                           static_cast<std::uint32_t>(x),
-                                                           static_cast<std::uint32_t>(y),
-                                                           sample_depth,
-                                                           downscale,
-                                                           points[3 * dy + dx]);
+                    recovered_filter_unproject<CameraType, AffineTransform>(camera,
+                                                                            static_cast<std::uint32_t>(x),
+                                                                            static_cast<std::uint32_t>(y),
+                                                                            sample_depth,
+                                                                            downscale,
+                                                                            points[3 * dy + dx]);
                 }
             }
 
@@ -4376,7 +4391,7 @@ namespace metmodel
             return sqrtf(sorted_distances[distance_count * 3 / 10]);
         }
 
-        template <std::uint32_t CameraType>
+        template <std::uint32_t CameraType, bool AffineTransform = false>
         __global__ __launch_bounds__(128, 1) void patchmatch_filter_speckles_edges_kernel(const float* depth,
                                                                                           std::uint8_t* filtered_mask,
                                                                                           PatchMatchCamera camera,
@@ -4397,16 +4412,18 @@ namespace metmodel
             RecoveredFloat3 center{0.0F, 0.0F, 0.0F};
             bool center_valid = false;
             if (center_depth != 0.0F)
-                center_valid = recovered_filter_unproject<CameraType>(camera, x, y, center_depth, downscale, center);
+                center_valid = recovered_filter_unproject<CameraType, AffineTransform>(
+                    camera, x, y, center_depth, downscale, center);
             if (center_valid)
             {
-                const float sample_radius = recovered_estimate_sample_radius<CameraType>(camera,
-                                                                                         depth,
-                                                                                         static_cast<std::int32_t>(x),
-                                                                                         static_cast<std::int32_t>(y),
-                                                                                         width,
-                                                                                         height,
-                                                                                         downscale);
+                const float sample_radius =
+                    recovered_estimate_sample_radius<CameraType, AffineTransform>(camera,
+                                                                                  depth,
+                                                                                  static_cast<std::int32_t>(x),
+                                                                                  static_cast<std::int32_t>(y),
+                                                                                  width,
+                                                                                  height,
+                                                                                  downscale);
                 const float radius = __fadd_rn(sample_radius, sample_radius);
                 const float radius_squared = __fmul_rn(radius, radius);
                 const float diagonal_radius_squared = __fadd_rn(radius_squared, radius_squared);
@@ -4428,18 +4445,20 @@ namespace metmodel
                         const float neighbor_depth = depth[neighbor_index];
                         if (neighbor_depth == 0.0F)
                             continue;
-                        const float neighbor_sample_radius = recovered_estimate_sample_radius<CameraType>(
-                            camera, depth, neighbor_x, neighbor_y, width, height, downscale);
+                        const float neighbor_sample_radius =
+                            recovered_estimate_sample_radius<CameraType, AffineTransform>(
+                                camera, depth, neighbor_x, neighbor_y, width, height, downscale);
                         const float neighbor_threshold = __fadd_rn(neighbor_sample_radius, neighbor_sample_radius);
                         if (neighbor_threshold < radius)
                             continue;
                         RecoveredFloat3 neighbor;
-                        if (!recovered_filter_unproject<CameraType>(camera,
-                                                                    static_cast<std::uint32_t>(neighbor_x),
-                                                                    static_cast<std::uint32_t>(neighbor_y),
-                                                                    neighbor_depth,
-                                                                    downscale,
-                                                                    neighbor))
+                        if (!recovered_filter_unproject<CameraType, AffineTransform>(
+                                camera,
+                                static_cast<std::uint32_t>(neighbor_x),
+                                static_cast<std::uint32_t>(neighbor_y),
+                                neighbor_depth,
+                                downscale,
+                                neighbor))
                             continue;
                         const float distance_squared = recovered_squared_distance(neighbor, center);
                         const float threshold = (dx == 1 || dy == 1) ? radius_squared : diagonal_radius_squared;
@@ -6106,7 +6125,7 @@ namespace metmodel
 #undef METMODEL_FILTER_NORMALS_CASE
     }
 
-    template <std::uint32_t CameraType>
+    template <std::uint32_t CameraType, bool AffineTransform = false>
     cudaError_t launch_recovered_patchmatch_filter_speckles_edges_typed_source(const float* depth,
                                                                                std::uint8_t* filtered_mask,
                                                                                const PatchMatchCamera& camera,
@@ -6117,7 +6136,7 @@ namespace metmodel
     {
         constexpr unsigned int threads = 128U;
         const unsigned int blocks = static_cast<unsigned int>((work_items + threads - 1U) / threads);
-        patchmatch_filter_speckles_edges_kernel<CameraType>
+        patchmatch_filter_speckles_edges_kernel<CameraType, AffineTransform>
             <<<blocks, threads, 0U, stream>>>(depth, filtered_mask, camera, depth_downscale, pixel_offset, work_items);
         return cudaGetLastError();
     }
@@ -6130,6 +6149,17 @@ namespace metmodel
                                                                          std::size_t work_items,
                                                                          cudaStream_t stream)
     {
+        const bool exact_affine_transform = std::bit_cast<std::uint32_t>(camera.transform[12]) == 0x00000000U &&
+                                            std::bit_cast<std::uint32_t>(camera.transform[13]) == 0x00000000U &&
+                                            std::bit_cast<std::uint32_t>(camera.transform[14]) == 0x00000000U &&
+                                            std::bit_cast<std::uint32_t>(camera.transform[15]) == 0x3f800000U;
+        // Dispatch once on the host so the hot unprojection body does not
+        // repeat three IEEE divisions by an identically-one coordinate.
+        if (camera.type == 0U && exact_affine_transform)
+        {
+            return launch_recovered_patchmatch_filter_speckles_edges_typed_source<0U, true>(
+                depth, filtered_mask, camera, depth_downscale, pixel_offset, work_items, stream);
+        }
 #define METMODEL_FILTER_SPECKLES_CASE(value)                                                                           \
     case value:                                                                                                        \
         return launch_recovered_patchmatch_filter_speckles_edges_typed_source<value>(                                  \

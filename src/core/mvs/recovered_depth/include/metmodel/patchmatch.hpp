@@ -1039,6 +1039,12 @@ namespace metmodel
         std::vector<float> depth;
         std::vector<std::uint8_t> normal;
         std::vector<float> cost;
+        // Production orchestration only needs immutable host views while the
+        // active state stays resident on CUDA. Standalone replay callers may
+        // continue to use the owning vectors above.
+        std::span<const float> depth_view;
+        std::span<const std::uint8_t> normal_view;
+        std::span<const float> cost_view;
         // The target reuses the same candidate allocation across kernels.  C2P
         // deliberately leaves odd/odd pixels untouched, so exact full-buffer
         // replay requires their incoming scratch state.  Empty means a diagnostic

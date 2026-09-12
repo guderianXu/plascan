@@ -17,12 +17,14 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QMessageBox>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -59,6 +61,91 @@ struct ModelProgressLogState
     QString lastStage;
     int highestPercent = 0;
 };
+
+bool canonicalModelGenerationSettings(const QJsonObject &settings,
+                                      QJsonObject *canonicalSettings,
+                                      QString *errorMessage)
+{
+    if (!canonicalSettings)
+    {
+        return false;
+    }
+
+    QJsonObject canonical = settings;
+    const QString requested_mode = canonical.value(QStringLiteral("reconstruction_mode"))
+                                       .toString()
+                                       .trimmed()
+                                       .toLower();
+    if (!requested_mode.isEmpty() && requested_mode != QStringLiteral("recovered_ooc") &&
+        requested_mode != QStringLiteral("rpc_height_plane_sweep"))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("canonical v1 不接受旧 reconstruction_mode。");
+        }
+        return false;
+    }
+
+    const bool rpc_mode = requested_mode == QStringLiteral("rpc_height_plane_sweep");
+    const QString source_data = canonical.value(QStringLiteral("source_data"))
+                                    .toString(rpc_mode ? QStringLiteral("rpc_height_plane_sweep")
+                                                        : QStringLiteral("depth_maps"));
+    if ((rpc_mode && source_data != QStringLiteral("rpc_height_plane_sweep")) ||
+        (!rpc_mode && source_data != QStringLiteral("depth_maps")))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("source_data 与 canonical 重建模式不匹配。");
+        }
+        return false;
+    }
+    if (rpc_mode)
+    {
+        const QJsonArray rpc_images = canonical.value(QStringLiteral("rpcImagePaths")).toArray();
+        const QJsonValue min_height = canonical.value(QStringLiteral("rpcHeightMinMeters"));
+        const QJsonValue max_height = canonical.value(QStringLiteral("rpcHeightMaxMeters"));
+        if (rpc_images.size() != 2 || !rpc_images.at(0).isString() || !rpc_images.at(1).isString() ||
+            rpc_images.at(0).toString().trimmed().isEmpty() || rpc_images.at(1).toString().trimmed().isEmpty() ||
+            !min_height.isDouble() || !max_height.isDouble() || !std::isfinite(min_height.toDouble()) ||
+            !std::isfinite(max_height.toDouble()) || min_height.toDouble() >= max_height.toDouble())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("RPC 模式要求恰好两条非空影像和递增的有限物理高程范围。");
+            }
+            return false;
+        }
+        canonical[QStringLiteral("source_path")] = rpc_images.at(0).toString().trimmed();
+    }
+
+    for (const char *key : {"quality", "qualityProfile", "modelQualityProfile", "targetFaces",
+                            "splitIntoBlocks", "blockSizeMeters", "skipBoundaryBlocks", "saveAfterEachStep",
+                            "strictVolumetricMasks", "surface_type", "interpolation", "calculateVertexColors"})
+    {
+        canonical.remove(QLatin1String(key));
+    }
+    canonical[QStringLiteral("modelGenerationContractRevision")] = 1;
+    canonical[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    const QString face_mode = canonical.value(QStringLiteral("faceCountMode")).toString();
+    const int custom_faces = qBound(1, canonical.value(QStringLiteral("faceCountCustom")).toInt(200000), 2000000);
+    const int target_faces = face_mode == QStringLiteral("low")      ? 20000
+                             : face_mode == QStringLiteral("medium") ? 100000
+                             : face_mode == QStringLiteral("high")   ? 200000
+                                                                     : custom_faces;
+    canonical[QStringLiteral("faceCountMode")] =
+        face_mode == QStringLiteral("low") || face_mode == QStringLiteral("medium") ||
+                face_mode == QStringLiteral("high") || face_mode == QStringLiteral("custom")
+            ? face_mode
+            : QStringLiteral("high");
+    canonical[QStringLiteral("faceCountCustom")] = custom_faces;
+    canonical[QStringLiteral("simplifyTargetFaces")] = target_faces;
+    canonical[QStringLiteral("source_data")] = source_data;
+    canonical[QStringLiteral("reconstruction_mode")] =
+        rpc_mode ? QStringLiteral("rpc_height_plane_sweep") : QStringLiteral("recovered_ooc");
+    canonical[QStringLiteral("surfaceQualityProfile")] = canonical.value(QStringLiteral("reconstruction_mode"));
+    *canonicalSettings = canonical;
+    return true;
+}
 
 QString utcNowIso()
 {
@@ -604,41 +691,42 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
     modelRecord[QStringLiteral("source_data")] = sourceData;
     modelRecord[QStringLiteral("source_path")] = sourcePath;
     modelRecord[QStringLiteral("source_label")] = settings.value(QStringLiteral("source_label")).toString();
-    modelRecord[QStringLiteral("requested_method")] = settings.value(QStringLiteral("method")).toString();
+    modelRecord[QStringLiteral("model_generation_contract_revision")] =
+        settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(1);
     modelRecord[QStringLiteral("reconstruction_mode")] =
         taskResult.value(QStringLiteral("reconstruction_mode"))
             .toString(settings.value(QStringLiteral("reconstruction_mode")).toString());
-    modelRecord[QStringLiteral("requested_quality_profile")] =
-        settings.contains(QStringLiteral("qualityProfile"))
-            ? settings.value(QStringLiteral("qualityProfile")).toString()
-            : QStringLiteral("balanced");
-    modelRecord[QStringLiteral("requested_model_quality_profile")] =
-        settings.value(QStringLiteral("modelQualityProfile")).toString(
-            modelRecord.value(QStringLiteral("requested_quality_profile")).toString());
     modelRecord[QStringLiteral("requested_depth_quality_profile")] =
         settings.value(QStringLiteral("depthQualityProfile")).toString();
+    modelRecord[QStringLiteral("requested_surface_quality_profile")] =
+        settings.value(QStringLiteral("surfaceQualityProfile")).toString();
+    modelRecord[QStringLiteral("requested_face_count_mode")] =
+        settings.value(QStringLiteral("faceCountMode")).toString();
+    modelRecord[QStringLiteral("requested_target_faces")] =
+        taskResult.value(QStringLiteral("requested_target_faces"))
+            .toInt(settings.value(QStringLiteral("simplifyTargetFaces")).toInt());
+    modelRecord[QStringLiteral("effective_target_faces")] =
+        taskResult.value(QStringLiteral("effective_target_faces"))
+            .toInt(settings.value(QStringLiteral("simplifyTargetFaces")).toInt());
+    modelRecord[QStringLiteral("actual_output_face_count")] =
+        taskResult.value(QStringLiteral("actual_output_face_count"))
+            .toInt(taskResult.value(QStringLiteral("face_count")).toInt(-1));
     modelRecord[QStringLiteral("software_version")] = QStringLiteral(PLASCAN_VERSION);
     modelRecord[QStringLiteral("model_property_schema_version")] = 1;
 
     QJsonObject reconstruction_parameters;
-    reconstruction_parameters[QStringLiteral("surface_type")] = settings.value(
-        QStringLiteral("surface_type"));
-    reconstruction_parameters[QStringLiteral("interpolation")] = settings.value(
-        QStringLiteral("interpolation"));
-    reconstruction_parameters[QStringLiteral("strict_volumetric_masks")] = settings.value(
-        QStringLiteral("strictVolumetricMasks"));
-    reconstruction_parameters[QStringLiteral("calculate_vertex_colors")] = settings.value(
-        QStringLiteral("calculateVertexColors"));
-    reconstruction_parameters[QStringLiteral("quality")] = settings.value(
-        QStringLiteral("quality"));
-    reconstruction_parameters[QStringLiteral("quality_profile")] = settings.value(
-        QStringLiteral("qualityProfile"));
-    reconstruction_parameters[QStringLiteral("model_quality_profile")] = settings.value(
-        QStringLiteral("modelQualityProfile"));
-    reconstruction_parameters[QStringLiteral("depth_quality_profile")] = settings.value(
-        QStringLiteral("depthQualityProfile"));
-    reconstruction_parameters[QStringLiteral("target_faces")] = settings.value(
-        QStringLiteral("simplifyTargetFaces"));
+    reconstruction_parameters[QStringLiteral("depth_quality_profile")] =
+        settings.value(QStringLiteral("depthQualityProfile"));
+    reconstruction_parameters[QStringLiteral("surface_quality_profile")] =
+        settings.value(QStringLiteral("surfaceQualityProfile"));
+    reconstruction_parameters[QStringLiteral("face_count_mode")] = settings.value(QStringLiteral("faceCountMode"));
+    reconstruction_parameters[QStringLiteral("face_count_custom")] = settings.value(QStringLiteral("faceCountCustom"));
+    reconstruction_parameters[QStringLiteral("requested_target_faces")] =
+        modelRecord.value(QStringLiteral("requested_target_faces"));
+    reconstruction_parameters[QStringLiteral("effective_target_faces")] =
+        modelRecord.value(QStringLiteral("effective_target_faces"));
+    reconstruction_parameters[QStringLiteral("actual_output_face_count")] =
+        modelRecord.value(QStringLiteral("actual_output_face_count"));
     reconstruction_parameters[QStringLiteral("processing_elapsed_ms")] = taskResult.value(
         QStringLiteral("processing_elapsed_ms"));
     modelRecord[QStringLiteral("reconstruction_parameters")] = reconstruction_parameters;
@@ -865,6 +953,37 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
 
     resolvedSource->requestedSourcePath = sourcePath;
 
+    if (sourceData == QStringLiteral("rpc_height_plane_sweep"))
+    {
+        const QJsonArray rpc_images = settings.value(QStringLiteral("rpcImagePaths")).toArray();
+        if (rpc_images.size() != 2)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("RPC 模型源必须包含恰好两幅影像。");
+            }
+            return false;
+        }
+        const QString left_image = QDir::cleanPath(rpc_images.at(0).toString().trimmed());
+        const QString right_image = QDir::cleanPath(rpc_images.at(1).toString().trimmed());
+        if (left_image.isEmpty() || right_image.isEmpty() || !QFileInfo(left_image).isFile() ||
+            !QFileInfo(right_image).isFile())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("RPC 立体像对不存在或不可访问。");
+            }
+            return false;
+        }
+        resolvedSource->requestedSourcePath = left_image;
+        resolvedSource->sourcePointCloudPath.clear();
+        resolvedSource->outputRoot = xjw::gui::project::resolveProjectOutputDir(
+            projectData ? projectData->currentProjectPath() : QString(),
+            QString(),
+            QStringLiteral("assets/models"));
+        return !resolvedSource->outputRoot.isEmpty();
+    }
+
     if (sourceData == QStringLiteral("depth_maps"))
     {
         if (sourcePath.isEmpty() || !QFileInfo::exists(sourcePath))
@@ -1017,16 +1136,24 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         return false;
     }
 
-    const QString dialogTitle = settings.contains(QStringLiteral("source_data"))
+    QJsonObject effectiveSettings;
+    QString canonicalizationError;
+    if (!canonicalModelGenerationSettings(settings, &effectiveSettings, &canonicalizationError))
+    {
+        QMessageBox::warning(_parentWidget, QStringLiteral("生成模型"), canonicalizationError);
+        return false;
+    }
+
+    const QString dialogTitle = effectiveSettings.contains(QStringLiteral("source_data"))
         ? QStringLiteral("生成模型")
         : QStringLiteral("网格重建");
 
-    if (settings.value(QStringLiteral("source_data")).toString() ==
+    if (effectiveSettings.value(QStringLiteral("source_data")).toString() ==
         QStringLiteral("depth_maps"))
     {
         const QString depth_source_path =
-            settings.value(QStringLiteral("depthMapSourcePath"))
-                .toString(settings.value(QStringLiteral("source_path")).toString());
+            effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
+                .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
         const QJsonObject project_metadata =
             _projectData->metadataIncludingResults();
         const auto sparse_scaffold =
@@ -1034,7 +1161,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 project_metadata,
                 depth_source_path);
         const bool allow_sparse_scaffold_fallback =
-            settings.value(QStringLiteral(
+            effectiveSettings.value(QStringLiteral(
                 "tsdfOrbitalSparseScaffoldCompletion")).toBool(true) &&
             !sparse_scaffold.pointCloudPath.isEmpty() &&
             !sparse_scaffold.pointsJsonPath.isEmpty();
@@ -1042,11 +1169,11 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             xjw::gui::project::assessStoredDepthBatchCompatibility(
                 project_metadata,
                 depth_source_path,
-                settings.value(QStringLiteral("at_index")).toInt(-1),
-                settings.value(QStringLiteral("sceneProfile")).toString(),
+                effectiveSettings.value(QStringLiteral("at_index")).toInt(-1),
+                effectiveSettings.value(QStringLiteral("sceneProfile")).toString(),
                 allow_sparse_scaffold_fallback,
                 xjw::gui::project::depthBatchRequirementsForModelSettings(
-                    settings));
+                    effectiveSettings));
         if (!batch_compatibility.compatible)
         {
             QMessageBox::warning(_parentWidget,
@@ -1059,13 +1186,12 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
     ResolvedModelSource resolvedSource;
     QString sourceError;
-    if (!resolveModelSourceForMeshing(_projectData, settings, &resolvedSource, &sourceError))
+    if (!resolveModelSourceForMeshing(_projectData, effectiveSettings, &resolvedSource, &sourceError))
     {
         QMessageBox::warning(_parentWidget, dialogTitle, sourceError);
         return false;
     }
 
-    QJsonObject effectiveSettings = settings;
     const xjw::mesh::workflow::ModelOutputPolicy outputPolicy =
         xjw::mesh::workflow::modelOutputPolicyFromSettings(
             effectiveSettings);
@@ -1127,8 +1253,8 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                  .toString(QStringLiteral("point_cloud")))
         .arg(effectiveSettings.value(QStringLiteral("reconstruction_mode"))
                  .toString(QStringLiteral("auto")))
-        .arg(effectiveSettings.value(QStringLiteral("quality"))
-                 .toString(QStringLiteral("default")))
+        .arg(effectiveSettings.value(QStringLiteral("surfaceQualityProfile"))
+                 .toString(QStringLiteral("recovered_ooc")))
         .arg(effectiveSettings.value(QStringLiteral("simplifyTargetFaces"))
                  .toInt())
         .arg(effectiveSettings.value(QStringLiteral("threads")).toInt())

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -1448,7 +1449,17 @@ trace_ooc_marching_adaptive_grid_step(
     const std::vector<std::uint32_t>& selected_indices,
     const std::vector<std::uint8_t>& active,
     const std::vector<float>& scalar_lut,
-    const std::vector<std::uint8_t>& partition_excluded = {});
+    const std::vector<std::uint8_t>& partition_excluded = {},
+    std::optional<std::size_t> cuda_device_index = std::nullopt);
+
+bool run_recovered_ooc_neighbors_cuda_source(
+    const std::vector<std::uint32_t>& morton_words_soa,
+    const std::vector<std::uint8_t>& levels,
+    std::vector<std::uint32_t>& neighbors,
+    std::vector<std::uint8_t>& connectivity,
+    std::vector<std::uint8_t>& refinement,
+    std::size_t device_index,
+    std::string& error);
 
 // sub_1EAB480 clamps the fused primal scalar to [-1, 1] and converts it to
 // binary16. sub_1EAE0B0 then writes those bits to record offset +26 for nodes

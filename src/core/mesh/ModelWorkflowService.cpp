@@ -1,5 +1,6 @@
 #include "ModelWorkflowService.h"
 #include "RecoveredModelBuilder.h"
+#include "RpcPlaneSweepModelBuilder.h"
 
 #include "DepthMapMeshBuilder.h"
 #include "DepthConstrainedSurfaceRefiner.h"
@@ -62,6 +63,81 @@ float depthFrameTextureQualityWeight(
 
 namespace
 {
+
+struct ModelGenerationContract
+{
+    QString surfaceProfile;
+    int targetFaces = 0;
+    QJsonObject requested;
+    QJsonObject effective;
+};
+
+bool resolveModelGenerationContract(const QJsonObject& settings,
+                                    ModelGenerationContract* contract,
+                                    QString* error)
+{
+    const auto fail = [error](const QString& message)
+    {
+        if (error) *error = message;
+        return false;
+    };
+    if (!settings.value(QStringLiteral("modelGenerationContractRevision")).isDouble() ||
+        settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(-1) != 1)
+    {
+        return fail(QStringLiteral("模型生成需要 modelGenerationContractRevision=1；旧项目请显式迁移到 recovered_ooc 或 rpc_height_plane_sweep。"));
+    }
+    const QString depth_profile = settings.value(QStringLiteral("depthQualityProfile")).toString();
+    if (depth_profile != QStringLiteral("medium"))
+    {
+        return fail(QStringLiteral("模型生成仅支持 depthQualityProfile=medium（d4）；不会静默降级。"));
+    }
+    const QString surface_profile = settings.value(QStringLiteral("surfaceQualityProfile")).toString();
+    if (surface_profile != QStringLiteral("recovered_ooc") &&
+        surface_profile != QStringLiteral("rpc_height_plane_sweep"))
+    {
+        return fail(QStringLiteral("模型生成需要显式 surfaceQualityProfile=recovered_ooc 或 rpc_height_plane_sweep；旧 TSDF/Poisson/Visual Hull 模式不可作为产品入口。"));
+    }
+    const QString mode = settings.value(QStringLiteral("faceCountMode")).toString();
+    int target_faces = 0;
+    if (mode == QStringLiteral("low")) target_faces = 20000;
+    else if (mode == QStringLiteral("medium")) target_faces = 100000;
+    else if (mode == QStringLiteral("high")) target_faces = 200000;
+    else if (mode == QStringLiteral("custom"))
+    {
+        if (!settings.value(QStringLiteral("faceCountCustom")).isDouble())
+        {
+            return fail(QStringLiteral("faceCountMode=custom 需要整数 faceCountCustom（1..2000000）。"));
+        }
+        target_faces = settings.value(QStringLiteral("faceCountCustom")).toInt(-1);
+        if (target_faces < 1 || target_faces > 2000000)
+        {
+            return fail(QStringLiteral("faceCountCustom 必须在 1..2000000。"));
+        }
+    }
+    else
+    {
+        return fail(QStringLiteral("faceCountMode 必须为 low、medium、high 或 custom。"));
+    }
+    const QString legacy_mode = settings.value(QStringLiteral("reconstruction_mode")).toString();
+    if (!legacy_mode.isEmpty() && legacy_mode != surface_profile)
+    {
+        return fail(QStringLiteral("reconstruction_mode 与 surfaceQualityProfile 不一致；请迁移旧项目设置。"));
+    }
+    contract->surfaceProfile = surface_profile;
+    contract->targetFaces = target_faces;
+    contract->requested = {{QStringLiteral("modelGenerationContractRevision"),
+                            settings.value(QStringLiteral("modelGenerationContractRevision"))},
+                           {QStringLiteral("depthQualityProfile"), depth_profile},
+                           {QStringLiteral("surfaceQualityProfile"), surface_profile},
+                           {QStringLiteral("faceCountMode"), mode},
+                           {QStringLiteral("requestedTargetFaces"), target_faces}};
+    contract->effective = {{QStringLiteral("modelGenerationContractRevision"), 1},
+                           {QStringLiteral("depthQualityProfile"), QStringLiteral("medium")},
+                           {QStringLiteral("surfaceQualityProfile"), surface_profile},
+                           {QStringLiteral("faceCountMode"), mode},
+                           {QStringLiteral("effectiveTargetFaces"), target_faces}};
+    return true;
+}
 
 QString sha256ForFile(const QString &path, QString *error_message)
 {
@@ -4231,19 +4307,29 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                    : depth_source_info.absolutePath());
     const QString recovered_input = depth_directory.filePath(
         QStringLiteral("recovered_model_input"));
-    const bool use_recovered = mode == QStringLiteral("recovered_ooc") ||
-        (mode == QStringLiteral("depth_tsdf") &&
-         QFileInfo::exists(recovered_input));
+    if (mode != QStringLiteral("recovered_ooc"))
+    {
+        result.errorMessage = QStringLiteral(
+            "深度图模型产品入口仅接受显式 recovered_ooc；旧 TSDF、Poisson、Visual Hull 与稀疏 DEM 模式不会自动回退。请迁移项目设置。");
+        return result;
+    }
+    if (request.exportObj)
+    {
+        result.errorMessage = QStringLiteral(
+            "参考 recovered 生产链尚未实现 UV/纹理导出；请选择 PLY。不会自动混用旧 PlaScan 纹理算法。");
+        return result;
+    }
+    if (!QFileInfo::exists(recovered_input))
+    {
+        result.errorMessage = QStringLiteral(
+            "recovered_ooc 需要有效的 recovered_model_input；不会回退到 TSDF、Poisson、Visual Hull 或稀疏 DEM。请重新生成 recovered 深度。 ");
+        return result;
+    }
+    const bool use_recovered = true;
     if (use_recovered)
     {
         result.payload[QStringLiteral("actual_mesh_algorithm")] =
             QStringLiteral("recovered_ooc");
-        if (request.exportObj)
-        {
-            result.errorMessage = QStringLiteral(
-                "参考 recovered 生产链尚未实现 UV/纹理导出；请选择 PLY。不会自动混用旧 PlaScan 纹理算法。");
-            return result;
-        }
         try
         {
             const auto artifacts = DepthMapMeshBuilder::discoverDepthFrames(
@@ -8197,8 +8283,27 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
     const QString source_data = request.sourceData.trimmed().isEmpty()
         ? QStringLiteral("point_cloud")
         : request.sourceData.trimmed();
-    const ReconstructionConfig reconstruction =
-        reconstructionConfigFromModelSettings(request.settings);
+    ModelGenerationContract contract;
+    QString contract_error;
+    if (!resolveModelGenerationContract(request.settings, &contract, &contract_error))
+    {
+        WorkflowResult rejected;
+        rejected.errorMessage = contract_error;
+        rejected.payload[QStringLiteral("fallback")] = QStringLiteral("none");
+        return rejected;
+    }
+    if ((contract.surfaceProfile == QStringLiteral("recovered_ooc") && source_data != QStringLiteral("depth_maps")) ||
+        (contract.surfaceProfile == QStringLiteral("rpc_height_plane_sweep") &&
+         source_data != QStringLiteral("rpc_height_plane_sweep")))
+    {
+        WorkflowResult rejected;
+        rejected.errorMessage = QStringLiteral(
+            "sourceData 与 surfaceQualityProfile 不匹配；recovered_ooc 必须使用 depth_maps，rpc_height_plane_sweep 必须使用 rpc_height_plane_sweep。 ");
+        rejected.payload[QStringLiteral("fallback")] = QStringLiteral("none");
+        return rejected;
+    }
+    ReconstructionConfig reconstruction = reconstructionConfigFromModelSettings(request.settings);
+    reconstruction.simplifyTargetFaces = contract.targetFaces;
 
     WorkflowResult result;
     const ModelOutputPolicy outputPolicy = request.outputPolicy.value_or(
@@ -8277,6 +8382,7 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
                 request.sparseScaffoldPointsPath;
             depth_request.outputRoot = effectiveOutputRoot;
             depth_request.settings = request.settings;
+            depth_request.settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("recovered_ooc");
             depth_request.reconstruction = reconstruction;
             depth_request.exportObj = false;
             depth_request.texture = defaultTextureConfig();
@@ -8285,19 +8391,27 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
             depth_request.progress = request.progress;
             result = buildMeshFromDepthMaps(depth_request);
         }
+        else if (source_data == QStringLiteral("rpc_height_plane_sweep"))
+        {
+            const auto rpc_model = buildRpcPlaneSweepModel(
+                request.settings,
+                contract.targetFaces,
+                request.isCancelled,
+                request.progress);
+            result = saveMeshAndOptionalTexture(
+                rpc_model.mesh,
+                "rpc_height_plane_sweep",
+                effectiveOutputRoot,
+                false,
+                defaultTextureConfig(),
+                request.progress,
+                request.isCancelled);
+            mergePayload(rpc_model.diagnostics, &result.payload);
+        }
         else
         {
-            MeshBuildRequest mesh_request;
-            mesh_request.pointCloudPath = request.sourcePointCloudPath.trimmed().isEmpty()
-                ? request.requestedSourcePath
-                : request.sourcePointCloudPath;
-            mesh_request.outputRoot = effectiveOutputRoot;
-            mesh_request.reconstruction = reconstruction;
-            mesh_request.exportObj = false;
-            mesh_request.texture = defaultTextureConfig();
-            mesh_request.isCancelled = request.isCancelled;
-            mesh_request.progress = request.progress;
-            result = buildMeshAndOptionalTexture(mesh_request);
+            result.errorMessage = QStringLiteral(
+                "模型产品入口不再接受点云/旧模式；请显式选择 recovered_ooc 或 rpc_height_plane_sweep。 ");
         }
     }
     catch (const std::exception &exception)
@@ -8310,15 +8424,24 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
         result.errorMessage = QStringLiteral("模型生成发生未知异常");
     }
 
-    result.payload[QStringLiteral("model_core_elapsed_ms")] =
-        static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started_at).count());
+    result.payload[QStringLiteral("model_core_elapsed_ms")] = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_at).count());
+    result.payload[QStringLiteral("requested_model_generation_contract")] = contract.requested;
+    result.payload[QStringLiteral("effective_model_generation_contract")] = contract.effective;
+    result.payload[QStringLiteral("face_count_mode")] = request.settings.value(QStringLiteral("faceCountMode"));
+    result.payload[QStringLiteral("requested_target_faces")] = contract.targetFaces;
+    result.payload[QStringLiteral("effective_target_faces")] = contract.targetFaces;
+    // Legacy consumers use these shorter names.  They retain the same target
+    // semantics as their explicit counterparts above.
+    result.payload[QStringLiteral("requested_face_count")] = contract.targetFaces;
+    result.payload[QStringLiteral("effective_face_count")] = contract.targetFaces;
     if (cancellationRequested(request.isCancelled))
     {
         return discardRun(cancelledWorkflowResult());
     }
     if (result.ok)
     {
+        result.payload[QStringLiteral("actual_output_face_count")] = result.payload.value(QStringLiteral("face_count"));
         result.payload[QStringLiteral("source_data")] = source_data;
         result.payload[QStringLiteral("source_path")] = request.requestedSourcePath;
         result.payload[QStringLiteral("source_point_cloud_path")] = request.sourcePointCloudPath;

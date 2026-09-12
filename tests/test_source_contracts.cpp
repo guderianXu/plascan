@@ -919,16 +919,52 @@ TEST(AutoSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
                       });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, MeshDecimationReachesReconstructionConfig)
+TEST(GuiAlgorithmAlignmentContractTest, ModelGenerationSettingsMigrateToCanonicalV1)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString workflow_settings = readSourceFile(
+        QStringLiteral("src/gui/dialogs/application/WorkflowSettingsDialog.cpp"));
+    const QString cli = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+    const QString model_settings = sectionBetween(workflow_settings,
+                                                  "QJsonObject WorkflowSettingsDialog::modelGenerationSettings",
+                                                  "void WorkflowSettingsDialog::setupUi");
 
-    expectContainsAll(workflow,
+    expectContainsAll(model_settings,
                       {
-                          R"(settings.value(QStringLiteral("decimate")).toBool(false))",
-                          R"(settings.value(QStringLiteral("decimateRatio"))",
-                          "config.simplifyTargetFaces =",
-                          "std::lround(config.simplifyTargetFaces * decimateRatio)",
+                          R"(model_settings[QStringLiteral("modelGenerationContractRevision")] = 1)",
+                          R"(model_settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium"))",
+                          R"(model_settings[QStringLiteral("surfaceQualityProfile")] = QStringLiteral("recovered_ooc"))",
+                          R"(model_settings[QStringLiteral("faceCountMode")] = QStringLiteral("high"))",
+                          R"(model_settings[QStringLiteral("faceCountCustom")] = 200000)",
+                          R"(source.value(QStringLiteral("targetFaces")))",
+                          R"(source.value(QStringLiteral("simplifyTargetFaces")))",
+                          "legacy_faces <= 20000",
+                          "legacy_faces <= 100000",
+                          "legacy_faces <= 200000",
+                          "qBound(1, legacy_faces, 2000000)",
+                      });
+    expectNotContainsAll(model_settings,
+                         {
+                             "qualityProfile",
+                             "modelQualityProfile",
+                             "splitIntoBlocks",
+                             "blockSizeMeters",
+                             "skipBoundaryBlocks",
+                             "saveAfterEachStep",
+                             "strictVolumetricMasks",
+                         });
+    expectContainsAll(cli,
+                      {
+                          R"(settings.remove(QStringLiteral("quality")))",
+                          R"(settings.remove(QStringLiteral("qualityProfile")))",
+                          R"(settings.remove(QStringLiteral("modelQualityProfile")))",
+                          R"(settings.remove(QStringLiteral("targetFaces")))",
+                          R"(settings.remove(QStringLiteral("splitIntoBlocks")))",
+                          R"(settings.remove(QStringLiteral("blockSizeMeters")))",
+                          R"(settings.remove(QStringLiteral("skipBoundaryBlocks")))",
+                          R"(settings.remove(QStringLiteral("saveAfterEachStep")))",
+                          R"(settings.remove(QStringLiteral("strictVolumetricMasks")))",
+                          R"(settings[QStringLiteral("simplifyTargetFaces")] = target_faces)",
                       });
 }
 
@@ -971,13 +1007,18 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
 
     expectContainsAll(dialog,
                       {
-                          R"(_reuseDepthMapsCheck->setChecked(true))",
+                          R"(_reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested))",
                           R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
-                          "使用严格的体积掩模",
+                          R"(settings[QStringLiteral("modelGenerationContractRevision")] = 1)",
+                          R"(settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium"))",
+                          R"(settings[QStringLiteral("surfaceQualityProfile")] =)",
                       });
     expectNotContainsAll(dialog,
                          {
-                             "使用严格的体积掩摸",
+                             "splitIntoBlocks",
+                             "blockSizeMeters",
+                             "strictVolumetricMasks",
+                             "saveAfterEachStep",
                          });
 }
 
@@ -1015,6 +1056,45 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
                          {
                              "深度图源需要先融合为密集点云，但未找到可复用的 dense_cloud.ply",
                          });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest, CanonicalFaceDiagnosticsKeepModeTargetsAndActualOutputDistinct)
+{
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    const QString contract = sectionBetween(workflow, "bool resolveModelGenerationContract", "QString sha256ForFile");
+    const QString build_model =
+        sectionBetween(workflow, "WorkflowResult buildModel", "WorkflowResult buildTextureOnly");
+
+    expectContainsAll(contract,
+                      {
+                          R"(QStringLiteral("requestedTargetFaces"), target_faces)",
+                          R"(QStringLiteral("effectiveTargetFaces"), target_faces)",
+                      });
+    expectContainsAll(build_model,
+                      {
+                          R"(QStringLiteral("face_count_mode"))",
+                          R"(QStringLiteral("requested_target_faces")] = contract.targetFaces)",
+                          R"(QStringLiteral("effective_target_faces")] = contract.targetFaces)",
+                          R"(QStringLiteral("requested_face_count")] = contract.targetFaces)",
+                          R"(QStringLiteral("effective_face_count")] = contract.targetFaces)",
+                          R"(QStringLiteral("actual_output_face_count"))",
+                          R"(QStringLiteral("face_count"))",
+                      });
+    expectContainsAll(manager,
+                      {
+                          R"(modelRecord[QStringLiteral("requested_target_faces")])",
+                          R"(modelRecord[QStringLiteral("effective_target_faces")])",
+                          R"(modelRecord[QStringLiteral("actual_output_face_count")])",
+                          R"(reconstruction_parameters[QStringLiteral("requested_target_faces")])",
+                          R"(reconstruction_parameters[QStringLiteral("effective_target_faces")])",
+                          R"(reconstruction_parameters[QStringLiteral("actual_output_face_count")])",
+                      });
+    expectNotContainsAll(
+        manager,
+        {
+            R"(taskResult.value(QStringLiteral("face_count")).toInt(settings.value(QStringLiteral("simplifyTargetFaces")).toInt()))",
+        });
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, SparseScaffoldCompletionUpdatesEffectiveDiagnosticsAfterSuccess)
@@ -1188,8 +1268,8 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
                       });
     expectContainsAll(project_manager_header,
                       {
-                          "void startCreatePointCloudAsync(const QJsonObject &settings)",
-                          "void startGenerateModelAsync(const QJsonObject &settings)",
+                          "void startCreatePointCloudAsync(const QJsonObject& settings)",
+                          "void startGenerateModelAsync(const QJsonObject& settings)",
                       });
 
     const QString generate_block =
@@ -1260,19 +1340,33 @@ TEST(GuiAlgorithmAlignmentContractTest, AutomaticModelDepthPreparationUsesSingle
                          });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSettings)
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountControls)
 {
     const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
 
     expectContainsAll(dialog,
                       {
-                          "_splitRegionCheck",
-                          "_blockSizeSpin",
-                          R"(settings[QStringLiteral("splitIntoBlocks")])",
-                          R"(settings[QStringLiteral("splitIntoBlocks")] = recovered_model)",
-                          R"(settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value())",
-                          "updateBlockControlsAvailability",
+                          "modelFaceCountModeCombo",
+                          "modelCustomFaceCountSpin",
+                          "QStringLiteral(\"low\")",
+                          "QStringLiteral(\"medium\")",
+                          "QStringLiteral(\"high\")",
+                          "QStringLiteral(\"custom\")",
+                          "_customFaceCountSpin->setRange(1, 2000000)",
+                          "? 20000",
+                          "? 100000",
+                          "? 200000",
+                          R"(settings[QStringLiteral("simplifyTargetFaces")] = target_faces)",
                       });
+    expectNotContainsAll(dialog,
+                         {
+                             "_splitRegionCheck",
+                             "_blockSizeSpin",
+                             "splitIntoBlocks",
+                             "blockSizeMeters",
+                             "strictVolumetricMasks",
+                             "saveAfterEachStep",
+                         });
 }
 
 TEST(MvsSchedulerContractTest, RecoveredProductionUsesTrackRankedSceneSelection)
@@ -1299,11 +1393,15 @@ TEST(MvsSchedulerContractTest, RecoveredProductionUsesTrackRankedSceneSelection)
                           "_configuredSourceViewCount = 16",
                           "runRecoveredDepthScene(",
                           "recovered_workspace_root",
+                          "frame.initialQualityAcceptanceAvailable = false",
+                          "QStringLiteral(\"recovered三层投票\")",
                       });
     expectNotContainsAll(run,
                          {
                              "prepareFrameCaches();",
                              "selectMvsSourceViewIndices(_views, _sparse, refIdx, numSrc)",
+                             "crossCheckDepthConsistencyStreaming()",
+                             "runDepthPoseRefinementCandidateStage(",
                          });
     expectContainsAll(adapter,
                       {
@@ -1706,6 +1804,10 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloating
 {
     const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
     const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString cudaSource =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/recovered_cuda_source.cu"));
+    const QString orchestrator =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
     const QString run =
         sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
 
@@ -1715,6 +1817,18 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloating
                           "recovered_depth/src/recovered_cuda_source.cu",
                           "--ftz=false;--prec-div=true;--prec-sqrt=true",
                       });
+    expectContainsAll(cudaSource,
+                      {
+                          "template <bool AffineTransform>",
+                          "camera.transform[15]) == 0x3f800000U",
+                          "launch_recovered_patchmatch_filter_speckles_edges_typed_source<0U, true>",
+                      });
+    expectContainsAll(orchestrator,
+                      {
+                          "const std::size_t checker_items = ((width + 1U) / 2U) * height;",
+                          "propagation.global_work_items = checker_items;",
+                      });
+    EXPECT_FALSE(orchestrator.contains(QStringLiteral("(pixels + 1U) / 2U")));
     expectContainsAll(run,
                       {
                           "for (RecoveredDepthFrame& recovered_frame : recovered_result.frames)",
@@ -1727,6 +1841,42 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloating
                              "saveQueue.reserveProducer",
                              "computeDepthForView(",
                          });
+}
+
+TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPaths)
+{
+    const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
+    const QString patchmatchHeader =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/include/metmodel/patchmatch.hpp"));
+    const QString patchmatch =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch.cpp"));
+    const QString orchestrator =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
+    const QString octree =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/octree_prepare.cpp"));
+    const QString neighbors =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/ooc_neighbors_cuda.cu"));
+
+    expectContainsAll(cmake, {"recovered_depth/src/ooc_neighbors_cuda.cu"});
+    expectContainsAll(patchmatchHeader, {"std::span<const float> depth_view;",
+                                         "std::span<const std::uint8_t> normal_view;",
+                                         "std::span<const float> cost_view;"});
+    expectContainsAll(patchmatch,
+                      {"parallel_for_recovered_patchmatch_rows(",
+                       "pixels < 131072U",
+                       "std::max(1U, logical_cpus / 2U)"});
+    expectContainsAll(orchestrator,
+                      {"c2p.depth_view = state.depth;",
+                       "c2p.normal_view = state.normal;",
+                       "c2p.cost_view = state.cost;"});
+    expectContainsAll(octree,
+                      {"run_recovered_ooc_neighbors_cuda_source(",
+                       "bool same_index_space = records.size() == balanced_records.size();",
+                       "std::lower_bound(nodes.begin(), nodes.end(), child_key, node_less)",
+                       "std::vector<std::optional<LocalMarchingRawPart>> raw_parts"});
+    expectContainsAll(neighbors,
+                      {"neighbors_binary_search_kernel<<<blocks, threads, 0U, stream>>>",
+                       "constexpr std::size_t batch_capacity = 1'000'000U;"});
 }
 
 TEST(MvsAdaptivePatchMatchContractTest, AuxiliaryEvidenceCrossesEveryAdaptiveBackendBranch)

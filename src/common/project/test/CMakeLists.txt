@@ -71,3 +71,10 @@ target_link_libraries(test_project_session PRIVATE
   GTest::gtest_main
 )
 gtest_discover_tests(test_project_session DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_project_exporter test_project_exporter.cpp)
+target_link_libraries(test_project_exporter PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_project_exporter DISCOVERY_MODE PRE_TEST)

@@ -241,10 +241,17 @@ void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
         return;
     }
 
+    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
+    if (_hasLoadedImageEntries && _loadedImageEntries == images)
+    {
+        return;
+    }
+
     advanceThumbnailGeneration(false);
     clearPhotos();
 
-    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
+    _loadedImageEntries = images;
+    _hasLoadedImageEntries = true;
     const int total = images.size();
     if (total == 0)
     {
@@ -463,6 +470,8 @@ void PhotoStripWidget::clearPhotos()
     _queuedThumbnailKeys.clear();
     _desiredThumbnailKeys.clear();
     _itemsByPath.clear();
+    _loadedImageEntries = QJsonArray();
+    _hasLoadedImageEntries = false;
     if (_list)
     {
         _list->clear();

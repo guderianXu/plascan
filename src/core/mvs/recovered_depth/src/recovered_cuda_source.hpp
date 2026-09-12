@@ -14,6 +14,17 @@ struct OocHistogramVoxel;
 struct OocHistogramCalibrationCu;
 struct OocHistogramCameraExteriorTransformCu;
 
+cudaError_t launch_recovered_ooc_neighbors_binary_search_source(
+    const std::uint32_t* morton_words_soa,
+    const std::uint8_t* levels,
+    std::uint32_t* neighbors,
+    std::uint8_t* connectivity,
+    std::uint8_t* refinement,
+    std::uint32_t count,
+    std::uint32_t offset,
+    std::size_t work_items,
+    cudaStream_t stream = nullptr);
+
 cudaError_t launch_recovered_patchmatch_undistort_u8_source(
     const std::uint8_t* source, const std::uint8_t* source_mask,
     std::uint8_t* result, std::uint8_t* result_mask,

@@ -4723,6 +4723,12 @@ namespace metmodel
                                                                  bool use_source_kernel)
     {
         const RecoveredCudaTransferPhaseScope transfer_phase(RecoveredCudaTransferPhase::coarse_to_precise);
+        const std::span<const float> depth =
+            input.depth_view.empty() ? std::span<const float>(input.depth) : input.depth_view;
+        const std::span<const std::uint8_t> normal =
+            input.normal_view.empty() ? std::span<const std::uint8_t>(input.normal) : input.normal_view;
+        const std::span<const float> cost =
+            input.cost_view.empty() ? std::span<const float>(input.cost) : input.cost_view;
         const std::size_t downscale = input.depth_downscale;
         if (downscale == 0)
         {
@@ -4734,8 +4740,8 @@ namespace metmodel
         const std::size_t pixels = width * height;
         const std::size_t work_items = input.global_work_items == 0 ? pixels : input.global_work_items;
         if (pixels == 0 || work_items == 0 || work_items > PatchMatchCandidateOutput::capacity ||
-            input.pixel_offset >= pixels || input.depth.size() != pixels || input.normal.size() != pixels * 3 ||
-            input.cost.size() != pixels)
+            input.pixel_offset >= pixels || depth.size() != pixels || normal.size() != pixels * 3 ||
+            cost.size() != pixels)
         {
             error = "PatchMatch coarse-to-precise launch or buffers are invalid";
             return false;
@@ -4801,9 +4807,9 @@ namespace metmodel
         }
 
         std::array<std::size_t, RecoveredCudaCostWorkspace::fixed_allocation_count> fixed_bytes{};
-        fixed_bytes[cost_depth_slot] = input.depth.size() * sizeof(float);
-        fixed_bytes[cost_normal_slot] = input.normal.size();
-        fixed_bytes[cost_main_cost_slot] = input.cost.size() * sizeof(float);
+        fixed_bytes[cost_depth_slot] = depth.size() * sizeof(float);
+        fixed_bytes[cost_normal_slot] = normal.size();
+        fixed_bytes[cost_main_cost_slot] = cost.size() * sizeof(float);
         fixed_bytes[cost_candidate_depth_slot] =
             PatchMatchCandidateOutput::hypotheses * PatchMatchCandidateOutput::capacity * sizeof(float);
         fixed_bytes[cost_candidate_normal_slot] =
@@ -4864,11 +4870,11 @@ namespace metmodel
         };
         if (!consume_pipeline_handoff)
         {
-            runtime_status = allocate_and_copy(&device_depth, input.depth.data(), fixed_bytes[cost_depth_slot]);
+            runtime_status = allocate_and_copy(&device_depth, depth.data(), fixed_bytes[cost_depth_slot]);
             if (runtime_status == cudaSuccess)
-                runtime_status = allocate_and_copy(&device_normal, input.normal.data(), fixed_bytes[cost_normal_slot]);
+                runtime_status = allocate_and_copy(&device_normal, normal.data(), fixed_bytes[cost_normal_slot]);
             if (runtime_status == cudaSuccess)
-                runtime_status = allocate_and_copy(&device_cost, input.cost.data(), fixed_bytes[cost_main_cost_slot]);
+                runtime_status = allocate_and_copy(&device_cost, cost.data(), fixed_bytes[cost_main_cost_slot]);
         }
         else
         {

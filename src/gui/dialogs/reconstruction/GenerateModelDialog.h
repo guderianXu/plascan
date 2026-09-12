@@ -14,6 +14,7 @@ class QPushButton;
 class QScrollArea;
 class QScreen;
 class QShowEvent;
+class QSpinBox;
 class QToolButton;
 class QWidget;
 
@@ -49,13 +50,13 @@ private:
     QJsonObject collectSettings() const;
     QJsonObject currentCandidate() const;
     bool usesRecoveredModelPipeline() const;
+    bool usesRpcHeightPlaneSweep() const;
     void refreshSourceTypes();
     void refreshSourceItems();
     void setAdvancedExpanded(bool expanded);
     void bindScreenGeometryUpdates(QScreen* targetScreen);
     void refreshScrollableDialogSize();
     void updateAvailability();
-    void updateBlockControlsAvailability();
     void updateScrollableContentHeight();
 
     QJsonArray _candidates;
@@ -67,26 +68,17 @@ private:
 
     QComboBox* _sourceCombo = nullptr;
     QComboBox* _sourceItemCombo = nullptr;
-    QComboBox* _surfaceTypeCombo = nullptr;
-    QComboBox* _qualityCombo = nullptr;
     QLabel* _effectiveDepthQualityLabel = nullptr;
-    QLabel* _modelAlgorithmLabel = nullptr;
-    QComboBox* _faceCountCombo = nullptr;
-    QCheckBox* _saveEachStepCheck = nullptr;
-    QCheckBox* _splitRegionCheck = nullptr;
-    QLabel* _coordinateLabel = nullptr;
-    QDoubleSpinBox* _blockSizeSpin = nullptr;
-    QLabel* _originLabel = nullptr;
-    QCheckBox* _skipBoundaryBlocksCheck = nullptr;
+    QLabel* _effectiveSurfaceQualityLabel = nullptr;
+    QComboBox* _faceCountModeCombo = nullptr;
+    QSpinBox* _customFaceCountSpin = nullptr;
+    QDoubleSpinBox* _rpcHeightMinSpin = nullptr;
+    QDoubleSpinBox* _rpcHeightMaxSpin = nullptr;
     QScrollArea* _contentScrollArea = nullptr;
     QMetaObject::Connection _screenGeometryConnection;
     bool _screenChangeConnected = false;
     QToolButton* _advancedToggle = nullptr;
     QWidget* _advancedContent = nullptr;
-    QComboBox* _interpolationCombo = nullptr;
-    QComboBox* _depthFilterCombo = nullptr;
-    QCheckBox* _calculateColorsCheck = nullptr;
-    QCheckBox* _strictMasksCheck = nullptr;
     QCheckBox* _reuseDepthMapsCheck = nullptr;
     QCheckBox* _replaceDefaultCheck = nullptr;
     QPushButton* _okButton = nullptr;

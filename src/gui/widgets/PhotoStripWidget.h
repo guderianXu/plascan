@@ -106,8 +106,10 @@ private:
     QSet<QString> _queuedThumbnailKeys;
     QSet<QString> _desiredThumbnailKeys;
     QJsonArray _pendingImageEntries;
+    QJsonArray _loadedImageEntries;
     int _pendingImageIndex = 0;
     int _activeThumbnailLoads = 0;
+    bool _hasLoadedImageEntries = false;
     bool _imageListLoading = false;
     bool _thumbnailRefreshScheduled = false;
     quint64 _thumbnailGeneration{};

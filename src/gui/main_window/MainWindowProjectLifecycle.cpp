@@ -34,16 +34,17 @@
 
 #include <exception>
 
-
 void MainWindow::onClearRecentRequested()
 {
     if (!_config)
     {
         return;
     }
-    auto btn = QMessageBox::question(this, tr("清空最近打开"),
-        tr("确定要清空最近打开的项目列表吗？"),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    auto btn = QMessageBox::question(this,
+                                     tr("清空最近打开"),
+                                     tr("确定要清空最近打开的项目列表吗？"),
+                                     QMessageBox::Yes | QMessageBox::No,
+                                     QMessageBox::No);
     if (btn == QMessageBox::Yes)
     {
         _config->recentProjects()->clearRecentProjects();
@@ -59,13 +60,17 @@ void MainWindow::onClearRecentRequested()
 //  项目生命周期
 // ============================================================
 
-void MainWindow::onProjectOpened(const QString &plascanPath)
+void MainWindow::onProjectOpened(const QString& plascanPath)
 {
     if (_mainMenu)
     {
         if (_mainMenu->saveAction())
         {
             _mainMenu->saveAction()->setEnabled(true);
+        }
+        if (_mainMenu->exportPortableProjectAction())
+        {
+            _mainMenu->exportPortableProjectAction()->setEnabled(true);
         }
         if (_mainMenu->importReferenceAction())
         {
@@ -100,9 +105,8 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         QString marker_error;
         if (!_markerWorkspaceController->openProject(&marker_error))
         {
-            QMessageBox::warning(this,
-                                 QStringLiteral("加载标记点"),
-                                 QStringLiteral("标记点数据未加载：%1").arg(marker_error));
+            QMessageBox::warning(
+                this, QStringLiteral("加载标记点"), QStringLiteral("标记点数据未加载：%1").arg(marker_error));
         }
     }
     if (_cameraReferenceRepository)
@@ -110,9 +114,8 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         QString referenceError;
         if (!_cameraReferenceRepository->open(&referenceError))
         {
-            QMessageBox::warning(this,
-                                 QStringLiteral("加载相机参考"),
-                                 QStringLiteral("相机参考数据未加载：%1").arg(referenceError));
+            QMessageBox::warning(
+                this, QStringLiteral("加载相机参考"), QStringLiteral("相机参考数据未加载：%1").arg(referenceError));
         }
     }
     if (_workspaceCenter)
@@ -124,9 +127,7 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         _dataTree->setProjectPath(plascanPath);
         if (_projectData)
         {
-            _dataTree->setChunkContext(
-                _projectData->chunks(),
-                _projectData->activeChunkId());
+            _dataTree->setChunkContext(_projectData->chunks(), _projectData->activeChunkId());
         }
     }
     if (_photoStrip)
@@ -153,8 +154,7 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     applyUiSettings(ui);
 }
 
-void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
-                                            const QString &preferredImagePath)
+void MainWindow::openMarkerFocusMeasurement(const QString& markerId, const QString& preferredImagePath)
 {
     if (!_markerWorkspaceController || !_projectData || markerId.isEmpty())
     {
@@ -164,8 +164,8 @@ void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
     QString anchor_path;
     try
     {
-        const auto &marker = _markerWorkspaceController->markerSet().marker(markerId);
-        auto paths_equal = [](const QString &left, const QString &right)
+        const auto& marker = _markerWorkspaceController->markerSet().marker(markerId);
+        auto paths_equal = [](const QString& left, const QString& right)
         {
 #ifdef Q_OS_WIN
             return QDir::cleanPath(left).compare(QDir::cleanPath(right), Qt::CaseInsensitive) == 0;
@@ -173,12 +173,11 @@ void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
             return QDir::cleanPath(left) == QDir::cleanPath(right);
 #endif
         };
-        for (const auto &projection : marker.projections)
+        for (const auto& projection : marker.projections)
         {
-            if (!preferredImagePath.isEmpty()
-                && paths_equal(projection.imagePathSnapshot, preferredImagePath)
-                && projection.state != xjw::control_points::ProjectionState::Blocked
-                && projection.state != xjw::control_points::ProjectionState::Disabled)
+            if (!preferredImagePath.isEmpty() && paths_equal(projection.imagePathSnapshot, preferredImagePath) &&
+                projection.state != xjw::control_points::ProjectionState::Blocked &&
+                projection.state != xjw::control_points::ProjectionState::Disabled)
             {
                 anchor_path = projection.imagePathSnapshot;
                 break;
@@ -186,10 +185,10 @@ void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
         }
         if (anchor_path.isEmpty())
         {
-            for (const auto &projection : marker.projections)
+            for (const auto& projection : marker.projections)
             {
-                if (projection.state != xjw::control_points::ProjectionState::Blocked
-                    && projection.state != xjw::control_points::ProjectionState::Disabled)
+                if (projection.state != xjw::control_points::ProjectionState::Blocked &&
+                    projection.state != xjw::control_points::ProjectionState::Disabled)
                 {
                     anchor_path = projection.imagePathSnapshot;
                     break;
@@ -197,33 +196,25 @@ void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
             }
         }
     }
-    catch (const std::exception &exception)
+    catch (const std::exception& exception)
     {
-        QMessageBox::warning(this,
-                             QStringLiteral("聚焦标记量测"),
-                             QString::fromUtf8(exception.what()));
+        QMessageBox::warning(this, QStringLiteral("聚焦标记量测"), QString::fromUtf8(exception.what()));
         return;
     }
 
     if (anchor_path.isEmpty())
     {
-        QMessageBox::information(this,
-                                 QStringLiteral("聚焦标记量测"),
-                                 QStringLiteral("该标记尚无可用投影，请先在照片中放置一次。"));
+        QMessageBox::information(
+            this, QStringLiteral("聚焦标记量测"), QStringLiteral("该标记尚无可用投影，请先在照片中放置一次。"));
         return;
     }
 
-    auto *dialog = new xjw::gui::markers::MarkerFocusMeasurementDialog(this);
+    auto* dialog = new xjw::gui::markers::MarkerFocusMeasurementDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    if (!dialog->setContext(_markerWorkspaceController,
-                            _projectData,
-                            markerId,
-                            anchor_path))
+    if (!dialog->setContext(_markerWorkspaceController, _projectData, markerId, anchor_path))
     {
         dialog->deleteLater();
-        QMessageBox::information(this,
-                                 QStringLiteral("聚焦标记量测"),
-                                 QStringLiteral("没有可供量测的其他项目照片。"));
+        QMessageBox::information(this, QStringLiteral("聚焦标记量测"), QStringLiteral("没有可供量测的其他项目照片。"));
         return;
     }
     dialog->show();
@@ -231,7 +222,7 @@ void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
     dialog->activateWindow();
 }
 
-void MainWindow::scheduleProjectMetadataRefresh(const QJsonObject &meta)
+void MainWindow::scheduleProjectMetadataRefresh(const QJsonObject& meta)
 {
     if (_projectUiHydrator)
     {
@@ -259,6 +250,10 @@ void MainWindow::onProjectClosed()
         if (_mainMenu->saveAction())
         {
             _mainMenu->saveAction()->setEnabled(false);
+        }
+        if (_mainMenu->exportPortableProjectAction())
+        {
+            _mainMenu->exportPortableProjectAction()->setEnabled(false);
         }
         if (_mainMenu->importReferenceAction())
         {
@@ -309,7 +304,7 @@ void MainWindow::onProjectClosed()
 //  applyUiSettings — 恢复项目范围内的 UI 设置
 // ============================================================
 
-void MainWindow::applyUiSettings(const QJsonObject &ui)
+void MainWindow::applyUiSettings(const QJsonObject& ui)
 {
     QScopedValueRollback<bool> applyingRollback(_applyingUiSettings, true);
     _imageViewRotations = ui.value(QStringLiteral("image_view_rotations")).toObject();
@@ -358,31 +353,31 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
     if (settings.contains(QStringLiteral("active_image_id")) && _canvas)
     {
-        const QString stateKey =
-            settings.value(QStringLiteral("active_image_id")).toString();
+        const QString stateKey = settings.value(QStringLiteral("active_image_id")).toString();
         const QString imagePath = projectImagePathForStateKey(stateKey);
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
-            const auto session = _projectManager
-                ? _projectManager->currentSessionContext()
-                : xjw::gui::project::ProjectSessionContext{};
-            QTimer::singleShot(100, this, [this, imagePath, session]()
-            {
-                if (!_projectManager || !_projectManager->isCurrentSession(session))
-                {
-                    return;
-                }
-                if (isProjectPhotoPath(imagePath))
-                {
-                    selectPhoto(imagePath, true);
-                    return;
-                }
-                if (_workspaceCenter)
-                {
-                    _workspaceCenter->showImageView(imagePath);
-                }
-                _lastSelectedImage = imagePath;
-            });
+            const auto session =
+                _projectManager ? _projectManager->currentSessionContext() : xjw::gui::project::ProjectSessionContext{};
+            QTimer::singleShot(100,
+                               this,
+                               [this, imagePath, session]()
+                               {
+                                   if (!_projectManager || !_projectManager->isCurrentSession(session))
+                                   {
+                                       return;
+                                   }
+                                   if (isProjectPhotoPath(imagePath))
+                                   {
+                                       selectPhoto(imagePath, true);
+                                       return;
+                                   }
+                                   if (_workspaceCenter)
+                                   {
+                                       _workspaceCenter->showImageView(imagePath);
+                                   }
+                                   _lastSelectedImage = imagePath;
+                               });
         }
     }
 }
@@ -391,7 +386,7 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 //  closeEvent — 退出时保存/提示
 // ============================================================
 
-void MainWindow::closeEvent(QCloseEvent *event)
+void MainWindow::closeEvent(QCloseEvent* event)
 {
     if (_projectLifecyclePresenter && _projectLifecyclePresenter->isCloseSavePending())
     {
@@ -399,8 +394,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         return;
     }
 
-    const bool hasProject = _projectManager
-        && !_projectManager->currentProjectPath().trimmed().isEmpty();
+    const bool hasProject = _projectManager && !_projectManager->currentProjectPath().trimmed().isEmpty();
     if (hasProject)
     {
         persistCurrentUiSettings();
@@ -408,10 +402,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
     if (hasProject && _projectManager->isDirty())
     {
-        auto btn = QMessageBox::warning(this, tr("未保存的更改"),
-            tr("当前项目有未保存的更改。是否保存？"),
-            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
-            QMessageBox::Save);
+        auto btn = QMessageBox::warning(this,
+                                        tr("未保存的更改"),
+                                        tr("当前项目有未保存的更改。是否保存？"),
+                                        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+                                        QMessageBox::Save);
 
         if (btn == QMessageBox::Cancel)
         {

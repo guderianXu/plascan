@@ -331,6 +331,10 @@ namespace metmodel
                 return true;
             };
 
+            // Checkerboard compaction enumerates ceil(width / 2) pixels
+            // independently on every row.  Flattening first under-launches
+            // when both dimensions are odd and leaves the bottom edge stale.
+            const std::size_t checker_items = ((width + 1U) / 2U) * height;
             for (std::uint32_t iteration = 0U; iteration < 6U; ++iteration)
             {
                 PatchMatchRefinementInput refinement;
@@ -376,7 +380,7 @@ namespace metmodel
                     propagation.initial_candidate_depth = std::move(state.candidates.depth);
                     propagation.initial_candidate_normal = std::move(state.candidates.normal);
                     propagation.checkboard_step = step;
-                    propagation.global_work_items = (pixels + 1U) / 2U;
+                    propagation.global_work_items = checker_items;
                     propagation.device_index = preparation.device_index;
                     propagation.cuda_workspace_handoff = std::exchange(next_producer_handoff, 0U);
                     propagation.defer_cuda_host_output =
@@ -388,7 +392,7 @@ namespace metmodel
                                       false,
                                       1U,
                                       step,
-                                      (pixels + 1U) / 2U,
+                                      checker_items,
                                       3U,
                                       capture_diagnostic_checkpoints && !run_final_refinement && iteration == 5U &&
                                           step == 1U))
@@ -840,9 +844,9 @@ namespace metmodel
             PatchMatchCoarseToPreciseInput c2p;
             c2p.camera = patch_camera;
             c2p.depth_downscale = downscale;
-            c2p.depth = state.depth;
-            c2p.normal = state.normal;
-            c2p.cost = state.cost;
+            c2p.depth_view = state.depth;
+            c2p.normal_view = state.normal;
+            c2p.cost_view = state.cost;
             c2p.initial_candidates = std::move(state.candidates);
             c2p.global_work_items = pixels;
             c2p.device_index = preparation.device_index;
@@ -1464,9 +1468,9 @@ namespace metmodel
                                     PatchMatchCoarseToPreciseInput c2p;
                                     c2p.camera = patch_camera;
                                     c2p.depth_downscale = downscale;
-                                    c2p.depth = state.depth;
-                                    c2p.normal = state.normal;
-                                    c2p.cost = state.cost;
+                                    c2p.depth_view = state.depth;
+                                    c2p.normal_view = state.normal;
+                                    c2p.cost_view = state.cost;
                                     c2p.initial_candidates = std::move(state.candidates);
                                     c2p.pixel_offset = offset;
                                     c2p.global_work_items = work_items;

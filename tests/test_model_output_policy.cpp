@@ -297,9 +297,9 @@ TEST(ModelOutputPolicyTest, RefusesToDeleteRunWithoutOwnershipMarker)
     EXPECT_TRUE(QFileInfo::exists(runRoot));
 }
 
-TEST(ModelOutputPolicyTest, BuildModelWritesCompleteIndependentRuns)
+TEST(ModelOutputPolicyTest,
+     LegacyPointCloudBuildIsRejectedWithoutPublishingRuns)
 {
-    using xjw::mesh::workflow::ModelOutputPolicy;
     QTemporaryDir temporary;
     ASSERT_TRUE(temporary.isValid());
 
@@ -320,55 +320,64 @@ TEST(ModelOutputPolicyTest, BuildModelWritesCompleteIndependentRuns)
     };
     request.runId = QStringLiteral("run-versioned");
 
-    const auto first = xjw::mesh::workflow::buildModel(request);
-    ASSERT_TRUE(first.ok) << first.errorMessage.toStdString();
+    const auto result = xjw::mesh::workflow::buildModel(request);
 
-    request.outputPolicy = ModelOutputPolicy::ReplaceDefault;
-    request.runId = QStringLiteral("run-replacement");
-    const auto second = xjw::mesh::workflow::buildModel(request);
-    ASSERT_TRUE(second.ok) << second.errorMessage.toStdString();
-
-    const QString firstModel = first.payload.value(
-        QStringLiteral("model_ply")).toString();
-    const QString secondModel = second.payload.value(
-        QStringLiteral("model_ply")).toString();
-    EXPECT_NE(firstModel, secondModel);
-    EXPECT_TRUE(QFileInfo(firstModel).isFile());
-    EXPECT_TRUE(QFileInfo(secondModel).isFile());
-    EXPECT_TRUE(firstModel.contains(QStringLiteral("run-versioned")));
-    EXPECT_TRUE(secondModel.contains(QStringLiteral("run-replacement")));
-    EXPECT_EQ(first.payload.value(QStringLiteral("model_output_policy")).toString(),
-              QStringLiteral("create_versioned_result"));
-    EXPECT_EQ(second.payload.value(QStringLiteral("model_output_policy")).toString(),
-              QStringLiteral("replace_default"));
-
-    for (const QJsonObject &payload : {first.payload, second.payload})
-    {
-        const QString diagnosticsPath = payload.value(
-            QStringLiteral("model_diagnostics_path")).toString();
-        QFile diagnosticsFile(diagnosticsPath);
-        ASSERT_TRUE(diagnosticsFile.open(QIODevice::ReadOnly));
-        QJsonParseError parseError;
-        const QJsonDocument document = QJsonDocument::fromJson(
-            diagnosticsFile.readAll(), &parseError);
-        EXPECT_EQ(parseError.error, QJsonParseError::NoError);
-        EXPECT_TRUE(document.object().value(QStringLiteral("ok")).toBool());
-        EXPECT_EQ(document.object().value(
-                      QStringLiteral("model_run_id")).toString(),
-                  payload.value(QStringLiteral("model_run_id")).toString());
-    }
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
+              QStringLiteral("none"));
+    EXPECT_TRUE(result.errorMessage.contains(
+        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(result.payload.value(QStringLiteral("model_ply")).toString().isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(QDir(request.outputRoot).filePath(
+        QStringLiteral("model_runs/%1").arg(request.runId))));
 }
 
-TEST(ModelOutputPolicyTest,
-     PointCloudCancellationDoesNotFinalizeOrPublishRun)
+TEST(ModelOutputPolicyTest, CanonicalLowDiagnosticsUseResolvedTargetInsteadOfUnusedCustomValue)
 {
     QTemporaryDir temporary;
     ASSERT_TRUE(temporary.isValid());
 
-    const QString pointCloudPath = writeDenseGridPointCloud(
-        temporary.filePath(QStringLiteral("cancel-input")));
-    const QString outputRoot = temporary.filePath(
-        QStringLiteral("cancel-output"));
+    xjw::mesh::workflow::ModelBuildRequest request;
+    request.sourceData = QStringLiteral("rpc_height_plane_sweep");
+    request.outputRoot = temporary.filePath(QStringLiteral("model"));
+    request.runId = QStringLiteral("low-diagnostics");
+    request.settings = QJsonObject{{QStringLiteral("modelGenerationContractRevision"), 1},
+                                   {QStringLiteral("depthQualityProfile"), QStringLiteral("medium")},
+                                   {QStringLiteral("surfaceQualityProfile"), QStringLiteral("rpc_height_plane_sweep")},
+                                   {QStringLiteral("reconstruction_mode"), QStringLiteral("rpc_height_plane_sweep")},
+                                   {QStringLiteral("faceCountMode"), QStringLiteral("low")},
+                                   {QStringLiteral("faceCountCustom"), 200000}};
+
+    const auto result = xjw::mesh::workflow::buildModel(request);
+
+    // The intentionally incomplete RPC input fails after canonical settings
+    // are resolved, so it exercises diagnostics without producing a mesh.
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.payload.value(QStringLiteral("face_count_mode")).toString(), QStringLiteral("low"));
+    EXPECT_EQ(result.payload.value(QStringLiteral("requested_target_faces")).toInt(), 20000);
+    EXPECT_EQ(result.payload.value(QStringLiteral("effective_target_faces")).toInt(), 20000);
+    EXPECT_EQ(result.payload.value(QStringLiteral("requested_face_count")).toInt(), 20000);
+    EXPECT_EQ(result.payload.value(QStringLiteral("effective_face_count")).toInt(), 20000);
+    EXPECT_EQ(result.payload.value(QStringLiteral("requested_model_generation_contract"))
+                  .toObject()
+                  .value(QStringLiteral("requestedTargetFaces"))
+                  .toInt(),
+              20000);
+    EXPECT_EQ(result.payload.value(QStringLiteral("effective_model_generation_contract"))
+                  .toObject()
+                  .value(QStringLiteral("effectiveTargetFaces"))
+                  .toInt(),
+              20000);
+    EXPECT_FALSE(result.payload.contains(QStringLiteral("actual_output_face_count")));
+}
+
+TEST(ModelOutputPolicyTest, LegacyPointCloudIsRejectedBeforeCancellationOrPublication)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+
+    const QString pointCloudPath = writeDenseGridPointCloud(temporary.filePath(QStringLiteral("cancel-input")));
+    const QString outputRoot = temporary.filePath(QStringLiteral("cancel-output"));
     const QString runId = QStringLiteral("cancelled-run");
     std::atomic_bool cancelRequested{false};
 
@@ -394,7 +403,12 @@ TEST(ModelOutputPolicyTest,
 
     const auto result = xjw::mesh::workflow::buildModel(request);
     EXPECT_FALSE(result.ok);
-    EXPECT_TRUE(result.payload.value(QStringLiteral("cancelled")).toBool());
+    EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
+              QStringLiteral("none"));
+    EXPECT_TRUE(result.errorMessage.contains(
+        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_FALSE(cancelRequested.load(std::memory_order_relaxed));
+    EXPECT_FALSE(result.payload.value(QStringLiteral("cancelled")).toBool());
     EXPECT_FALSE(result.payload.contains(
         QStringLiteral("model_diagnostics_path")));
 
@@ -409,16 +423,26 @@ TEST(ModelOutputPolicyTest,
     QTemporaryDir temporary;
     ASSERT_TRUE(temporary.isValid());
 
-    const QString pointCloudPath = writeDenseGridPointCloud(
-        temporary.filePath(QStringLiteral("history-input")));
     const QString outputRoot = temporary.filePath(
         QStringLiteral("history-output"));
+    const QJsonObject committed = createCompletedModelRun(
+        outputRoot, QStringLiteral("committed-run"));
+    ASSERT_FALSE(committed.isEmpty());
+    const QString committedDirectory = committed.value(
+        QStringLiteral("model_run_directory")).toString();
+    const QString committedModel = committed.value(
+        QStringLiteral("model_ply")).toString();
+    const QString committedDiagnostics = committed.value(
+        QStringLiteral("model_diagnostics_path")).toString();
+
     xjw::mesh::workflow::ModelBuildRequest request;
     request.sourceData = QStringLiteral("point_cloud");
-    request.requestedSourcePath = pointCloudPath;
-    request.sourcePointCloudPath = pointCloudPath;
+    const QString missingInput = temporary.filePath(
+        QStringLiteral("missing-input.ply"));
+    request.requestedSourcePath = missingInput;
+    request.sourcePointCloudPath = missingInput;
     request.outputRoot = outputRoot;
-    request.runId = QStringLiteral("committed-run");
+    request.runId = QStringLiteral("failed-run");
     request.settings = QJsonObject{
         {QStringLiteral("surface_type"), QStringLiteral("height_field")},
         {QStringLiteral("method"), QStringLiteral("Height Grid")},
@@ -427,23 +451,13 @@ TEST(ModelOutputPolicyTest,
         {QStringLiteral("smoothIter"), 0}
     };
 
-    const auto committed = xjw::mesh::workflow::buildModel(request);
-    ASSERT_TRUE(committed.ok) << committed.errorMessage.toStdString();
-    const QString committedDirectory = committed.payload.value(
-        QStringLiteral("model_run_directory")).toString();
-    const QString committedModel = committed.payload.value(
-        QStringLiteral("model_ply")).toString();
-    const QString committedDiagnostics = committed.payload.value(
-        QStringLiteral("model_diagnostics_path")).toString();
-
-    const QString missingInput = temporary.filePath(
-        QStringLiteral("missing-input.ply"));
-    request.requestedSourcePath = missingInput;
-    request.sourcePointCloudPath = missingInput;
-    request.runId = QStringLiteral("failed-run");
     const auto failed = xjw::mesh::workflow::buildModel(request);
 
     EXPECT_FALSE(failed.ok);
+    EXPECT_EQ(failed.payload.value(QStringLiteral("fallback")).toString(),
+              QStringLiteral("none"));
+    EXPECT_TRUE(failed.errorMessage.contains(
+        QStringLiteral("modelGenerationContractRevision=1")));
     EXPECT_FALSE(QFileInfo::exists(QDir(outputRoot).filePath(
         QStringLiteral("model_runs/failed-run"))));
     EXPECT_TRUE(QFileInfo(committedDirectory).isDir());

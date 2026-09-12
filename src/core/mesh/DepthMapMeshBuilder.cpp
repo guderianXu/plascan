@@ -439,6 +439,11 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory, object.value(QStringLiteral("support_mask_path")).toString());
             frame.status = status;
             frame.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
+            frame.depthProducer = object.value(QStringLiteral("pixel_domain_diagnostics"))
+                                      .toObject()
+                                      .value(QStringLiteral("producer"))
+                                      .toString()
+                                      .trimmed();
             frame.algorithmRevision = object.value(
                 QStringLiteral("algorithm_revision")).toInt(
                     manifest_algorithm_revision);

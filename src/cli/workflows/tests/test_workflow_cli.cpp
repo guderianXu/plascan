@@ -1261,24 +1261,43 @@ TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
     });
     expectContainsAll(source, {
         "--source-data",
-        "--point-cloud",
         "--depth-map-dir",
-        "--dense-cloud",
-        "--sparse-scaffold",
-        "--sparse-points-json",
         "--output-dir",
         "--settings-json",
         "--settings-key",
         "xjw::mesh::workflow::ModelBuildRequest",
         "xjw::mesh::workflow::buildModel",
+        "QStringLiteral(\"depth_maps\")",
+        "canonical v1 生成模型仅支持 --source-data depth_maps 或 rpc_height_plane_sweep",
+        "depth_maps 模式缺少 --depth-map-dir",
         "reconstruction_mode",
-        "depth_tsdf",
-        "sparseScaffoldPointCloudPath",
-        "sparseScaffoldPointsPath",
+        "QStringLiteral(\"recovered_ooc\")",
+        "QStringLiteral(\"rpc_height_plane_sweep\")",
+        "rpcImagePaths",
+        "rpcHeightMinMeters",
+        "rpcHeightMaxMeters",
     });
 }
 
-TEST(MeshReconstructCliGTest, BuildsModelFromGuiStyleSettingsJson)
+TEST(MeshReconstructCliGTest, CanonicalV1DefaultsAndRejectsLegacyModesInSource)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+
+    expectContainsAll(source,
+                      {
+                          R"(settings.value(QStringLiteral("source_data")))",
+                          R"(toString(QStringLiteral("depth_maps")))",
+                          R"(source_data_qt != QStringLiteral("depth_maps"))",
+                          R"(settings[QStringLiteral("reconstruction_mode")] =)",
+                          R"(QStringLiteral("recovered_ooc"))",
+                          R"(QStringLiteral("rpc_height_plane_sweep"))",
+                          "requested_mode != QStringLiteral(\"recovered_ooc\")",
+                          "requested_mode != QStringLiteral(\"rpc_height_plane_sweep\")",
+                      });
+}
+
+TEST(MeshReconstructCliGTest, RejectsLegacySourceAndInvalidRpcBeforeModelBuild)
 {
     const QString exe = executablePath(PLASCAN_MESH_RECONSTRUCT_CLI_PATH);
     ASSERT_FALSE(exe.isEmpty()) << "mesh_reconstruct_cli target is unavailable";
@@ -1286,57 +1305,66 @@ TEST(MeshReconstructCliGTest, BuildsModelFromGuiStyleSettingsJson)
 
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
-    const QString input_ply = QDir(temp_dir.path()).filePath(QStringLiteral("grid.ply"));
-    const QString output_dir = QDir(temp_dir.path()).filePath(QStringLiteral("model"));
     const QString settings_path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.json"));
+    const QString depth_dir = QDir(temp_dir.path()).filePath(QStringLiteral("depth_maps"));
+    const QString output_dir = QDir(temp_dir.path()).filePath(QStringLiteral("model"));
 
-    QVector<Point3f> points;
-    for (int y = 0; y < 20; ++y)
+    auto write_settings = [&settings_path](const QJsonObject& settings)
     {
-        for (int x = 0; x < 20; ++x)
-        {
-            points.push_back(Point3f{static_cast<float>(x),
-                                     static_cast<float>(y),
-                                     0.05f * static_cast<float>(x + y)});
-        }
-    }
-    writeBinaryPly(input_ply, points);
+        writeTextFile(settings_path,
+                      QString::fromUtf8(QJsonDocument(
+                          QJsonObject{{QStringLiteral("generate_model"), settings}})
+                                             .toJson(QJsonDocument::Indented)));
+    };
 
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("point_cloud");
-    settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
-    settings[QStringLiteral("method")] = QStringLiteral("Height Grid");
-    settings[QStringLiteral("meshResolution")] = 64;
-    settings[QStringLiteral("depthFiltering")] = QStringLiteral("disabled");
-    QJsonObject root;
-    root[QStringLiteral("generate_model")] = settings;
-    writeTextFile(settings_path,
-                  QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
-
-    const CliResult result = runCli(exe, {
+    write_settings(QJsonObject{});
+    const CliResult point_cloud = runCli(exe, {
         QStringLiteral("--source-data"), QStringLiteral("point_cloud"),
-        QStringLiteral("--point-cloud"), input_ply,
         QStringLiteral("--output-dir"), output_dir,
         QStringLiteral("--settings-json"), settings_path,
-        QStringLiteral("--settings-key"), QStringLiteral("generate_model"),
-    }, 120000);
-
-    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
-    expectContainsAll(result.stdoutText, {
-        R"("ok": true)",
-        R"("mesh_algorithm": "height_grid")",
-        R"("model_output_policy": "create_versioned_result")",
-        R"("model_run_id": )",
     });
-    const QDir runs_dir(QDir(output_dir).filePath(QStringLiteral("model_runs")));
-    const QStringList run_directories = runs_dir.entryList(
-        QDir::Dirs | QDir::NoDotAndDotDot);
-    ASSERT_EQ(run_directories.size(), 1);
-    const QString run_root = runs_dir.filePath(run_directories.front());
-    EXPECT_TRUE(QFileInfo::exists(
-        QDir(run_root).filePath(QStringLiteral("products/model_from_mesh.ply"))));
-    EXPECT_TRUE(QFileInfo::exists(
-        QDir(run_root).filePath(QStringLiteral("model_result.json"))));
+    EXPECT_NE(point_cloud.exitCode, 0);
+    expectContainsAll(combinedOutput(point_cloud), {"canonical v1", "depth_maps"});
+
+    QJsonObject one_rpc_image;
+    one_rpc_image[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    one_rpc_image[QStringLiteral("reconstruction_mode")] = QStringLiteral("rpc_height_plane_sweep");
+    one_rpc_image[QStringLiteral("rpcImagePaths")] = QJsonArray{QStringLiteral("one.tif")};
+    one_rpc_image[QStringLiteral("rpcHeightMinMeters")] = 10.0;
+    one_rpc_image[QStringLiteral("rpcHeightMaxMeters")] = 20.0;
+    write_settings(one_rpc_image);
+    const CliResult one_image = runCli(exe, {
+        QStringLiteral("--source-data"), QStringLiteral("rpc_height_plane_sweep"),
+        QStringLiteral("--output-dir"), output_dir,
+        QStringLiteral("--settings-json"), settings_path,
+    });
+    EXPECT_NE(one_image.exitCode, 0);
+    expectContainsAll(combinedOutput(one_image), {"RPC", "rpcImagePaths"});
+
+    QJsonObject invalid_height = one_rpc_image;
+    invalid_height[QStringLiteral("rpcImagePaths")] =
+        QJsonArray{QStringLiteral("one.tif"), QStringLiteral("two.tif")};
+    invalid_height[QStringLiteral("rpcHeightMaxMeters")] = 10.0;
+    write_settings(invalid_height);
+    const CliResult non_increasing_height = runCli(exe, {
+        QStringLiteral("--source-data"), QStringLiteral("rpc_height_plane_sweep"),
+        QStringLiteral("--output-dir"), output_dir,
+        QStringLiteral("--settings-json"), settings_path,
+    });
+    EXPECT_NE(non_increasing_height.exitCode, 0);
+    expectContainsAll(combinedOutput(non_increasing_height), {"RPC", "有限物理高程范围"});
+
+    QJsonObject legacy_mode;
+    legacy_mode[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    legacy_mode[QStringLiteral("reconstruction_mode")] = QStringLiteral("poisson_legacy");
+    write_settings(legacy_mode);
+    const CliResult legacy = runCli(exe, {
+        QStringLiteral("--depth-map-dir"), depth_dir,
+        QStringLiteral("--output-dir"), output_dir,
+        QStringLiteral("--settings-json"), settings_path,
+    });
+    EXPECT_NE(legacy.exitCode, 0);
+    expectContainsAll(combinedOutput(legacy), {"canonical v1", "reconstruction_mode"});
 }
 
 TEST(ThreeDReconstructionCliContractTest, TargetExistsAndThreeDOnlyModeSkipsTerrain)

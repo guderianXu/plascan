@@ -11112,6 +11112,7 @@ namespace xjw
             }
 
             bool recovered_save_ok = true;
+            std::vector<std::uint8_t> recovered_frame_seen(static_cast<std::size_t>(NV), 0);
             for (RecoveredDepthFrame& recovered_frame : recovered_result.frames)
             {
                 if (_cancelled.load(std::memory_order_relaxed))
@@ -11120,11 +11121,13 @@ namespace xjw
                     return;
                 }
                 const int frame_index = recovered_frame.viewIndex;
-                if (frame_index < 0 || frame_index >= NV)
+                if (frame_index < 0 || frame_index >= NV ||
+                    recovered_frame_seen[static_cast<std::size_t>(frame_index)] != 0)
                 {
                     recovered_save_ok = false;
                     break;
                 }
+                recovered_frame_seen[static_cast<std::size_t>(frame_index)] = 1;
                 DepthFrameResult frame;
                 frame.refViewIdx = frame_index;
                 frame.preparedRasterSize = cv::Size(_views[static_cast<std::size_t>(frame_index)].imageWidth,
@@ -11158,6 +11161,10 @@ namespace xjw
                     {QStringLiteral("producer"), QStringLiteral("recovered_scene_d4")},
                     {QStringLiteral("confidence_semantics"), QStringLiteral("binary_valid_after_three_level_voting")},
                     {QStringLiteral("source_selection"), QStringLiteral("sfm_track_ranked_1_to_16")}};
+                // The reference implementation's three-level voting chain is the
+                // complete recovered quality filter.  Do not opt this frame into
+                // PlaScan's legacy consistency/quality gate, which can rewrite the
+                // voted depth and downgrade an otherwise valid reference camera.
                 frame.qualityDecision.acceptance = DepthFrameAcceptance::Accepted;
                 frame.initialQualityAcceptanceAvailable = false;
                 frame.initialQualityAcceptance = DepthFrameAcceptance::Accepted;
@@ -11186,6 +11193,9 @@ namespace xjw
                                      0.1f + 0.85f * static_cast<float>(frame_index + 1) /
                                                 static_cast<float>(std::max(1, NV)));
             }
+            recovered_save_ok = recovered_save_ok && std::all_of(recovered_frame_seen.cbegin(),
+                                                                 recovered_frame_seen.cend(),
+                                                                 [](std::uint8_t seen) { return seen != 0; });
             if (!recovered_save_ok)
             {
                 emit errorOccurred(QStringLiteral("recovered 深度图工件写入失败"));

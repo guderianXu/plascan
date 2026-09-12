@@ -479,6 +479,14 @@ void MainWindow::setupProjectManager()
             connect(
                 _mainMenu->exportMatchedPairsAction(), &QAction::triggered, this, &MainWindow::onExportMatchedPairs);
         }
+        if (_mainMenu->exportPortableProjectAction())
+        {
+            _mainMenu->exportPortableProjectAction()->setEnabled(false);
+            connect(_mainMenu->exportPortableProjectAction(),
+                    &QAction::triggered,
+                    _projectManager,
+                    &ProjectManager::exportPortableProject);
+        }
 
         if (_menuWorkflowController)
         {
@@ -704,8 +712,7 @@ void MainWindow::setupProjectManager()
                                 if (!range.isValid())
                                 {
                                     configuration.minimum = 0.0;
-                                    configuration.maximum = std::max(
-                                        configuration.maximum, defaultLevel);
+                                    configuration.maximum = std::max(configuration.maximum, defaultLevel);
                                 }
                                 else if (qualityCriterion == QualityCriterion::ReprojectionError)
                                 {

@@ -8,6 +8,7 @@
 #include "ProjectCameraSetupManager.h"
 #include "ProjectUiCommands.h"
 #include "project/ProjectSessionModel.h"
+#include "project/ProjectExporter.h"
 #include "project/ProjectAssetImporter.h"
 #include "project/ProjectIO.h"
 #include "ProjectCameraIO.h"
@@ -162,6 +163,7 @@ namespace
         bool success = false;
         QString errorMessage;
         QStringList projectImagePaths;
+        QMap<QString, QJsonObject> rpcCameras;
         int skipped = 0;
     };
 
@@ -170,12 +172,13 @@ namespace
         bool success = false;
         QString errorMessage;
         QString projectImagePath;
+        QJsonObject rpcCamera;
     };
 
-    ImageImportBatch importImagesToSharedStore(const QString& projectPath,
-                                               const QStringList& imagePaths,
-                                               QSet<QString> existingPaths,
-                                               const std::function<void(int, int)>& progress)
+    ImageImportBatch validateExternalImages(const QString& projectPath,
+                                            const QStringList& imagePaths,
+                                            QSet<QString> existingPaths,
+                                            const std::function<void(int, int)>& progress)
     {
         ImageImportBatch batch;
         batch.projectImagePaths.reserve(imagePaths.size());
@@ -193,9 +196,19 @@ namespace
             [projectPath, total, progressStep, progress, &completed, &progressMutex](const QString& imagePath)
             {
                 ImageImportItem item;
-                QString resourceUri;
-                xjw::common::project::ProjectSharedImageStore store(projectPath);
-                item.success = store.importImage(imagePath, &resourceUri, &item.projectImagePath, &item.errorMessage);
+                Q_UNUSED(projectPath);
+                const QFileInfo info(imagePath);
+                item.projectImagePath = QDir::cleanPath(info.absoluteFilePath());
+                item.success = info.isFile();
+                if (!item.success)
+                {
+                    item.errorMessage = QStringLiteral("影像不存在: %1").arg(item.projectImagePath);
+                }
+                else if (const QString suffix = info.suffix().toLower();
+                         suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
+                {
+                    xjw::common::project::parseRpcCameraRaster(item.projectImagePath, &item.rpcCamera, nullptr);
+                }
 
                 std::lock_guard<std::mutex> lock(progressMutex);
                 ++completed;
@@ -206,15 +219,13 @@ namespace
                 return item;
             });
 
-        QStringList successfulReservations;
-        successfulReservations.reserve(imported.size());
         QString firstImportError;
         bool importFailed = false;
         for (const ImageImportItem& item : imported)
         {
             if (item.success)
             {
-                successfulReservations.append(item.projectImagePath);
+                continue;
             }
             else
             {
@@ -227,23 +238,24 @@ namespace
         }
         if (importFailed)
         {
-            batch.errorMessage = firstImportError.isEmpty() ? QStringLiteral("共享影像导入失败") : firstImportError;
-            xjw::common::project::ProjectSharedImageStore(projectPath).releaseReservations(successfulReservations);
+            batch.errorMessage = firstImportError.isEmpty() ? QStringLiteral("影像验证失败") : firstImportError;
             return batch;
         }
 
-        xjw::common::project::ProjectSharedImageStore sharedImageStore(projectPath);
         for (const ImageImportItem& item : imported)
         {
             if (existingPaths.contains(item.projectImagePath))
             {
                 ++batch.skipped;
-                sharedImageStore.releaseReservations({item.projectImagePath});
             }
             else
             {
                 existingPaths.insert(item.projectImagePath);
                 batch.projectImagePaths.append(item.projectImagePath);
+                if (!item.rpcCamera.isEmpty())
+                {
+                    batch.rpcCameras.insert(item.projectImagePath, item.rpcCamera);
+                }
             }
         }
 
@@ -497,6 +509,20 @@ ProjectManager::ProjectManager(ProjectData* projectData, QWidget* parent)
                                                                                                  currentProjectPath()));
                 });
         connect(_projectData, &ProjectData::dirtyStateChanged, this, &ProjectManager::metadataDirtyChanged);
+        connect(_projectData,
+                &ProjectData::portableProjectExportCompleted,
+                this,
+                [this](bool success, const QString& outputPath, const QString& error)
+                {
+                    _portableExportActive = false;
+                    if (!success)
+                    {
+                        QMessageBox::critical(_parent, QStringLiteral("导出项目失败"), error);
+                        return;
+                    }
+                    QMessageBox::information(
+                        _parent, QStringLiteral("导出项目"), QStringLiteral("便携项目已导出: %1").arg(outputPath));
+                });
     }
 
     connect(_lifecycleController, &ProjectLifecycleController::projectCreated, this, &ProjectManager::projectCreated);
@@ -599,7 +625,7 @@ ProjectManager::ProjectManager(ProjectData* projectData, QWidget* parent)
                 model_settings[QStringLiteral("reuseDepthMaps")] = true;
                 model_settings[QStringLiteral("automatic_depth_maps")] = false;
                 model_settings[QStringLiteral("force_depth_recompute")] = false;
-                model_settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("depth_tsdf");
+                model_settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("recovered_ooc");
                 emit meshProgressChanged(QStringLiteral("深度图估计完成，正在生成三维模型..."), 60);
                 if (!_modelManager->startMeshReconstructionAsync(model_settings))
                 {
@@ -708,6 +734,31 @@ void ProjectManager::saveProject()
         return;
     }
     _lifecycleController->saveProject();
+}
+
+void ProjectManager::exportPortableProject()
+{
+    if (!_projectData || !_projectData->hasProject() || !_uiCommands)
+    {
+        return;
+    }
+    if (_portableExportActive)
+    {
+        QMessageBox::information(_parent, QStringLiteral("导出项目"), QStringLiteral("便携项目导出正在进行，请稍候。"));
+        return;
+    }
+    QString outputPath;
+    if (!_uiCommands->selectPortableExportPath(&outputPath))
+    {
+        return;
+    }
+    _portableExportActive = true;
+    QString error;
+    if (!_projectData->exportPortableProjectAsync(outputPath, &error))
+    {
+        _portableExportActive = false;
+        QMessageBox::critical(_parent, QStringLiteral("导出项目失败"), error);
+    }
 }
 
 void ProjectManager::closeProject()
@@ -841,26 +892,26 @@ void ProjectManager::startImageImport(const QStringList& imagePaths, const QStri
         this,
         [owner, projectPath, imagePaths, existingPaths, session]()
         {
-            return importImagesToSharedStore(
-                projectPath,
-                imagePaths,
-                existingPaths,
-                [owner, session](int done, int progressTotal)
-                {
-                    if (!owner)
-                    {
-                        return;
-                    }
-                    xjw::gui::tasks::postGuarded(owner,
-                                                 [session, done, progressTotal](ProjectManager* self)
-                                                 {
-                                                     if (self->_imageImportActive && self->isCurrentSession(session))
-                                                     {
-                                                         emit self->imageImportProgressChanged(
-                                                             QStringLiteral("正在加载影像..."), done, progressTotal);
-                                                     }
-                                                 });
-                });
+            return validateExternalImages(projectPath,
+                                          imagePaths,
+                                          existingPaths,
+                                          [owner, session](int done, int progressTotal)
+                                          {
+                                              if (!owner)
+                                              {
+                                                  return;
+                                              }
+                                              xjw::gui::tasks::postGuarded(
+                                                  owner,
+                                                  [session, done, progressTotal](ProjectManager* self)
+                                                  {
+                                                      if (self->_imageImportActive && self->isCurrentSession(session))
+                                                      {
+                                                          emit self->imageImportProgressChanged(
+                                                              QStringLiteral("正在加载影像..."), done, progressTotal);
+                                                      }
+                                                  });
+                                          });
         },
         [session, sourceLabel, total](ProjectManager* self, xjw::gui::tasks::TaskOutcome<ImageImportBatch> outcome)
         {
@@ -890,7 +941,7 @@ void ProjectManager::startImageImport(const QStringList& imagePaths, const QStri
             }
 
             QString message;
-            if (!self->_projectData->addImagesFromSharedStore(batch.projectImagePaths, batch.skipped, &message))
+            if (!self->_projectData->addImages(batch.projectImagePaths, &message))
             {
                 emit self->imageImportFinished(false, message);
                 QMessageBox::critical(
@@ -898,24 +949,10 @@ void ProjectManager::startImageImport(const QStringList& imagePaths, const QStri
                 return;
             }
 
-            QMap<QString, QJsonObject> rpcCameras;
-            for (const QString& imagePath : batch.projectImagePaths)
-            {
-                const QString suffix = QFileInfo(imagePath).suffix().toLower();
-                if (suffix != QStringLiteral("tif") && suffix != QStringLiteral("tiff"))
-                {
-                    continue;
-                }
-                QJsonObject cameraMetadata;
-                if (xjw::common::project::parseRpcCameraRaster(imagePath, &cameraMetadata, nullptr))
-                {
-                    rpcCameras.insert(QFileInfo(imagePath).absoluteFilePath(), cameraMetadata);
-                }
-            }
             int importedRpcCameras = 0;
             QString rpcImportError;
-            if (!rpcCameras.isEmpty() &&
-                !self->_projectData->setImageCameras(rpcCameras, &importedRpcCameras, &rpcImportError))
+            if (!batch.rpcCameras.isEmpty() &&
+                !self->_projectData->setImageCameras(batch.rpcCameras, &importedRpcCameras, &rpcImportError))
             {
                 LOG_WARN(QStringLiteral("影像已导入，但 RPC 相机写入工程失败: %1").arg(rpcImportError));
             }
@@ -1640,6 +1677,10 @@ void ProjectManager::deleteGeneratedData(const QString& section, const QStringLi
     {
         return;
     }
+    if (rejectLifecycleChangeDuringResourceCleanup(QStringLiteral("删除数据")))
+    {
+        return;
+    }
     if (_resourceCleanupRunning)
     {
         QMessageBox::information(
@@ -1668,6 +1709,10 @@ void ProjectManager::deleteGeneratedData(const QString& section, const QStringLi
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No);
     if (confirm != QMessageBox::Yes)
+    {
+        return;
+    }
+    if (rejectLifecycleChangeDuringResourceCleanup(QStringLiteral("删除数据")))
     {
         return;
     }
@@ -1963,6 +2008,13 @@ void ProjectManager::switchChunk(const QString& chunkId)
 
 bool ProjectManager::rejectLifecycleChangeDuringResourceCleanup(const QString& operation) const
 {
+    if (_portableExportActive)
+    {
+        QMessageBox::information(_parent,
+                                 QStringLiteral("导出项目进行中"),
+                                 QStringLiteral("便携项目导出完成前无法%1，请稍候。").arg(operation));
+        return true;
+    }
     if (!_resourceCleanupRunning)
     {
         return false;
@@ -2641,9 +2693,7 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject& settings)
     const bool reuse_depth_maps = settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
     const bool force_depth_recompute = settings.value(QStringLiteral("force_depth_recompute")).toBool(false);
     const QString requested_depth_quality =
-        settings.value(QStringLiteral("depthQualityProfile"))
-            .toString(xjw::core::project::depthQualityProfileForModelQuality(
-                settings.value(QStringLiteral("quality")).toString(QStringLiteral("high"))));
+        settings.value(QStringLiteral("depthQualityProfile")).toString(QStringLiteral("medium"));
     const QJsonObject project_metadata = _projectData->metadataIncludingResults();
     const QString stored_depth_quality = storedDepthBatchQualityProfile(project_metadata, depth_source);
     const bool stored_depth_quality_insufficient =
@@ -2691,7 +2741,6 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject& settings)
     _pendingAutomaticModelSettings = settings;
     _automaticModelDepthPreparationActive = true;
     QJsonObject depth_settings = settings;
-    depth_settings[QStringLiteral("qualityProfile")] = requested_depth_quality;
     depth_settings[QStringLiteral("depthQualityProfile")] = requested_depth_quality;
     depth_settings[QStringLiteral("reuseDepthMaps")] = false;
     depth_settings[QStringLiteral("force_depth_recompute")] = true;

@@ -551,10 +551,7 @@ StoredDepthBatchRequirements depthBatchRequirementsForModelSettings(
                        .toLower();
     if (mode.isEmpty())
     {
-        mode = settings.value(QStringLiteral("surface_type")).toString() ==
-                QStringLiteral("height_field")
-            ? QStringLiteral("poisson_legacy")
-            : QStringLiteral("depth_tsdf");
+        mode = QStringLiteral("recovered_ooc");
     }
     if (mode == QStringLiteral("depth_tsdf") || mode == QStringLiteral("recovered_ooc"))
     {

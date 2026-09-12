@@ -88,6 +88,7 @@ set(MVS_CXX_SOURCES
     recovered_depth/src/neighbor_selection.cpp
     recovered_depth/src/patchmatch_orchestrator.cpp
     recovered_depth/src/patchmatch_store.cpp
+    recovered_depth/src/rpc.cpp
 )
 
 set(MVS_HEADERS
@@ -162,7 +163,9 @@ if(MVS_HAS_CUDA)
         PatchMatchCUDA.cu
         DensePointCloudCUDA.cu
         recovered_depth/src/gpu_cuda.cu
+        recovered_depth/src/ooc_neighbors_cuda.cu
         recovered_depth/src/recovered_cuda_source.cu
+        recovered_depth/src/rpc_plane_sweep_cuda.cu
     )
 else()
     set(MVS_CUDA_SOURCES
@@ -206,6 +209,7 @@ if(MVS_HAS_CUDA)
     )
     set_source_files_properties(
         recovered_depth/src/gpu_cuda.cu
+        recovered_depth/src/ooc_neighbors_cuda.cu
         recovered_depth/src/recovered_cuda_source.cu
         PROPERTIES
             COMPILE_OPTIONS "--ftz=false;--prec-div=true;--prec-sqrt=true"

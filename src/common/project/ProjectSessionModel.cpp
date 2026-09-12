@@ -18,6 +18,7 @@
 //           - 下次 openProject 时优先从 .plascan_tmp/ 恢复
 // =============================================================================
 #include "project/ProjectSessionModel.h"
+#include "project/ProjectExporter.h"
 #include "PlascanArchive.h"
 #include "ProjectChunkStore.h"
 #include "ProjectWorkspaceStore.h"
@@ -48,40 +49,36 @@
 #include <QUuid>
 #include <QtConcurrent/QtConcurrent>
 
-using xjw::common::project::ProjectIO;
+using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
 using xjw::common::project::ProjectChunkRecord;
-using xjw::common::project::ProjectPackageLayout;
-using xjw::common::project::PortableProjectFormat;
-using xjw::common::project::ProjectResourceIndex;
+using xjw::common::project::ProjectExporter;
+using xjw::common::project::ProjectIO;
 using xjw::common::project::ProjectLock;
+using xjw::common::project::ProjectPackageLayout;
+using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectSharedImageStore;
 
-quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
-    currentGeneration() const
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::currentGeneration() const
 {
     return _generation.load(std::memory_order_acquire);
 }
 
-quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
-    advanceGeneration()
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::advanceGeneration()
 {
     return _generation.fetch_add(1, std::memory_order_acq_rel) + 1;
 }
 
-quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
-    advanceGenerationAfterCurrentCommit()
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::advanceGenerationAfterCurrentCommit()
 {
     const QMutexLocker locker(&_commitMutex);
     return _generation.fetch_add(1, std::memory_order_acq_rel) + 1;
 }
 
-bool xjw::common::project::ProjectPersistenceCommitCoordinator::runIfCurrent(
-    quint64 generation,
-    const std::function<void()> &commit)
+bool xjw::common::project::ProjectPersistenceCommitCoordinator::runIfCurrent(quint64 generation,
+                                                                             const std::function<void()>& commit)
 {
-    if (!commit
-        || generation != _generation.load(std::memory_order_acquire))
+    if (!commit || generation != _generation.load(std::memory_order_acquire))
     {
         return false;
     }
@@ -96,15 +93,10 @@ bool xjw::common::project::ProjectPersistenceCommitCoordinator::runIfCurrent(
 
 bool ProjectResourceCleanupPersistence::isValid() const
 {
-    return _generation != 0
-        && !_projectPath.trimmed().isEmpty()
-        && _commitUpdated
-        && _commitOriginal;
+    return _generation != 0 && !_projectPath.trimmed().isEmpty() && _commitUpdated && _commitOriginal;
 }
 
-bool ProjectResourceCleanupPersistence::commitUpdated(
-    QString *errorMsg,
-    bool *archiveCommitted) const
+bool ProjectResourceCleanupPersistence::commitUpdated(QString* errorMsg, bool* archiveCommitted) const
 {
     if (archiveCommitted)
     {
@@ -113,9 +105,7 @@ bool ProjectResourceCleanupPersistence::commitUpdated(
     return _commitUpdated && _commitUpdated(errorMsg, archiveCommitted);
 }
 
-bool ProjectResourceCleanupPersistence::commitOriginal(
-    QString *errorMsg,
-    bool *archiveCommitted) const
+bool ProjectResourceCleanupPersistence::commitOriginal(QString* errorMsg, bool* archiveCommitted) const
 {
     if (archiveCommitted)
     {
@@ -134,14 +124,13 @@ struct ProjectData::PersistenceSnapshot
     QString temporaryResultsPath;
     QString temporaryConfigPath;
     QString temporaryUiStatePath;
+    QString portableExportPath;
     QJsonObject core;
     QJsonObject results;
     QJsonObject config;
     QJsonObject uiState;
     QJsonObject resourceIndex;
-    std::shared_ptr<
-        xjw::common::project::ProjectPersistenceCommitCoordinator>
-        commitCoordinator;
+    std::shared_ptr<xjw::common::project::ProjectPersistenceCommitCoordinator> commitCoordinator;
     quint64 commitGeneration = 0;
     quint64 sessionGeneration = 0;
     bool resultsLoaded = false;
@@ -160,12 +149,14 @@ struct ProjectData::PersistenceResult
     QString chunkId;
     int chunkDirectory = 0;
     QString errorMessage;
+    QString portableExportPath;
     quint64 commitGeneration = 0;
     quint64 sessionGeneration = 0;
     bool stale = false;
     bool success = false;
     bool archiveRequested = false;
     bool archiveSuccess = false;
+    bool portableExportSuccess = false;
     bool temporaryRequested = false;
     bool temporarySuccess = false;
     bool includedCore = false;
@@ -178,313 +169,296 @@ struct ProjectData::PersistenceResult
     QJsonObject projectUriResults;
 };
 
-namespace {
-
-QJsonObject versionedResultRecord(const QJsonObject &record)
+namespace
 {
-    QJsonObject versioned = record;
-    if (!versioned.contains(QStringLiteral("schema_version")))
-    {
-        versioned[QStringLiteral("schema_version")] = 1;
-    }
-    return versioned;
-}
 
-QString normalizedResultPath(const QString &projectPath, const QString &path)
-{
-    if (path.trimmed().isEmpty())
+    QJsonObject versionedResultRecord(const QJsonObject& record)
     {
-        return QString();
+        QJsonObject versioned = record;
+        if (!versioned.contains(QStringLiteral("schema_version")))
+        {
+            versioned[QStringLiteral("schema_version")] = 1;
+        }
+        return versioned;
     }
-    const QString resolved =
-        ProjectIO::resolveProjectResourcePath(projectPath, path.trimmed());
-    QString normalized = QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+
+    QString normalizedResultPath(const QString& projectPath, const QString& path)
+    {
+        if (path.trimmed().isEmpty())
+        {
+            return QString();
+        }
+        const QString resolved = ProjectIO::resolveProjectResourcePath(projectPath, path.trimmed());
+        QString normalized = QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
 #ifdef Q_OS_WIN
-    normalized = normalized.toCaseFolded();
+        normalized = normalized.toCaseFolded();
 #endif
-    return normalized;
-}
-
-int chunkTiePointCount(const QJsonObject &projectResults)
-{
-    const QJsonArray results = projectResults.value(
-        QStringLiteral("aerial_triangulation_results")).toArray();
-    for (int index = results.size() - 1; index >= 0; --index)
-    {
-        const QJsonObject result = results.at(index).toObject();
-        const QString sparsePath = result.value(QStringLiteral("files"))
-                                       .toObject()
-                                       .value(QStringLiteral(
-                                           "sparse_cloud_xyz"))
-                                       .toString()
-                                       .trimmed();
-        if (sparsePath.isEmpty())
-        {
-            continue;
-        }
-
-        int pointCount = result.value(
-            QStringLiteral("sparse_point_count")).toInt(-1);
-        if (pointCount < 0)
-        {
-            pointCount = result.value(
-                QStringLiteral("point_count")).toInt(-1);
-        }
-        if (pointCount < 0)
-        {
-            pointCount = result.value(QStringLiteral("quality"))
-                             .toObject()
-                             .value(QStringLiteral("point_count"))
-                             .toInt(-1);
-        }
-        return pointCount;
-    }
-    return -1;
-}
-
-bool writeFileAtomically(const QString &path,
-                         const QByteArray &data,
-                         QString *errorMessage)
-{
-    if (path.trimmed().isEmpty())
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QStringLiteral("临时文件路径为空");
-        }
-        return false;
+        return normalized;
     }
 
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly))
+    int chunkTiePointCount(const QJsonObject& projectResults)
     {
-        if (errorMessage)
+        const QJsonArray results = projectResults.value(QStringLiteral("aerial_triangulation_results")).toArray();
+        for (int index = results.size() - 1; index >= 0; --index)
         {
-            *errorMessage = QStringLiteral("无法写入临时文件: %1").arg(path);
-        }
-        return false;
-    }
-    if (file.write(data) != data.size() || !file.commit())
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QStringLiteral("提交临时文件失败: %1").arg(path);
-        }
-        return false;
-    }
-    return true;
-}
-
-QJsonDocument parseJsonOrCompressedJson(const QByteArray &bytes)
-{
-    if (bytes.isEmpty())
-    {
-        return QJsonDocument();
-    }
-
-    if (static_cast<unsigned char>(bytes[0]) != '{')
-    {
-        const QByteArray uncompressed = qUncompress(bytes);
-        if (!uncompressed.isEmpty())
-        {
-            const QJsonDocument doc = QJsonDocument::fromJson(uncompressed);
-            if (!doc.isNull())
+            const QJsonObject result = results.at(index).toObject();
+            const QString sparsePath = result.value(QStringLiteral("files"))
+                                           .toObject()
+                                           .value(QStringLiteral("sparse_cloud_xyz"))
+                                           .toString()
+                                           .trimmed();
+            if (sparsePath.isEmpty())
             {
-                return doc;
+                continue;
             }
-        }
-    }
 
-    return QJsonDocument::fromJson(bytes);
-}
-
-bool containsResultKeys(const QJsonObject &meta)
-{
-    for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
-    {
-        if (ProjectFilesManager::isResultKey(it.key()))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-QJsonObject defaultProjectUiState()
-{
-    ProjectUiConfigManager manager;
-    manager.setData(ProjectUiConfigManager::defaultUiSettings());
-    return QJsonObject{
-        {QStringLiteral("schema_version"), 1},
-        {QStringLiteral("display_settings"), manager.data()}
-    };
-}
-
-QJsonObject normalizedProjectUiState(const QJsonObject &state)
-{
-    QJsonObject normalized = state;
-    ProjectUiConfigManager manager;
-    manager.setData(ProjectUiConfigManager::defaultUiSettings());
-    manager.applyPatch(
-        state.value(QStringLiteral("display_settings")).toObject());
-    normalized[QStringLiteral("schema_version")] = 1;
-    normalized[QStringLiteral("display_settings")] = manager.data();
-    return normalized;
-}
-
-QString normalizedProjectResourcePath(const QString &projectRoot, const QString &path)
-{
-    const QString cleanPath = QDir::cleanPath(path.trimmed());
-    if (cleanPath.isEmpty())
-    {
-        return QString();
-    }
-
-    if (QFileInfo(cleanPath).isAbsolute())
-    {
-        return QDir::cleanPath(QFileInfo(cleanPath).absoluteFilePath());
-    }
-
-    if (projectRoot.trimmed().isEmpty())
-    {
-        return cleanPath;
-    }
-
-    return QDir::cleanPath(QDir(projectRoot).filePath(cleanPath));
-}
-
-QJsonObject readJsonObjectFile(const QString &path)
-{
-    if (path.isEmpty() || !QFileInfo::exists(path))
-    {
-        return QJsonObject();
-    }
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-    {
-        return QJsonObject();
-    }
-
-    const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
-    return doc.isObject() ? doc.object() : QJsonObject();
-}
-
-bool ensureImageUuids(QJsonObject *core)
-{
-    if (!core)
-    {
-        return false;
-    }
-
-    QJsonArray images = core->value(QStringLiteral("images")).toArray();
-    QSet<QString> used_ids;
-    bool changed = false;
-    for (int index = 0; index < images.size(); ++index)
-    {
-        QJsonObject image = images[index].toObject();
-        QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-        if (image_id.isEmpty() || used_ids.contains(image_id))
-        {
-            do
+            int pointCount = result.value(QStringLiteral("sparse_point_count")).toInt(-1);
+            if (pointCount < 0)
             {
-                image_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                pointCount = result.value(QStringLiteral("point_count")).toInt(-1);
             }
-            while (used_ids.contains(image_id));
-            image[QStringLiteral("image_uuid")] = image_id;
-            images[index] = image;
-            changed = true;
-        }
-        used_ids.insert(image_id);
-    }
-
-    if (changed)
-    {
-        (*core)[QStringLiteral("images")] = images;
-    }
-    return changed;
-}
-
-bool jsonArrayContains(const QJsonArray &array, const QJsonValue &needle)
-{
-    for (const QJsonValue &value : array)
-    {
-        if (value == needle)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-QJsonObject mergeCleanupRollback(const QJsonObject &current,
-                                 const QJsonObject &original,
-                                 const QJsonObject &updated)
-{
-    QJsonObject merged = current;
-    for (auto it = original.constBegin(); it != original.constEnd(); ++it)
-    {
-        const QString &key = it.key();
-        const QJsonValue originalValue = it.value();
-        const QJsonValue updatedValue = updated.value(key);
-        if (originalValue == updatedValue)
-        {
-            continue;
-        }
-        if (originalValue.isArray() && updatedValue.isArray())
-        {
-            const QJsonArray originalArray = originalValue.toArray();
-            const QJsonArray updatedArray = updatedValue.toArray();
-            QJsonArray currentArray = merged.value(key).toArray();
-            for (const QJsonValue &value : originalArray)
+            if (pointCount < 0)
             {
-                if (!jsonArrayContains(updatedArray, value)
-                    && !jsonArrayContains(currentArray, value))
+                pointCount =
+                    result.value(QStringLiteral("quality")).toObject().value(QStringLiteral("point_count")).toInt(-1);
+            }
+            return pointCount;
+        }
+        return -1;
+    }
+
+    bool writeFileAtomically(const QString& path, const QByteArray& data, QString* errorMessage)
+    {
+        if (path.trimmed().isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("临时文件路径为空");
+            }
+            return false;
+        }
+
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法写入临时文件: %1").arg(path);
+            }
+            return false;
+        }
+        if (file.write(data) != data.size() || !file.commit())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("提交临时文件失败: %1").arg(path);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    QJsonDocument parseJsonOrCompressedJson(const QByteArray& bytes)
+    {
+        if (bytes.isEmpty())
+        {
+            return QJsonDocument();
+        }
+
+        if (static_cast<unsigned char>(bytes[0]) != '{')
+        {
+            const QByteArray uncompressed = qUncompress(bytes);
+            if (!uncompressed.isEmpty())
+            {
+                const QJsonDocument doc = QJsonDocument::fromJson(uncompressed);
+                if (!doc.isNull())
                 {
-                    currentArray.append(value);
+                    return doc;
                 }
             }
-            merged[key] = currentArray;
-            continue;
         }
-        if (merged.value(key) == updatedValue)
-        {
-            merged[key] = originalValue;
-        }
+
+        return QJsonDocument::fromJson(bytes);
     }
-    return merged;
-}
 
-QMutex &projectOpenPreflightMutex()
-{
-    static QMutex mutex;
-    return mutex;
-}
-
-ProjectData::ProjectOpenPreflight &projectOpenPreflight()
-{
-    static ProjectData::ProjectOpenPreflight preflight;
-    return preflight;
-}
-
-bool runProjectOpenPreflight(const QString &projectPath,
-                             QString *errorMessage)
-{
-    ProjectData::ProjectOpenPreflight preflight;
+    bool containsResultKeys(const QJsonObject& meta)
     {
-        const QMutexLocker locker(&projectOpenPreflightMutex());
-        preflight = projectOpenPreflight();
+        for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
+        {
+            if (ProjectFilesManager::isResultKey(it.key()))
+            {
+                return true;
+            }
+        }
+        return false;
     }
-    return !preflight || preflight(projectPath, errorMessage);
-}
+
+    QJsonObject defaultProjectUiState()
+    {
+        ProjectUiConfigManager manager;
+        manager.setData(ProjectUiConfigManager::defaultUiSettings());
+        return QJsonObject{{QStringLiteral("schema_version"), 1}, {QStringLiteral("display_settings"), manager.data()}};
+    }
+
+    QJsonObject normalizedProjectUiState(const QJsonObject& state)
+    {
+        QJsonObject normalized = state;
+        ProjectUiConfigManager manager;
+        manager.setData(ProjectUiConfigManager::defaultUiSettings());
+        manager.applyPatch(state.value(QStringLiteral("display_settings")).toObject());
+        normalized[QStringLiteral("schema_version")] = 1;
+        normalized[QStringLiteral("display_settings")] = manager.data();
+        return normalized;
+    }
+
+    QString normalizedProjectResourcePath(const QString& projectRoot, const QString& path)
+    {
+        const QString cleanPath = QDir::cleanPath(path.trimmed());
+        if (cleanPath.isEmpty())
+        {
+            return QString();
+        }
+
+        if (QFileInfo(cleanPath).isAbsolute())
+        {
+            return QDir::cleanPath(QFileInfo(cleanPath).absoluteFilePath());
+        }
+
+        if (projectRoot.trimmed().isEmpty())
+        {
+            return cleanPath;
+        }
+
+        return QDir::cleanPath(QDir(projectRoot).filePath(cleanPath));
+    }
+
+    QJsonObject readJsonObjectFile(const QString& path)
+    {
+        if (path.isEmpty() || !QFileInfo::exists(path))
+        {
+            return QJsonObject();
+        }
+
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+        {
+            return QJsonObject();
+        }
+
+        const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
+        return doc.isObject() ? doc.object() : QJsonObject();
+    }
+
+    bool ensureImageUuids(QJsonObject* core)
+    {
+        if (!core)
+        {
+            return false;
+        }
+
+        QJsonArray images = core->value(QStringLiteral("images")).toArray();
+        QSet<QString> used_ids;
+        bool changed = false;
+        for (int index = 0; index < images.size(); ++index)
+        {
+            QJsonObject image = images[index].toObject();
+            QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+            if (image_id.isEmpty() || used_ids.contains(image_id))
+            {
+                do
+                {
+                    image_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                } while (used_ids.contains(image_id));
+                image[QStringLiteral("image_uuid")] = image_id;
+                images[index] = image;
+                changed = true;
+            }
+            used_ids.insert(image_id);
+        }
+
+        if (changed)
+        {
+            (*core)[QStringLiteral("images")] = images;
+        }
+        return changed;
+    }
+
+    bool jsonArrayContains(const QJsonArray& array, const QJsonValue& needle)
+    {
+        for (const QJsonValue& value : array)
+        {
+            if (value == needle)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    QJsonObject
+    mergeCleanupRollback(const QJsonObject& current, const QJsonObject& original, const QJsonObject& updated)
+    {
+        QJsonObject merged = current;
+        for (auto it = original.constBegin(); it != original.constEnd(); ++it)
+        {
+            const QString& key = it.key();
+            const QJsonValue originalValue = it.value();
+            const QJsonValue updatedValue = updated.value(key);
+            if (originalValue == updatedValue)
+            {
+                continue;
+            }
+            if (originalValue.isArray() && updatedValue.isArray())
+            {
+                const QJsonArray originalArray = originalValue.toArray();
+                const QJsonArray updatedArray = updatedValue.toArray();
+                QJsonArray currentArray = merged.value(key).toArray();
+                for (const QJsonValue& value : originalArray)
+                {
+                    if (!jsonArrayContains(updatedArray, value) && !jsonArrayContains(currentArray, value))
+                    {
+                        currentArray.append(value);
+                    }
+                }
+                merged[key] = currentArray;
+                continue;
+            }
+            if (merged.value(key) == updatedValue)
+            {
+                merged[key] = originalValue;
+            }
+        }
+        return merged;
+    }
+
+    QMutex& projectOpenPreflightMutex()
+    {
+        static QMutex mutex;
+        return mutex;
+    }
+
+    ProjectData::ProjectOpenPreflight& projectOpenPreflight()
+    {
+        static ProjectData::ProjectOpenPreflight preflight;
+        return preflight;
+    }
+
+    bool runProjectOpenPreflight(const QString& projectPath, QString* errorMessage)
+    {
+        ProjectData::ProjectOpenPreflight preflight;
+        {
+            const QMutexLocker locker(&projectOpenPreflightMutex());
+            preflight = projectOpenPreflight();
+        }
+        return !preflight || preflight(projectPath, errorMessage);
+    }
 
 } // namespace
 
-ProjectData::ProjectData(QObject *parent)
-    : QObject(parent)
-    , _persistenceCommitCoordinator(std::make_shared<
-          xjw::common::project::ProjectPersistenceCommitCoordinator>())
+ProjectData::ProjectData(QObject* parent)
+    : QObject(parent),
+      _persistenceCommitCoordinator(std::make_shared<xjw::common::project::ProjectPersistenceCommitCoordinator>())
 {
     // 防抖归档写入定时器：将多次 appendIpfind/appendIpmatch/setImageCameras 合并为一次 ZIP 写入
     _archiveSyncTimer = new QTimer(this);
@@ -507,20 +481,16 @@ ProjectData::~ProjectData()
         QString persistenceError;
         if (drainPersistenceForClose(&persistenceError))
         {
-            ProjectSharedImageStore(_projectPath).releaseReservations(
-                _filesManager.getAllImages());
+            ProjectSharedImageStore(_projectPath).releaseReservations(_filesManager.getAllImages());
         }
         else
         {
-            LOG_ERROR(QStringLiteral(
-                "项目析构前无法持久化最新归档或临时恢复快照: %1")
-                          .arg(persistenceError));
+            LOG_ERROR(QStringLiteral("项目析构前无法持久化最新归档或临时恢复快照: %1").arg(persistenceError));
         }
     }
     _shuttingDown = true;
     if (_persistencePool)
     {
-        _persistencePool->clear();
         _persistencePool->waitForDone();
     }
     if (!_projectPath.isEmpty())
@@ -534,8 +504,7 @@ ProjectData::~ProjectData()
     }
 }
 
-void ProjectData::installProjectOpenPreflight(
-    ProjectOpenPreflight preflight)
+void ProjectData::installProjectOpenPreflight(ProjectOpenPreflight preflight)
 {
     const QMutexLocker locker(&projectOpenPreflightMutex());
     projectOpenPreflight() = std::move(preflight);
@@ -555,16 +524,10 @@ void ProjectData::emitCurrentMetadataChanged()
     emit metadataChanged(_filesManager.combinedData());
 }
 
-void ProjectData::scheduleArchiveSync(bool coreDirty,
-                                      bool resultsDirty,
-                                      bool writeTemporary,
-                                      bool configDirty,
-                                      bool uiStateDirty,
-                                      bool workspaceDirty)
+void ProjectData::scheduleArchiveSync(
+    bool coreDirty, bool resultsDirty, bool writeTemporary, bool configDirty, bool uiStateDirty, bool workspaceDirty)
 {
-    if ((coreDirty || resultsDirty || configDirty || uiStateDirty
-         || workspaceDirty)
-        && _persistenceCommitCoordinator)
+    if ((coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty) && _persistenceCommitCoordinator)
     {
         _persistenceCommitCoordinator->advanceGeneration();
     }
@@ -589,9 +552,8 @@ void ProjectData::scheduleArchiveSync(bool coreDirty,
         _workspaceDirtyForArchive = true;
     }
 
-    if ((coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty)
-        && _archiveSyncTimer
-        && QCoreApplication::instance())
+    if ((coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty) && _archiveSyncTimer &&
+        QCoreApplication::instance())
     {
         _archiveSyncTimer->start(2000);
     }
@@ -602,29 +564,23 @@ void ProjectData::scheduleArchiveSync(bool coreDirty,
     }
 }
 
-bool ProjectData::createProject(const QString &plascanPath, const QString &projectName)
+bool ProjectData::createProject(const QString& plascanPath, const QString& projectName)
 {
     if (_resourceCleanupPersistenceGeneration != 0)
     {
-        LOG_WARN(QStringLiteral(
-            "资源清理事务提交期间拒绝创建新项目"));
+        LOG_WARN(QStringLiteral("资源清理事务提交期间拒绝创建新项目"));
         return false;
     }
-    const QString dataDirectory =
-        ProjectPackageLayout::dataDirectory(plascanPath);
-    const QString archivePath =
-        ProjectPackageLayout::metadataArchivePath(plascanPath);
-    if (QFileInfo::exists(plascanPath)
-        || QFileInfo::exists(dataDirectory))
+    const QString dataDirectory = ProjectPackageLayout::dataDirectory(plascanPath);
+    const QString archivePath = ProjectPackageLayout::metadataArchivePath(plascanPath);
+    if (QFileInfo::exists(plascanPath) || QFileInfo::exists(dataDirectory))
     {
-        LOG_ERROR(QStringLiteral("项目文件或同名数据目录已存在: %1")
-                      .arg(plascanPath));
+        LOG_ERROR(QStringLiteral("项目文件或同名数据目录已存在: %1").arg(plascanPath));
         return false;
     }
     if (!QDir().mkpath(dataDirectory))
     {
-        LOG_ERROR(QStringLiteral("无法创建项目数据目录: %1")
-                      .arg(dataDirectory));
+        LOG_ERROR(QStringLiteral("无法创建项目数据目录: %1").arg(dataDirectory));
         return false;
     }
     auto newProjectLock = std::make_unique<ProjectLock>();
@@ -656,25 +612,18 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     QJsonObject configMeta = ProjectConfigManager::defaultConfig();
     configMeta["project_name"] = projectName;
     configMeta["created_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    configMeta["version"] = QString::fromLatin1(
-        PortableProjectFormat::CurrentFormatVersion);
+    configMeta["version"] = QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion);
     configMeta["schema_version"] = 2;
     configMeta["project_id"] = projectId;
 
     // 步骤3：构建项目根文档和默认 Chunk 文档。
-    const ProjectChunkIndex chunkIndex =
-        ProjectChunkIndex::createInitial();
+    const ProjectChunkIndex chunkIndex = ProjectChunkIndex::createInitial();
     const ProjectChunkRecord initialChunk = chunkIndex.defaultChunk();
-    const QString chunkDirectory =
-        ProjectPackageLayout::chunkDirectory(
-            plascanPath, initialChunk.directory);
-    const QString chunkArchivePath =
-        ProjectPackageLayout::chunkArchivePath(
-            plascanPath, initialChunk.directory);
+    const QString chunkDirectory = ProjectPackageLayout::chunkDirectory(plascanPath, initialChunk.directory);
+    const QString chunkArchivePath = ProjectPackageLayout::chunkArchivePath(plascanPath, initialChunk.directory);
     if (!QDir().mkpath(chunkDirectory))
     {
-        LOG_ERROR(QStringLiteral("无法创建默认 Chunk 目录: %1")
-                      .arg(chunkDirectory));
+        LOG_ERROR(QStringLiteral("无法创建默认 Chunk 目录: %1").arg(chunkDirectory));
         cleanupCreatedProject();
         return false;
     }
@@ -683,35 +632,17 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     QString err;
     const QJsonObject initialUiState = defaultProjectUiState();
     const QJsonObject projectDocument =
-        PortableProjectFormat::createProjectDocument(
-            projectId, chunkIndex, initialUiState);
-    const QJsonObject chunkDocument =
-        PortableProjectFormat::createChunkDocument(
-            initialChunk,
-            filesMeta,
-            ProjectFilesManager::defaultResults(),
-            configMeta,
-            ProjectResourceIndex().toJson());
-    if (!PlascanArchive::createArchive(
-            chunkArchivePath,
-            {
-                qMakePair(
-                    QString::fromLatin1(
-                        PortableProjectFormat::DocumentEntry),
-                    QJsonDocument(chunkDocument)
-                        .toJson(QJsonDocument::Compact))
-            },
-            &err)
-        || !PlascanArchive::createArchive(
-            archivePath,
-            {
-                qMakePair(
-                    QString::fromLatin1(
-                        PortableProjectFormat::DocumentEntry),
-                    QJsonDocument(projectDocument)
-                        .toJson(QJsonDocument::Compact))
-            },
-            &err))
+        PortableProjectFormat::createProjectDocument(projectId, chunkIndex, initialUiState);
+    const QJsonObject chunkDocument = PortableProjectFormat::createChunkDocument(
+        initialChunk, filesMeta, ProjectFilesManager::defaultResults(), configMeta, ProjectResourceIndex().toJson());
+    if (!PlascanArchive::createArchive(chunkArchivePath,
+                                       {qMakePair(QString::fromLatin1(PortableProjectFormat::DocumentEntry),
+                                                  QJsonDocument(chunkDocument).toJson(QJsonDocument::Compact))},
+                                       &err) ||
+        !PlascanArchive::createArchive(archivePath,
+                                       {qMakePair(QString::fromLatin1(PortableProjectFormat::DocumentEntry),
+                                                  QJsonDocument(projectDocument).toJson(QJsonDocument::Compact))},
+                                       &err))
     {
         LOG_ERROR(QStringLiteral("初始化 Chunk 工程归档失败: %1").arg(err));
         cleanupCreatedProject();
@@ -724,20 +655,17 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
         return false;
     }
 
-    ProjectWorkspaceStore workspace(
-        plascanPath, initialChunk.directory);
+    ProjectWorkspaceStore workspace(plascanPath, initialChunk.directory);
     QString workspaceError;
     if (!workspace.validateProjectLayout(&workspaceError))
     {
-        LOG_ERROR(QStringLiteral("完成项目布局初始化失败: %1")
-                      .arg(workspaceError));
+        LOG_ERROR(QStringLiteral("完成项目布局初始化失败: %1").arg(workspaceError));
         cleanupCreatedProject();
         return false;
     }
     if (!workspace.initializeRuntime(nullptr, &workspaceError))
     {
-        LOG_ERROR(QStringLiteral("初始化项目运行工作区失败: %1")
-                      .arg(workspaceError));
+        LOG_ERROR(QStringLiteral("初始化项目运行工作区失败: %1").arg(workspaceError));
         cleanupCreatedProject();
         return false;
     }
@@ -749,9 +677,7 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
         QString closeError;
         if (!closeProject(&closeError))
         {
-            LOG_ERROR(QStringLiteral(
-                "创建项目时无法安全关闭当前会话: %1")
-                          .arg(closeError));
+            LOG_ERROR(QStringLiteral("创建项目时无法安全关闭当前会话: %1").arg(closeError));
             cleanupCreatedProject();
             return false;
         }
@@ -769,28 +695,26 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     _configDirtyForArchive = false;
     _projectUiState = defaultProjectUiState();
     _uiStateDirtyForArchive = false;
-    updateMetadata(filesMeta, false);   // false = 不标记为脏（刚创建，不需要保存）
+    updateMetadata(filesMeta, false); // false = 不标记为脏（刚创建，不需要保存）
     updateConfig(configMeta, false);
     scheduleTemporaryMetadataSave();
 
     LOG_INFO(QStringLiteral("项目创建成功: %1").arg(plascanPath));
     // 发出 projectOpened 信号（新建项目视同已打开）
     emit projectOpened(plascanPath);
-    emit activeChunkChanged(
-        _activeChunkId, _activeChunkName, _activeChunkDirectory);
+    emit activeChunkChanged(_activeChunkId, _activeChunkName, _activeChunkDirectory);
     emit chunkListChanged(chunks(), _activeChunkId);
 
     return true;
 }
 
-bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
+bool ProjectData::openProject(const QString& plascanPath, QString* errorMsg)
 {
     if (_resourceCleanupPersistenceGeneration != 0)
     {
         if (errorMsg)
         {
-            *errorMsg = QStringLiteral(
-                "资源清理任务正在提交，请稍后打开项目");
+            *errorMsg = QStringLiteral("资源清理任务正在提交，请稍后打开项目");
         }
         return false;
     }
@@ -813,47 +737,34 @@ QJsonArray ProjectData::chunks() const
         LOG_ERROR(QStringLiteral("读取 Chunk 列表失败: %1").arg(error));
         return result;
     }
-    for (const ProjectChunkRecord &record : records)
+    for (const ProjectChunkRecord& record : records)
     {
         QJsonObject chunk = record.toJson();
         QJsonObject document;
         QString documentError;
-        if (store.readChunkDocument(
-                record.directory, &document, &documentError))
+        if (store.readChunkDocument(record.directory, &document, &documentError))
         {
-            const QJsonObject projectFiles = document.value(
-                QString::fromLatin1(
-                    PortableProjectFormat::ProjectFilesSection))
-                                                 .toObject();
-            const QJsonObject projectResults = document.value(
-                QString::fromLatin1(
-                    PortableProjectFormat::ProjectResultsSection))
-                                                   .toObject();
-            chunk[QStringLiteral("image_count")] = projectFiles.value(
-                QStringLiteral("images")).toArray().size();
-            const int tiePointCount =
-                chunkTiePointCount(projectResults);
+            const QJsonObject projectFiles =
+                document.value(QString::fromLatin1(PortableProjectFormat::ProjectFilesSection)).toObject();
+            const QJsonObject projectResults =
+                document.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
+            chunk[QStringLiteral("image_count")] = projectFiles.value(QStringLiteral("images")).toArray().size();
+            const int tiePointCount = chunkTiePointCount(projectResults);
             if (tiePointCount >= 0)
             {
-                chunk[QStringLiteral("tie_point_count")] =
-                    tiePointCount;
+                chunk[QStringLiteral("tie_point_count")] = tiePointCount;
             }
         }
         else
         {
-            LOG_WARN(
-                QStringLiteral("读取 Chunk 工作区摘要失败: %1")
-                    .arg(documentError));
+            LOG_WARN(QStringLiteral("读取 Chunk 工作区摘要失败: %1").arg(documentError));
         }
         result.append(chunk);
     }
     return result;
 }
 
-bool ProjectData::createChunk(
-    const QString &name,
-    QString *createdChunkId,
-    QString *errorMsg)
+bool ProjectData::createChunk(const QString& name, QString* createdChunkId, QString* errorMsg)
 {
     if (_projectPath.trimmed().isEmpty())
     {
@@ -868,26 +779,22 @@ bool ProjectData::createChunk(
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("创建 Chunk 前保存当前 Chunk 失败: %1")
-                    .arg(saveError);
+            *errorMsg = QStringLiteral("创建 Chunk 前保存当前 Chunk 失败: %1").arg(saveError);
         }
         return false;
     }
 
     QJsonObject config = _configManager.data();
-    config[QStringLiteral("created_at")] =
-        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    config[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     ProjectChunkRecord created;
     ProjectChunkStore store(_projectPath);
-    if (!store.createChunk(
-            name,
-            ProjectFilesManager::defaultFiles(),
-            ProjectFilesManager::defaultResults(),
-            config,
-            ProjectResourceIndex().toJson(),
-            &created,
-            errorMsg))
+    if (!store.createChunk(name,
+                           ProjectFilesManager::defaultFiles(),
+                           ProjectFilesManager::defaultResults(),
+                           config,
+                           ProjectResourceIndex().toJson(),
+                           &created,
+                           errorMsg))
     {
         return false;
     }
@@ -902,10 +809,7 @@ bool ProjectData::createChunk(
     return true;
 }
 
-bool ProjectData::renameChunk(
-    const QString &chunkId,
-    const QString &name,
-    QString *errorMsg)
+bool ProjectData::renameChunk(const QString& chunkId, const QString& name, QString* errorMsg)
 {
     if (_projectPath.trimmed().isEmpty())
     {
@@ -929,16 +833,13 @@ bool ProjectData::renameChunk(
         }
         const ProjectChunkRecord renamed = index.chunk(chunkId);
         _activeChunkName = renamed.name;
-        emit activeChunkChanged(
-            renamed.id, renamed.name, renamed.directory);
+        emit activeChunkChanged(renamed.id, renamed.name, renamed.directory);
     }
     emit chunkListChanged(chunks(), _activeChunkId);
     return true;
 }
 
-bool ProjectData::removeChunk(
-    const QString &chunkId,
-    QString *errorMsg)
+bool ProjectData::removeChunk(const QString& chunkId, QString* errorMsg)
 {
     if (_projectPath.trimmed().isEmpty())
     {
@@ -953,9 +854,7 @@ bool ProjectData::removeChunk(
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("删除 Chunk 前保存当前 Chunk 失败: %1")
-                    .arg(saveError);
+            *errorMsg = QStringLiteral("删除 Chunk 前保存当前 Chunk 失败: %1").arg(saveError);
         }
         return false;
     }
@@ -968,8 +867,7 @@ bool ProjectData::removeChunk(
     }
     if (removingActive)
     {
-        const ProjectOpenSnapshot snapshot =
-            loadProjectOpenSnapshot(_projectPath);
+        const ProjectOpenSnapshot snapshot = loadProjectOpenSnapshot(_projectPath);
         if (!openProjectFromSnapshot(snapshot, errorMsg))
         {
             return false;
@@ -982,9 +880,7 @@ bool ProjectData::removeChunk(
     return true;
 }
 
-bool ProjectData::switchChunk(
-    const QString &chunkId,
-    QString *errorMsg)
+bool ProjectData::switchChunk(const QString& chunkId, QString* errorMsg)
 {
     if (_projectPath.trimmed().isEmpty())
     {
@@ -1003,9 +899,7 @@ bool ProjectData::switchChunk(
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("切换 Chunk 前保存当前 Chunk 失败: %1")
-                    .arg(saveError);
+            *errorMsg = QStringLiteral("切换 Chunk 前保存当前 Chunk 失败: %1").arg(saveError);
         }
         return false;
     }
@@ -1016,8 +910,7 @@ bool ProjectData::switchChunk(
     {
         return false;
     }
-    const ProjectOpenSnapshot snapshot =
-        loadProjectOpenSnapshot(_projectPath);
+    const ProjectOpenSnapshot snapshot = loadProjectOpenSnapshot(_projectPath);
     if (!openProjectFromSnapshot(snapshot, errorMsg))
     {
         QString rollbackError;
@@ -1027,7 +920,7 @@ bool ProjectData::switchChunk(
     return true;
 }
 
-ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanPath)
+ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanPath)
 {
     ProjectOpenSnapshot snapshot;
     snapshot.projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
@@ -1035,19 +928,15 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
     QString recoveryError;
     if (!runProjectOpenPreflight(snapshot.projectPath, &recoveryError))
     {
-        snapshot.errorMessage = recoveryError.isEmpty()
-            ? QStringLiteral("项目打开前恢复未完成")
-            : QStringLiteral("项目打开前恢复失败: %1").arg(recoveryError);
+        snapshot.errorMessage = recoveryError.isEmpty() ? QStringLiteral("项目打开前恢复未完成")
+                                                        : QStringLiteral("项目打开前恢复失败: %1").arg(recoveryError);
         return snapshot;
     }
 
     QString layoutError;
-    if (ProjectPackageLayout::resolveMetadataArchive(
-            snapshot.projectPath, &layoutError).isEmpty())
+    if (ProjectPackageLayout::resolveMetadataArchive(snapshot.projectPath, &layoutError).isEmpty())
     {
-        snapshot.errorMessage = layoutError.isEmpty()
-            ? QStringLiteral("无法解析项目数据目录")
-            : layoutError;
+        snapshot.errorMessage = layoutError.isEmpty() ? QStringLiteral("无法解析项目数据目录") : layoutError;
         return snapshot;
     }
 
@@ -1056,8 +945,7 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
     {
         return snapshot;
     }
-    const ProjectChunkRecord chunk =
-        chunkStore.defaultChunk(&snapshot.errorMessage);
+    const ProjectChunkRecord chunk = chunkStore.defaultChunk(&snapshot.errorMessage);
     if (chunk.id.isEmpty())
     {
         return snapshot;
@@ -1066,54 +954,41 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
     snapshot.chunkName = chunk.name;
     snapshot.chunkDirectory = chunk.directory;
 
-    ProjectWorkspaceStore workspace(
-        snapshot.projectPath, snapshot.chunkDirectory);
+    ProjectWorkspaceStore workspace(snapshot.projectPath, snapshot.chunkDirectory);
     if (!workspace.initializeRuntime(nullptr, &snapshot.errorMessage))
     {
         return snapshot;
     }
-    const auto runtimeGuard = qScopeGuard(
-        [&workspace]()
-        {
-            workspace.releaseRuntime();
-        });
+    const auto runtimeGuard = qScopeGuard([&workspace]() { workspace.releaseRuntime(); });
 
     QJsonObject projectDocument;
     QJsonObject chunkDocument;
-    if (!chunkStore.loadProjectDocument(
-            &projectDocument, &snapshot.errorMessage)
-        || !chunkStore.readDefaultChunkDocument(
-            &chunkDocument, &snapshot.errorMessage))
+    if (!chunkStore.loadProjectDocument(&projectDocument, &snapshot.errorMessage) ||
+        !chunkStore.readDefaultChunkDocument(&chunkDocument, &snapshot.errorMessage))
     {
         return snapshot;
     }
 
-    snapshot.filesMeta = chunkDocument.value(
-        QString::fromLatin1(
-            PortableProjectFormat::ProjectFilesSection)).toObject();
-    snapshot.configMeta = chunkDocument.value(
-        QString::fromLatin1(
-            PortableProjectFormat::ProjectConfigSection)).toObject();
-    snapshot.uiState = projectDocument.value(
-        QString::fromLatin1(
-            PortableProjectFormat::ProjectUiStateSection)).toObject();
+    snapshot.filesMeta =
+        chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectFilesSection)).toObject();
+    snapshot.configMeta =
+        chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectConfigSection)).toObject();
+    snapshot.uiState =
+        projectDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectUiStateSection)).toObject();
 
-    const QJsonObject runtimeFiles =
-        readJsonObjectFile(ProjectIO::tempFilesPath(snapshot.projectPath));
+    const QJsonObject runtimeFiles = readJsonObjectFile(ProjectIO::tempFilesPath(snapshot.projectPath));
     if (!runtimeFiles.isEmpty())
     {
         snapshot.filesMeta = runtimeFiles;
         snapshot.recoveredFromTemporary = true;
     }
-    const QJsonObject runtimeConfig =
-        readJsonObjectFile(ProjectIO::tempConfigPath(snapshot.projectPath));
+    const QJsonObject runtimeConfig = readJsonObjectFile(ProjectIO::tempConfigPath(snapshot.projectPath));
     if (!runtimeConfig.isEmpty())
     {
         snapshot.configMeta = runtimeConfig;
         snapshot.recoveredFromTemporary = true;
     }
-    const QJsonObject runtimeUiState =
-        readJsonObjectFile(ProjectIO::tempUiStatePath(snapshot.projectPath));
+    const QJsonObject runtimeUiState = readJsonObjectFile(ProjectIO::tempUiStatePath(snapshot.projectPath));
     if (!runtimeUiState.isEmpty())
     {
         snapshot.uiState = runtimeUiState;
@@ -1122,29 +997,23 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
 
     if (!snapshot.filesMeta.value(QStringLiteral("images")).isArray())
     {
-        snapshot.errorMessage =
-            QStringLiteral("Chunk doc.json 的 project_files 无效");
+        snapshot.errorMessage = QStringLiteral("Chunk doc.json 的 project_files 无效");
         return snapshot;
     }
-    snapshot.configMeta =
-        ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
-    if (!snapshot.uiState.value(
-            QStringLiteral("display_settings")).isObject())
+    snapshot.configMeta = ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
+    if (!snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
     {
-        snapshot.errorMessage =
-            QStringLiteral("项目 doc.json 的 ui_state 无效");
+        snapshot.errorMessage = QStringLiteral("项目 doc.json 的 ui_state 无效");
         return snapshot;
     }
     snapshot.uiState = normalizedProjectUiState(snapshot.uiState);
 
-    if (!workspace.materializeMetadata(
-            &snapshot.filesMeta, &snapshot.errorMessage))
+    if (!workspace.materializeMetadata(&snapshot.filesMeta, &snapshot.errorMessage))
     {
         return snapshot;
     }
 
-    const QString projectId =
-        projectDocument.value(QStringLiteral("project_id")).toString();
+    const QString projectId = projectDocument.value(QStringLiteral("project_id")).toString();
     if (!projectId.isEmpty())
     {
         snapshot.configMeta[QStringLiteral("version")] =
@@ -1158,7 +1027,7 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
     return snapshot;
 }
 
-ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &plascanPath)
+ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString& plascanPath)
 {
     ProjectResultsSnapshot snapshot;
     snapshot.projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
@@ -1168,30 +1037,23 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &pl
     {
         return snapshot;
     }
-    const ProjectChunkRecord chunk =
-        chunkStore.defaultChunk(&snapshot.errorMessage);
+    const ProjectChunkRecord chunk = chunkStore.defaultChunk(&snapshot.errorMessage);
     if (chunk.id.isEmpty())
     {
         return snapshot;
     }
     snapshot.chunkId = chunk.id;
-    ProjectWorkspaceStore workspace(
-        snapshot.projectPath, chunk.directory);
+    ProjectWorkspaceStore workspace(snapshot.projectPath, chunk.directory);
     if (!workspace.initializeRuntime(nullptr, &snapshot.errorMessage))
     {
         return snapshot;
     }
-    const auto runtimeGuard = qScopeGuard(
-        [&workspace]()
-        {
-            workspace.releaseRuntime();
-        });
+    const auto runtimeGuard = qScopeGuard([&workspace]() { workspace.releaseRuntime(); });
 
     snapshot.resultsMeta = readJsonObjectFile(ProjectIO::tempResultsPath(snapshot.projectPath));
     if (!snapshot.resultsMeta.isEmpty())
     {
-        if (!workspace.materializeMetadata(
-                &snapshot.resultsMeta, &snapshot.errorMessage))
+        if (!workspace.materializeMetadata(&snapshot.resultsMeta, &snapshot.errorMessage))
         {
             return snapshot;
         }
@@ -1201,28 +1063,20 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &pl
     }
 
     QString layoutError;
-    if (ProjectPackageLayout::resolveMetadataArchive(
-            snapshot.projectPath, &layoutError).isEmpty())
+    if (ProjectPackageLayout::resolveMetadataArchive(snapshot.projectPath, &layoutError).isEmpty())
     {
-        snapshot.errorMessage = layoutError.isEmpty()
-            ? QStringLiteral("无法解析项目数据目录")
-            : layoutError;
+        snapshot.errorMessage = layoutError.isEmpty() ? QStringLiteral("无法解析项目数据目录") : layoutError;
         return snapshot;
     }
     QJsonObject chunkDocument;
-    if (!chunkStore.readChunkDocument(
-            chunk.directory,
-            &chunkDocument,
-            &snapshot.errorMessage))
+    if (!chunkStore.readChunkDocument(chunk.directory, &chunkDocument, &snapshot.errorMessage))
     {
         return snapshot;
     }
 
-    snapshot.resultsMeta = chunkDocument.value(
-        QString::fromLatin1(
-            PortableProjectFormat::ProjectResultsSection)).toObject();
-    if (!workspace.materializeMetadata(
-            &snapshot.resultsMeta, &snapshot.errorMessage))
+    snapshot.resultsMeta =
+        chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
+    if (!workspace.materializeMetadata(&snapshot.resultsMeta, &snapshot.errorMessage))
     {
         snapshot.success = false;
         return snapshot;
@@ -1232,14 +1086,13 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &pl
     return snapshot;
 }
 
-bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, QString *errorMsg)
+bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot& snapshot, QString* errorMsg)
 {
     if (_resourceCleanupPersistenceGeneration != 0)
     {
         if (errorMsg)
         {
-            *errorMsg = QStringLiteral(
-                "资源清理任务正在提交，已拒绝切换项目快照");
+            *errorMsg = QStringLiteral("资源清理任务正在提交，已拒绝切换项目快照");
         }
         return false;
     }
@@ -1247,9 +1100,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     {
         if (errorMsg)
         {
-            *errorMsg = snapshot.errorMessage.isEmpty()
-                ? QStringLiteral("项目快照加载失败")
-                : snapshot.errorMessage;
+            *errorMsg = snapshot.errorMessage.isEmpty() ? QStringLiteral("项目快照加载失败") : snapshot.errorMessage;
         }
         return false;
     }
@@ -1263,13 +1114,9 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         return false;
     }
 
-    const QString currentPath =
-        QDir::cleanPath(QFileInfo(_projectPath).absoluteFilePath());
-    const QString targetPath =
-        QDir::cleanPath(QFileInfo(snapshot.projectPath).absoluteFilePath());
-    const bool reuseLock =
-        _projectLock && _projectLock->isLocked()
-        && currentPath == targetPath;
+    const QString currentPath = QDir::cleanPath(QFileInfo(_projectPath).absoluteFilePath());
+    const QString targetPath = QDir::cleanPath(QFileInfo(snapshot.projectPath).absoluteFilePath());
+    const bool reuseLock = _projectLock && _projectLock->isLocked() && currentPath == targetPath;
     std::unique_ptr<ProjectLock> replacementLock;
     if (!reuseLock)
     {
@@ -1285,8 +1132,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         }
     }
 
-    ProjectWorkspaceStore workspace(
-        snapshot.projectPath, snapshot.chunkDirectory);
+    ProjectWorkspaceStore workspace(snapshot.projectPath, snapshot.chunkDirectory);
     QString workspaceError;
     if (!workspace.initializeRuntime(nullptr, &workspaceError))
     {
@@ -1313,9 +1159,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
             }
             if (errorMsg)
             {
-                *errorMsg = QStringLiteral(
-                    "无法安全关闭当前项目，未切换到目标项目: %1")
-                                .arg(closeError);
+                *errorMsg = QStringLiteral("无法安全关闭当前项目，未切换到目标项目: %1").arg(closeError);
             }
             return false;
         }
@@ -1353,9 +1197,8 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     _temporarySavePending = false;
     _isDirty = false;
 
-    const QJsonObject filesMeta = snapshot.filesMeta.isEmpty()
-        ? ProjectFilesManager::defaultFiles()
-        : snapshot.filesMeta;
+    const QJsonObject filesMeta =
+        snapshot.filesMeta.isEmpty() ? ProjectFilesManager::defaultFiles() : snapshot.filesMeta;
     _filesManager.setCoreData(filesMeta);
 
     QJsonObject core = _filesManager.coreData();
@@ -1370,30 +1213,26 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     }
 
     const QJsonObject configMeta = snapshot.configMeta.isEmpty()
-        ? ProjectConfigManager::defaultConfig()
-        : ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
+                                       ? ProjectConfigManager::defaultConfig()
+                                       : ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
     updateConfig(configMeta, false);
-    _projectUiState = snapshot.uiState.isEmpty()
-        ? defaultProjectUiState()
-        : normalizedProjectUiState(snapshot.uiState);
+    _projectUiState = snapshot.uiState.isEmpty() ? defaultProjectUiState() : normalizedProjectUiState(snapshot.uiState);
 
     emit dirtyStateChanged(_isDirty);
     emit projectOpened(_projectPath);
-    emit activeChunkChanged(
-        _activeChunkId, _activeChunkName, _activeChunkDirectory);
+    emit activeChunkChanged(_activeChunkId, _activeChunkName, _activeChunkDirectory);
     emit chunkListChanged(chunks(), _activeChunkId);
     return true;
 }
 
-bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, QString *errorMsg)
+bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot& snapshot, QString* errorMsg)
 {
     if (!snapshot.success)
     {
         if (errorMsg)
         {
-            *errorMsg = snapshot.errorMessage.isEmpty()
-                ? QStringLiteral("项目结果数据加载失败")
-                : snapshot.errorMessage;
+            *errorMsg =
+                snapshot.errorMessage.isEmpty() ? QStringLiteral("项目结果数据加载失败") : snapshot.errorMessage;
         }
         return false;
     }
@@ -1406,8 +1245,7 @@ bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, Q
         }
         return false;
     }
-    if (!snapshot.chunkId.isEmpty()
-        && snapshot.chunkId != _activeChunkId)
+    if (!snapshot.chunkId.isEmpty() && snapshot.chunkId != _activeChunkId)
     {
         if (errorMsg)
         {
@@ -1417,8 +1255,7 @@ bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, Q
     }
     if (_resultsLoaded && _resultsDirtyForArchive)
     {
-        LOG_INFO(QStringLiteral(
-            "忽略已过期的异步项目结果快照：当前结果在快照加载期间已更新"));
+        LOG_INFO(QStringLiteral("忽略已过期的异步项目结果快照：当前结果在快照加载期间已更新"));
         return true;
     }
 
@@ -1428,8 +1265,7 @@ bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, Q
     return true;
 }
 
-ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(
-    PersistenceMode mode) const
+ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(PersistenceMode mode) const
 {
     PersistenceSnapshot snapshot;
     snapshot.mode = mode;
@@ -1449,12 +1285,10 @@ ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(
     snapshot.config = _configManager.data();
     snapshot.uiState = _projectUiState;
     snapshot.commitCoordinator = _persistenceCommitCoordinator;
-    snapshot.commitGeneration = _persistenceCommitCoordinator
-        ? _persistenceCommitCoordinator->currentGeneration()
-        : 0;
+    snapshot.commitGeneration = _persistenceCommitCoordinator ? _persistenceCommitCoordinator->currentGeneration() : 0;
     snapshot.sessionGeneration = _sessionGeneration;
 
-    if (mode == PersistenceMode::FullSave)
+    if (mode == PersistenceMode::FullSave || mode == PersistenceMode::PortableExport)
     {
         snapshot.writeCoreToArchive = true;
         snapshot.writeResultsToArchive = _resultsLoaded;
@@ -1486,8 +1320,7 @@ ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(
     return snapshot;
 }
 
-ProjectData::PersistenceResult ProjectData::persistSnapshot(
-    PersistenceSnapshot snapshot)
+ProjectData::PersistenceResult ProjectData::persistSnapshot(PersistenceSnapshot snapshot)
 {
     PersistenceResult result;
     result.mode = snapshot.mode;
@@ -1501,23 +1334,36 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
     result.includedConfig = snapshot.writeConfigToArchive;
     result.includedUiState = snapshot.writeUiStateToArchive;
     result.includedWorkspace = snapshot.writeWorkspaceIndex;
+    result.portableExportPath = snapshot.portableExportPath;
+
+    QString portableStagingProject;
+    if (snapshot.mode == PersistenceMode::PortableExport)
+    {
+        if (!ProjectExporter::createStagingProject(
+                snapshot.projectPath, snapshot.portableExportPath, &portableStagingProject, &result.errorMessage))
+        {
+            result.success = false;
+            return result;
+        }
+        snapshot.projectPath = portableStagingProject;
+        snapshot.writeTemporary = false;
+    }
+    const auto cleanupPortableStaging = qScopeGuard([&portableStagingProject]()
+                                                     {
+                                                         if (!portableStagingProject.isEmpty())
+                                                         {
+                                                             QDir(QFileInfo(portableStagingProject).absolutePath())
+                                                                 .removeRecursively();
+                                                         }
+                                                     });
 
     const bool workspaceIndexRequested =
-        snapshot.writeCoreToArchive
-        || snapshot.writeResultsToArchive
-        || snapshot.writeWorkspaceIndex;
+        snapshot.writeCoreToArchive || snapshot.writeResultsToArchive || snapshot.writeWorkspaceIndex;
     if (workspaceIndexRequested)
     {
-        ProjectWorkspaceStore workspace(
-            snapshot.projectPath, snapshot.chunkDirectory);
-        QJsonObject *results = snapshot.resultsLoaded
-            ? &snapshot.results
-            : nullptr;
-        if (!workspace.prepareSplitMetadata(
-                &snapshot.core,
-                results,
-                &snapshot.resourceIndex,
-                &result.errorMessage))
+        ProjectWorkspaceStore workspace(snapshot.projectPath, snapshot.chunkDirectory);
+        QJsonObject* results = snapshot.resultsLoaded ? &snapshot.results : nullptr;
+        if (!workspace.prepareSplitMetadata(&snapshot.core, results, &snapshot.resourceIndex, &result.errorMessage))
         {
             result.archiveRequested = true;
             result.archiveSuccess = false;
@@ -1535,81 +1381,56 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
     QVector<QPair<QString, QJsonObject>> chunkSections;
     if (snapshot.writeCoreToArchive)
     {
-        chunkSections.append(qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ProjectFilesSection),
-            snapshot.core));
+        chunkSections.append(qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectFilesSection), snapshot.core));
     }
     if (snapshot.writeResultsToArchive)
     {
-        chunkSections.append(qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ProjectResultsSection),
-            snapshot.results));
+        chunkSections.append(
+            qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection), snapshot.results));
     }
     if (snapshot.writeConfigToArchive)
     {
-        chunkSections.append(qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ProjectConfigSection),
-            snapshot.config));
+        chunkSections.append(
+            qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectConfigSection), snapshot.config));
     }
     if (workspaceIndexRequested)
     {
-        chunkSections.append(qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ResourceIndexSection),
-            snapshot.resourceIndex));
+        chunkSections.append(
+            qMakePair(QString::fromLatin1(PortableProjectFormat::ResourceIndexSection), snapshot.resourceIndex));
     }
 
-    result.archiveRequested =
-        workspaceIndexRequested
-        || !chunkSections.isEmpty()
-        || snapshot.writeUiStateToArchive;
+    result.archiveRequested = workspaceIndexRequested || !chunkSections.isEmpty() || snapshot.writeUiStateToArchive;
     result.archiveSuccess = true;
     const auto commitArchive = [&]()
     {
         ProjectChunkStore chunkStore(snapshot.projectPath);
         if (!chunkSections.isEmpty())
         {
-            result.archiveSuccess = chunkStore.writeChunkSections(
-                snapshot.chunkDirectory,
-                chunkSections,
-                &result.errorMessage);
+            result.archiveSuccess =
+                chunkStore.writeChunkSections(snapshot.chunkDirectory, chunkSections, &result.errorMessage);
         }
         if (result.archiveSuccess && snapshot.writeUiStateToArchive)
         {
-            result.archiveSuccess = chunkStore.saveProjectUiState(
-                snapshot.uiState, &result.errorMessage);
+            result.archiveSuccess = chunkStore.saveProjectUiState(snapshot.uiState, &result.errorMessage);
         }
         if (result.archiveSuccess && result.archiveRequested)
         {
             QString garbageCollectionError;
-            if (!ProjectSharedImageStore(snapshot.projectPath)
-                     .pruneUnreferenced(&garbageCollectionError))
+            if (!ProjectSharedImageStore(snapshot.projectPath).pruneUnreferenced(&garbageCollectionError))
             {
-                LOG_WARN(
-                    QStringLiteral(
-                        "共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
-                        .arg(snapshot.projectPath,
-                             garbageCollectionError));
+                LOG_WARN(QStringLiteral("共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
+                             .arg(snapshot.projectPath, garbageCollectionError));
             }
         }
-        if (result.archiveSuccess
-            && snapshot.mode == PersistenceMode::FullSave)
+        if (result.archiveSuccess && snapshot.mode == PersistenceMode::FullSave)
         {
-            result.archiveSuccess =
-                ProjectPackageLayout::pruneEmptyOptionalDirectories(
-                    snapshot.projectPath,
-                    snapshot.chunkDirectory,
-                    &result.errorMessage);
+            result.archiveSuccess = ProjectPackageLayout::pruneEmptyOptionalDirectories(
+                snapshot.projectPath, snapshot.chunkDirectory, &result.errorMessage);
         }
 
-        if (result.archiveSuccess
-            && snapshot.mode == PersistenceMode::FullSave)
+        if (result.archiveSuccess && snapshot.mode == PersistenceMode::FullSave)
         {
-            ProjectWorkspaceStore workspace(
-                snapshot.projectPath, snapshot.chunkDirectory);
+            ProjectWorkspaceStore workspace(snapshot.projectPath, snapshot.chunkDirectory);
             QString cleanupError;
             if (!workspace.validateProjectLayout(&cleanupError))
             {
@@ -1618,23 +1439,32 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
             }
         }
     };
-    if (result.archiveRequested
-        && snapshot.commitCoordinator
-        && !snapshot.commitCoordinator->runIfCurrent(
-            snapshot.commitGeneration, commitArchive))
+    if (result.archiveRequested && snapshot.mode != PersistenceMode::PortableExport && snapshot.commitCoordinator &&
+        !snapshot.commitCoordinator->runIfCurrent(snapshot.commitGeneration, commitArchive))
     {
         result.stale = true;
         result.success = true;
         return result;
     }
-    if (result.archiveRequested && !snapshot.commitCoordinator)
+    if (result.archiveRequested &&
+        (!snapshot.commitCoordinator || snapshot.mode == PersistenceMode::PortableExport))
     {
         commitArchive();
     }
 
+    if (snapshot.mode == PersistenceMode::PortableExport && result.archiveSuccess)
+    {
+        result.portableExportSuccess = ProjectExporter::exportPortableProject(
+            snapshot.projectPath, snapshot.portableExportPath, &result.errorMessage);
+        if (!result.portableExportSuccess)
+        {
+            result.success = false;
+            return result;
+        }
+    }
+
     const bool shouldWriteTemporary =
-        snapshot.writeTemporary
-        && (snapshot.mode != PersistenceMode::FullSave || !result.archiveSuccess);
+        snapshot.writeTemporary && (snapshot.mode != PersistenceMode::FullSave || !result.archiveSuccess);
     result.temporaryRequested = shouldWriteTemporary;
     result.temporarySuccess = !shouldWriteTemporary;
     if (shouldWriteTemporary)
@@ -1642,34 +1472,26 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
         const auto commitTemporary = [&]()
         {
             QString temporaryError;
-            bool temporarySuccess = writeFileAtomically(
-                snapshot.temporaryCorePath,
-                QJsonDocument(snapshot.core).toJson(QJsonDocument::Compact),
-                &temporaryError);
+            bool temporarySuccess = writeFileAtomically(snapshot.temporaryCorePath,
+                                                        QJsonDocument(snapshot.core).toJson(QJsonDocument::Compact),
+                                                        &temporaryError);
             if (temporarySuccess && snapshot.resultsLoaded)
             {
-                const QByteArray resultsJson = QJsonDocument(snapshot.results)
-                                                   .toJson(QJsonDocument::Compact);
-                temporarySuccess = writeFileAtomically(
-                    snapshot.temporaryResultsPath,
-                    qCompress(resultsJson, 1),
-                    &temporaryError);
+                const QByteArray resultsJson = QJsonDocument(snapshot.results).toJson(QJsonDocument::Compact);
+                temporarySuccess =
+                    writeFileAtomically(snapshot.temporaryResultsPath, qCompress(resultsJson, 1), &temporaryError);
             }
             if (temporarySuccess)
             {
-                temporarySuccess = writeFileAtomically(
-                    snapshot.temporaryConfigPath,
-                    QJsonDocument(snapshot.config).toJson(
-                        QJsonDocument::Compact),
-                    &temporaryError);
+                temporarySuccess = writeFileAtomically(snapshot.temporaryConfigPath,
+                                                       QJsonDocument(snapshot.config).toJson(QJsonDocument::Compact),
+                                                       &temporaryError);
             }
             if (temporarySuccess)
             {
-                temporarySuccess = writeFileAtomically(
-                    snapshot.temporaryUiStatePath,
-                    QJsonDocument(snapshot.uiState)
-                        .toJson(QJsonDocument::Compact),
-                    &temporaryError);
+                temporarySuccess = writeFileAtomically(snapshot.temporaryUiStatePath,
+                                                       QJsonDocument(snapshot.uiState).toJson(QJsonDocument::Compact),
+                                                       &temporaryError);
             }
             result.temporarySuccess = temporarySuccess;
             if (!temporarySuccess)
@@ -1681,9 +1503,8 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
                 result.errorMessage += temporaryError;
             }
         };
-        if (snapshot.commitCoordinator
-            && !snapshot.commitCoordinator->runIfCurrent(
-                snapshot.commitGeneration, commitTemporary))
+        if (snapshot.commitCoordinator &&
+            !snapshot.commitCoordinator->runIfCurrent(snapshot.commitGeneration, commitTemporary))
         {
             result.stale = true;
             result.success = true;
@@ -1701,25 +1522,28 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
     }
     else
     {
-        result.success = result.archiveSuccess
-            && (!result.temporaryRequested || result.temporarySuccess);
+        result.success = result.archiveSuccess && (!result.temporaryRequested || result.temporarySuccess) &&
+                         (snapshot.mode != PersistenceMode::PortableExport || result.portableExportSuccess);
     }
     return result;
 }
 
 void ProjectData::startNextPersistence()
 {
-    if (_shuttingDown
-        || _persistenceRunning
-        || _resourceCleanupPersistenceGeneration != 0
-        || !_persistencePool)
+    if (_shuttingDown || _persistenceRunning || _resourceCleanupPersistenceGeneration != 0 || !_persistencePool)
     {
         return;
     }
 
     PersistenceMode mode = PersistenceMode::TemporaryOnly;
     PersistenceSnapshot snapshot;
-    if (_fullSavePending)
+    if (_portableExportSnapshot)
+    {
+        mode = PersistenceMode::PortableExport;
+        snapshot = std::move(*_portableExportSnapshot);
+        _portableExportSnapshot.reset();
+    }
+    else if (_fullSavePending)
     {
         mode = PersistenceMode::FullSave;
         _fullSavePending = false;
@@ -1750,7 +1574,10 @@ void ProjectData::startNextPersistence()
         return;
     }
 
-    snapshot = createPersistenceSnapshot(mode);
+    if (mode != PersistenceMode::PortableExport)
+    {
+        snapshot = createPersistenceSnapshot(mode);
+    }
     if (mode == PersistenceMode::FullSave)
     {
         _coreFileDirtyForArchive = false;
@@ -1787,101 +1614,83 @@ void ProjectData::startNextPersistence()
     _runningPersistenceGeneration = snapshot.commitGeneration;
     _runningPersistenceSessionGeneration = snapshot.sessionGeneration;
     QPointer<ProjectData> self(this);
-    (void)QtConcurrent::run(
-        _persistencePool,
-        [self, snapshot = std::move(snapshot)]() mutable
-        {
-            PersistenceResult result =
-                ProjectData::persistSnapshot(std::move(snapshot));
-            if (!self)
-            {
-                return;
-            }
-            QMetaObject::invokeMethod(
-                self.data(),
-                [self, result = std::move(result)]() mutable
-                {
-                    if (self)
-                    {
-                        self->handlePersistenceFinished(std::move(result));
-                    }
-                },
-                Qt::QueuedConnection);
-        });
+    (void)QtConcurrent::run(_persistencePool,
+                            [self, snapshot = std::move(snapshot)]() mutable
+                            {
+                                PersistenceResult result = ProjectData::persistSnapshot(std::move(snapshot));
+                                if (!self)
+                                {
+                                    return;
+                                }
+                                QMetaObject::invokeMethod(
+                                    self.data(),
+                                    [self, result = std::move(result)]() mutable
+                                    {
+                                        if (self)
+                                        {
+                                            self->handlePersistenceFinished(std::move(result));
+                                        }
+                                    },
+                                    Qt::QueuedConnection);
+                            });
 }
 
 void ProjectData::handlePersistenceFinished(PersistenceResult result)
 {
-    if (_persistenceRunning
-        && result.commitGeneration == _runningPersistenceGeneration
-        && result.sessionGeneration
-            == _runningPersistenceSessionGeneration)
+    if (_persistenceRunning && result.commitGeneration == _runningPersistenceGeneration &&
+        result.sessionGeneration == _runningPersistenceSessionGeneration)
     {
         _persistenceRunning = false;
         _runningPersistenceGeneration = 0;
         _runningPersistenceSessionGeneration = 0;
     }
-    const bool sameProject =
-        QDir::cleanPath(result.projectPath) == QDir::cleanPath(_projectPath);
-    const bool sameSession = sameProject
-        && result.sessionGeneration == _sessionGeneration
-        && result.chunkId == _activeChunkId
-        && result.chunkDirectory == _activeChunkDirectory;
-    const bool currentCommitGeneration = !_persistenceCommitCoordinator
-        || result.commitGeneration
-            == _persistenceCommitCoordinator->currentGeneration();
-    if (result.stale || !currentCommitGeneration)
+    const bool sameProject = QDir::cleanPath(result.projectPath) == QDir::cleanPath(_projectPath);
+    const bool sameSession = sameProject && result.sessionGeneration == _sessionGeneration &&
+                             result.chunkId == _activeChunkId && result.chunkDirectory == _activeChunkDirectory;
+    const bool currentCommitGeneration =
+        !_persistenceCommitCoordinator || result.commitGeneration == _persistenceCommitCoordinator->currentGeneration();
+    if ((result.stale || !currentCommitGeneration) && result.mode != PersistenceMode::PortableExport)
     {
         if (sameSession)
         {
-            _coreFileDirtyForArchive =
-                _coreFileDirtyForArchive || result.includedCore;
-            _resultsDirtyForArchive =
-                _resultsDirtyForArchive || result.includedResults;
-            _configDirtyForArchive =
-                _configDirtyForArchive || result.includedConfig;
-            _uiStateDirtyForArchive =
-                _uiStateDirtyForArchive || result.includedUiState;
-            _workspaceDirtyForArchive =
-                _workspaceDirtyForArchive || result.includedWorkspace;
-            const bool hasArchiveState = result.includedCore
-                || result.includedResults
-                || result.includedConfig
-                || result.includedUiState
-                || result.includedWorkspace;
+            _coreFileDirtyForArchive = _coreFileDirtyForArchive || result.includedCore;
+            _resultsDirtyForArchive = _resultsDirtyForArchive || result.includedResults;
+            _configDirtyForArchive = _configDirtyForArchive || result.includedConfig;
+            _uiStateDirtyForArchive = _uiStateDirtyForArchive || result.includedUiState;
+            _workspaceDirtyForArchive = _workspaceDirtyForArchive || result.includedWorkspace;
+            const bool hasArchiveState = result.includedCore || result.includedResults || result.includedConfig ||
+                                         result.includedUiState || result.includedWorkspace;
             _archiveSyncPending = _archiveSyncPending || hasArchiveState;
-            _temporarySavePending = _temporarySavePending
-                || result.temporaryRequested;
+            _temporarySavePending = _temporarySavePending || result.temporaryRequested;
             if (_archiveSyncTimer && hasArchiveState)
             {
                 _archiveSyncTimer->start(2000);
             }
         }
-        LOG_INFO(QStringLiteral(
-            "忽略已被更新操作取代的项目持久化快照（代次 %1）")
-                     .arg(result.commitGeneration));
+        LOG_INFO(QStringLiteral("忽略已被更新操作取代的项目持久化快照（代次 %1）").arg(result.commitGeneration));
         if (sameSession && result.mode == PersistenceMode::FullSave)
         {
-            emit projectSaveCompleted(
-                false,
-                QStringLiteral("保存期间项目已更新，请重新保存"));
+            emit projectSaveCompleted(false, QStringLiteral("保存期间项目已更新，请重新保存"));
         }
+        startNextPersistence();
+        return;
+    }
+
+    if (result.mode == PersistenceMode::PortableExport)
+    {
+        emit portableProjectExportCompleted(
+            result.success && result.portableExportSuccess, result.portableExportPath, result.errorMessage);
         startNextPersistence();
         return;
     }
 
     if (sameSession && result.archiveRequested && !result.archiveSuccess)
     {
-        _coreFileDirtyForArchive =
-            _coreFileDirtyForArchive || result.includedCore;
-        _resultsDirtyForArchive =
-            _resultsDirtyForArchive || result.includedResults;
-        _configDirtyForArchive =
-            _configDirtyForArchive || result.includedConfig;
-        _uiStateDirtyForArchive =
-            _uiStateDirtyForArchive || result.includedUiState;
-        _workspaceDirtyForArchive =
-            _workspaceDirtyForArchive || result.includedWorkspace;
+        _coreFileDirtyForArchive = _coreFileDirtyForArchive || result.includedCore;
+        _resultsDirtyForArchive = _resultsDirtyForArchive || result.includedResults;
+        _configDirtyForArchive = _configDirtyForArchive || result.includedConfig;
+        _uiStateDirtyForArchive = _uiStateDirtyForArchive || result.includedUiState;
+        _workspaceDirtyForArchive = _workspaceDirtyForArchive || result.includedWorkspace;
         if (_archiveSyncTimer)
         {
             _archiveSyncTimer->start(5000);
@@ -1890,8 +1699,7 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
 
     if (sameSession && result.archiveSuccess && result.projectUriMetadata)
     {
-        ProjectWorkspaceStore workspace(
-            _projectPath, _activeChunkDirectory);
+        ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
         bool metadataChanged = false;
         if (result.includedCore && !_coreFileDirtyForArchive)
         {
@@ -1904,13 +1712,10 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
             }
             else
             {
-                LOG_WARN(QStringLiteral("刷新工程资源缓存路径失败: %1")
-                             .arg(materializeError));
+                LOG_WARN(QStringLiteral("刷新工程资源缓存路径失败: %1").arg(materializeError));
             }
         }
-        if (result.includedResults
-            && !_resultsDirtyForArchive
-            && _resultsLoaded)
+        if (result.includedResults && !_resultsDirtyForArchive && _resultsLoaded)
         {
             QJsonObject results = result.projectUriResults;
             QString materializeError;
@@ -1921,8 +1726,7 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
             }
             else
             {
-                LOG_WARN(QStringLiteral("刷新工程结果缓存路径失败: %1")
-                             .arg(materializeError));
+                LOG_WARN(QStringLiteral("刷新工程结果缓存路径失败: %1").arg(materializeError));
             }
         }
         if (metadataChanged)
@@ -1941,12 +1745,9 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
         {
             if (sameSession)
             {
-                const bool hasNewChanges =
-                    _coreFileDirtyForArchive
-                    || _resultsDirtyForArchive
-                    || _configDirtyForArchive
-                    || _uiStateDirtyForArchive
-                    || _workspaceDirtyForArchive;
+                const bool hasNewChanges = _coreFileDirtyForArchive || _resultsDirtyForArchive ||
+                                           _configDirtyForArchive || _uiStateDirtyForArchive ||
+                                           _workspaceDirtyForArchive;
                 if (!hasNewChanges)
                 {
                     _isDirty = false;
@@ -1961,14 +1762,13 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
     }
     else if (!result.success)
     {
-        LOG_WARN(QStringLiteral("项目后台持久化失败: %1")
-                     .arg(result.errorMessage));
+        LOG_WARN(QStringLiteral("项目后台持久化失败: %1").arg(result.errorMessage));
     }
 
     startNextPersistence();
 }
 
-bool ProjectData::drainPersistenceForClose(QString *errorMessage)
+bool ProjectData::drainPersistenceForClose(QString* errorMessage)
 {
     if (_projectPath.trimmed().isEmpty())
     {
@@ -1983,65 +1783,66 @@ bool ProjectData::drainPersistenceForClose(QString *errorMessage)
         _runningPersistenceSessionGeneration = 0;
     }
 
-    const bool needsDurableSnapshot = workerWasRunning
-        || _isDirty
-        || _coreFileDirtyForArchive
-        || _resultsDirtyForArchive
-        || _configDirtyForArchive
-        || _uiStateDirtyForArchive
-        || _workspaceDirtyForArchive
-        || _fullSavePending
-        || _archiveSyncPending
-        || _temporarySavePending;
+    if (_portableExportSnapshot)
+    {
+        PersistenceSnapshot portableSnapshot = std::move(*_portableExportSnapshot);
+        _portableExportSnapshot.reset();
+        const PersistenceResult portableResult = persistSnapshot(std::move(portableSnapshot));
+        if (!portableResult.success || !portableResult.portableExportSuccess)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = portableResult.errorMessage.isEmpty()
+                                    ? QStringLiteral("关闭项目前无法完成便携项目导出")
+                                    : portableResult.errorMessage;
+            }
+            return false;
+        }
+    }
+
+    const bool needsDurableSnapshot = workerWasRunning || _isDirty || _coreFileDirtyForArchive ||
+                                      _resultsDirtyForArchive || _configDirtyForArchive || _uiStateDirtyForArchive ||
+                                      _workspaceDirtyForArchive || _fullSavePending || _archiveSyncPending ||
+                                      _temporarySavePending;
     if (!needsDurableSnapshot)
     {
         return true;
     }
 
-    const quint64 closeGeneration = _persistenceCommitCoordinator
-        ? _persistenceCommitCoordinator->
-              advanceGenerationAfterCurrentCommit()
-        : 0;
+    const quint64 closeGeneration =
+        _persistenceCommitCoordinator ? _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit() : 0;
     _coreFileDirtyForArchive = true;
     _resultsDirtyForArchive = _resultsLoaded;
     _configDirtyForArchive = true;
     _uiStateDirtyForArchive = true;
     _workspaceDirtyForArchive = true;
 
-    PersistenceSnapshot archiveSnapshot = createPersistenceSnapshot(
-        PersistenceMode::ArchiveSync);
+    PersistenceSnapshot archiveSnapshot = createPersistenceSnapshot(PersistenceMode::ArchiveSync);
     archiveSnapshot.commitGeneration = closeGeneration;
-    const PersistenceResult archiveResult = persistSnapshot(
-        std::move(archiveSnapshot));
+    const PersistenceResult archiveResult = persistSnapshot(std::move(archiveSnapshot));
     if (archiveResult.archiveSuccess && !archiveResult.stale)
     {
         return true;
     }
-    if (archiveResult.temporaryRequested
-        && archiveResult.temporarySuccess
-        && !archiveResult.stale)
+    if (archiveResult.temporaryRequested && archiveResult.temporarySuccess && !archiveResult.stale)
     {
         return true;
     }
 
-    PersistenceSnapshot temporarySnapshot = createPersistenceSnapshot(
-        PersistenceMode::TemporaryOnly);
+    PersistenceSnapshot temporarySnapshot = createPersistenceSnapshot(PersistenceMode::TemporaryOnly);
     temporarySnapshot.commitGeneration = closeGeneration;
-    const PersistenceResult temporaryResult = persistSnapshot(
-        std::move(temporarySnapshot));
+    const PersistenceResult temporaryResult = persistSnapshot(std::move(temporarySnapshot));
     if (temporaryResult.success && !temporaryResult.stale)
     {
         return true;
     }
     if (errorMessage)
     {
-        *errorMessage = temporaryResult.errorMessage.isEmpty()
-            ? archiveResult.errorMessage
-            : temporaryResult.errorMessage;
+        *errorMessage =
+            temporaryResult.errorMessage.isEmpty() ? archiveResult.errorMessage : temporaryResult.errorMessage;
         if (errorMessage->isEmpty())
         {
-            *errorMessage = QStringLiteral(
-                "关闭项目前无法持久化最新恢复快照");
+            *errorMessage = QStringLiteral("关闭项目前无法持久化最新恢复快照");
         }
     }
     return false;
@@ -2056,8 +1857,7 @@ void ProjectData::saveProjectAsync()
     }
     if (_resourceCleanupPersistenceGeneration != 0)
     {
-        emit projectSaveCompleted(
-            false, QStringLiteral("资源清理任务正在提交，请稍后保存"));
+        emit projectSaveCompleted(false, QStringLiteral("资源清理任务正在提交，请稍后保存"));
         return;
     }
     if (_archiveSyncTimer)
@@ -2066,6 +1866,44 @@ void ProjectData::saveProjectAsync()
     }
     _fullSavePending = true;
     startNextPersistence();
+}
+
+bool ProjectData::exportPortableProjectAsync(const QString& outputZipPath, QString* errorMsg)
+{
+    const QString output = QDir::cleanPath(QFileInfo(outputZipPath).absoluteFilePath());
+    if (_projectPath.trimmed().isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有打开的项目");
+        }
+        return false;
+    }
+    if (_resourceCleanupPersistenceGeneration != 0 || _portableExportSnapshot)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("项目持久化任务正在进行，请稍后导出");
+        }
+        return false;
+    }
+    if (QFileInfo::exists(output))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("导出目标已存在，不会覆盖: %1").arg(output);
+        }
+        return false;
+    }
+    if (_archiveSyncTimer)
+    {
+        _archiveSyncTimer->stop();
+    }
+    auto snapshot = std::make_unique<PersistenceSnapshot>(createPersistenceSnapshot(PersistenceMode::PortableExport));
+    snapshot->portableExportPath = output;
+    _portableExportSnapshot = std::move(snapshot);
+    startNextPersistence();
+    return true;
 }
 
 void ProjectData::scheduleTemporaryMetadataSave()
@@ -2082,42 +1920,38 @@ void ProjectData::scheduleTemporaryMetadataSave()
     startNextPersistence();
 }
 
-bool ProjectData::saveProject(QString *errorMsg)
+bool ProjectData::saveProject(QString* errorMsg)
 {
-    if (_projectPath.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
     if (_resourceCleanupPersistenceGeneration != 0)
     {
         if (errorMsg)
         {
-            *errorMsg = QStringLiteral(
-                "资源清理任务正在提交，请稍后保存");
+            *errorMsg = QStringLiteral("资源清理任务正在提交，请稍后保存");
         }
         return false;
     }
 
     // 完整保存前首先取消防抖定时器，避免重复写入
-    if (_archiveSyncTimer) _archiveSyncTimer->stop();
+    if (_archiveSyncTimer)
+        _archiveSyncTimer->stop();
     if (_persistencePool && _persistenceRunning)
     {
         _persistencePool->waitForDone();
     }
 
     QJsonObject projectUriCore = _filesManager.coreData();
-    QJsonObject projectUriResults = _resultsLoaded
-        ? _filesManager.resultsData()
-        : QJsonObject();
+    QJsonObject projectUriResults = _resultsLoaded ? _filesManager.resultsData() : QJsonObject();
     QJsonObject resourceIndex;
-    ProjectWorkspaceStore workspace(
-        _projectPath, _activeChunkDirectory);
+    ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
     QString err;
     if (!workspace.prepareSplitMetadata(
-            &projectUriCore,
-            _resultsLoaded ? &projectUriResults : nullptr,
-            &resourceIndex,
-            &err))
+            &projectUriCore, _resultsLoaded ? &projectUriResults : nullptr, &resourceIndex, &err))
     {
         if (errorMsg)
         {
@@ -2126,57 +1960,36 @@ bool ProjectData::saveProject(QString *errorMsg)
         return false;
     }
     QVector<QPair<QString, QJsonObject>> chunkSections{
-        qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ProjectFilesSection),
-            projectUriCore),
-        qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ProjectConfigSection),
-            _configManager.data()),
-        qMakePair(
-            QString::fromLatin1(
-                PortableProjectFormat::ResourceIndexSection),
-            resourceIndex)
-    };
+        qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectFilesSection), projectUriCore),
+        qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectConfigSection), _configManager.data()),
+        qMakePair(QString::fromLatin1(PortableProjectFormat::ResourceIndexSection), resourceIndex)};
     if (_resultsLoaded)
     {
         chunkSections.insert(
-            1,
-            qMakePair(
-                QString::fromLatin1(
-                    PortableProjectFormat::ProjectResultsSection),
-                projectUriResults));
+            1, qMakePair(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection), projectUriResults));
     }
 
     ProjectChunkStore chunkStore(_projectPath);
-    if (!chunkStore.writeChunkSections(
-            _activeChunkDirectory, chunkSections, &err)
-        || !chunkStore.saveProjectUiState(_projectUiState, &err))
+    if (!chunkStore.writeChunkSections(_activeChunkDirectory, chunkSections, &err) ||
+        !chunkStore.saveProjectUiState(_projectUiState, &err))
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("写入项目 doc.json 失败: %1").arg(err);
+            *errorMsg = QStringLiteral("写入项目 doc.json 失败: %1").arg(err);
         }
         return false;
     }
     QString garbageCollectionError;
-    if (!ProjectSharedImageStore(_projectPath)
-             .pruneUnreferenced(&garbageCollectionError))
+    if (!ProjectSharedImageStore(_projectPath).pruneUnreferenced(&garbageCollectionError))
     {
-        LOG_WARN(
-            QStringLiteral(
-                "共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
-                .arg(_projectPath, garbageCollectionError));
+        LOG_WARN(QStringLiteral("共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
+                     .arg(_projectPath, garbageCollectionError));
     }
-    if (!ProjectPackageLayout::pruneEmptyOptionalDirectories(
-            _projectPath, _activeChunkDirectory, &err))
+    if (!ProjectPackageLayout::pruneEmptyOptionalDirectories(_projectPath, _activeChunkDirectory, &err))
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("清理空的工作流目录失败: %1").arg(err);
+            *errorMsg = QStringLiteral("清理空的工作流目录失败: %1").arg(err);
         }
         return false;
     }
@@ -2185,9 +1998,7 @@ bool ProjectData::saveProject(QString *errorMsg)
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("项目保存后格式校验失败: %1")
-                    .arg(err);
+            *errorMsg = QStringLiteral("项目保存后格式校验失败: %1").arg(err);
         }
         return false;
     }
@@ -2197,9 +2008,7 @@ bool ProjectData::saveProject(QString *errorMsg)
     {
         _filesManager.setCoreData(projectUriCore);
     }
-    if (_resultsLoaded
-        && workspace.materializeMetadata(
-            &projectUriResults, &materializeError))
+    if (_resultsLoaded && workspace.materializeMetadata(&projectUriResults, &materializeError))
     {
         _filesManager.setResultsData(projectUriResults);
     }
@@ -2218,7 +2027,7 @@ bool ProjectData::saveProject(QString *errorMsg)
     return true;
 }
 
-bool ProjectData::closeProject(QString *errorMsg)
+bool ProjectData::closeProject(QString* errorMsg)
 {
     if (errorMsg)
     {
@@ -2226,8 +2035,7 @@ bool ProjectData::closeProject(QString *errorMsg)
     }
     if (_resourceCleanupPersistenceGeneration != 0)
     {
-        const QString message = QStringLiteral(
-            "资源清理事务提交期间拒绝关闭项目，以保持项目锁有效");
+        const QString message = QStringLiteral("资源清理事务提交期间拒绝关闭项目，以保持项目锁有效");
         LOG_WARN(message);
         if (errorMsg)
         {
@@ -2243,9 +2051,7 @@ bool ProjectData::closeProject(QString *errorMsg)
     QString persistenceError;
     if (!drainPersistenceForClose(&persistenceError))
     {
-        LOG_ERROR(QStringLiteral(
-            "项目关闭前持久化失败，继续保持项目锁：%1")
-                      .arg(persistenceError));
+        LOG_ERROR(QStringLiteral("项目关闭前持久化失败，继续保持项目锁：%1").arg(persistenceError));
         if (_archiveSyncTimer)
         {
             _archiveSyncTimer->start(5000);
@@ -2260,8 +2066,7 @@ bool ProjectData::closeProject(QString *errorMsg)
     const QStringList closingImagePaths = _filesManager.getAllImages();
     if (!closingProjectPath.isEmpty())
     {
-        ProjectSharedImageStore(closingProjectPath).releaseReservations(
-            closingImagePaths);
+        ProjectSharedImageStore(closingProjectPath).releaseReservations(closingImagePaths);
     }
     _projectPath.clear();
     _activeChunkId.clear();
@@ -2299,12 +2104,8 @@ bool ProjectData::closeProject(QString *errorMsg)
 // 防抖定时器回调：把最新快照交给串行持久化线程。
 void ProjectData::syncToArchive()
 {
-    if (_projectPath.isEmpty()
-        || (!_resultsDirtyForArchive
-            && !_coreFileDirtyForArchive
-            && !_configDirtyForArchive
-            && !_uiStateDirtyForArchive
-            && !_workspaceDirtyForArchive))
+    if (_projectPath.isEmpty() || (!_resultsDirtyForArchive && !_coreFileDirtyForArchive && !_configDirtyForArchive &&
+                                   !_uiStateDirtyForArchive && !_workspaceDirtyForArchive))
     {
         return;
     }
@@ -2313,7 +2114,7 @@ void ProjectData::syncToArchive()
     startNextPersistence();
 }
 
-void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
+void ProjectData::updateMetadata(const QJsonObject& meta, bool markDirty)
 {
     const bool hasResults = containsResultKeys(meta);
     QJsonObject core;
@@ -2341,11 +2142,13 @@ void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
         _filesManager.setCoreData(normalized_core);
     }
 
-    if (hasResults) {
+    if (hasResults)
+    {
         _resultsLoaded = true;
     }
     markDirtyIfRequested(markDirty);
-    if (markDirty) {
+    if (markDirty)
+    {
         scheduleArchiveSync(true, hasResults, false);
     }
 
@@ -2364,28 +2167,24 @@ bool ProjectData::ensureResultsLoaded() const
         return false;
     }
     _resultsLoading = true;
-    const auto loading_guard = qScopeGuard(
-        [this]()
-        {
-            _resultsLoading = false;
-        });
+    const auto loading_guard = qScopeGuard([this]() { _resultsLoading = false; });
 
     // 尝试从 tmp 先加载（崩溃恢复）
     const QString tmpPath = tempResultsPath();
-    if (!tmpPath.isEmpty() && QFile::exists(tmpPath)) {
+    if (!tmpPath.isEmpty() && QFile::exists(tmpPath))
+    {
         QFile f(tmpPath);
-        if (f.open(QIODevice::ReadOnly)) {
+        if (f.open(QIODevice::ReadOnly))
+        {
             const QJsonDocument doc = parseJsonOrCompressedJson(f.readAll());
-            if (!doc.isNull() && doc.isObject()) {
+            if (!doc.isNull() && doc.isObject())
+            {
                 QJsonObject results = doc.object();
-                ProjectWorkspaceStore workspace(
-                    _projectPath, _activeChunkDirectory);
+                ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
                 QString materializeError;
-                if (!workspace.materializeMetadata(
-                        &results, &materializeError))
+                if (!workspace.materializeMetadata(&results, &materializeError))
                 {
-                    LOG_WARN(QStringLiteral("解析临时项目结果资源失败: %1")
-                                 .arg(materializeError));
+                    LOG_WARN(QStringLiteral("解析临时项目结果资源失败: %1").arg(materializeError));
                 }
                 else
                 {
@@ -2400,22 +2199,17 @@ bool ProjectData::ensureResultsLoaded() const
 
     QString err;
     QJsonObject document;
-    if (!ProjectChunkStore(_projectPath).readChunkDocument(
-            _activeChunkDirectory, &document, &err))
+    if (!ProjectChunkStore(_projectPath).readChunkDocument(_activeChunkDirectory, &document, &err))
     {
         LOG_WARN(QStringLiteral("读取 Chunk doc.json 失败: %1").arg(err));
         return false;
     }
-    QJsonObject results = document.value(
-        QString::fromLatin1(
-            PortableProjectFormat::ProjectResultsSection)).toObject();
-    ProjectWorkspaceStore workspace(
-        _projectPath, _activeChunkDirectory);
+    QJsonObject results = document.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
+    ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
     QString materializeError;
     if (!workspace.materializeMetadata(&results, &materializeError))
     {
-        LOG_WARN(QStringLiteral("解析项目结果资源失败: %1")
-                     .arg(materializeError));
+        LOG_WARN(QStringLiteral("解析项目结果资源失败: %1").arg(materializeError));
         return false;
     }
     _filesManager.setResultsData(results);
@@ -2424,7 +2218,7 @@ bool ProjectData::ensureResultsLoaded() const
     return true;
 }
 
-void ProjectData::updateConfig(const QJsonObject &config, bool markDirty)
+void ProjectData::updateConfig(const QJsonObject& config, bool markDirty)
 {
     _configManager.setData(config);
 
@@ -2442,8 +2236,7 @@ std::optional<ProjectCameraModelPolicy> ProjectData::cameraModelPolicy() const
 
 void ProjectData::setCameraModelPolicy(ProjectCameraModelPolicy policy)
 {
-    const std::optional<ProjectCameraModelPolicy> current_policy =
-        _configManager.cameraModelPolicy();
+    const std::optional<ProjectCameraModelPolicy> current_policy = _configManager.cameraModelPolicy();
     if (current_policy.has_value() && current_policy.value() == policy)
     {
         return;
@@ -2453,12 +2246,9 @@ void ProjectData::setCameraModelPolicy(ProjectCameraModelPolicy policy)
     updateConfig(_configManager.data());
 }
 
-void ProjectData::updateProjectUiState(const QJsonObject &state,
-                                       bool markDirty)
+void ProjectData::updateProjectUiState(const QJsonObject& state, bool markDirty)
 {
-    _projectUiState = state.isEmpty()
-        ? defaultProjectUiState()
-        : normalizedProjectUiState(state);
+    _projectUiState = state.isEmpty() ? defaultProjectUiState() : normalizedProjectUiState(state);
     if (markDirty)
     {
         markDirtyIfRequested(true);
@@ -2472,11 +2262,14 @@ bool ProjectData::loadTemporaryMetadata()
 
     // 尝试从 .plascan_tmp/project_files.json 恢复核心数据
     QString filesPath = tempFilesPath();
-    if (!filesPath.isEmpty() && QFile::exists(filesPath)) {
+    if (!filesPath.isEmpty() && QFile::exists(filesPath))
+    {
         QFile file(filesPath);
-        if (file.open(QIODevice::ReadOnly)) {
+        if (file.open(QIODevice::ReadOnly))
+        {
             QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-            if (!doc.isNull() && doc.isObject()) {
+            if (!doc.isNull() && doc.isObject())
+            {
                 _filesManager.setCoreData(doc.object());
                 loaded = true;
             }
@@ -2486,11 +2279,14 @@ bool ProjectData::loadTemporaryMetadata()
     // 尝试从 .plascan_tmp/project_results.json 恢复结果数据
     // （新版以 qCompress 压缩写入；通过首字节区分压缩/明文 JSON）
     QString resultsPath = tempResultsPath();
-    if (!resultsPath.isEmpty() && QFile::exists(resultsPath)) {
+    if (!resultsPath.isEmpty() && QFile::exists(resultsPath))
+    {
         QFile file(resultsPath);
-        if (file.open(QIODevice::ReadOnly)) {
+        if (file.open(QIODevice::ReadOnly))
+        {
             const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
-            if (!doc.isNull() && doc.isObject()) {
+            if (!doc.isNull() && doc.isObject())
+            {
                 _filesManager.setResultsData(doc.object());
                 _resultsLoaded = true;
                 loaded = true;
@@ -2500,11 +2296,14 @@ bool ProjectData::loadTemporaryMetadata()
 
     // 尝试从 .plascan_tmp/project_config.json 恢复配置数据
     QString configPath = tempConfigPath();
-    if (!configPath.isEmpty() && QFile::exists(configPath)) {
+    if (!configPath.isEmpty() && QFile::exists(configPath))
+    {
         QFile file(configPath);
-        if (file.open(QIODevice::ReadOnly)) {
+        if (file.open(QIODevice::ReadOnly))
+        {
             QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-            if (!doc.isNull() && doc.isObject()) {
+            if (!doc.isNull() && doc.isObject())
+            {
                 updateConfig(ProjectConfigManager::mergeWithDefaults(doc.object()), false);
                 loaded = true;
             }
@@ -2537,20 +2336,18 @@ bool ProjectData::saveTemporaryMetadata()
         return false;
 
     QString error;
-    if (!writeFileAtomically(
-            filesPath,
-            QJsonDocument(_filesManager.coreData()).toJson(QJsonDocument::Compact),
-            &error))
+    if (!writeFileAtomically(filesPath, QJsonDocument(_filesManager.coreData()).toJson(QJsonDocument::Compact), &error))
     {
         return false;
     }
 
     // 写结果数据（qCompress 压缩的 Compact JSON，比原始 JSON 小 60-70%）
-    if (_resultsLoaded) {
+    if (_resultsLoaded)
+    {
         QString resultsPath = tempResultsPath();
-        if (!resultsPath.isEmpty()) {
-            const QByteArray json =
-                QJsonDocument(_filesManager.resultsData()).toJson(QJsonDocument::Compact);
+        if (!resultsPath.isEmpty())
+        {
+            const QByteArray json = QJsonDocument(_filesManager.resultsData()).toJson(QJsonDocument::Compact);
             if (!writeFileAtomically(resultsPath, qCompress(json, 1), &error))
             {
                 return false;
@@ -2558,30 +2355,21 @@ bool ProjectData::saveTemporaryMetadata()
         }
     }
 
-    if (!writeFileAtomically(
-        configPath,
-        QJsonDocument(_configManager.data()).toJson(QJsonDocument::Compact),
-        &error))
+    if (!writeFileAtomically(configPath, QJsonDocument(_configManager.data()).toJson(QJsonDocument::Compact), &error))
     {
         return false;
     }
     return writeFileAtomically(
-        tempUiStatePath(),
-        QJsonDocument(_projectUiState).toJson(QJsonDocument::Compact),
-        &error);
+        tempUiStatePath(), QJsonDocument(_projectUiState).toJson(QJsonDocument::Compact), &error);
 }
 
-bool ProjectData::commitResourceCleanupMetadata(
-    const QJsonObject &metadata,
-    QString *errorMsg,
-    bool *archiveCommitted)
+bool ProjectData::commitResourceCleanupMetadata(const QJsonObject& metadata, QString* errorMsg, bool* archiveCommitted)
 {
     if (archiveCommitted)
     {
         *archiveCommitted = false;
     }
-    if (_projectPath.trimmed().isEmpty()
-        || !_persistenceCommitCoordinator)
+    if (_projectPath.trimmed().isEmpty() || !_persistenceCommitCoordinator)
     {
         if (errorMsg)
         {
@@ -2598,13 +2386,10 @@ bool ProjectData::commitResourceCleanupMetadata(
         return false;
     }
 
-    const quint64 cleanupGeneration =
-        _persistenceCommitCoordinator->
-            advanceGenerationAfterCurrentCommit();
+    const quint64 cleanupGeneration = _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit();
     updateMetadata(metadata, false);
 
-    PersistenceSnapshot snapshot = createPersistenceSnapshot(
-        PersistenceMode::CleanupCommit);
+    PersistenceSnapshot snapshot = createPersistenceSnapshot(PersistenceMode::CleanupCommit);
     snapshot.commitGeneration = cleanupGeneration;
     PersistenceResult result = persistSnapshot(std::move(snapshot));
     if (archiveCommitted)
@@ -2618,9 +2403,8 @@ bool ProjectData::commitResourceCleanupMetadata(
         _workspaceDirtyForArchive = true;
         if (errorMsg)
         {
-            *errorMsg = result.errorMessage.isEmpty()
-                ? QStringLiteral("资源清理元数据提交被其它更新取代")
-                : result.errorMessage;
+            *errorMsg = result.errorMessage.isEmpty() ? QStringLiteral("资源清理元数据提交被其它更新取代")
+                                                      : result.errorMessage;
         }
         return false;
     }
@@ -2632,21 +2416,16 @@ bool ProjectData::commitResourceCleanupMetadata(
     return true;
 }
 
-ProjectResourceCleanupPersistence
-ProjectData::prepareResourceCleanupPersistence(
-    const QJsonObject &updatedMetadata)
+ProjectResourceCleanupPersistence ProjectData::prepareResourceCleanupPersistence(const QJsonObject& updatedMetadata)
 {
     ProjectResourceCleanupPersistence persistence;
-    if (_projectPath.trimmed().isEmpty()
-        || !_persistenceCommitCoordinator
-        || _resourceCleanupPersistenceGeneration != 0)
+    if (_projectPath.trimmed().isEmpty() || !_persistenceCommitCoordinator ||
+        _resourceCleanupPersistenceGeneration != 0)
     {
         return persistence;
     }
 
-    persistence._generation =
-        _persistenceCommitCoordinator->
-            advanceGenerationAfterCurrentCommit();
+    persistence._generation = _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit();
     _resourceCleanupPersistenceGeneration = persistence._generation;
     if (_archiveSyncTimer)
     {
@@ -2659,23 +2438,18 @@ ProjectData::prepareResourceCleanupPersistence(
     persistence._updatedMetadata = updatedMetadata;
     persistence._wasDirty = _isDirty;
 
-    PersistenceSnapshot originalSnapshot = createPersistenceSnapshot(
-        PersistenceMode::CleanupCommit);
+    PersistenceSnapshot originalSnapshot = createPersistenceSnapshot(PersistenceMode::CleanupCommit);
     originalSnapshot.commitGeneration = persistence._generation;
     updateMetadata(updatedMetadata, false);
-    PersistenceSnapshot updatedSnapshot = createPersistenceSnapshot(
-        PersistenceMode::CleanupCommit);
+    PersistenceSnapshot updatedSnapshot = createPersistenceSnapshot(PersistenceMode::CleanupCommit);
     updatedSnapshot.commitGeneration = persistence._generation;
     markDirtyIfRequested(true);
 
     const auto makeCommit = [](PersistenceSnapshot snapshot)
     {
-        return [snapshot = std::move(snapshot)](
-                   QString *errorMsg,
-                   bool *archiveCommitted) mutable
+        return [snapshot = std::move(snapshot)](QString* errorMsg, bool* archiveCommitted) mutable
         {
-            const PersistenceResult result = ProjectData::persistSnapshot(
-                snapshot);
+            const PersistenceResult result = ProjectData::persistSnapshot(snapshot);
             if (archiveCommitted)
             {
                 *archiveCommitted = result.archiveSuccess && !result.stale;
@@ -2684,10 +2458,8 @@ ProjectData::prepareResourceCleanupPersistence(
             {
                 if (errorMsg)
                 {
-                    *errorMsg = result.errorMessage.isEmpty()
-                        ? QStringLiteral(
-                            "资源清理持久化快照已被更新操作取代")
-                        : result.errorMessage;
+                    *errorMsg = result.errorMessage.isEmpty() ? QStringLiteral("资源清理持久化快照已被更新操作取代")
+                                                              : result.errorMessage;
                 }
                 return false;
             }
@@ -2699,17 +2471,13 @@ ProjectData::prepareResourceCleanupPersistence(
     return persistence;
 }
 
-bool ProjectData::finalizeResourceCleanupPersistence(
-    const ProjectResourceCleanupPersistence &persistence,
-    bool keepUpdatedMetadata,
-    bool metadataStateCommitted)
+bool ProjectData::finalizeResourceCleanupPersistence(const ProjectResourceCleanupPersistence& persistence,
+                                                     bool keepUpdatedMetadata,
+                                                     bool metadataStateCommitted)
 {
-    if (!persistence.isValid()
-        || !_persistenceCommitCoordinator
-        || QDir::cleanPath(persistence._projectPath)
-            != QDir::cleanPath(_projectPath)
-        || persistence._chunkId != _activeChunkId
-        || persistence._chunkDirectory != _activeChunkDirectory)
+    if (!persistence.isValid() || !_persistenceCommitCoordinator ||
+        QDir::cleanPath(persistence._projectPath) != QDir::cleanPath(_projectPath) ||
+        persistence._chunkId != _activeChunkId || persistence._chunkDirectory != _activeChunkDirectory)
     {
         return false;
     }
@@ -2717,19 +2485,15 @@ bool ProjectData::finalizeResourceCleanupPersistence(
     {
         return false;
     }
-    const bool generationCurrent = persistence._generation
-        == _persistenceCommitCoordinator->currentGeneration();
+    const bool generationCurrent = persistence._generation == _persistenceCommitCoordinator->currentGeneration();
     const QJsonObject currentMetadata = _filesManager.combinedData();
-    const QJsonObject finalMetadata = keepUpdatedMetadata
-        ? currentMetadata
-        : mergeCleanupRollback(currentMetadata,
-                               persistence._originalMetadata,
-                               persistence._updatedMetadata);
-    const QJsonObject &committedMetadata = keepUpdatedMetadata
-        ? persistence._updatedMetadata
-        : persistence._originalMetadata;
-    const bool hasConcurrentMetadataChanges =
-        finalMetadata != committedMetadata;
+    const QJsonObject finalMetadata =
+        keepUpdatedMetadata
+            ? currentMetadata
+            : mergeCleanupRollback(currentMetadata, persistence._originalMetadata, persistence._updatedMetadata);
+    const QJsonObject& committedMetadata =
+        keepUpdatedMetadata ? persistence._updatedMetadata : persistence._originalMetadata;
+    const bool hasConcurrentMetadataChanges = finalMetadata != committedMetadata;
 
     if (hasConcurrentMetadataChanges)
     {
@@ -2740,14 +2504,10 @@ bool ProjectData::finalizeResourceCleanupPersistence(
         updateMetadata(finalMetadata, false);
     }
 
-    const bool finalMetadataDurable = metadataStateCommitted
-        && !hasConcurrentMetadataChanges;
-    _coreFileDirtyForArchive = _coreFileDirtyForArchive
-        || !finalMetadataDurable;
-    _resultsDirtyForArchive = _resultsDirtyForArchive
-        || (_resultsLoaded && !finalMetadataDurable);
-    _workspaceDirtyForArchive = _workspaceDirtyForArchive
-        || !finalMetadataDurable;
+    const bool finalMetadataDurable = metadataStateCommitted && !hasConcurrentMetadataChanges;
+    _coreFileDirtyForArchive = _coreFileDirtyForArchive || !finalMetadataDurable;
+    _resultsDirtyForArchive = _resultsDirtyForArchive || (_resultsLoaded && !finalMetadataDurable);
+    _workspaceDirtyForArchive = _workspaceDirtyForArchive || !finalMetadataDurable;
     if (keepUpdatedMetadata || hasConcurrentMetadataChanges)
     {
         markDirtyIfRequested(true);
@@ -2762,20 +2522,18 @@ bool ProjectData::finalizeResourceCleanupPersistence(
         _archiveSyncTimer->start(2000);
     }
     _resourceCleanupPersistenceGeneration = 0;
-    _archiveSyncPending = _archiveSyncPending
-        || _coreFileDirtyForArchive
-        || _resultsDirtyForArchive
-        || _configDirtyForArchive
-        || _uiStateDirtyForArchive
-        || _workspaceDirtyForArchive;
+    _archiveSyncPending = _archiveSyncPending || _coreFileDirtyForArchive || _resultsDirtyForArchive ||
+                          _configDirtyForArchive || _uiStateDirtyForArchive || _workspaceDirtyForArchive;
     startNextPersistence();
     return generationCurrent;
 }
 
 void ProjectData::clearTemporaryMetadata()
 {
-    auto removeIfExists = [](const QString &p) {
-        if (!p.isEmpty() && QFile::exists(p)) QFile::remove(p);
+    auto removeIfExists = [](const QString& p)
+    {
+        if (!p.isEmpty() && QFile::exists(p))
+            QFile::remove(p);
     };
     removeIfExists(tempFilesPath());
     removeIfExists(tempResultsPath());
@@ -2785,66 +2543,60 @@ void ProjectData::clearTemporaryMetadata()
 
 bool ProjectData::hasTemporaryMetadata() const
 {
-    auto exists = [](const QString &p) { return !p.isEmpty() && QFile::exists(p); };
-    return exists(tempFilesPath())
-        || exists(tempResultsPath())
-        || exists(tempConfigPath())
-        || exists(tempUiStatePath());
+    auto exists = [](const QString& p) { return !p.isEmpty() && QFile::exists(p); };
+    return exists(tempFilesPath()) || exists(tempResultsPath()) || exists(tempConfigPath()) ||
+           exists(tempUiStatePath());
 }
 
-bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
+bool ProjectData::addImages(const QStringList& imagePaths, QString* errorMsg)
 {
-    if (_projectPath.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
     const QJsonArray images = _filesManager.coreData().value("images").toArray();
     QSet<QString> existingPaths;
     existingPaths.reserve(images.size());
-    for (const QJsonValue &val : images) {
+    for (const QJsonValue& val : images)
+    {
         const QString p = val.toObject().value("path").toString();
         if (!p.isEmpty())
             existingPaths.insert(p);
     }
 
-    QStringList importedPaths;
-    importedPaths.reserve(imagePaths.size());
-    QStringList reservedPaths;
-    reservedPaths.reserve(imagePaths.size());
+    QStringList externalPaths;
+    externalPaths.reserve(imagePaths.size());
     int skipped = 0;
-    for (const QString &srcPath : imagePaths) {
+    for (const QString& srcPath : imagePaths)
+    {
         const QString absPath = QFileInfo(srcPath).absoluteFilePath();
-        QString sharedUri;
-        QString projectImagePath;
-        if (!ProjectSharedImageStore(_projectPath).importImage(
-                absPath,
-                &sharedUri,
-                &projectImagePath,
-                errorMsg))
+        if (!QFileInfo(absPath).isFile())
         {
-            ProjectSharedImageStore(_projectPath)
-                .releaseReservations(reservedPaths);
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("影像不存在: %1").arg(absPath);
+            }
             return false;
         }
         // 跳过已存在的重复图片
-        if (existingPaths.contains(projectImagePath)) {
+        if (existingPaths.contains(absPath))
+        {
             ++skipped;
-            ProjectSharedImageStore(_projectPath)
-                .releaseReservations({projectImagePath});
             continue;
         }
-        reservedPaths.append(projectImagePath);
-        existingPaths.insert(projectImagePath); // 防止同批次内重复
-        importedPaths.append(projectImagePath);
+        existingPaths.insert(absPath); // 防止同批次内重复
+        externalPaths.append(absPath);
     }
 
-    return addImagesFromSharedStore(importedPaths, skipped, errorMsg);
+    return addImagesFromSharedStore(externalPaths, skipped, errorMsg);
 }
 
-bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
+bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
                                            int previouslySkipped,
-                                           QString *errorMsg)
+                                           QString* errorMsg)
 {
     if (_projectPath.isEmpty())
     {
@@ -2858,7 +2610,7 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
     QJsonArray images = _filesManager.coreData().value("images").toArray();
     QSet<QString> existingPaths;
     existingPaths.reserve(images.size() + projectImagePaths.size());
-    for (const QJsonValue &value : images)
+    for (const QJsonValue& value : images)
     {
         const QString path = value.toObject().value("path").toString();
         if (!path.isEmpty())
@@ -2869,7 +2621,8 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
 
     int skipped = std::max(0, previouslySkipped);
     QStringList publishedPaths;
-    for (const QString &projectImagePath : projectImagePaths)
+    const QString sharedImagesRoot = QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath));
+    for (const QString& projectImagePath : projectImagePaths)
     {
         const QString cleanPath = QDir::cleanPath(projectImagePath.trimmed());
         if (cleanPath.isEmpty())
@@ -2880,8 +2633,7 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
         if (existingPaths.contains(cleanPath))
         {
             ++skipped;
-            ProjectSharedImageStore(_projectPath)
-                .releaseReservations({cleanPath});
+            ProjectSharedImageStore(_projectPath).releaseReservations({cleanPath});
             continue;
         }
         if (!QFileInfo(cleanPath).isFile())
@@ -2890,23 +2642,25 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
             {
                 *errorMsg = QStringLiteral("共享影像不存在: %1").arg(cleanPath);
             }
-            ProjectSharedImageStore(_projectPath)
-                .releaseReservations(projectImagePaths);
             return false;
         }
 
         existingPaths.insert(cleanPath);
-        publishedPaths.append(cleanPath);
+        const bool isSharedImage = cleanPath.startsWith(sharedImagesRoot + QDir::separator(), Qt::CaseInsensitive);
+        if (isSharedImage)
+        {
+            publishedPaths.append(cleanPath);
+        }
         QJsonObject image;
         image["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
         image["path"] = cleanPath;
-        image["type"] = "shared";
+        image["type"] = isSharedImage ? "shared" : "external";
         image["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
         images.append(image);
     }
 
     ProjectSharedImageStore sharedImageStore(_projectPath);
-    if (!sharedImageStore.publishReferences(publishedPaths, errorMsg))
+    if (!publishedPaths.isEmpty() && !sharedImageStore.publishReferences(publishedPaths, errorMsg))
     {
         sharedImageStore.releaseReservations(projectImagePaths);
         return false;
@@ -2928,23 +2682,25 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
     return true;
 }
 
-bool ProjectData::addImagesFromFolder(const QString &folderPath, QString *errorMsg)
+bool ProjectData::addImagesFromFolder(const QString& folderPath, QString* errorMsg)
 {
     QDir dir(folderPath);
-    if (!dir.exists()) {
-        if (errorMsg) *errorMsg = QStringLiteral("文件夹不存在");
+    if (!dir.exists())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("文件夹不存在");
         return false;
     }
 
     // 支持的影像格式过滤器（包含大小写两种，兼容 Linux/Windows 文件系统）
     QStringList filters;
-    filters << "*.tif" << "*.tiff" << "*.TIF" << "*.TIFF"
-            << "*.png" << "*.PNG"
-            << "*.jpg" << "*.jpeg" << "*.JPG" << "*.JPEG";
-    
+    filters << "*.tif" << "*.tiff" << "*.TIF" << "*.TIFF" << "*.png" << "*.PNG" << "*.jpg" << "*.jpeg" << "*.JPG"
+            << "*.JPEG";
+
     // 递归只查找当前目录（QDir::Files，不含子目录）
     QStringList imagePaths;
-    for (const QFileInfo &fi : dir.entryInfoList(filters, QDir::Files)) {
+    for (const QFileInfo& fi : dir.entryInfoList(filters, QDir::Files))
+    {
         imagePaths << fi.absoluteFilePath();
     }
 
@@ -2952,17 +2708,17 @@ bool ProjectData::addImagesFromFolder(const QString &folderPath, QString *errorM
     return addImages(imagePaths, errorMsg);
 }
 
-bool ProjectData::removeResource(const QString &resourcePath)
+bool ProjectData::removeResource(const QString& resourcePath)
 {
     return removeResources(QStringList() << resourcePath);
 }
 
-bool ProjectData::removeResources(const QStringList &resourcePaths)
+bool ProjectData::removeResources(const QStringList& resourcePaths)
 {
     const QString projectRoot = ProjectIO::projectRootFromPlascan(_projectPath);
     const QString physicalRoot = ProjectIO::physicalProjectRoot(_projectPath);
     QStringList normalizedTargets;
-    for (const QString &path : resourcePaths)
+    for (const QString& path : resourcePaths)
     {
         const QString normalized = normalizedProjectResourcePath(projectRoot, path);
         if (!normalized.isEmpty() && !normalizedTargets.contains(normalized))
@@ -2970,25 +2726,21 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
             normalizedTargets.append(normalized);
         }
 
-        const QString absolute =
-            QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
         QString physicalPrefix = QDir::cleanPath(physicalRoot);
         if (!physicalPrefix.endsWith(QLatin1Char('/')))
         {
             physicalPrefix += QLatin1Char('/');
         }
 #if defined(Q_OS_WIN)
-        const bool usesPhysicalRoot =
-            absolute.startsWith(physicalPrefix, Qt::CaseInsensitive);
+        const bool usesPhysicalRoot = absolute.startsWith(physicalPrefix, Qt::CaseInsensitive);
 #else
         const bool usesPhysicalRoot = absolute.startsWith(physicalPrefix);
 #endif
         if (usesPhysicalRoot)
         {
-            const QString relative =
-                QDir(physicalRoot).relativeFilePath(absolute);
-            const QString runtimeAlias =
-                QDir::cleanPath(QDir(projectRoot).filePath(relative));
+            const QString relative = QDir(physicalRoot).relativeFilePath(absolute);
+            const QString runtimeAlias = QDir::cleanPath(QDir(projectRoot).filePath(relative));
             if (!normalizedTargets.contains(runtimeAlias))
             {
                 normalizedTargets.append(runtimeAlias);
@@ -3000,7 +2752,8 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
     QJsonArray newImages;
     QStringList removedProjectFiles;
 
-    for (const QJsonValue &val : images) {
+    for (const QJsonValue& val : images)
+    {
         QJsonObject obj = val.toObject();
         const QString storedPath = normalizedProjectResourcePath(projectRoot, obj.value("path").toString());
         if (!normalizedTargets.contains(storedPath))
@@ -3013,19 +2766,17 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
         }
     }
 
-    const QString importedRoot = QDir(projectRoot).filePath(
-        QStringLiteral("assets/imported"));
+    const QString importedRoot = QDir(projectRoot).filePath(QStringLiteral("assets/imported"));
     QString importedPrefix = QDir::cleanPath(importedRoot);
     if (!importedPrefix.endsWith(QLatin1Char('/')))
     {
         importedPrefix += QLatin1Char('/');
     }
-    for (const QString &path : removedProjectFiles)
+    for (const QString& path : removedProjectFiles)
     {
         const QString cleanPath = QDir::cleanPath(path);
 #if defined(Q_OS_WIN)
-        const bool isImported =
-            cleanPath.startsWith(importedPrefix, Qt::CaseInsensitive);
+        const bool isImported = cleanPath.startsWith(importedPrefix, Qt::CaseInsensitive);
 #else
         const bool isImported = cleanPath.startsWith(importedPrefix);
 #endif
@@ -3036,10 +2787,8 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
         QFile::remove(cleanPath);
 
         QDir parent(QFileInfo(cleanPath).absolutePath());
-        while (parent.absolutePath().size() > importedRoot.size()
-               && parent.entryList(
-                      QDir::AllEntries | QDir::NoDotAndDotDot)
-                      .isEmpty())
+        while (parent.absolutePath().size() > importedRoot.size() &&
+               parent.entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
         {
             const QString directory = parent.absolutePath();
             parent.cdUp();
@@ -3056,33 +2805,39 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
     return true;
 }
 
-bool ProjectData::setImageCamera(const QString &imagePath, const QJsonObject &cameraMeta, QString *errorMsg)
+bool ProjectData::setImageCamera(const QString& imagePath, const QJsonObject& cameraMeta, QString* errorMsg)
 {
     QMap<QString, QJsonObject> one;
     one.insert(imagePath, cameraMeta);
     return setImageCameras(one, nullptr, errorMsg);
 }
 
-bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaByImage,
-                                  int *updatedCount,
-                                  QString *errorMsg)
+bool ProjectData::setImageCameras(const QMap<QString, QJsonObject>& cameraMetaByImage,
+                                  int* updatedCount,
+                                  QString* errorMsg)
 {
-    if (updatedCount) *updatedCount = 0;
+    if (updatedCount)
+        *updatedCount = 0;
 
-    if (_projectPath.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
-    if (cameraMetaByImage.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有可写入的相机元数据");
+    if (cameraMetaByImage.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有可写入的相机元数据");
         return false;
     }
 
     // 预处理：将输入的所有键路径规范化为 cleanPath + absoluteFilePath，
     // 避免不同表示方式（相对路径 vs 绝对路径、双斜线等）导致匹配失败
     QMap<QString, QJsonObject> normalizedMap;
-    for (auto it = cameraMetaByImage.constBegin(); it != cameraMetaByImage.constEnd(); ++it) {
+    for (auto it = cameraMetaByImage.constBegin(); it != cameraMetaByImage.constEnd(); ++it)
+    {
         normalizedMap.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
     }
 
@@ -3091,13 +2846,16 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
     QJsonArray images = core.value("images").toArray();
     int changed = 0;
 
-    for (int i = 0; i < images.size(); ++i) {
-        if (!images[i].isObject()) continue;
+    for (int i = 0; i < images.size(); ++i)
+    {
+        if (!images[i].isObject())
+            continue;
         QJsonObject imgObj = images[i].toObject();
         // 同样规范化影像路径后再查找
         const QString imgPath = QDir::cleanPath(QFileInfo(imgObj.value("path").toString()).absoluteFilePath());
         auto it = normalizedMap.constFind(imgPath);
-        if (it == normalizedMap.constEnd()) continue;
+        if (it == normalizedMap.constEnd())
+            continue;
 
         // 写入相机参数到影像对象的 camera 字段
         imgObj.remove(QStringLiteral("camera_file"));
@@ -3106,8 +2864,10 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
         ++changed;
     }
 
-    if (changed <= 0) {
-        if (errorMsg) *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+    if (changed <= 0)
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
         return false;
     }
 
@@ -3117,32 +2877,37 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
 
-    if (updatedCount) *updatedCount = changed;
+    if (updatedCount)
+        *updatedCount = changed;
     return true;
 }
 
-bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
-                                      const QMap<QString, QJsonObject> &cameraMetaByImage,
-                                      int *updatedCount,
-                                      int *clearedCount,
-                                      QString *errorMsg)
+bool ProjectData::replaceImageCameras(const QStringList& targetImagePaths,
+                                      const QMap<QString, QJsonObject>& cameraMetaByImage,
+                                      int* updatedCount,
+                                      int* clearedCount,
+                                      QString* errorMsg)
 {
-    if (updatedCount) *updatedCount = 0;
-    if (clearedCount) *clearedCount = 0;
+    if (updatedCount)
+        *updatedCount = 0;
+    if (clearedCount)
+        *clearedCount = 0;
 
     if (_projectPath.isEmpty())
     {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
     if (targetImagePaths.isEmpty())
     {
-        if (errorMsg) *errorMsg = QStringLiteral("没有指定要替换相机结果的影像");
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有指定要替换相机结果的影像");
         return false;
     }
 
     QSet<QString> normalizedTargets;
-    for (const QString &path : targetImagePaths)
+    for (const QString& path : targetImagePaths)
     {
         normalizedTargets.insert(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
     }
@@ -3166,8 +2931,8 @@ bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
         }
 
         QJsonObject image = images[index].toObject();
-        const QString imagePath = QDir::cleanPath(
-            QFileInfo(image.value(QStringLiteral("path")).toString()).absoluteFilePath());
+        const QString imagePath =
+            QDir::cleanPath(QFileInfo(image.value(QStringLiteral("path")).toString()).absoluteFilePath());
         if (!normalizedTargets.contains(imagePath))
         {
             continue;
@@ -3181,8 +2946,7 @@ bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
             image[QStringLiteral("camera")] = cameraIt.value();
             ++updated;
         }
-        else if (image.contains(QStringLiteral("camera")) ||
-                 image.contains(QStringLiteral("camera_file")))
+        else if (image.contains(QStringLiteral("camera")) || image.contains(QStringLiteral("camera_file")))
         {
             image.remove(QStringLiteral("camera"));
             image.remove(QStringLiteral("camera_file"));
@@ -3193,7 +2957,8 @@ bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
 
     if (foundTargets <= 0)
     {
-        if (errorMsg) *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        if (errorMsg)
+            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
         return false;
     }
 
@@ -3204,53 +2969,64 @@ bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
 
-    if (updatedCount) *updatedCount = updated;
-    if (clearedCount) *clearedCount = cleared;
+    if (updatedCount)
+        *updatedCount = updated;
+    if (clearedCount)
+        *clearedCount = cleared;
     return true;
 }
 
 // ---------- 清除相机参数 ----------
 
-bool ProjectData::clearImageCameras(const QStringList &imagePaths,
-                                    int *clearedCount,
-                                    QString *errorMsg)
+bool ProjectData::clearImageCameras(const QStringList& imagePaths, int* clearedCount, QString* errorMsg)
 {
-    if (clearedCount) *clearedCount = 0;
+    if (clearedCount)
+        *clearedCount = 0;
 
-    if (_projectPath.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
-    if (imagePaths.isEmpty()) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有指定要清除的影像");
+    if (imagePaths.isEmpty())
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有指定要清除的影像");
         return false;
     }
 
     // 规范化路径
     QSet<QString> normalizedSet;
-    for (const QString &p : imagePaths)
+    for (const QString& p : imagePaths)
         normalizedSet.insert(QDir::cleanPath(QFileInfo(p).absoluteFilePath()));
 
     QJsonObject core = _filesManager.coreData();
     QJsonArray images = core.value("images").toArray();
     int cleared = 0;
 
-    for (int i = 0; i < images.size(); ++i) {
-        if (!images[i].isObject()) continue;
+    for (int i = 0; i < images.size(); ++i)
+    {
+        if (!images[i].isObject())
+            continue;
         QJsonObject imgObj = images[i].toObject();
         const QString imgPath = QDir::cleanPath(QFileInfo(imgObj.value("path").toString()).absoluteFilePath());
-        if (!normalizedSet.contains(imgPath)) continue;
+        if (!normalizedSet.contains(imgPath))
+            continue;
         const QJsonObject camera = imgObj.value(QStringLiteral("camera")).toObject();
-        if (camera.isEmpty()) continue;
+        if (camera.isEmpty())
+            continue;
 
         imgObj.remove(QStringLiteral("camera"));
         images[i] = imgObj;
         ++cleared;
     }
 
-    if (cleared <= 0) {
-        if (errorMsg) *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+    if (cleared <= 0)
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
         return false;
     }
 
@@ -3260,14 +3036,17 @@ bool ProjectData::clearImageCameras(const QStringList &imagePaths,
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
 
-    if (clearedCount) *clearedCount = cleared;
+    if (clearedCount)
+        *clearedCount = cleared;
     return true;
 }
 
-bool ProjectData::appendIntersectionResult(const QJsonObject &result, QString *errorMsg)
+bool ProjectData::appendIntersectionResult(const QJsonObject& result, QString* errorMsg)
 {
-    if (!appendResultRecord(QStringLiteral("intersection_results"), result, true)) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (!appendResultRecord(QStringLiteral("intersection_results"), result, true))
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
@@ -3286,10 +3065,12 @@ QJsonArray ProjectData::getIntersectionResults() const
     return _filesManager.resultsData().value(QLatin1String("intersection_results")).toArray();
 }
 
-bool ProjectData::appendBundleAdjustResult(const QJsonObject &result, QString *errorMsg)
+bool ProjectData::appendBundleAdjustResult(const QJsonObject& result, QString* errorMsg)
 {
-    if (!appendResultRecord(QStringLiteral("bundle_adjust_results"), result, true)) {
-        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+    if (!appendResultRecord(QStringLiteral("bundle_adjust_results"), result, true))
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
@@ -3302,9 +3083,7 @@ QJsonArray ProjectData::getBundleAdjustResults() const
     return _filesManager.resultsData().value(QLatin1String("bundle_adjust_results")).toArray();
 }
 
-bool ProjectData::appendResultRecord(const QString &arrayKey,
-                                     const QJsonObject &record,
-                                     bool markDirty)
+bool ProjectData::appendResultRecord(const QString& arrayKey, const QJsonObject& record, bool markDirty)
 {
     if (_projectPath.isEmpty())
     {
@@ -3327,9 +3106,9 @@ bool ProjectData::appendResultRecord(const QString &arrayKey,
     return true;
 }
 
-bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
-                                           const QString &pathKey,
-                                           const QJsonObject &record,
+bool ProjectData::upsertResultRecordByPath(const QString& arrayKey,
+                                           const QString& pathKey,
+                                           const QJsonObject& record,
                                            bool markDirty)
 {
     if (_projectPath.isEmpty())
@@ -3343,16 +3122,13 @@ bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
     }
     QJsonObject results = _filesManager.resultsData();
     const QString targetPath = record.value(pathKey).toString();
-    const QString normalizedTargetPath =
-        normalizedResultPath(_projectPath, targetPath);
+    const QString normalizedTargetPath = normalizedResultPath(_projectPath, targetPath);
     const QJsonArray source = results.value(arrayKey).toArray();
     QJsonArray deduped;
-    for (const QJsonValue &value : source)
+    for (const QJsonValue& value : source)
     {
         const QString existingPath = value.toObject().value(pathKey).toString();
-        if (!normalizedTargetPath.isEmpty()
-            && normalizedResultPath(_projectPath, existingPath)
-                == normalizedTargetPath)
+        if (!normalizedTargetPath.isEmpty() && normalizedResultPath(_projectPath, existingPath) == normalizedTargetPath)
         {
             continue;
         }
@@ -3368,8 +3144,8 @@ bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
     return true;
 }
 
-bool ProjectData::upsertResultRecordByIndex(const QString &arrayKey,
-                                            const QJsonObject &record,
+bool ProjectData::upsertResultRecordByIndex(const QString& arrayKey,
+                                            const QJsonObject& record,
                                             int replaceIndex,
                                             bool markDirty)
 {
@@ -3401,9 +3177,7 @@ bool ProjectData::upsertResultRecordByIndex(const QString &arrayKey,
     return true;
 }
 
-bool ProjectData::replaceResultRecordWithLatest(const QString &arrayKey,
-                                                const QJsonObject &record,
-                                                bool markDirty)
+bool ProjectData::replaceResultRecordWithLatest(const QString& arrayKey, const QJsonObject& record, bool markDirty)
 {
     if (_projectPath.isEmpty())
     {
@@ -3415,8 +3189,7 @@ bool ProjectData::replaceResultRecordWithLatest(const QString &arrayKey,
         return false;
     }
     QJsonObject results = _filesManager.resultsData();
-    results[arrayKey] =
-        QJsonArray{versionedResultRecord(record)};
+    results[arrayKey] = QJsonArray{versionedResultRecord(record)};
     _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
@@ -3425,7 +3198,7 @@ bool ProjectData::replaceResultRecordWithLatest(const QString &arrayKey,
     return true;
 }
 
-bool ProjectData::packResource(const QString &resourcePath, QString *errorMsg)
+bool ProjectData::packResource(const QString& resourcePath, QString* errorMsg)
 {
     if (_projectPath.isEmpty())
     {
@@ -3441,28 +3214,23 @@ bool ProjectData::packResource(const QString &resourcePath, QString *errorMsg)
     {
         if (errorMsg)
         {
-            *errorMsg =
-                QStringLiteral("待打包资源不存在: %1").arg(resourcePath);
+            *errorMsg = QStringLiteral("待打包资源不存在: %1").arg(resourcePath);
         }
         return false;
     }
 
     QString stagedPath;
     if (!ProjectWorkspaceStore(_projectPath, _activeChunkDirectory)
-             .stagePackedResource(resource.absoluteFilePath(),
-                                  &stagedPath,
-                                  errorMsg))
+             .stagePackedResource(resource.absoluteFilePath(), &stagedPath, errorMsg))
     {
         return false;
     }
 
     QJsonObject core = _filesManager.coreData();
     QJsonArray packed = core.value(QStringLiteral("packed_resources")).toArray();
-    for (const QJsonValue &value : packed)
+    for (const QJsonValue& value : packed)
     {
-        if (QDir::cleanPath(
-                value.toObject().value(QStringLiteral("path")).toString())
-            == stagedPath)
+        if (QDir::cleanPath(value.toObject().value(QStringLiteral("path")).toString()) == stagedPath)
         {
             return true;
         }
@@ -3470,10 +3238,7 @@ bool ProjectData::packResource(const QString &resourcePath, QString *errorMsg)
     packed.append(QJsonObject{
         {QStringLiteral("name"), resource.fileName()},
         {QStringLiteral("path"), stagedPath},
-        {QStringLiteral("resource_type"),
-         resource.isDir() ? QStringLiteral("directory")
-                          : QStringLiteral("file")}
-    });
+        {QStringLiteral("resource_type"), resource.isDir() ? QStringLiteral("directory") : QStringLiteral("file")}});
     core[QStringLiteral("packed_resources")] = packed;
     _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
@@ -3487,7 +3252,7 @@ QStringList ProjectData::getAllImages() const
     return _filesManager.getAllImages();
 }
 
-QStringList ProjectData::getImagesByCategory(const QString &category) const
+QStringList ProjectData::getImagesByCategory(const QString& category) const
 {
     return _filesManager.getImagesByCategory(category);
 }
@@ -3497,12 +3262,12 @@ QMap<QString, QString> ProjectData::getImageMatchOutputMap() const
     return _filesManager.getImageMatchOutputMap();
 }
 
-QString ProjectData::findMatchFile(const QString &imgA, const QString &imgB) const
+QString ProjectData::findMatchFile(const QString& imgA, const QString& imgB) const
 {
     return _filesManager.findMatchFile(imgA, imgB);
 }
 
-void ProjectData::saveImageMatchingSettings(const QJsonObject &settings)
+void ProjectData::saveImageMatchingSettings(const QJsonObject& settings)
 {
     _configManager.setWorkflowSettings("image_matching", settings);
     updateConfig(_configManager.data());
@@ -3513,19 +3278,16 @@ QJsonObject ProjectData::loadImageMatchingSettings() const
     return _configManager.workflowSettings("image_matching");
 }
 
-void ProjectData::saveUiSettings(const QJsonObject &settings)
+void ProjectData::saveUiSettings(const QJsonObject& settings)
 {
     if (!hasProject())
     {
         return;
     }
 
-    QJsonObject state = _projectUiState.isEmpty()
-        ? defaultProjectUiState()
-        : _projectUiState;
+    QJsonObject state = _projectUiState.isEmpty() ? defaultProjectUiState() : _projectUiState;
     ProjectUiConfigManager manager;
-    manager.setData(
-        state.value(QStringLiteral("display_settings")).toObject());
+    manager.setData(state.value(QStringLiteral("display_settings")).toObject());
     manager.applyPatch(settings);
     state[QStringLiteral("display_settings")] = manager.data();
     if (normalizedProjectUiState(state) == normalizedProjectUiState(_projectUiState))
@@ -3551,14 +3313,11 @@ void ProjectData::markWorkspaceDirty()
 
 QJsonObject ProjectData::loadUiSettings() const
 {
-    const QJsonObject settings =
-        _projectUiState.value(QStringLiteral("display_settings")).toObject();
-    return settings.isEmpty()
-        ? ProjectUiConfigManager::defaultUiSettings()
-        : settings;
+    const QJsonObject settings = _projectUiState.value(QStringLiteral("display_settings")).toObject();
+    return settings.isEmpty() ? ProjectUiConfigManager::defaultUiSettings() : settings;
 }
 
-void ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord &record)
+void ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord& record)
 {
     if (!ensureResultsLoaded())
     {
@@ -3572,8 +3331,7 @@ void ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord &re
     scheduleArchiveSync(false, true, false);
 }
 
-void ProjectData::appendImageMatchResults(
-    const QVector<ProjectImageMatchResultRecord> &records)
+void ProjectData::appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records)
 {
     if (records.isEmpty())
     {

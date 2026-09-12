@@ -98,6 +98,7 @@
       <string>导出</string>
      </property>
      <addaction name="actionExportMatchedPairs"/>
+     <addaction name="actionExportPortableProject"/>
     </widget>
     <widget class="QMenu" name="menuImport">
      <property name="title">
@@ -237,6 +238,14 @@
   <action name="actionExportMatchedPairs">
    <property name="text">
     <string>导出匹配对(.lis)</string>
+   </property>
+  </action>
+  <action name="actionExportPortableProject">
+   <property name="text">
+    <string>导出项目...</string>
+   </property>
+   <property name="toolTip">
+    <string>导出包含全部工程数据和外部影像的便携 ZIP</string>
    </property>
   </action>
   <action name="actionMinimize">

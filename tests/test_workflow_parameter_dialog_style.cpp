@@ -36,12 +36,12 @@
 namespace
 {
 
-    QJsonObject pointCloudCandidate()
+    QJsonObject depthMapsCandidate()
     {
-        return QJsonObject{{QStringLiteral("source_data"), QStringLiteral("point_cloud")},
-                           {QStringLiteral("source_label"), QStringLiteral("点云")},
-                           {QStringLiteral("source_path"), QStringLiteral("E:/tmp/cloud.ply")},
-                           {QStringLiteral("display"), QStringLiteral("cloud.ply")},
+        return QJsonObject{{QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+                           {QStringLiteral("source_label"), QStringLiteral("深度图")},
+                           {QStringLiteral("source_path"), QStringLiteral("E:/tmp/depth")},
+                           {QStringLiteral("display"), QStringLiteral("depth")},
                            {QStringLiteral("supported"), true}};
     }
 
@@ -76,10 +76,8 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_EQ(dialog.layout()->sizeConstraint(), QLayout::SetMinimumSize);
 
     auto* generalGroup = dialog.findChild<QGroupBox*>(QStringLiteral("workflowGeneralGroup"));
-    auto* regionGroup = dialog.findChild<QGroupBox*>(QStringLiteral("workflowRegionGroup"));
     auto* advancedGroup = dialog.findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup"));
     ASSERT_NE(generalGroup, nullptr);
-    ASSERT_NE(regionGroup, nullptr);
     ASSERT_NE(advancedGroup, nullptr);
 
     auto* generalForm = qobject_cast<QFormLayout*>(generalGroup->layout());
@@ -88,6 +86,15 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_EQ(generalForm->horizontalSpacing(), 12);
     EXPECT_EQ(generalForm->verticalSpacing(), 6);
 
+    EXPECT_EQ(dialog.findChild<QGroupBox*>(QStringLiteral("workflowRegionGroup")), nullptr);
+    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelSurfaceTypeCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("splitRegionCheck")), nullptr);
+    EXPECT_EQ(dialog.findChild<QDoubleSpinBox*>(QStringLiteral("blockSizeSpin")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("saveAfterEachStepCheck")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("strictVolumetricMasksCheck")), nullptr);
+
     auto* sourceItems = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceItemCombo"));
     ASSERT_NE(sourceItems, nullptr);
     EXPECT_EQ(sourceItems->sizeAdjustPolicy(), QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -95,6 +102,18 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_TRUE(sourceItems->isHidden());
     EXPECT_EQ(generalForm->labelForField(sourceItems), nullptr);
     EXPECT_EQ(dialog.findChild<QLabel*>(QStringLiteral("workflowStatusLabel")), nullptr);
+
+    auto* faceCountMode = dialog.findChild<QComboBox*>(QStringLiteral("modelFaceCountModeCombo"));
+    auto* customFaceCount = dialog.findChild<QSpinBox*>(QStringLiteral("modelCustomFaceCountSpin"));
+    ASSERT_NE(faceCountMode, nullptr);
+    ASSERT_NE(customFaceCount, nullptr);
+    ASSERT_EQ(faceCountMode->count(), 4);
+    EXPECT_EQ(faceCountMode->itemData(0).toString(), QStringLiteral("low"));
+    EXPECT_EQ(faceCountMode->itemData(1).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(faceCountMode->itemData(2).toString(), QStringLiteral("high"));
+    EXPECT_EQ(faceCountMode->itemData(3).toString(), QStringLiteral("custom"));
+    EXPECT_EQ(customFaceCount->minimum(), 1);
+    EXPECT_EQ(customFaceCount->maximum(), 2000000);
 
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
     auto* scrollArea = dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea"));
@@ -207,44 +226,22 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudBlocksWithoutProductionSp
     EXPECT_FALSE(replace->isEnabled());
 }
 
-TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehavior)
+TEST(WorkflowParameterDialogStyleTest, AdvancedSectionKeepsOnlyCanonicalModelControls)
 {
     GenerateModelDialog dialog;
-    dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
 
-    auto* source = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceCombo"));
     auto* toggle = dialog.findChild<QToolButton*>(QStringLiteral("workflowAdvancedToggle"));
     auto* advanced = dialog.findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup"));
-    auto* split = dialog.findChild<QCheckBox*>(QStringLiteral("splitRegionCheck"));
-    auto* blockSize = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("blockSizeSpin"));
-    auto* coordinate = dialog.findChild<QLabel*>(QStringLiteral("coordinateSystemLabel"));
-    auto* origin = dialog.findChild<QLabel*>(QStringLiteral("gridOriginLabel"));
     auto* scrollArea = dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea"));
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
-    ASSERT_NE(source, nullptr);
     ASSERT_NE(toggle, nullptr);
     ASSERT_NE(advanced, nullptr);
-    ASSERT_NE(split, nullptr);
-    ASSERT_NE(blockSize, nullptr);
-    ASSERT_NE(coordinate, nullptr);
-    ASSERT_NE(origin, nullptr);
     ASSERT_NE(scrollArea, nullptr);
     ASSERT_NE(buttonBox, nullptr);
 
-    const int pointCloudIndex = source->findData(QStringLiteral("point_cloud"));
-    ASSERT_GE(pointCloudIndex, 0);
-    source->setCurrentIndex(pointCloudIndex);
-
     EXPECT_FALSE(toggle->isChecked());
     EXPECT_TRUE(advanced->isHidden());
-    EXPECT_FALSE(blockSize->isEnabled());
-    EXPECT_FALSE(coordinate->isEnabled());
-    EXPECT_FALSE(origin->isEnabled());
-
-    split->setChecked(true);
-    EXPECT_TRUE(blockSize->isEnabled());
-    EXPECT_TRUE(coordinate->isEnabled());
-    EXPECT_TRUE(origin->isEnabled());
 
     dialog.show();
     QApplication::processEvents();
@@ -271,14 +268,21 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehav
     EXPECT_EQ(dialog.width(), resizedWidth);
 }
 
-TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
+TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings)
 {
     GenerateModelDialog dialog;
-    dialog.applySettings(QJsonObject{{QStringLiteral("source_data"), QStringLiteral("point_cloud")},
-                                     {QStringLiteral("source_path"), QStringLiteral("E:/tmp/cloud.ply")},
+    dialog.applySettings(QJsonObject{{QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+                                     {QStringLiteral("source_path"), QStringLiteral("E:/tmp/depth")},
                                      {QStringLiteral("quality"), QStringLiteral("low")},
-                                     {QStringLiteral("targetFaces"), 60000}});
-    dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
+                                     {QStringLiteral("qualityProfile"), QStringLiteral("lite")},
+                                     {QStringLiteral("modelQualityProfile"), QStringLiteral("detail")},
+                                     {QStringLiteral("targetFaces"), 60000},
+                                     {QStringLiteral("splitIntoBlocks"), true},
+                                     {QStringLiteral("blockSizeMeters"), 256.0},
+                                     {QStringLiteral("skipBoundaryBlocks"), true},
+                                     {QStringLiteral("saveAfterEachStep"), true},
+                                     {QStringLiteral("strictVolumetricMasks"), true}});
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
 
     QSignalSpy runSpy(&dialog, &GenerateModelDialog::runRequested);
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
@@ -287,29 +291,43 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
     ASSERT_EQ(runSpy.count(), 1);
 
     const QJsonObject settings = runSpy.at(0).at(0).toJsonObject();
-    EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(), QStringLiteral("point_cloud"));
-    EXPECT_EQ(settings.value(QStringLiteral("source_path")).toString(), QStringLiteral("E:/tmp/cloud.ply"));
-    EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("low"));
+    EXPECT_EQ(settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 1);
+    EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(), QStringLiteral("depth_maps"));
+    EXPECT_EQ(settings.value(QStringLiteral("source_path")).toString(), QStringLiteral("E:/tmp/depth"));
     EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
-    EXPECT_EQ(settings.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("low"));
-    EXPECT_EQ(settings.value(QStringLiteral("targetFaces")).toInt(), 60000);
+    EXPECT_EQ(settings.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(settings.value(QStringLiteral("surfaceQualityProfile")).toString(), QStringLiteral("recovered_ooc"));
+    EXPECT_EQ(settings.value(QStringLiteral("reconstruction_mode")).toString(), QStringLiteral("recovered_ooc"));
+    EXPECT_EQ(settings.value(QStringLiteral("faceCountMode")).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(settings.value(QStringLiteral("faceCountCustom")).toInt(), 60000);
+    EXPECT_EQ(settings.value(QStringLiteral("simplifyTargetFaces")).toInt(), 100000);
+    EXPECT_EQ(settings.value(QStringLiteral("requestedTargetFaces")).toInt(), 100000);
+    for (const QString& retired : {QStringLiteral("quality"),
+                                   QStringLiteral("qualityProfile"),
+                                   QStringLiteral("modelQualityProfile"),
+                                   QStringLiteral("targetFaces"),
+                                   QStringLiteral("splitIntoBlocks"),
+                                   QStringLiteral("blockSizeMeters"),
+                                   QStringLiteral("skipBoundaryBlocks"),
+                                   QStringLiteral("saveAfterEachStep"),
+                                   QStringLiteral("strictVolumetricMasks")})
+    {
+        EXPECT_FALSE(settings.contains(retired)) << qPrintable(retired);
+    }
 
     auto* depthQualityLabel = dialog.findChild<QLabel*>(QStringLiteral("effectiveDepthQualityLabel"));
     ASSERT_NE(depthQualityLabel, nullptr);
-    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("比例 0.125")));
-    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("4 轮")));
-    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("9×9 邻域")));
-    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("源视角 3")));
+    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("d4")));
 }
 
-TEST(WorkflowParameterDialogStyleTest, GenerateModelRestoresDepthPostProcessingSettings)
+TEST(WorkflowParameterDialogStyleTest, GenerateModelFixesRecoveredPipelineParameters)
 {
     GenerateModelDialog dialog;
-    dialog.applySettings(QJsonObject{{QStringLiteral("source_data"), QStringLiteral("point_cloud")},
-                                     {QStringLiteral("source_path"), QStringLiteral("E:/tmp/cloud.ply")},
+    dialog.applySettings(QJsonObject{{QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+                                     {QStringLiteral("source_path"), QStringLiteral("E:/tmp/depth")},
                                      {QStringLiteral("interpolation"), QStringLiteral("disabled")},
                                      {QStringLiteral("depthFiltering"), QStringLiteral("aggressive")}});
-    dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
 
     QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
     auto* button_box = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
@@ -318,29 +336,20 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelRestoresDepthPostProcessingS
     ASSERT_EQ(run_spy.count(), 1);
 
     const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
-    EXPECT_EQ(settings.value(QStringLiteral("interpolation")).toString(), QStringLiteral("disabled"));
-    EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("aggressive"));
+    EXPECT_FALSE(settings.contains(QStringLiteral("interpolation")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("calculateVertexColors")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("surface_type")));
+    EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("mild"));
 }
 
-TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsAlgorithmAndFixedInterpolation)
+TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsCanonicalAlgorithm)
 {
-    const QString root = QStringLiteral(PLASCAN_SOURCE_DIR "/build/tmp/recovered-model-tests");
-    ASSERT_TRUE(QDir().mkpath(root));
-    QTemporaryDir temporary(root + QStringLiteral("/dialog-XXXXXX"));
-    ASSERT_TRUE(temporary.isValid());
-    ASSERT_TRUE(QDir().mkpath(temporary.filePath(QStringLiteral("recovered_model_input"))));
     GenerateModelDialog dialog;
-    dialog.applySettings({{"source_data", "depth_maps"}, {"source_path", temporary.path()},
-                          {"interpolation", "disabled"}, {"surface_type", "arbitrary_3d"}});
-    dialog.setSourceCandidates({QJsonObject{{"source_data", "depth_maps"}, {"source_path", temporary.path()},
-                                           {"display", "Recovered input"}, {"supported", true}}});
-    auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveModelAlgorithmLabel"));
-    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
+    auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveSurfaceQualityLabel"));
     ASSERT_NE(label, nullptr);
-    ASSERT_NE(interpolation, nullptr);
-    EXPECT_TRUE(label->text().contains(QStringLiteral("OOC")));
-    EXPECT_FALSE(interpolation->isEnabled());
-    EXPECT_EQ(interpolation->currentData().toString(), QStringLiteral("enabled"));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("recovered_ooc")));
+    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo")), nullptr);
 }
 
 TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeepsStableSchema)

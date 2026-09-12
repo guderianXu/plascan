@@ -114,6 +114,102 @@ namespace
             metmodel::run_recovered_patchmatch_filter_speckles_edges_cuda_source(speckles, speckles_output, error))
             << error;
         EXPECT_EQ(speckles_output.filtered_mask_allocation, std::vector<std::uint8_t>(pixel_count, 0U));
+
+        // The optimized source kernel dispatches exact affine perspective
+        // transforms once on the host.  A mathematically equivalent generic
+        // projective transform must retain identical filtering semantics.
+        metmodel::PatchMatchCamera affine_camera;
+        affine_camera.f = 100.0F;
+        affine_camera.width_original = 5U;
+        affine_camera.height_original = 3U;
+        affine_camera.type = 0U;
+        affine_camera.transform[0] = 1.0F;
+        affine_camera.transform[5] = 1.0F;
+        affine_camera.transform[10] = 1.0F;
+        affine_camera.transform[15] = 1.0F;
+        metmodel::PatchMatchFilterSpecklesEdgesInput affine_speckles;
+        affine_speckles.camera = affine_camera;
+        affine_speckles.depth_allocation.assign(15U, 2.0F);
+        affine_speckles.filtered_mask_allocation.assign(15U, 0U);
+        affine_speckles.global_work_items = 15U;
+        metmodel::PatchMatchFilterSpecklesEdgesOutput affine_output;
+        ASSERT_TRUE(
+            metmodel::run_recovered_patchmatch_filter_speckles_edges_cuda_source(affine_speckles, affine_output, error))
+            << error;
+
+        auto projective_speckles = affine_speckles;
+        for (std::size_t index = 0U; index != 16U; ++index)
+            projective_speckles.camera.transform[index] *= 2.0F;
+        metmodel::PatchMatchFilterSpecklesEdgesOutput projective_output;
+        ASSERT_TRUE(metmodel::run_recovered_patchmatch_filter_speckles_edges_cuda_source(
+            projective_speckles, projective_output, error))
+            << error;
+        EXPECT_EQ(affine_output.filtered_mask_allocation, projective_output.filtered_mask_allocation);
+    }
+
+    TEST(RecoveredModelReference, ParallelCudaSpeckleBandsRemainConnected)
+    {
+        constexpr std::uint32_t width = 512U;
+        constexpr std::uint32_t height = 300U;
+        constexpr std::uint32_t line_x = 100U;
+        std::vector<float> depth(static_cast<std::size_t>(width) * height, 0.0F);
+        std::vector<std::uint8_t> mask(depth.size(), 0U);
+        for (std::uint32_t y = 0U; y < height; ++y)
+        {
+            const std::size_t index = static_cast<std::size_t>(y) * width + line_x;
+            depth[index] = 1.0F;
+            if (y + 1U < height)
+            {
+                mask[index] = static_cast<std::uint8_t>(1U << (y == 0U ? 3U : 6U));
+            }
+        }
+        const std::size_t isolated = static_cast<std::size_t>(height / 2U) * width + 200U;
+        depth[isolated] = 2.0F;
+        std::string error;
+        ASSERT_TRUE(
+            metmodel::filter_recovered_patchmatch_cuda_speckle_components(width, height, mask, depth, 30U, error))
+            << error;
+        for (std::uint32_t y = 0U; y < height; ++y)
+        {
+            EXPECT_EQ(depth[static_cast<std::size_t>(y) * width + line_x], 1.0F);
+        }
+        EXPECT_EQ(depth[isolated], 0.0F);
+    }
+
+    TEST(RecoveredModelReference, CudaOocNeighborsMatchCpuReference)
+    {
+        std::vector<metmodel::OocOctreeRecord> records(9U);
+        records[0].level = 0U;
+        for (std::uint32_t child = 0U; child < 8U; ++child)
+        {
+            records[child + 1U].morton_words[0] = child << 29U;
+            records[child + 1U].level = 1U;
+        }
+        std::vector<std::uint32_t> selected(records.size());
+        std::iota(selected.begin(), selected.end(), 0U);
+        const std::vector<std::uint8_t> active(records.size(), 1U);
+        const std::vector<float> scalar_lut(65536U, 0.0F);
+        const auto cpu = metmodel::prepare_ooc_fusion_state(records, selected, active, scalar_lut);
+        metmodel::OocFusionState cuda;
+        try
+        {
+            cuda = metmodel::prepare_ooc_fusion_state(records, selected, active, scalar_lut, {}, 0U);
+        }
+        catch (const std::exception& exception)
+        {
+            const std::string message = exception.what();
+            if (message.find("CUDA-disabled") != std::string::npos ||
+                message.find("no CUDA-capable device") != std::string::npos)
+            {
+                GTEST_SKIP() << message;
+            }
+            throw;
+        }
+        EXPECT_EQ(cuda.neighbors, cpu.neighbors);
+        EXPECT_EQ(cuda.connectivity, cpu.connectivity);
+        EXPECT_EQ(cuda.refinement, cpu.refinement);
+        EXPECT_EQ(cuda.weights, cpu.weights);
+        EXPECT_EQ(cuda.flags, cpu.flags);
     }
 
     void require(bool condition, const char* message)
@@ -1463,6 +1559,10 @@ namespace
             upstream[index].level = records[index].level;
             upstream[index].weight_denominator = denominators[index];
         }
+        const auto identity_nodes = metmodel::make_ooc_marching_nodes(
+            records, selected, std::span<const metmodel::OocWeightedNodeRecord>(upstream));
+        require(std::memcmp(identity_nodes.data(), nodes.data(), nodes.size() * sizeof(nodes.front())) == 0,
+                "marching same-index denominator projection mismatch");
         // The producer table and persistent table need not have the same order.
         std::rotate(upstream.begin(), upstream.begin() + 3, upstream.end());
         const auto producer_nodes = metmodel::make_ooc_marching_nodes(

@@ -6,10 +6,13 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
+#include <QtGlobal>
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -57,19 +60,15 @@ int main(int argc, char *argv[])
     cli::configureApp(app);
 
     std::string source_data;
-    std::string point_cloud;
     std::string depth_map_dir;
-    std::string dense_cloud;
     std::string sparse_scaffold;
     std::string sparse_points_json;
     std::string output_dir;
     std::string settings_json;
     std::string settings_key = "generate_model";
 
-    app.add_option("--source-data", source_data, "源数据: point_cloud 或 depth_maps");
-    app.add_option("--point-cloud", point_cloud, "点云源 PLY 路径");
+    app.add_option("--source-data", source_data, "源数据: depth_maps 或 rpc_height_plane_sweep");
     app.add_option("--depth-map-dir", depth_map_dir, "深度图输出目录");
-    app.add_option("--dense-cloud", dense_cloud, "仅显式 poisson_legacy 模式使用的密集点云 PLY");
     app.add_option("--sparse-scaffold", sparse_scaffold,
                    "环拍深度补全使用的 SfM 稀疏骨架 PLY");
     app.add_option("--sparse-points-json", sparse_points_json,
@@ -82,20 +81,44 @@ int main(int argc, char *argv[])
 
     QJsonObject settings = readSettingsObject(QString::fromUtf8(settings_json),
                                               QString::fromUtf8(settings_key));
+    settings.remove(QStringLiteral("quality"));
+    settings.remove(QStringLiteral("qualityProfile"));
+    settings.remove(QStringLiteral("modelQualityProfile"));
+    settings.remove(QStringLiteral("targetFaces"));
+    settings.remove(QStringLiteral("splitIntoBlocks"));
+    settings.remove(QStringLiteral("blockSizeMeters"));
+    settings.remove(QStringLiteral("skipBoundaryBlocks"));
+    settings.remove(QStringLiteral("saveAfterEachStep"));
+    settings.remove(QStringLiteral("strictVolumetricMasks"));
+    settings.remove(QStringLiteral("surface_type"));
+    settings.remove(QStringLiteral("interpolation"));
+    settings.remove(QStringLiteral("calculateVertexColors"));
+    settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    const QString face_mode = settings.value(QStringLiteral("faceCountMode")).toString();
+    const int custom_faces = qBound(1, settings.value(QStringLiteral("faceCountCustom")).toInt(200000), 2000000);
+    const int target_faces = face_mode == QStringLiteral("low")      ? 20000
+                             : face_mode == QStringLiteral("medium") ? 100000
+                             : face_mode == QStringLiteral("high")   ? 200000
+                                                                     : custom_faces;
+    settings[QStringLiteral("faceCountMode")] =
+        face_mode == QStringLiteral("low") || face_mode == QStringLiteral("medium") ||
+                face_mode == QStringLiteral("high") || face_mode == QStringLiteral("custom")
+            ? face_mode
+            : QStringLiteral("high");
+    settings[QStringLiteral("faceCountCustom")] = custom_faces;
+    settings[QStringLiteral("simplifyTargetFaces")] = target_faces;
     QString source_data_qt = QString::fromUtf8(source_data).trimmed();
     if (source_data_qt.isEmpty())
     {
         source_data_qt = settings.value(QStringLiteral("source_data"))
-                             .toString(QStringLiteral("point_cloud"));
+                             .toString(QStringLiteral("depth_maps"));
     }
-    if (source_data_qt != QStringLiteral("point_cloud") &&
-        source_data_qt != QStringLiteral("depth_maps"))
+    if (source_data_qt != QStringLiteral("depth_maps") &&
+        source_data_qt != QStringLiteral("rpc_height_plane_sweep"))
     {
-        cli::fatal("--source-data 仅支持 point_cloud 或 depth_maps", cli::EXIT_ARG_ERR);
-    }
-    if (source_data_qt == QStringLiteral("point_cloud") && point_cloud.empty())
-    {
-        cli::fatal("point_cloud 模式缺少 --point-cloud", cli::EXIT_ARG_ERR);
+        cli::fatal("canonical v1 生成模型仅支持 --source-data depth_maps 或 rpc_height_plane_sweep",
+                   cli::EXIT_ARG_ERR);
     }
     if (source_data_qt == QStringLiteral("depth_maps") && depth_map_dir.empty())
     {
@@ -107,24 +130,44 @@ int main(int argc, char *argv[])
                    cli::EXIT_ARG_ERR);
     }
 
-    settings[QStringLiteral("source_data")] = source_data_qt;
-    if (source_data_qt == QStringLiteral("depth_maps") &&
-        !settings.contains(QStringLiteral("reconstruction_mode")))
+    const QString requested_mode = settings.value(QStringLiteral("reconstruction_mode"))
+                                       .toString()
+                                       .trimmed()
+                                       .toLower();
+    if (!requested_mode.isEmpty() && requested_mode != QStringLiteral("recovered_ooc") &&
+        requested_mode != QStringLiteral("rpc_height_plane_sweep"))
     {
-        settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("depth_tsdf");
+        cli::fatal("canonical v1 不接受旧 reconstruction_mode", cli::EXIT_ARG_ERR);
     }
-    const QString reconstruction_mode =
-        settings.value(QStringLiteral("reconstruction_mode")).toString();
+    const bool rpc_mode = source_data_qt == QStringLiteral("rpc_height_plane_sweep");
+    if (rpc_mode != (requested_mode == QStringLiteral("rpc_height_plane_sweep")))
+    {
+        cli::fatal("source_data 与 reconstruction_mode 必须同为 RPC 高程平面扫描", cli::EXIT_ARG_ERR);
+    }
+    if (rpc_mode)
+    {
+        const QJsonArray rpc_images = settings.value(QStringLiteral("rpcImagePaths")).toArray();
+        const QJsonValue min_height = settings.value(QStringLiteral("rpcHeightMinMeters"));
+        const QJsonValue max_height = settings.value(QStringLiteral("rpcHeightMaxMeters"));
+        if (rpc_images.size() != 2 || !rpc_images.at(0).isString() || !rpc_images.at(1).isString() ||
+            rpc_images.at(0).toString().trimmed().isEmpty() || rpc_images.at(1).toString().trimmed().isEmpty() ||
+            !min_height.isDouble() || !max_height.isDouble() || !std::isfinite(min_height.toDouble()) ||
+            !std::isfinite(max_height.toDouble()) || min_height.toDouble() >= max_height.toDouble())
+        {
+            cli::fatal("RPC 模式要求恰好两条非空 rpcImagePaths 和递增的有限物理高程范围",
+                       cli::EXIT_ARG_ERR);
+        }
+    }
+    settings[QStringLiteral("source_data")] = source_data_qt;
+    settings[QStringLiteral("reconstruction_mode")] =
+        rpc_mode ? QStringLiteral("rpc_height_plane_sweep") : QStringLiteral("recovered_ooc");
+    settings[QStringLiteral("surfaceQualityProfile")] = settings.value(QStringLiteral("reconstruction_mode"));
     xjw::mesh::workflow::ModelBuildRequest request;
     request.sourceData = source_data_qt;
-    request.requestedSourcePath = source_data_qt == QStringLiteral("depth_maps")
-        ? QString::fromUtf8(depth_map_dir)
-        : QString::fromUtf8(point_cloud);
-    request.sourcePointCloudPath = source_data_qt == QStringLiteral("depth_maps")
-        ? (reconstruction_mode == QStringLiteral("poisson_legacy")
-               ? QString::fromUtf8(dense_cloud)
-               : QString())
-        : QString::fromUtf8(point_cloud);
+    request.requestedSourcePath = rpc_mode
+        ? settings.value(QStringLiteral("rpcImagePaths")).toArray().at(0).toString()
+        : QString::fromUtf8(depth_map_dir);
+    request.sourcePointCloudPath = QString();
     request.depthMapSourcePath = QString::fromUtf8(depth_map_dir);
     request.sparseScaffoldPointCloudPath = QString::fromUtf8(sparse_scaffold);
     request.sparseScaffoldPointsPath = QString::fromUtf8(sparse_points_json);
