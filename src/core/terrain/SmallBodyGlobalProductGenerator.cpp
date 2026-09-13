@@ -35,12 +35,17 @@ namespace
 constexpr double kPi = 3.14159265358979323846;
 
 void reportProgress(const SmallBodyProgressCallback &callback,
-                    const QString &stage,
-                    int percent)
+                    SmallBodyGlobalStage stage,
+                    int percent,
+                    int rasterRowsDone = 0,
+                    int rasterRowCount = 0)
 {
     if (callback)
     {
-        callback(stage, std::clamp(percent, 0, 100));
+        callback({stage,
+                  std::clamp(percent, 0, 100),
+                  std::max(0, rasterRowsDone),
+                  std::max(0, rasterRowCount)});
     }
 }
 
@@ -544,7 +549,7 @@ bool SmallBodyGlobalProductGenerator::generate(const QString &surfacePath,
         }
         return false;
     }
-    reportProgress(progressCallback, QStringLiteral("读取体固连表面模型"), 2);
+    reportProgress(progressCallback, SmallBodyGlobalStage::LoadSurface, 2);
     TerrainMeshInput surface;
     if (!loadSurface(absolute_surface_path, &surface, errorMessage))
     {
@@ -647,7 +652,7 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
         return false;
     }
 
-    reportProgress(progressCallback, QStringLiteral("建立三角网 BVH"), 5);
+    reportProgress(progressCallback, SmallBodyGlobalStage::BuildSpatialIndex, 5);
     SmallBodyMeshRaycaster raycaster;
     if (!raycaster.initialize(
             surface, center_in_surface_units, errorMessage, cancelFlag))
@@ -756,8 +761,10 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
                 {
                     reported_progress = percent;
                     reportProgress(progressCallback,
-                                   QStringLiteral("生成全球径向 DEM/DOM"),
-                                   percent);
+                                   SmallBodyGlobalStage::RasterizeGlobalProducts,
+                                   percent,
+                                   rows_done,
+                                   height);
                 }
             }
         }
@@ -860,7 +867,7 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
     generated.solidAngleWeightedCoverageRatio =
         total_area > 0.0 ? valid_area / total_area : 0.0;
 
-    reportProgress(progressCallback, QStringLiteral("写出全球 GeoTIFF"), 82);
+    reportProgress(progressCallback, SmallBodyGlobalStage::WriteProducts, 82);
     if (failIfCancelled(cancelFlag, errorMessage))
     {
         return false;
@@ -989,7 +996,7 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
     }
 
     *products = std::move(generated);
-    reportProgress(progressCallback, QStringLiteral("全球 DEM/DOM 与报告完成"), 100);
+    reportProgress(progressCallback, SmallBodyGlobalStage::Completed, 100);
     return true;
 }
 catch (const cv::Exception &exception)

@@ -84,12 +84,14 @@ namespace xjw::mvs
             return bytes;
         }
 
-        std::size_t pixelCount(const metmodel::Camera& camera, std::size_t level)
+        std::size_t pixelCount(const metmodel::Camera& camera, std::uint32_t baseDownscale, std::size_t level)
         {
-            const auto scale = std::size_t{4} << level;
+            const auto scale = static_cast<std::size_t>(baseDownscale) << level;
             require(camera.image.width > 0 && camera.image.height > 0 && camera.image.width <= 100000 &&
                         camera.image.height <= 100000 && camera.image.width % 16 == 0 && camera.image.height % 16 == 0,
                     QStringLiteral("Recovered OOC requires positive image dimensions divisible by 16"));
+            require(camera.image.width % scale == 0 && camera.image.height % scale == 0,
+                    QStringLiteral("Recovered OOC image dimensions are not divisible by the stored quality level"));
             const auto count = (camera.image.width / scale) * (camera.image.height / scale);
             require(count <= static_cast<std::size_t>(std::numeric_limits<int>::max() / 4),
                     QStringLiteral("Recovered depth plane exceeds supported size"));
@@ -140,6 +142,10 @@ namespace xjw::mvs
     {
         require(!scene.cameras.empty() && scene.cameras.size() == depth.cameras.size() && scene.region.specified,
                 QStringLiteral("Incomplete recovered model scene"));
+        require((depth.base_downscale == 1U || depth.base_downscale == 2U || depth.base_downscale == 4U ||
+                 depth.base_downscale == 8U || depth.base_downscale == 16U) &&
+                    depth.stored_level_count == (depth.base_downscale == 16U ? 2U : 3U),
+                QStringLiteral("Invalid recovered model quality identity"));
         require(replaceExisting || !QFileInfo::exists(directory),
                 QStringLiteral("Recovered model input already exists: %1").arg(directory));
         QTemporaryDir staging(directory + QStringLiteral(".staging-XXXXXX"));
@@ -180,17 +186,20 @@ namespace xjw::mvs
             object[QStringLiteral("image_path")] = QString::fromUtf8(reinterpret_cast<const char*>(image_path.data()),
                                                                      static_cast<qsizetype>(image_path.size()));
             QJsonArray hashes;
-            for (std::size_t level = 0; level < 3; ++level)
+            for (std::size_t level = 0; level < depth.stored_level_count; ++level)
             {
                 const auto& plane = output.voting.depth_after_components[level];
-                require(plane.size() == pixelCount(camera, level), QStringLiteral("Missing voted depth pyramid level"));
+                require(plane.size() == pixelCount(camera, depth.base_downscale, level),
+                        QStringLiteral("Missing voted depth pyramid level"));
                 QByteArray bytes(static_cast<qsizetype>(plane.size() * sizeof(float)), Qt::Uninitialized);
                 for (std::size_t p = 0; p < plane.size(); ++p)
                 {
                     require(std::isfinite(plane[p]) && plane[p] >= 0, QStringLiteral("Invalid voted depth value"));
                     qToLittleEndian(std::bit_cast<quint32>(plane[p]), bytes.data() + p * 4);
                 }
-                save(QDir(staging.path()).filePath(QStringLiteral("camera_%1_d%2.bin").arg(i).arg(4U << level)), bytes);
+                save(QDir(staging.path())
+                         .filePath(QStringLiteral("camera_%1_d%2.bin").arg(i).arg(depth.base_downscale << level)),
+                     bytes);
                 hashes.append(QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()));
             }
             object[QStringLiteral("sha256")] = hashes;
@@ -199,7 +208,9 @@ namespace xjw::mvs
         const auto& region = scene.region;
         QJsonObject manifest{
             {QStringLiteral("schema"), QStringLiteral("plascan.recovered-model-input.v1")},
-            {QStringLiteral("depth_semantics"), QStringLiteral("d4-d8-d16-voting-after-components")},
+            {QStringLiteral("depth_semantics"), QStringLiteral("scaled-voting-after-components")},
+            {QStringLiteral("base_downscale"), static_cast<int>(depth.base_downscale)},
+            {QStringLiteral("stored_level_count"), static_cast<int>(depth.stored_level_count)},
             {QStringLiteral("cameras"), cameras},
             {QStringLiteral("region_rotation"), values(region.rotation)},
             {QStringLiteral("region_center"), values({region.center.x, region.center.y, region.center.z})},
@@ -223,11 +234,24 @@ namespace xjw::mvs
         require(error.error == QJsonParseError::NoError && document.isObject() &&
                     manifest.value(QStringLiteral("schema")).toString() ==
                         QStringLiteral("plascan.recovered-model-input.v1") &&
-                    manifest.value(QStringLiteral("depth_semantics")).toString() ==
-                        QStringLiteral("d4-d8-d16-voting-after-components"),
+                    (manifest.value(QStringLiteral("depth_semantics")).toString() ==
+                         QStringLiteral("scaled-voting-after-components") ||
+                     manifest.value(QStringLiteral("depth_semantics")).toString() ==
+                         QStringLiteral("d4-d8-d16-voting-after-components")),
                 QStringLiteral("Unsupported recovered model input manifest"));
         metmodel::Scene loaded;
         metmodel::RecoveredPatchMatchD4SceneOutput loaded_depth;
+        const bool legacy_d4 = manifest.value(QStringLiteral("depth_semantics")).toString() ==
+                               QStringLiteral("d4-d8-d16-voting-after-components");
+        loaded_depth.base_downscale =
+            legacy_d4 ? 4U : static_cast<std::uint32_t>(manifest.value(QStringLiteral("base_downscale")).toInt());
+        loaded_depth.stored_level_count =
+            legacy_d4 ? 3U : static_cast<std::size_t>(manifest.value(QStringLiteral("stored_level_count")).toInt());
+        require((loaded_depth.base_downscale == 1U || loaded_depth.base_downscale == 2U ||
+                 loaded_depth.base_downscale == 4U || loaded_depth.base_downscale == 8U ||
+                 loaded_depth.base_downscale == 16U) &&
+                    loaded_depth.stored_level_count == (loaded_depth.base_downscale == 16U ? 2U : 3U),
+                QStringLiteral("Invalid recovered model input quality identity"));
         const auto rotation = numbers(manifest.value(QStringLiteral("region_rotation")), 9);
         std::copy(rotation.begin(), rotation.end(), loaded.region.rotation.begin());
         const auto center = numbers(manifest.value(QStringLiteral("region_center")), 3);
@@ -276,13 +300,17 @@ namespace xjw::mvs
             camera.pose.center = camera.center;
             metmodel::RecoveredPatchMatchD4CameraOutput output;
             output.patchmatch.camera_index = camera.index;
+            output.patchmatch.base_downscale = loaded_depth.base_downscale;
+            output.patchmatch.stored_level_count = loaded_depth.stored_level_count;
             const auto hashes = object.value(QStringLiteral("sha256")).toArray();
-            require(hashes.size() == 3, QStringLiteral("Missing model depth checksums"));
-            for (std::size_t level = 0; level < 3; ++level)
+            require(hashes.size() == static_cast<qsizetype>(loaded_depth.stored_level_count),
+                    QStringLiteral("Missing model depth checksums"));
+            for (std::size_t level = 0; level < loaded_depth.stored_level_count; ++level)
             {
-                const auto count = pixelCount(camera, level);
+                const auto count = pixelCount(camera, loaded_depth.base_downscale, level);
                 const auto bytes =
-                    read(QDir(directory).filePath(QStringLiteral("camera_%1_d%2.bin").arg(i).arg(4U << level)),
+                    read(QDir(directory).filePath(
+                             QStringLiteral("camera_%1_d%2.bin").arg(i).arg(loaded_depth.base_downscale << level)),
                          static_cast<qint64>(count * 4));
                 require(QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()) ==
                             hashes[static_cast<qsizetype>(level)].toString(),

@@ -2879,7 +2879,11 @@ namespace metmodel
 
     OocSampleScalePyramidOutput build_ooc_sample_scale_pyramid_mode0(const OocSampleScalePyramidInput& input)
     {
-        for (std::size_t level = 0U; level != input.seeds.size(); ++level)
+        if (input.seed_count < 2U || input.seed_count > input.seeds.size())
+        {
+            throw std::invalid_argument("OOC sample-scale pyramid requires two or three seed levels");
+        }
+        for (std::size_t level = 0U; level != input.seed_count; ++level)
         {
             const auto& seed = input.seeds[level];
             if (seed.width == 0U || seed.height == 0U ||
@@ -2996,7 +3000,8 @@ namespace metmodel
     {
         std::array<std::vector<float>, 3> expanded;
         OocSampleScalePyramidInput pyramid;
-        for (std::size_t seed = 0U; seed != input.seeds.size(); ++seed)
+        pyramid.seed_count = input.seed_count;
+        for (std::size_t seed = 0U; seed != input.seed_count; ++seed)
         {
             expanded[seed] = expand_ooc_depth_roi(input.seeds[seed].depth);
             pyramid.seeds[seed] = {
@@ -3042,7 +3047,8 @@ namespace metmodel
         bounds[2] = downsample_ooc_depth_roi_bounds(bounds[1]);
 
         OocSampleScalePyramidRoiInput roi;
-        for (std::size_t seed = 0U; seed != input.cameras.size(); ++seed)
+        roi.seed_count = input.seed_count;
+        for (std::size_t seed = 0U; seed != input.seed_count; ++seed)
         {
             const auto& camera = input.cameras[seed];
             const auto& current = bounds[seed];
@@ -3092,7 +3098,7 @@ namespace metmodel
         region.bounds = input.bounds;
         region.cameras = input.cameras;
         region.gates = input.gates;
-        // The six target work items carry the raw project c2w bytes here. This is
+        region.seed_count = input.seed_count; // The six target work items carry the raw project c2w bytes here. This is
         // intentionally distinct from the SVD-conditioned transform used above
         // for ROI projection.
         region.camera_to_record = input.bounds.camera_to_world;
@@ -3100,7 +3106,7 @@ namespace metmodel
         region.diagonal_pixel_scale = input.diagonal_pixel_scale;
         region.special_invalid_depth = input.special_invalid_depth;
         region.reduction_gates = input.reduction_gates;
-        for (std::size_t level = 0U; level != input.voted_depths.size(); ++level)
+        for (std::size_t level = 0U; level != input.seed_count; ++level)
         {
             const auto& camera = input.cameras[level];
             if (camera.width <= 0 || camera.height <= 0)
@@ -3182,15 +3188,21 @@ namespace metmodel
         std::size_t camera_index,
         const std::array<std::span<const float>, 3>& voted_depths,
         std::uint32_t depth_downscale,
-        bool captured_diagonal_pixel_scale)
+        bool captured_diagonal_pixel_scale,
+        std::size_t stored_level_count)
     {
         if (depth_downscale > std::numeric_limits<std::uint32_t>::max() / 4U)
         {
             throw std::overflow_error("OOC Scene pyramid downscale overflows");
         }
         OocSampleScalePyramidVotedDepthInput input;
+        if (stored_level_count < 2U || stored_level_count > voted_depths.size())
+        {
+            throw std::invalid_argument("OOC Scene pyramid requires two or three stored levels");
+        }
+        input.seed_count = stored_level_count;
         input.bounds = make_ooc_depth_roi_project_mode0_input(scene, camera_index, depth_downscale);
-        for (std::size_t level = 0U; level != voted_depths.size(); ++level)
+        for (std::size_t level = 0U; level != stored_level_count; ++level)
         {
             const std::uint32_t level_downscale = depth_downscale << static_cast<std::uint32_t>(level);
             const OocDepthRoiProjectMode0Input level_input =
@@ -3213,11 +3225,12 @@ namespace metmodel
                                                                  std::size_t camera_index,
                                                                  const std::array<std::vector<float>, 3>& voted_depths,
                                                                  std::uint32_t depth_downscale,
-                                                                 bool captured_diagonal_pixel_scale)
+                                                                 bool captured_diagonal_pixel_scale,
+                                                                 std::size_t stored_level_count)
     {
         const std::array<std::span<const float>, 3> views{voted_depths[0], voted_depths[1], voted_depths[2]};
         return build_ooc_sample_scale_pyramid_from_scene_voted_depths_mode0(
-            scene, camera_index, views, depth_downscale, captured_diagonal_pixel_scale);
+            scene, camera_index, views, depth_downscale, captured_diagonal_pixel_scale, stored_level_count);
     }
 
     OocSceneVotedDepthBundleMode0Output
@@ -3253,7 +3266,8 @@ namespace metmodel
                                                                              camera.camera_index,
                                                                              camera.voted_depths,
                                                                              depth_downscale,
-                                                                             camera.captured_diagonal_pixel_scale));
+                                                                             camera.captured_diagonal_pixel_scale,
+                                                                             camera.stored_level_count));
         }
 
         std::vector<OocPyramidBundleMode0Group> groups;
@@ -6150,7 +6164,8 @@ namespace metmodel
                                             const std::array<double, 16>& root_grid_to_world,
                                             std::optional<std::size_t> cuda_device_index,
                                             OocFusionCudaStats* cuda_stats,
-                                            const OocFusionParameters& fusion_parameters)
+                                            const OocFusionParameters& fusion_parameters,
+                                            const bool partition_for_preset_qem)
     {
         if (histogram_records.empty() || balanced_records.empty() || scalar_lut.size() != 65536U ||
             !std::isfinite(root_scale) || !(root_scale > 0.0))
@@ -6364,6 +6379,51 @@ namespace metmodel
         marching_nodes.shrink_to_fit();
         reorder_ooc_marching_child_groups(marching_extract);
         output.marching_work_cells = plan_ooc_marching_capacity_frontier(marching_extract);
+        std::vector<std::uint32_t> work_cell_mini(output.marching_work_cells.size(), 0U);
+        if (partition_for_preset_qem)
+        {
+            auto mini_roots = plan_ooc_marching_capacity_frontier(marching_extract, 0x800000ULL);
+            std::sort(mini_roots.begin(),
+                      mini_roots.end(),
+                      [](const OocMarchingWorkCell& left, const OocMarchingWorkCell& right)
+                      {
+                          if (left.subtree_node_count != right.subtree_node_count)
+                              return left.subtree_node_count > right.subtree_node_count;
+                          return left.node_index < right.node_index;
+                      });
+            const auto contains = [](const OocMarchingWorkCell& outer, const OocMarchingWorkCell& inner)
+            {
+                if (inner.level < outer.level)
+                    return false;
+                const std::uint32_t shift = inner.level - outer.level;
+                return (inner.x >> shift) == outer.x && (inner.y >> shift) == outer.y && (inner.z >> shift) == outer.z;
+            };
+            std::vector<OocMarchingWorkCell> grouped;
+            grouped.reserve(output.marching_work_cells.size());
+            output.marching_mini_parts.reserve(mini_roots.size());
+            for (const OocMarchingWorkCell& mini_root : mini_roots)
+            {
+                const std::size_t begin = grouped.size();
+                for (const OocMarchingWorkCell& inner : output.marching_work_cells)
+                {
+                    if (contains(mini_root, inner))
+                        grouped.push_back(inner);
+                }
+                if (grouped.size() == begin)
+                    throw std::runtime_error("OOC marching mini-part contains no inner work cell");
+                output.marching_mini_parts.push_back({mini_root, begin, grouped.size(), 0U, 0U, 0U, 0U});
+            }
+            if (grouped.size() != output.marching_work_cells.size())
+                throw std::runtime_error("OOC marching inner cells do not form a mini-part partition");
+            output.marching_work_cells = std::move(grouped);
+            work_cell_mini.resize(output.marching_work_cells.size());
+            for (std::size_t mini_index = 0U; mini_index != output.marching_mini_parts.size(); ++mini_index)
+            {
+                const auto& mini = output.marching_mini_parts[mini_index];
+                for (std::size_t inner = mini.inner_cell_begin; inner != mini.inner_cell_end; ++inner)
+                    work_cell_mini[inner] = static_cast<std::uint32_t>(mini_index);
+            }
+        }
         const auto marching_extract_at = std::chrono::steady_clock::now();
         output.marching_extract_seconds =
             std::chrono::duration<double>(marching_extract_at - marching_nodes_at).count();
@@ -6727,6 +6787,8 @@ namespace metmodel
         {
             throw std::runtime_error("OOC marching seam coordinate count mismatch");
         }
+        const auto seam_started = std::chrono::steady_clock::now();
+        bool mini_ranges_rebuilt = false;
         if (!output.raw_mesh.vertices.empty() && seam_parts.size() > 1U)
         {
             struct SeamNeighbor
@@ -6739,6 +6801,8 @@ namespace metmodel
             {
                 for (std::size_t right = left + 1U; right != seam_parts.size(); ++right)
                 {
+                    if (partition_for_preset_qem && work_cell_mini[left] != work_cell_mini[right])
+                        continue;
                     std::uint8_t left_mask = 0U;
                     std::uint8_t right_mask = 0U;
                     for (std::size_t axis = 0U; axis != 3U; ++axis)
@@ -6918,20 +6982,40 @@ namespace metmodel
                 parent[vertex] = find_root(find_root, static_cast<std::uint32_t>(vertex));
 
             OocMarchingRawOutput joined;
+            std::vector<std::array<double, 3>> joined_root_grid_positions;
+            joined_root_grid_positions.reserve(raw_root_grid_positions.size());
             std::vector<std::uint32_t> compact(parent.size(), std::numeric_limits<std::uint32_t>::max());
-            for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+            const auto append_root_vertex = [&](const std::size_t vertex)
             {
                 if (parent[vertex] != vertex)
-                    continue;
+                    return;
                 compact[vertex] = static_cast<std::uint32_t>(joined.vertices.size());
                 joined.vertices.push_back(output.raw_mesh.vertices[vertex]);
                 joined.vertex_scale.push_back(output.raw_mesh.vertex_scale[vertex]);
                 joined.vertex_source.push_back(output.raw_mesh.vertex_source[vertex]);
                 joined.vertex_trim_attribute.push_back(output.raw_mesh.vertex_trim_attribute[vertex]);
+                joined_root_grid_positions.push_back(raw_root_grid_positions[vertex]);
+            };
+            if (partition_for_preset_qem)
+            {
+                for (auto& mini : output.marching_mini_parts)
+                {
+                    mini.vertex_begin = joined.vertices.size();
+                    const std::size_t begin = seam_parts[mini.inner_cell_begin].vertex_begin;
+                    const std::size_t end = seam_parts[mini.inner_cell_end - 1U].vertex_end;
+                    for (std::size_t vertex = begin; vertex != end; ++vertex)
+                        append_root_vertex(vertex);
+                    mini.vertex_end = joined.vertices.size();
+                }
+            }
+            else
+            {
+                for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+                    append_root_vertex(vertex);
             }
             for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
                 compact[vertex] = compact[parent[vertex]];
-            for (std::size_t face = 0U; face != output.raw_mesh.triangles.size(); ++face)
+            const auto append_face = [&](const std::size_t face)
             {
                 auto triangle = output.raw_mesh.triangles[face];
                 for (auto& vertex : triangle.vertices)
@@ -6939,13 +7023,112 @@ namespace metmodel
                 if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[1] == triangle.vertices[2] ||
                     triangle.vertices[2] == triangle.vertices[0])
                 {
-                    continue;
+                    return;
                 }
                 joined.triangles.push_back(triangle);
                 joined.face_source.push_back(output.raw_mesh.face_source[face]);
+            };
+            if (partition_for_preset_qem)
+            {
+                for (auto& mini : output.marching_mini_parts)
+                {
+                    mini.face_begin = joined.triangles.size();
+                    const std::size_t begin = seam_parts[mini.inner_cell_begin].face_begin;
+                    const std::size_t end = seam_parts[mini.inner_cell_end - 1U].face_end;
+                    for (std::size_t face = begin; face != end; ++face)
+                        append_face(face);
+                    mini.face_end = joined.triangles.size();
+                }
+                mini_ranges_rebuilt = true;
+            }
+            else
+            {
+                for (std::size_t face = 0U; face != output.raw_mesh.triangles.size(); ++face)
+                    append_face(face);
             }
             output.raw_mesh = std::move(joined);
+            raw_root_grid_positions = std::move(joined_root_grid_positions);
         }
+        output.marching_seam_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - seam_started).count();
+
+        const auto mini_boundary_started = std::chrono::steady_clock::now();
+        if (partition_for_preset_qem)
+        {
+            if (!mini_ranges_rebuilt)
+            {
+                for (auto& mini : output.marching_mini_parts)
+                {
+                    mini.vertex_begin = seam_parts[mini.inner_cell_begin].vertex_begin;
+                    mini.vertex_end = seam_parts[mini.inner_cell_end - 1U].vertex_end;
+                    mini.face_begin = seam_parts[mini.inner_cell_begin].face_begin;
+                    mini.face_end = seam_parts[mini.inner_cell_end - 1U].face_end;
+                }
+            }
+            if (raw_root_grid_positions.size() != output.raw_mesh.vertices.size())
+                throw std::runtime_error("OOC mini-part boundary coordinate count mismatch");
+            output.raw_vertex_mini_boundary_mask.assign(output.raw_mesh.vertices.size(), 0U);
+            const double finest_scale = root_scale / static_cast<double>(std::uint32_t{1} << marching_maximum_level);
+            const double boundary_epsilon = finest_scale * 0.0625;
+            parallel_indices(output.marching_mini_parts.size(),
+                             [&](const std::size_t mini_index)
+                             {
+                                 const auto& mini = output.marching_mini_parts[mini_index];
+                                 if (mini.vertex_begin == mini.vertex_end || mini.face_begin == mini.face_end)
+                                     return;
+                                 std::vector<std::uint64_t> edges;
+                                 edges.reserve(3U * (mini.face_end - mini.face_begin));
+                                 for (std::size_t face = mini.face_begin; face != mini.face_end; ++face)
+                                 {
+                                     const auto& triangle = output.raw_mesh.triangles[face].vertices;
+                                     for (std::size_t edge = 0U; edge != 3U; ++edge)
+                                     {
+                                         const std::uint32_t a = triangle[edge];
+                                         const std::uint32_t b = triangle[(edge + 1U) % 3U];
+                                         edges.push_back((static_cast<std::uint64_t>(std::min(a, b)) << 32U) |
+                                                         static_cast<std::uint64_t>(std::max(a, b)));
+                                     }
+                                 }
+                                 std::sort(edges.begin(), edges.end());
+                                 const std::uint32_t shift = marching_maximum_level - mini.root.level;
+                                 const std::array<std::uint32_t, 3> lower{
+                                     mini.root.x << shift, mini.root.y << shift, mini.root.z << shift};
+                                 const std::array<std::uint32_t, 3> upper{(mini.root.x + 1U) << shift,
+                                                                          (mini.root.y + 1U) << shift,
+                                                                          (mini.root.z + 1U) << shift};
+                                 const auto mark = [&](const std::uint32_t vertex)
+                                 {
+                                     if (vertex < mini.vertex_begin || vertex >= mini.vertex_end)
+                                         throw std::runtime_error("OOC mini-part boundary vertex exceeds its range");
+                                     std::uint8_t mask = 0U;
+                                     for (std::size_t axis = 0U; axis != 3U; ++axis)
+                                     {
+                                         const double coordinate = raw_root_grid_positions[vertex][axis];
+                                         const double minimum = finest_scale * lower[axis];
+                                         const double maximum = finest_scale * upper[axis];
+                                         if (minimum + boundary_epsilon > coordinate)
+                                             mask |= static_cast<std::uint8_t>(1U << (2U * axis));
+                                         else if (coordinate > maximum - boundary_epsilon)
+                                             mask |= static_cast<std::uint8_t>(1U << (2U * axis + 1U));
+                                     }
+                                     output.raw_vertex_mini_boundary_mask[vertex] |= mask;
+                                 };
+                                 for (std::size_t begin = 0U; begin != edges.size();)
+                                 {
+                                     std::size_t end = begin + 1U;
+                                     while (end != edges.size() && edges[end] == edges[begin])
+                                         ++end;
+                                     if (end == begin + 1U)
+                                     {
+                                         mark(static_cast<std::uint32_t>(edges[begin] >> 32U));
+                                         mark(static_cast<std::uint32_t>(edges[begin]));
+                                     }
+                                     begin = end;
+                                 }
+                             });
+        }
+        output.marching_mini_boundary_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - mini_boundary_started).count();
 
         // The caller of sub_1EA0680 does one topology-aware attribute pass before
         // entering mode-3 QEM.  It snapshots channel 1, then visits all three
@@ -6986,6 +7169,86 @@ namespace metmodel
         return output;
     }
 
+    RecoveredOocSupportSchedule
+    select_recovered_ooc_support_schedule(const std::array<std::uint64_t, 33>& global_level_counts,
+                                          const std::array<std::uint64_t, 33>& first_part_level_counts)
+    {
+        RecoveredOocSupportSchedule output;
+        for (const std::uint64_t count : global_level_counts)
+        {
+            if (count > std::numeric_limits<std::uint64_t>::max() - output.total_voxels)
+            {
+                throw std::overflow_error("OOC level population overflows uint64");
+            }
+            output.total_voxels += count;
+        }
+        if (output.total_voxels == 0U)
+        {
+            throw std::invalid_argument("OOC support schedule has no voxels");
+        }
+        output.maximum_quantile_threshold =
+            (output.total_voxels / 100U) * 99U + ((output.total_voxels % 100U) * 99U + 99U) / 100U;
+
+        std::uint64_t global_cumulative = 0U;
+        bool found_maximum = false;
+        for (std::uint32_t level = 0U; level != global_level_counts.size(); ++level)
+        {
+            global_cumulative += global_level_counts[level];
+            if (global_cumulative >= output.maximum_quantile_threshold)
+            {
+                output.maximum_level = level;
+                found_maximum = true;
+                break;
+            }
+        }
+        if (!found_maximum || output.maximum_level == 0U || output.maximum_level >= 31U)
+        {
+            throw std::invalid_argument("OOC support maximum is outside recovered marching domain");
+        }
+
+        std::uint64_t part_cumulative = 0U;
+        std::uint32_t first = output.maximum_level;
+        for (std::uint32_t level = 0U; level <= output.maximum_level; ++level)
+        {
+            part_cumulative += first_part_level_counts[level];
+            if (part_cumulative > output.first_part_voxel_cap)
+            {
+                first = level == 0U ? 0U : level - 1U;
+                break;
+            }
+        }
+        const std::uint32_t required_remainder = output.maximum_level % output.level_step;
+        while (first != 0U && first % output.level_step != required_remainder)
+        {
+            --first;
+        }
+        if (first == 0U && required_remainder != 0U)
+        {
+            throw std::invalid_argument("OOC support start cannot be aligned to the recovered stride");
+        }
+        output.first_level = first;
+        for (std::uint32_t level = first; level <= output.maximum_level; level += output.level_step)
+        {
+            output.levels.push_back(level);
+        }
+        return output;
+    }
+
+    RecoveredOocSupportSchedule
+    select_recovered_ooc_support_schedule(std::span<const OocWeightedNodeRecord> one_part_balanced_records)
+    {
+        std::array<std::uint64_t, 33> counts{};
+        for (const auto& record : one_part_balanced_records)
+        {
+            if (record.level >= counts.size())
+            {
+                throw std::invalid_argument("OOC balanced record level exceeds scheduler table");
+            }
+            ++counts[record.level];
+        }
+        return select_recovered_ooc_support_schedule(counts, counts);
+    }
+
     RecoveredOocMultilevelModelOutput
     run_recovered_ooc_multilevel_model_cpu(std::span<const OocOctreeRecord> histogram_records,
                                            std::span<const OocWeightedNodeRecord> balanced_records,
@@ -6993,7 +7256,8 @@ namespace metmodel
                                            std::span<const std::uint32_t> support_levels,
                                            double root_scale,
                                            const std::array<double, 16>& root_grid_to_world,
-                                           const OocFusionParameters& fusion_parameters)
+                                           const OocFusionParameters& fusion_parameters,
+                                           bool partition_for_preset_qem)
     {
         return run_recovered_ooc_multilevel_model_impl(histogram_records,
                                                        balanced_records,
@@ -7003,7 +7267,8 @@ namespace metmodel
                                                        root_grid_to_world,
                                                        std::nullopt,
                                                        nullptr,
-                                                       fusion_parameters);
+                                                       fusion_parameters,
+                                                       partition_for_preset_qem);
     }
 
     RecoveredOocMultilevelModelOutput
@@ -7015,7 +7280,8 @@ namespace metmodel
                                             const std::array<double, 16>& root_grid_to_world,
                                             std::size_t device_index,
                                             OocFusionCudaStats& cuda_stats,
-                                            const OocFusionParameters& fusion_parameters)
+                                            const OocFusionParameters& fusion_parameters,
+                                            bool partition_for_preset_qem)
     {
         return run_recovered_ooc_multilevel_model_impl(histogram_records,
                                                        balanced_records,
@@ -7025,7 +7291,8 @@ namespace metmodel
                                                        root_grid_to_world,
                                                        device_index,
                                                        &cuda_stats,
-                                                       fusion_parameters);
+                                                       fusion_parameters,
+                                                       partition_for_preset_qem);
     }
 
     void validate_ooc_marching_raw_output(const OocMarchingRawOutput& output)

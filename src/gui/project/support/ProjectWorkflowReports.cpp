@@ -3,6 +3,7 @@
 #include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 #include "project/SparseResultQuality.h"
+#include "ProjectSparseWorkflow.h"
 #include "ReconstructionQualityReport.h"
 
 #include <QDateTime>
@@ -257,7 +258,8 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
     files[QStringLiteral("sparse_cloud_points_json")] = sidecarPath;
     exportResult.extraRecord[QStringLiteral("files")] = files;
     exportResult.extraRecord[QStringLiteral("operation")] = QStringLiteral("bundle_adjust");
-    exportResult.extraRecord[QStringLiteral("operation_display_name")] = QStringLiteral("BA 精化点云");
+    exportResult.extraRecord[QStringLiteral("operation_display_name")] =
+        sparseOperationDisplayName(QStringLiteral("bundle_adjust"));
     exportResult.extraRecord[QStringLiteral("ba_mean_rms_after")] =
         baResult.value(QStringLiteral("mean_rms_after")).toDouble();
     exportResult.extraRecord[QStringLiteral("selected_images")] = QJsonArray::fromStringList(selectedImages);

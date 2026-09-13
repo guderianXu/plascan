@@ -68,8 +68,7 @@ private:
 
     QComboBox* _sourceCombo = nullptr;
     QComboBox* _sourceItemCombo = nullptr;
-    QLabel* _effectiveDepthQualityLabel = nullptr;
-    QLabel* _effectiveSurfaceQualityLabel = nullptr;
+    QComboBox* _qualityCombo = nullptr;
     QComboBox* _faceCountModeCombo = nullptr;
     QSpinBox* _customFaceCountSpin = nullptr;
     QDoubleSpinBox* _rpcHeightMinSpin = nullptr;
@@ -79,6 +78,7 @@ private:
     bool _screenChangeConnected = false;
     QToolButton* _advancedToggle = nullptr;
     QWidget* _advancedContent = nullptr;
+    QComboBox* _interpolationCombo = nullptr;
     QCheckBox* _reuseDepthMapsCheck = nullptr;
     QCheckBox* _replaceDefaultCheck = nullptr;
     QPushButton* _okButton = nullptr;

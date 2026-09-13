@@ -1,4 +1,27 @@
-# Third-party reconstruction diagnostics
+# Validation tools
+
+## Core architecture boundary
+
+`check_core_boundaries.py` prevents new GUI dependencies and presentation code from entering `src/core`.
+It rejects Qt Widgets, dialogs, and `src/gui` includes outright. An explicit baseline freezes core target Qt links,
+header Qt APIs, runtime Qt dependencies, and display-only fields so debt cannot silently move or become public.
+
+Run the guard from the repository root:
+
+```bash
+.venv/bin/python scripts/validation/check_core_boundaries.py
+```
+
+On Windows PowerShell, use the repository virtual environment at
+`.\.venv\Scripts\python.exe`.
+
+When an intentional migration changes existing debt, review the complete diff before refreshing the baseline:
+
+```bash
+.venv/bin/python scripts/validation/check_core_boundaries.py --write-baseline
+```
+
+## Third-party reconstruction diagnostics
 
 These scripts build reproducible COLMAP/OpenMVS comparison inputs without
 overwriting a PlaScan project or its current products.

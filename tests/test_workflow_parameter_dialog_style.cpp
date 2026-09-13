@@ -88,8 +88,20 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
 
     EXPECT_EQ(dialog.findChild<QGroupBox*>(QStringLiteral("workflowRegionGroup")), nullptr);
     EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelSurfaceTypeCombo")), nullptr);
-    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo")), nullptr);
-    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo")), nullptr);
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    ASSERT_NE(quality, nullptr);
+    ASSERT_NE(interpolation, nullptr);
+    ASSERT_EQ(quality->count(), 5);
+    EXPECT_EQ(quality->itemData(0).toString(), QStringLiteral("highest"));
+    EXPECT_EQ(quality->itemData(1).toString(), QStringLiteral("high"));
+    EXPECT_EQ(quality->itemData(2).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(quality->itemData(3).toString(), QStringLiteral("low"));
+    EXPECT_EQ(quality->itemData(4).toString(), QStringLiteral("lowest"));
+    ASSERT_EQ(interpolation->count(), 3);
+    EXPECT_EQ(interpolation->itemData(0).toString(), QStringLiteral("disabled"));
+    EXPECT_EQ(interpolation->itemData(1).toString(), QStringLiteral("enabled"));
+    EXPECT_EQ(interpolation->itemData(2).toString(), QStringLiteral("extrapolated"));
     EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("splitRegionCheck")), nullptr);
     EXPECT_EQ(dialog.findChild<QDoubleSpinBox*>(QStringLiteral("blockSizeSpin")), nullptr);
     EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("saveAfterEachStepCheck")), nullptr);
@@ -112,6 +124,10 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_EQ(faceCountMode->itemData(1).toString(), QStringLiteral("medium"));
     EXPECT_EQ(faceCountMode->itemData(2).toString(), QStringLiteral("high"));
     EXPECT_EQ(faceCountMode->itemData(3).toString(), QStringLiteral("custom"));
+    EXPECT_EQ(faceCountMode->itemText(0), QStringLiteral("低"));
+    EXPECT_EQ(faceCountMode->itemText(1), QStringLiteral("中"));
+    EXPECT_EQ(faceCountMode->itemText(2), QStringLiteral("高"));
+    EXPECT_EQ(faceCountMode->itemText(3), QStringLiteral("自定义"));
     EXPECT_EQ(customFaceCount->minimum(), 1);
     EXPECT_EQ(customFaceCount->maximum(), 2000000);
 
@@ -291,17 +307,17 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings
     ASSERT_EQ(runSpy.count(), 1);
 
     const QJsonObject settings = runSpy.at(0).at(0).toJsonObject();
-    EXPECT_EQ(settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 1);
+    EXPECT_EQ(settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 2);
     EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(), QStringLiteral("depth_maps"));
     EXPECT_EQ(settings.value(QStringLiteral("source_path")).toString(), QStringLiteral("E:/tmp/depth"));
     EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
     EXPECT_EQ(settings.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("medium"));
     EXPECT_EQ(settings.value(QStringLiteral("surfaceQualityProfile")).toString(), QStringLiteral("recovered_ooc"));
     EXPECT_EQ(settings.value(QStringLiteral("reconstruction_mode")).toString(), QStringLiteral("recovered_ooc"));
-    EXPECT_EQ(settings.value(QStringLiteral("faceCountMode")).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(settings.value(QStringLiteral("faceCountMode")).toString(), QStringLiteral("high"));
     EXPECT_EQ(settings.value(QStringLiteral("faceCountCustom")).toInt(), 60000);
-    EXPECT_EQ(settings.value(QStringLiteral("simplifyTargetFaces")).toInt(), 100000);
-    EXPECT_EQ(settings.value(QStringLiteral("requestedTargetFaces")).toInt(), 100000);
+    EXPECT_EQ(settings.value(QStringLiteral("simplifyTargetFaces")).toInt(), 0);
+    EXPECT_EQ(settings.value(QStringLiteral("requestedTargetFaces")).toInt(), 0);
     for (const QString& retired : {QStringLiteral("quality"),
                                    QStringLiteral("qualityProfile"),
                                    QStringLiteral("modelQualityProfile"),
@@ -315,9 +331,9 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings
         EXPECT_FALSE(settings.contains(retired)) << qPrintable(retired);
     }
 
-    auto* depthQualityLabel = dialog.findChild<QLabel*>(QStringLiteral("effectiveDepthQualityLabel"));
-    ASSERT_NE(depthQualityLabel, nullptr);
-    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("d4")));
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    ASSERT_NE(quality, nullptr);
+    EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
 }
 
 TEST(WorkflowParameterDialogStyleTest, GenerateModelFixesRecoveredPipelineParameters)
@@ -336,20 +352,22 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelFixesRecoveredPipelineParame
     ASSERT_EQ(run_spy.count(), 1);
 
     const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
-    EXPECT_FALSE(settings.contains(QStringLiteral("interpolation")));
+    EXPECT_EQ(settings.value(QStringLiteral("interpolation")).toString(), QStringLiteral("disabled"));
     EXPECT_FALSE(settings.contains(QStringLiteral("calculateVertexColors")));
     EXPECT_FALSE(settings.contains(QStringLiteral("surface_type")));
     EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("mild"));
 }
 
-TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsCanonicalAlgorithm)
+TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsQualityAndInterpolationControls)
 {
     GenerateModelDialog dialog;
     dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
-    auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveSurfaceQualityLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_TRUE(label->text().contains(QStringLiteral("recovered_ooc")));
-    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo")), nullptr);
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    ASSERT_NE(quality, nullptr);
+    ASSERT_NE(interpolation, nullptr);
+    EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
+    EXPECT_EQ(interpolation->currentData().toString(), QStringLiteral("enabled"));
 }
 
 TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeepsStableSchema)

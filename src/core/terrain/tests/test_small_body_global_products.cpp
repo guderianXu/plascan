@@ -2,6 +2,8 @@
 #include "SmallBodyGlobalProductGenerator.h"
 #include "SmallBodyMeshRaycaster.h"
 
+#include <plapoint/io/ply_io.h>
+
 #include <gtest/gtest.h>
 
 #include <QDir>
@@ -9,9 +11,11 @@
 #include <QImage>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace
 {
@@ -217,6 +221,82 @@ TEST(SmallBodyGlobalProductGeneratorTest, CreatesNativeRegisteredProducts)
     EXPECT_TRUE(QFileInfo::exists(products.reportPath));
 }
 
+TEST(SmallBodyGlobalProductGeneratorTest, ReportsStructuredProgressInLifecycleOrder)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+
+    const QString surface_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("octahedron.ply"));
+    const xjw::TerrainMeshInput surface = makeOctahedron();
+    ASSERT_NO_THROW(plapoint::io::writePly<float>(
+        surface_path.toStdString(), surface.mesh, plapoint::io::PlyFormat::ASCII));
+
+    xjw::SmallBodyGlobalOptions options;
+    options.targetName = QStringLiteral("SyntheticBody");
+    options.bodyFixedFrame = QStringLiteral("SYNTHETIC_FIXED");
+    options.automaticCenter = false;
+    options.bodyCenter = cv::Vec3d(0.0, 0.0, 0.0);
+    options.referenceRadiusM = 10.0;
+    options.angularResolutionDeg = 60.0;
+    options.maximumPixelCount = 1000;
+    options.writeReportPreview = false;
+
+    std::vector<xjw::SmallBodyGlobalProgress> progress_events;
+    const auto progress_callback = [&progress_events](
+                                       const xjw::SmallBodyGlobalProgress &progress)
+    {
+        progress_events.push_back(progress);
+    };
+    xjw::SmallBodyGlobalProducts products;
+    QString error;
+    ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generate(
+        surface_path,
+        QDir(temporary_directory.path()).filePath(QStringLiteral("output")),
+        options,
+        &products,
+        &error,
+        nullptr,
+        progress_callback)) << qPrintable(error);
+
+    ASSERT_FALSE(progress_events.empty());
+    std::vector<xjw::SmallBodyGlobalStage> stage_sequence;
+    int previous_percent = -1;
+    int previous_raster_rows = 0;
+    for (const xjw::SmallBodyGlobalProgress &progress : progress_events)
+    {
+        EXPECT_GE(progress.overallPercent, previous_percent);
+        previous_percent = progress.overallPercent;
+        if (stage_sequence.empty() || stage_sequence.back() != progress.stage)
+        {
+            stage_sequence.push_back(progress.stage);
+        }
+
+        if (progress.stage == xjw::SmallBodyGlobalStage::RasterizeGlobalProducts)
+        {
+            EXPECT_EQ(progress.rasterRowCount, 3);
+            EXPECT_GT(progress.rasterRowsDone, previous_raster_rows);
+            EXPECT_LE(progress.rasterRowsDone, progress.rasterRowCount);
+            previous_raster_rows = progress.rasterRowsDone;
+        }
+        else
+        {
+            EXPECT_EQ(progress.rasterRowsDone, 0);
+            EXPECT_EQ(progress.rasterRowCount, 0);
+        }
+    }
+
+    ASSERT_EQ(stage_sequence.size(), 5U);
+    EXPECT_EQ(stage_sequence[0], xjw::SmallBodyGlobalStage::LoadSurface);
+    EXPECT_EQ(stage_sequence[1], xjw::SmallBodyGlobalStage::BuildSpatialIndex);
+    EXPECT_EQ(stage_sequence[2], xjw::SmallBodyGlobalStage::RasterizeGlobalProducts);
+    EXPECT_EQ(stage_sequence[3], xjw::SmallBodyGlobalStage::WriteProducts);
+    EXPECT_EQ(stage_sequence[4], xjw::SmallBodyGlobalStage::Completed);
+    EXPECT_EQ(progress_events.front().overallPercent, 2);
+    EXPECT_EQ(progress_events.back().overallPercent, 100);
+    EXPECT_EQ(previous_raster_rows, 3);
+}
+
 TEST(SmallBodyGlobalProductGeneratorTest, RejectsFakeDomForUncoloredMesh)
 {
     QTemporaryDir temporary_directory;
@@ -296,12 +376,23 @@ TEST(SmallBodyGlobalProductGeneratorTest, HonorsPreCancelledRequest)
     options.maximumPixelCount = 1000;
 
     std::atomic_bool cancel_requested = true;
+    std::vector<xjw::SmallBodyGlobalProgress> progress_events;
     xjw::SmallBodyGlobalProducts products;
     QString error;
     EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
         makeOctahedron(), QStringLiteral("synthetic"), temporary_directory.path(),
-        options, &products, &error, &cancel_requested));
+        options, &products, &error, &cancel_requested,
+        [&progress_events](const xjw::SmallBodyGlobalProgress &progress)
+        {
+            progress_events.push_back(progress);
+        }));
     EXPECT_TRUE(error.contains(QStringLiteral("取消")));
+    EXPECT_TRUE(std::none_of(
+        progress_events.cbegin(), progress_events.cend(),
+        [](const xjw::SmallBodyGlobalProgress &progress)
+        {
+            return progress.stage == xjw::SmallBodyGlobalStage::Completed;
+        }));
     EXPECT_TRUE(QDir(temporary_directory.path()).entryList(
         QDir::Files | QDir::NoDotAndDotDot).isEmpty());
 }

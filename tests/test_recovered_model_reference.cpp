@@ -16,6 +16,107 @@
 
 namespace
 {
+    TEST(RecoveredModelReference, PatchMatchScheduleReachesFullResolutionD1)
+    {
+        const auto schedule = metmodel::make_recovered_patchmatch_level_schedule(4096U, 3072U, 1U);
+        ASSERT_FALSE(schedule.empty());
+
+        std::vector<std::uint32_t> downscales;
+        for (const auto& event : schedule)
+        {
+            if (downscales.empty() || downscales.back() != event.downscale)
+                downscales.push_back(event.downscale);
+        }
+
+        EXPECT_NE(std::find(downscales.begin(), downscales.end(), 1U), downscales.end());
+        EXPECT_EQ(schedule.back().downscale, 1U);
+        EXPECT_THROW(metmodel::make_recovered_patchmatch_level_schedule(4096U, 3072U, 3U), std::invalid_argument);
+
+        metmodel::Camera camera;
+        camera.image.width = 4096U;
+        camera.image.height = 3072U;
+        camera.model.f = 1200.0;
+        const auto packed = metmodel::make_patchmatch_perspective_camera(camera, 1);
+        EXPECT_EQ(packed.pyramid_level0_downscale, 1U);
+        EXPECT_NO_THROW(metmodel::make_depth_voting_perspective_calibration(camera, 1U, 0U));
+    }
+
+    TEST(RecoveredModelReference, D1TilePlanMatchesBalancedReferenceSubdivision)
+    {
+        const auto south = metmodel::make_recovered_patchmatch_d1_tile_plan(3072U, 2304U);
+        ASSERT_EQ(south.size(), 4U);
+        const auto tile_values = [](const metmodel::RecoveredPatchMatchD1Tile& tile)
+        {
+            return std::array<std::uint32_t, 8>{tile.core_left,
+                                                tile.core_top,
+                                                tile.core_right,
+                                                tile.core_bottom,
+                                                tile.area_left,
+                                                tile.area_top,
+                                                tile.area_right,
+                                                tile.area_bottom};
+        };
+        EXPECT_EQ(tile_values(south[0]), (std::array<std::uint32_t, 8>{0U, 0U, 1536U, 1152U, 0U, 0U, 1568U, 1184U}));
+        EXPECT_EQ(tile_values(south[1]),
+                  (std::array<std::uint32_t, 8>{1536U, 0U, 3072U, 1152U, 1504U, 0U, 3072U, 1184U}));
+        EXPECT_EQ(tile_values(south[2]),
+                  (std::array<std::uint32_t, 8>{0U, 1152U, 1536U, 2304U, 0U, 1120U, 1568U, 2304U}));
+        EXPECT_EQ(tile_values(south[3]),
+                  (std::array<std::uint32_t, 8>{1536U, 1152U, 3072U, 2304U, 1504U, 1120U, 3072U, 2304U}));
+
+        const auto shoe = metmodel::make_recovered_patchmatch_d1_tile_plan(4928U, 3264U);
+        ASSERT_EQ(shoe.size(), 6U);
+        EXPECT_EQ(tile_values(shoe[0]), (std::array<std::uint32_t, 8>{0U, 0U, 1644U, 1632U, 0U, 0U, 1696U, 1664U}));
+        EXPECT_EQ(tile_values(shoe[1]),
+                  (std::array<std::uint32_t, 8>{1644U, 0U, 3288U, 1632U, 1600U, 0U, 3328U, 1664U}));
+        EXPECT_EQ(tile_values(shoe[2]),
+                  (std::array<std::uint32_t, 8>{3288U, 0U, 4928U, 1632U, 3232U, 0U, 4928U, 1664U}));
+        EXPECT_EQ(tile_values(shoe[3]),
+                  (std::array<std::uint32_t, 8>{0U, 1632U, 1644U, 3264U, 0U, 1600U, 1696U, 3264U}));
+        EXPECT_EQ(tile_values(shoe[4]),
+                  (std::array<std::uint32_t, 8>{1644U, 1632U, 3288U, 3264U, 1600U, 1600U, 3328U, 3264U}));
+        EXPECT_EQ(tile_values(shoe[5]),
+                  (std::array<std::uint32_t, 8>{3288U, 1632U, 4928U, 3264U, 3232U, 1600U, 4928U, 3264U}));
+    }
+
+    TEST(RecoveredModelReference, D1TileReferencePreservesMaskAndOwnerDeviation)
+    {
+        metmodel::Camera camera;
+        camera.index = 0U;
+        camera.aligned = true;
+        camera.image.width = 4U;
+        camera.image.height = 4U;
+        camera.model.f = 4.0;
+        camera.model.cx = 2.0;
+        camera.model.cy = 2.0;
+        metmodel::RecoveredPatchMatchPreparedCamera full;
+        full.camera_index = 0U;
+        full.target_downscale = 1U;
+        full.valid = true;
+        metmodel::RecoveredPatchMatchPreparedLevel full_level;
+        full_level.downscale = 1U;
+        full_level.data.width = 4U;
+        full_level.data.height = 4U;
+        full_level.data.image = {2U, 9U, 20U, 255U, 9U, 10U, 21U, 254U, 11U, 12U, 22U, 253U, 13U, 14U, 23U, 252U};
+        full_level.data.rejection_mask = {0U, 1U, 0U, 1U, 1U, 0U, 1U, 0U, 0U, 1U, 0U, 1U, 1U, 0U, 1U, 0U};
+        full_level.deviation_ratio = metmodel::reduce_recovered_patchmatch_deviation_multiplier(full_level.data.image);
+        full.image_levels.push_back(full_level);
+        metmodel::RecoveredPatchMatchD1Tile crop{0U, 0U, 2U, 4U, 0U, 0U, 2U, 4U};
+        metmodel::RecoveredPatchMatchPreparedCamera tiled;
+        std::string error;
+        ASSERT_TRUE(metmodel::make_recovered_patchmatch_d1_tile_reference_preparation(camera, full, crop, tiled, error))
+            << error;
+        ASSERT_EQ(tiled.image_levels.size(), 1U);
+        EXPECT_EQ(tiled.image_levels[0].data.image, (std::vector<std::uint8_t>{2U, 9U, 9U, 10U, 11U, 12U, 13U, 14U}));
+        EXPECT_EQ(tiled.image_levels[0].data.rejection_mask,
+                  (std::vector<std::uint8_t>{0U, 1U, 1U, 0U, 0U, 1U, 1U, 0U}));
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(tiled.image_levels[0].deviation_ratio),
+                  std::bit_cast<std::uint32_t>(full_level.deviation_ratio));
+        EXPECT_NE(std::bit_cast<std::uint32_t>(tiled.image_levels[0].deviation_ratio),
+                  std::bit_cast<std::uint32_t>(
+                      metmodel::reduce_recovered_patchmatch_deviation_multiplier(tiled.image_levels[0].data.image)));
+    }
+
     TEST(RecoveredModelReference, NeighborGraphUsesInclusiveFloatRegionBounds)
     {
         metmodel::Scene scene;
@@ -195,13 +296,8 @@ namespace
         level.downscale = 4U;
         level.data.width = 4U;
         level.data.height = 4U;
-        level.data.image = {
-            2U, 9U, 20U, 255U,
-            9U, 10U, 21U, 254U,
-            11U, 12U, 22U, 253U,
-            13U, 14U, 23U, 252U};
-        level.deviation_ratio =
-            metmodel::reduce_recovered_patchmatch_deviation_multiplier(level.data.image);
+        level.data.image = {2U, 9U, 20U, 255U, 9U, 10U, 21U, 254U, 11U, 12U, 22U, 253U, 13U, 14U, 23U, 252U};
+        level.deviation_ratio = metmodel::reduce_recovered_patchmatch_deviation_multiplier(level.data.image);
         prepared.image_levels.push_back(level);
 
         metmodel::RecoveredPatchMatchCropDescriptor crop;
@@ -216,15 +312,13 @@ namespace
         crop.full_height = 4U;
 
         std::string error;
-        ASSERT_TRUE(metmodel::apply_recovered_patchmatch_neighbor_crop(
-            camera, 4U, crop, prepared, error)) << error;
+        ASSERT_TRUE(metmodel::apply_recovered_patchmatch_neighbor_crop(camera, 4U, crop, prepared, error)) << error;
         ASSERT_EQ(prepared.image_levels.size(), 1U);
         EXPECT_EQ(std::bit_cast<std::uint32_t>(prepared.image_levels[0].deviation_ratio),
                   std::bit_cast<std::uint32_t>(level.deviation_ratio));
         EXPECT_NE(std::bit_cast<std::uint32_t>(prepared.image_levels[0].deviation_ratio),
                   std::bit_cast<std::uint32_t>(
-                      metmodel::reduce_recovered_patchmatch_deviation_multiplier(
-                          prepared.image_levels[0].data.image)));
+                      metmodel::reduce_recovered_patchmatch_deviation_multiplier(prepared.image_levels[0].data.image)));
     }
 
     TEST(RecoveredModelReference, CudaOocNeighborsMatchCpuReference)
@@ -290,6 +384,93 @@ namespace
     TEST(RecoveredModelReference, recovered_qem_part_budget)
     {
         EXPECT_NO_THROW(test_recovered_qem_part_budget());
+    }
+    TEST(RecoveredModelReference, recovered_qem_preset_thresholds)
+    {
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(
+                      metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::Low)),
+                  0x3eb851ebU);
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(
+                      metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::Medium)),
+                  0x3d75c28fU);
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(
+                      metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::High)),
+                  0x3c23d70aU);
+    }
+
+    TEST(RecoveredModelReference, PresetQemRemapsExplicitMiniPartSeam)
+    {
+        constexpr std::size_t side = 9U;
+        metmodel::Mesh mesh;
+        mesh.vertices.reserve(side * side);
+        for (std::size_t y = 0U; y != side; ++y)
+        {
+            for (std::size_t x = 0U; x != side; ++x)
+            {
+                metmodel::Vertex vertex;
+                vertex.position = {static_cast<double>(x), static_cast<double>(y), 0.0};
+                mesh.vertices.push_back(vertex);
+            }
+        }
+        for (std::size_t y = 0U; y + 1U != side; ++y)
+        {
+            for (std::size_t x = 0U; x + 1U != side; ++x)
+            {
+                const std::size_t lower_left = y * side + x;
+                mesh.faces.push_back({{lower_left, lower_left + side, lower_left + 1U}});
+                mesh.faces.push_back({{lower_left + 1U, lower_left + side, lower_left + side + 1U}});
+            }
+        }
+        metmodel::recompute_normals(mesh);
+
+        std::vector<float> scale(mesh.vertices.size(), 1.0F);
+        std::vector<metmodel::RecoveredMeshTrimAttribute> attributes(
+            mesh.vertices.size(), metmodel::RecoveredMeshTrimAttribute{1.0F, 2.0F, 3.0F, 1.0F});
+        std::vector<std::uint8_t> seam_seed(mesh.vertices.size(), 0U);
+        for (std::size_t y = 0U; y != side; ++y)
+            seam_seed[y * side + side / 2U] = 1U;
+        const std::size_t input_faces = mesh.faces.size();
+
+        const auto stats = metmodel::decimate_mesh_qem_mode3_preset(
+            mesh, std::numeric_limits<float>::max(), scale, attributes, nullptr, nullptr, true, seam_seed);
+
+        EXPECT_EQ(stats.boundary_vertices, side);
+        EXPECT_GT(stats.near_seam_vertices, stats.boundary_vertices);
+        EXPECT_GT(stats.seam_input_faces, 0U);
+        EXPECT_GT(stats.seam.accepted_collapses, 0U);
+        EXPECT_LT(mesh.faces.size(), input_faces);
+        EXPECT_EQ(stats.output_vertices, mesh.vertices.size());
+        EXPECT_EQ(stats.output_faces, mesh.faces.size());
+        EXPECT_EQ(scale.size(), mesh.vertices.size());
+        EXPECT_EQ(attributes.size(), mesh.vertices.size());
+        for (const auto& face : mesh.faces)
+        {
+            EXPECT_LT(face.vertices[0], mesh.vertices.size());
+            EXPECT_LT(face.vertices[1], mesh.vertices.size());
+            EXPECT_LT(face.vertices[2], mesh.vertices.size());
+            EXPECT_NE(face.vertices[0], face.vertices[1]);
+            EXPECT_NE(face.vertices[1], face.vertices[2]);
+            EXPECT_NE(face.vertices[2], face.vertices[0]);
+        }
+    }
+    TEST(RecoveredModelReference, recovered_ooc_support_schedule)
+    {
+        const auto schedule = [](std::initializer_list<std::uint64_t> values)
+        {
+            std::array<std::uint64_t, 33> counts{};
+            std::copy(values.begin(), values.end(), counts.begin());
+            return metmodel::select_recovered_ooc_support_schedule(counts, counts);
+        };
+        EXPECT_EQ(schedule({1, 8, 64, 288, 1096, 5080, 18848, 64152, 213136, 618888, 919376}).levels,
+                  (std::vector<std::uint32_t>{6, 8, 10}));
+        EXPECT_EQ(schedule({1, 8, 64, 288, 1096, 4944, 15200, 50616, 151848, 248384}).levels,
+                  (std::vector<std::uint32_t>{7, 9}));
+        const auto d4 = schedule({1, 8, 64, 192, 528, 2040, 6680, 20216, 42672, 32});
+        EXPECT_EQ(d4.levels, (std::vector<std::uint32_t>{8}));
+        EXPECT_EQ(d4.maximum_level, 8U);
+        EXPECT_EQ(d4.total_voxels, 72433U);
+        EXPECT_EQ(schedule({1, 8, 64, 288, 1088, 4600, 11160, 11408}).levels, (std::vector<std::uint32_t>{7}));
+        EXPECT_EQ(schedule({1, 8, 64, 280, 1056, 3352, 2744}).levels, (std::vector<std::uint32_t>{6}));
     }
     void test_recovered_mesh_trim()
     {
@@ -1702,6 +1883,33 @@ namespace
                     multilevel.marching_maximum_level == 1U,
                 "multilevel OOC model stage contract mismatch");
         metmodel::validate_ooc_marching_raw_output(multilevel.raw_mesh);
+
+        const auto partitioned = metmodel::run_recovered_ooc_multilevel_model_cpu(
+            records, support_tree, scalar_lut, model_stages, 1.0, identity, no_iterations, true);
+        require(!partitioned.marching_mini_parts.empty(), "preset OOC marching did not produce mini-parts");
+        require(partitioned.raw_vertex_mini_boundary_mask.size() == partitioned.raw_mesh.vertices.size(),
+                "preset OOC marching boundary-mask count mismatch");
+        std::size_t next_vertex = 0U;
+        std::size_t next_face = 0U;
+        for (const auto& mini : partitioned.marching_mini_parts)
+        {
+            require(mini.vertex_begin == next_vertex && mini.face_begin == next_face &&
+                        mini.vertex_end >= mini.vertex_begin && mini.face_end >= mini.face_begin,
+                    "preset OOC marching mini-part ranges are not contiguous");
+            for (std::size_t face = mini.face_begin; face != mini.face_end; ++face)
+            {
+                for (const std::uint32_t vertex : partitioned.raw_mesh.triangles[face].vertices)
+                {
+                    require(vertex >= mini.vertex_begin && vertex < mini.vertex_end,
+                            "preset OOC marching mini-part face crosses its vertex range");
+                }
+            }
+            next_vertex = mini.vertex_end;
+            next_face = mini.face_end;
+        }
+        require(next_vertex == partitioned.raw_mesh.vertices.size() &&
+                    next_face == partitioned.raw_mesh.triangles.size(),
+                "preset OOC marching mini-parts do not cover the raw mesh");
     }
     TEST(RecoveredModelReference, ooc_marching_bridge)
     {

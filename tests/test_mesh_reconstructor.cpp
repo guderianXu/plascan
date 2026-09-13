@@ -8121,8 +8121,7 @@ TEST(MeshWorkflowServiceTest, SharedModelEntryRejectsLegacyPointCloudSource)
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
               QStringLiteral("none"));
-    EXPECT_TRUE(result.errorMessage.contains(
-        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("modelGenerationContractRevision=2")));
     EXPECT_TRUE(result.payload.value(QStringLiteral("model_ply")).toString().isEmpty());
     EXPECT_FALSE(fs::exists(root / "model" / "model_runs"));
 }
@@ -9984,12 +9983,13 @@ TEST(DepthMapMeshBuilderTest,
     xjw::mesh::workflow::DepthMapMeshBuildRequest request;
     request.depthMapSourcePath = QString::fromStdString(root.string());
     request.outputRoot = QString::fromStdString((root / "model").string());
-    request.settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    request.settings[QStringLiteral("modelGenerationContractRevision")] = 2;
     request.settings[QStringLiteral("depthQualityProfile")] =
         QStringLiteral("medium");
     request.settings[QStringLiteral("surfaceQualityProfile")] =
         QStringLiteral("recovered_ooc");
     request.settings[QStringLiteral("faceCountMode")] = QStringLiteral("high");
+    request.settings[QStringLiteral("interpolation")] = QStringLiteral("enabled");
     request.settings[QStringLiteral("reconstruction_mode")] =
         QStringLiteral("recovered_ooc");
 

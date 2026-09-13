@@ -60,6 +60,23 @@ struct SmallBodyGlobalProducts
     QJsonObject report;
 };
 
-using SmallBodyProgressCallback = std::function<void(const QString &, int)>;
+enum class SmallBodyGlobalStage
+{
+    LoadSurface,
+    BuildSpatialIndex,
+    RasterizeGlobalProducts,
+    WriteProducts,
+    Completed
+};
+
+struct SmallBodyGlobalProgress
+{
+    SmallBodyGlobalStage stage = SmallBodyGlobalStage::LoadSurface;
+    int overallPercent = 0;
+    int rasterRowsDone = 0;
+    int rasterRowCount = 0;
+};
+
+using SmallBodyProgressCallback = std::function<void(const SmallBodyGlobalProgress &)>;
 
 } // namespace xjw

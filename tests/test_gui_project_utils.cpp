@@ -27,6 +27,7 @@
 #include "ProjectWorkflowOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectMetadataOperations.h"
+#include "ProjectSparseWorkflow.h"
 #include "PointCloudWorkflowConfig.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "runtime/PythonRuntimeLocator.h"
@@ -1383,22 +1384,6 @@ namespace
                           QJsonObject{{QStringLiteral("track_len"), 4}, {QStringLiteral("rms_reproj_px"), 0.7}}};
     }
 
-    QJsonObject sparseResultRecord(int index,
-                                   const QString& displayName,
-                                   const QString& operation,
-                                   const QString& operationDisplayName,
-                                   int sparsePointCount,
-                                   const QJsonObject& quality)
-    {
-        QJsonObject record{{QStringLiteral("index"), index},
-                           {QStringLiteral("display_name"), displayName},
-                           {QStringLiteral("operation"), operation},
-                           {QStringLiteral("operation_display_name"), operationDisplayName},
-                           {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("E:/tmp/%1.xyz").arg(displayName)},
-                           {QStringLiteral("sparse_point_count"), sparsePointCount}};
-        return xjw::gui::project::mergeSparseQualityIntoRecord(record, quality);
-    }
-
     const xjw::gui::project::ProjectDashboardStep*
     dashboardStepById(const xjw::gui::project::ProjectDashboardSummary& summary, const QString& id)
     {
@@ -2463,7 +2448,9 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     auto* source_combo = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceCombo"));
     ASSERT_NE(source_combo, nullptr);
     EXPECT_GE(source_combo->findData(QStringLiteral("depth_maps")), 0);
-    EXPECT_LT(source_combo->findData(QStringLiteral("tie_points")), 0);
+    const int tie_points_index = source_combo->findData(QStringLiteral("tie_points"));
+    EXPECT_GE(tie_points_index, 0);
+    EXPECT_FALSE(source_combo->itemData(tie_points_index, Qt::UserRole - 1).toBool());
     EXPECT_LT(source_combo->findData(QStringLiteral("model")), 0);
     EXPECT_EQ(source_combo->currentData().toString(), QStringLiteral("depth_maps"));
 
@@ -2484,7 +2471,7 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     EXPECT_TRUE(submitted.value(QStringLiteral("automatic_depth_maps")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
     EXPECT_TRUE(submitted.value(QStringLiteral("depthMapSourcePath")).toString().isEmpty());
-    EXPECT_FALSE(submitted.contains(QStringLiteral("interpolation")));
+    EXPECT_EQ(submitted.value(QStringLiteral("interpolation")).toString(), QStringLiteral("disabled"));
     EXPECT_FALSE(submitted.contains(QStringLiteral("strictVolumetricMasks")));
     EXPECT_FALSE(submitted.contains(QStringLiteral("splitIntoBlocks")));
 }
@@ -2502,10 +2489,12 @@ TEST(GenerateModelDialogTest, ReusesCompatibleDepthMapsByDefault)
     dialog.applySettings(QJsonObject());
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    const auto* algorithm_label = dialog.findChild<QLabel*>(QStringLiteral("effectiveSurfaceQualityLabel"));
-    ASSERT_NE(algorithm_label, nullptr);
-    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("recovered_ooc")));
-    EXPECT_TRUE(algorithm_label->text().contains(QStringLiteral("参考已验证链")));
+    const auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    const auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    ASSERT_NE(quality, nullptr);
+    ASSERT_NE(interpolation, nullptr);
+    EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
+    EXPECT_EQ(interpolation->currentData().toString(), QStringLiteral("enabled"));
 
     QCheckBox* reuse_check = nullptr;
     for (QCheckBox* check : dialog.findChildren<QCheckBox*>())
@@ -2535,11 +2524,9 @@ TEST(GenerateModelDialogTest, LegacyQualityCannotOverrideCanonicalDepthQuality)
     dialog.applySettings(QJsonObject{{QStringLiteral("quality"), QStringLiteral("ultra")}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* label = dialog.findChild<QLabel*>(QStringLiteral("effectiveDepthQualityLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_TRUE(label->text().contains(QStringLiteral("中")));
-    EXPECT_TRUE(label->text().contains(QStringLiteral("d4")));
-    EXPECT_TRUE(label->text().contains(QStringLiteral("参考已验证")));
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    ASSERT_NE(quality, nullptr);
+    EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
 
     QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
     auto* button_box = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
@@ -2547,7 +2534,7 @@ TEST(GenerateModelDialogTest, LegacyQualityCannotOverrideCanonicalDepthQuality)
     button_box->button(QDialogButtonBox::Ok)->click();
     ASSERT_EQ(run_spy.count(), 1);
     const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
-    EXPECT_EQ(submitted.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 1);
+    EXPECT_EQ(submitted.value(QStringLiteral("modelGenerationContractRevision")).toInt(), 2);
     EXPECT_FALSE(submitted.contains(QStringLiteral("modelQualityProfile")));
     EXPECT_EQ(submitted.value(QStringLiteral("depthQualityProfile")).toString(), QStringLiteral("medium"));
     EXPECT_EQ(submitted.value(QStringLiteral("surfaceQualityProfile")).toString(), QStringLiteral("recovered_ooc"));
@@ -5135,8 +5122,21 @@ TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePrevie
                                    {QStringLiteral("source"), QStringLiteral("triangulation")}};
 
     EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(legacyRecord));
-    EXPECT_EQ(xjw::core::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
+}
+
+TEST(SparsePointWorkflowUtilsTest, FormatsSparseOperationNamesInGuiLayer)
+{
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
               QStringLiteral("两视预览云"));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("outlier_removal")),
+              QStringLiteral("离群点剔除"));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("sparse_refine")),
+              QStringLiteral("稀疏点云精修"));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("bundle_adjust")),
+              QStringLiteral("平差稀疏点云"));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("spatial_cleanup")),
+              QStringLiteral("空间清理点云"));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("unknown")), QStringLiteral("稀疏点云"));
 }
 
 TEST(SparsePointWorkflowUtilsTest, LocalOptimAcceptsExternalPlyWithoutSidecar)
@@ -7346,6 +7346,8 @@ TEST(TiePointResultIntegrationTest, ReplacingTwiceKeepsOnlyLatestTiePointRecord)
     ASSERT_EQ(records.size(), 1);
     const QJsonObject current = records.first().toObject();
     EXPECT_EQ(current.value(QStringLiteral("sparse_point_count")).toInt(), 200);
+    EXPECT_EQ(current.value(QStringLiteral("operation_display_name")).toString(),
+              QStringLiteral("稀疏点云"));
     EXPECT_EQ(current.value(QStringLiteral("files")).toObject().value(QStringLiteral("sparse_cloud_xyz")).toString(),
               secondPath);
     EXPECT_FALSE(QFileInfo::exists(firstPath));
@@ -11921,6 +11923,8 @@ TEST(BundleAdjustSparseResultMetadataTest, ExportedSparseCloudCarriesFormalQuali
               xjw::gui::project::kSparseResultKindSparsePostprocess);
     EXPECT_EQ(exportResult.extraRecord.value(QStringLiteral("source_result_kind")).toString(),
               xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    EXPECT_EQ(exportResult.extraRecord.value(QStringLiteral("operation_display_name")).toString(),
+              QStringLiteral("平差稀疏点云"));
     EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(exportResult.extraRecord));
 
     const QString sidecarPath = exportResult.extraRecord.value(QStringLiteral("files"))

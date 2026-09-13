@@ -80,7 +80,6 @@ using xjw::common::project::normalizePath;
 using xjw::common::project::pathTokenMatchesImage;
 using xjw::core::project::findLatestAtResultIndex;
 using xjw::core::project::resolveSparsePointContext;
-using xjw::core::project::sparseOperationDisplayName;
 using xjw::core::project::SparsePointContext;
 using xjw::core::project::SparsePointOperationResult;
 using xjw::core::project::writeJsonObjectFile;
@@ -2696,9 +2695,8 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject& settings)
         settings.value(QStringLiteral("depthQualityProfile")).toString(QStringLiteral("medium"));
     const QJsonObject project_metadata = _projectData->metadataIncludingResults();
     const QString stored_depth_quality = storedDepthBatchQualityProfile(project_metadata, depth_source);
-    const bool stored_depth_quality_insufficient =
-        !stored_depth_quality.isEmpty() && xjw::core::project::depthQualityRank(stored_depth_quality) <
-                                               xjw::core::project::depthQualityRank(requested_depth_quality);
+    const bool stored_depth_quality_mismatch =
+        !stored_depth_quality.isEmpty() && stored_depth_quality != requested_depth_quality;
     const auto sparse_scaffold = xjw::gui::project::resolveSparseScaffoldSource(project_metadata, depth_source);
     const bool allow_sparse_scaffold_fallback =
         settings.value(QStringLiteral("tsdfOrbitalSparseScaffoldCompletion")).toBool(true) &&
@@ -2717,7 +2715,7 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject& settings)
     const bool prepare_depth_maps = source_data == QStringLiteral("depth_maps") &&
                                     (settings.value(QStringLiteral("automatic_depth_maps")).toBool(false) ||
                                      force_depth_recompute || stored_depth_batch_incompatible ||
-                                     stored_depth_quality_insufficient || !reuse_depth_maps || depth_source.isEmpty());
+                                     stored_depth_quality_mismatch || !reuse_depth_maps || depth_source.isEmpty());
     if (!prepare_depth_maps)
     {
         _modelManager->startMeshReconstructionAsync(settings);

@@ -87,16 +87,23 @@ namespace metmodel
     build_recovered_d4_voting_to_ooc_bundle_mode0_impl(const Scene& scene,
                                                        const RecoveredPatchMatchD4SceneOutput& recovered_depth,
                                                        const RecoveredD4VotingToOocMode0Input& input,
-                                                       RecoveredPatchMatchD4SceneOutput* consumable_recovered_depth)
+                                                       RecoveredPatchMatchD4SceneOutput* consumable_recovered_depth,
+                                                       std::uint32_t required_depth_downscale,
+                                                       std::size_t required_stored_level_count)
     {
         if (input.reference_camera_indices.empty() ||
             input.reference_camera_indices.size() != recovered_depth.cameras.size())
         {
             throw std::invalid_argument("recovered voting-to-OOC bridge requires one output per reference");
         }
-        if (input.depth_downscale != 4U)
+        if (input.depth_downscale != required_depth_downscale)
         {
-            throw std::invalid_argument("recovered voting-to-OOC bridge is validated only for d4");
+            throw std::invalid_argument("recovered voting-to-OOC bridge request downscale does not match its scene");
+        }
+        if (input.stored_level_count != required_stored_level_count || input.stored_level_count < 2U ||
+            input.stored_level_count > 3U)
+        {
+            throw std::invalid_argument("recovered voting-to-OOC stored-level count does not match its scene");
         }
         if (input.volumetric_masks)
         {
@@ -120,6 +127,7 @@ namespace metmodel
                                               : input.camera_pyramid_execution;
         auto& manifest = output.manifest;
         manifest.depth_downscale = input.depth_downscale;
+        manifest.stored_level_count = input.stored_level_count;
         manifest.diagonal_policy = input.diagonal_policy;
         manifest.volumetric_masks = input.volumetric_masks;
         manifest.workitem_size_cameras = input.workitem_size_cameras;
@@ -161,7 +169,7 @@ namespace metmodel
             }
             std::array<std::span<const float>, 3> voted_depths;
             std::array<std::uint64_t, 3> hashes{};
-            for (std::size_t level = 0U; level != voted_depths.size(); ++level)
+            for (std::size_t level = 0U; level != input.stored_level_count; ++level)
             {
                 const std::size_t level_downscale = static_cast<std::size_t>(input.depth_downscale) << level;
                 if (camera.image.width == 0U || camera.image.height == 0U ||
@@ -184,7 +192,7 @@ namespace metmodel
                 hashes[level] = hash_floats(depth);
             }
             const std::uint8_t diagonal = diagonal_for_camera(input, ordinal);
-            views.push_back({camera_index, voted_depths, diagonal != 0U});
+            views.push_back({camera_index, voted_depths, diagonal != 0U, input.stored_level_count});
             manifest.stable_camera_ids.push_back(stable_id);
             manifest.diagonal_pixel_scale_used.push_back(diagonal);
             manifest.voted_depth_hashes.push_back(hashes);
@@ -216,12 +224,13 @@ namespace metmodel
                     OocDepthRoiProjectMode0Input project =
                         make_ooc_depth_roi_project_mode0_input(scene, view.camera_index, input.depth_downscale);
                     ooc.items[ordinal] = {output.manifest.stable_camera_ids[ordinal], std::move(project)};
-                    ooc.pyramids[ordinal] = build_ooc_sample_scale_pyramid_from_scene_voted_depths_mode0(
-                        scene,
-                        view.camera_index,
-                        view.voted_depths,
-                        input.depth_downscale,
-                        view.captured_diagonal_pixel_scale);
+                    ooc.pyramids[ordinal] =
+                        build_ooc_sample_scale_pyramid_from_scene_voted_depths_mode0(scene,
+                                                                                     view.camera_index,
+                                                                                     view.voted_depths,
+                                                                                     input.depth_downscale,
+                                                                                     view.captured_diagonal_pixel_scale,
+                                                                                     view.stored_level_count);
                     auto& consumed = consumable_recovered_depth->cameras[ordinal];
                     for (auto& level : consumed.patchmatch.depth_levels)
                         std::vector<float>().swap(level);
@@ -292,7 +301,7 @@ namespace metmodel
                                                   const RecoveredPatchMatchD4SceneOutput& recovered_depth,
                                                   const RecoveredD4VotingToOocMode0Input& input)
     {
-        return build_recovered_d4_voting_to_ooc_bundle_mode0_impl(scene, recovered_depth, input, nullptr);
+        return build_recovered_d4_voting_to_ooc_bundle_mode0_impl(scene, recovered_depth, input, nullptr, 4U, 3U);
     }
 
     RecoveredD4VotingToOocMode0Output
@@ -300,7 +309,22 @@ namespace metmodel
                                                             RecoveredPatchMatchD4SceneOutput& recovered_depth,
                                                             const RecoveredD4VotingToOocMode0Input& input)
     {
-        return build_recovered_d4_voting_to_ooc_bundle_mode0_impl(scene, recovered_depth, input, &recovered_depth);
+        return build_recovered_d4_voting_to_ooc_bundle_mode0_impl(
+            scene, recovered_depth, input, &recovered_depth, 4U, 3U);
+    }
+
+    RecoveredD4VotingToOocMode0Output
+    build_recovered_scaled_voting_to_ooc_bundle_mode0_consuming(const Scene& scene,
+                                                                RecoveredPatchMatchD4SceneOutput& recovered_depth,
+                                                                const RecoveredD4VotingToOocMode0Input& input)
+    {
+        if (recovered_depth.base_downscale != input.depth_downscale ||
+            recovered_depth.stored_level_count != input.stored_level_count)
+        {
+            throw std::invalid_argument("scaled voting-to-OOC scene quality identity is inconsistent");
+        }
+        return build_recovered_d4_voting_to_ooc_bundle_mode0_impl(
+            scene, recovered_depth, input, &recovered_depth, input.depth_downscale, input.stored_level_count);
     }
 
     RecoveredOocWeightedNodeOutput
@@ -311,9 +335,11 @@ namespace metmodel
         {
             throw std::invalid_argument("recovered OOC weighted-node builder requires a positive region");
         }
-        if (input.manifest.depth_downscale != 4U)
+        if (input.manifest.depth_downscale < 1U || input.manifest.depth_downscale > 16U ||
+            (input.manifest.depth_downscale & (input.manifest.depth_downscale - 1U)) != 0U ||
+            input.manifest.stored_level_count < 2U || input.manifest.stored_level_count > 3U)
         {
-            throw std::invalid_argument("recovered OOC weighted-node builder is validated only for d4");
+            throw std::invalid_argument("recovered OOC weighted-node builder requires a five-quality bundle");
         }
         const std::size_t count = input.manifest.reference_camera_indices.size();
         if (count == 0U || input.ooc.items.size() != count || input.ooc.pyramids.size() != count ||

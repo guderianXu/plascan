@@ -134,7 +134,7 @@ public:
         QJsonObject *result,
         QString *errorMsg = nullptr,
         const std::atomic_bool *cancelFlag = nullptr,
-        const OrthoProgressCallback &progressCallback = {});
+        const SmallBodyProgressCallback &progressCallback = {});
 
     /**
      * @brief 从带纹理 OBJ 同时生成三种小天体投影的 DEM+DOM GeoTIFF 产品。

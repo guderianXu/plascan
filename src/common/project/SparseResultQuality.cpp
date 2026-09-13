@@ -331,23 +331,6 @@ QString sparseResultKind(const QJsonObject &record)
     return kSparseResultKindUnknown;
 }
 
-QString sparseResultKindDisplayName(const QString &resultKind)
-{
-    if (resultKind == kSparseResultKindPairwisePreview)
-    {
-        return QStringLiteral("两视预览云");
-    }
-    if (resultKind == kSparseResultKindSfmSparseReconstruction)
-    {
-        return QStringLiteral("正式 SfM 稀疏云");
-    }
-    if (resultKind == kSparseResultKindSparsePostprocess)
-    {
-        return QStringLiteral("稀疏云后处理");
-    }
-    return QStringLiteral("未知稀疏云");
-}
-
 bool isPairwisePreviewSparseResult(const QJsonObject &record)
 {
     return sparseResultKind(record) == kSparseResultKindPairwisePreview;

@@ -99,6 +99,7 @@ namespace metmodel
                 bytes = saturating_add_bytes(bytes, vector_capacity_bytes(group.mask));
             }
             bytes = saturating_add_bytes(bytes, vector_capacity_bytes(resources.ranked_neighbors));
+            bytes = saturating_add_bytes(bytes, vector_capacity_bytes(resources.active_neighbor_camera_indices));
             for (const auto& neighbor : resources.ranked_neighbors)
             {
                 bytes = saturating_add_bytes(bytes, vector_capacity_bytes(neighbor.texture));
@@ -131,6 +132,80 @@ namespace metmodel
             return bytes;
         }
 
+        bool remap_recovered_patchmatch_inlier_masks(std::span<const std::uint8_t> active_packed_masks,
+                                                     std::size_t pixels,
+                                                     std::span<const std::size_t> active_neighbor_camera_indices,
+                                                     std::span<const std::size_t> full_ranked_neighbor_camera_indices,
+                                                     std::vector<std::uint8_t>& output,
+                                                     std::string& error)
+        {
+            if (pixels == 0U || active_neighbor_camera_indices.empty() || full_ranked_neighbor_camera_indices.empty() ||
+                active_neighbor_camera_indices.size() > full_ranked_neighbor_camera_indices.size())
+            {
+                error = "PatchMatch packed-mask remap dimensions are invalid";
+                return false;
+            }
+            const std::size_t active_groups = (active_neighbor_camera_indices.size() + 7U) / 8U;
+            const std::size_t full_groups = (full_ranked_neighbor_camera_indices.size() + 7U) / 8U;
+            if (active_groups > std::numeric_limits<std::size_t>::max() / pixels ||
+                full_groups > std::numeric_limits<std::size_t>::max() / pixels ||
+                active_packed_masks.size() != active_groups * pixels)
+            {
+                error = "PatchMatch packed-mask remap backing is inconsistent";
+                return false;
+            }
+
+            std::vector<std::size_t> full_ranks;
+            full_ranks.reserve(active_neighbor_camera_indices.size());
+            std::size_t search_begin = 0U;
+            for (const std::size_t camera_index : active_neighbor_camera_indices)
+            {
+                const auto found =
+                    std::find(full_ranked_neighbor_camera_indices.begin() + static_cast<std::ptrdiff_t>(search_begin),
+                              full_ranked_neighbor_camera_indices.end(),
+                              camera_index);
+                if (found == full_ranked_neighbor_camera_indices.end())
+                {
+                    error = "PatchMatch active-neighbour list is not an ordered subset of the full ranking";
+                    return false;
+                }
+                const std::size_t full_rank =
+                    static_cast<std::size_t>(found - full_ranked_neighbor_camera_indices.begin());
+                full_ranks.push_back(full_rank);
+                search_begin = full_rank + 1U;
+            }
+
+            if (active_neighbor_camera_indices.size() == full_ranked_neighbor_camera_indices.size() &&
+                std::equal(active_neighbor_camera_indices.begin(),
+                           active_neighbor_camera_indices.end(),
+                           full_ranked_neighbor_camera_indices.begin()))
+            {
+                output.assign(active_packed_masks.begin(), active_packed_masks.end());
+                error.clear();
+                return true;
+            }
+
+            std::vector<std::uint8_t> remapped(full_groups * pixels, std::uint8_t{0});
+            for (std::size_t active_rank = 0U; active_rank < active_neighbor_camera_indices.size(); ++active_rank)
+            {
+                const std::size_t active_group = active_rank / 8U;
+                const std::uint8_t active_bit = static_cast<std::uint8_t>(std::uint8_t{1} << (active_rank % 8U));
+                const std::size_t full_rank = full_ranks[active_rank];
+                const std::size_t full_group = full_rank / 8U;
+                const std::uint8_t full_bit = static_cast<std::uint8_t>(std::uint8_t{1} << (full_rank % 8U));
+                for (std::size_t pixel = 0U; pixel < pixels; ++pixel)
+                {
+                    if ((active_packed_masks[active_group * pixels + pixel] & active_bit) != 0U)
+                    {
+                        remapped[full_group * pixels + pixel] |= full_bit;
+                    }
+                }
+            }
+            output = std::move(remapped);
+            error.clear();
+            return true;
+        }
+
     } // namespace
 
     bool run_recovered_patchmatch_coarsest_level_cuda(const RecoveredPatchMatchHostPreparation& preparation,
@@ -147,11 +222,11 @@ namespace metmodel
             constexpr std::size_t capacity = PatchMatchCandidateOutput::capacity;
             const PatchMatchCamera& camera = preparation.reference_camera;
             const bool valid_target_downscale =
-                preparation.target_downscale >= 2U && preparation.target_downscale <= 8U &&
+                preparation.target_downscale >= 1U && preparation.target_downscale <= 16U &&
                 (preparation.target_downscale & (preparation.target_downscale - 1U)) == 0U;
             if (!valid_target_downscale)
             {
-                error = "PatchMatch coarsest-level orchestration requires power-of-two target downscale 2..8";
+                error = "PatchMatch coarsest-level orchestration requires power-of-two target downscale 1..16";
                 return false;
             }
             if (preparation.no_prior_policy != RecoveredPatchMatchNoPriorPolicy::DeterministicZero)
@@ -506,12 +581,12 @@ namespace metmodel
             constexpr std::size_t hypotheses = PatchMatchCandidateOutput::hypotheses;
             constexpr std::size_t capacity = PatchMatchCandidateOutput::capacity;
             const PatchMatchCamera& patch_camera = preparation.reference_camera;
-            if (preparation.target_downscale > 8U || preparation.target_downscale < 2U ||
+            if (preparation.target_downscale > 8U || preparation.target_downscale < 1U ||
                 preparation.reference.camera_index != camera.index ||
                 preparation.reference_camera_index != camera.index || patch_camera.width_original == 0U ||
                 patch_camera.height_original == 0U || preparation.neighbor_resources.ranked_neighbors.empty())
             {
-                error = "PatchMatch x16 continuation requires a matching d2/d4/d8 host preparation";
+                error = "PatchMatch x16 continuation requires a matching d1/d2/d4/d8 host preparation";
                 return false;
             }
             RecoveredPatchMatchCostAtlasState local_atlas_state;
@@ -1049,7 +1124,7 @@ namespace metmodel
             const bool valid_power_of_two = downscale != 0U && (downscale & (downscale - 1U)) == 0U;
             const bool target_level = downscale == preparation.target_downscale;
             if (!valid_power_of_two || downscale >= 16U || downscale < preparation.target_downscale ||
-                preparation.target_downscale < 2U || preparation.reference.camera_index != camera.index ||
+                preparation.target_downscale < 1U || preparation.reference.camera_index != camera.index ||
                 preparation.reference_camera_index != camera.index || patch_camera.width_original == 0U ||
                 patch_camera.height_original == 0U || preparation.neighbor_resources.ranked_neighbors.empty())
             {
@@ -1685,27 +1760,38 @@ namespace metmodel
         }
     }
 
-    bool
-    compose_recovered_depthmap_default_image_d4(const Camera& camera,
-                                                const std::array<std::span<const float>, 3>& persisted_depth_levels,
-                                                std::vector<float>& output,
-                                                std::string& error)
+    static bool
+    compose_recovered_depthmap_default_image_impl(const Camera& camera,
+                                                  const std::array<std::span<const float>, 3>& persisted_depth_levels,
+                                                  std::uint32_t base_downscale,
+                                                  std::size_t stored_level_count,
+                                                  std::vector<float>& output,
+                                                  std::string& error)
     {
         try
         {
-            if (!camera.aligned || camera.image.width == 0U || camera.image.height == 0U ||
-                camera.image.width % 16U != 0U || camera.image.height % 16U != 0U || !std::isfinite(camera.model.f) ||
-                camera.model.f <= 0.0 || !std::isfinite(camera.model.cx) || !std::isfinite(camera.model.cy))
+            if (base_downscale < 1U || base_downscale > 16U || (base_downscale & (base_downscale - 1U)) != 0U ||
+                stored_level_count < 2U || stored_level_count > 3U ||
+                stored_level_count != (base_downscale == 16U ? 2U : 3U))
             {
-                error = "DepthMap default-image composition requires an aligned finite pinhole camera with dimensions "
-                        "divisible by 16";
+                error = "DepthMap default-image composition base downscale is unsupported";
+                return false;
+            }
+            const std::uint32_t maximum_downscale = base_downscale << (stored_level_count - 1U);
+            if (!camera.aligned || camera.image.width == 0U || camera.image.height == 0U ||
+                camera.image.width % maximum_downscale != 0U || camera.image.height % maximum_downscale != 0U ||
+                !std::isfinite(camera.model.f) || camera.model.f <= 0.0 || !std::isfinite(camera.model.cx) ||
+                !std::isfinite(camera.model.cy))
+            {
+                error = "DepthMap default-image composition requires an aligned finite pinhole camera divisible by its "
+                        "coarsest level";
                 return false;
             }
 
-            constexpr std::array<std::uint32_t, 3> downscales{4U, 8U, 16U};
+            const std::array<std::uint32_t, 3> downscales{base_downscale, base_downscale << 1U, base_downscale << 2U};
             std::array<std::size_t, 3> widths{};
             std::array<std::size_t, 3> heights{};
-            for (std::size_t level = 0; level < 3U; ++level)
+            for (std::size_t level = 0; level < stored_level_count; ++level)
             {
                 widths[level] = camera.image.width / downscales[level];
                 heights[level] = camera.image.height / downscales[level];
@@ -1724,11 +1810,13 @@ namespace metmodel
                     }
                 }
             }
-            if (widths[0] != 2U * widths[1] || heights[0] != 2U * heights[1] || widths[1] != 2U * widths[2] ||
-                heights[1] != 2U * heights[2])
+            for (std::size_t level = 1U; level < stored_level_count; ++level)
             {
-                error = "DepthMap default-image composition requires exact 2x pyramid levels";
-                return false;
+                if (widths[level - 1U] != 2U * widths[level] || heights[level - 1U] != 2U * heights[level])
+                {
+                    error = "DepthMap default-image composition requires exact 2x pyramid levels";
+                    return false;
+                }
             }
 
             struct Point3
@@ -1882,30 +1970,28 @@ namespace metmodel
                 return true;
             };
 
-            std::vector<float> composed_middle(persisted_depth_levels[1].begin(), persisted_depth_levels[1].end());
-            std::vector<float> upsampled_middle;
-            if (!upsample(persisted_depth_levels[2],
-                          widths[2],
-                          heights[2],
-                          downscales[2],
-                          widths[1],
-                          heights[1],
-                          upsampled_middle))
-                return false;
-            for (std::size_t pixel = 0; pixel < composed_middle.size(); ++pixel)
+            std::vector<float> result(persisted_depth_levels[stored_level_count - 1U].begin(),
+                                      persisted_depth_levels[stored_level_count - 1U].end());
+            for (std::size_t source_level = stored_level_count - 1U; source_level > 0U; --source_level)
             {
-                if (composed_middle[pixel] == 0.0F)
-                    composed_middle[pixel] = upsampled_middle[pixel];
-            }
+                std::vector<float> upsampled;
+                if (!upsample(result,
+                              widths[source_level],
+                              heights[source_level],
+                              downscales[source_level],
+                              widths[source_level - 1U],
+                              heights[source_level - 1U],
+                              upsampled))
+                    return false;
+                std::vector<float> finer(persisted_depth_levels[source_level - 1U].begin(),
+                                         persisted_depth_levels[source_level - 1U].end());
+                for (std::size_t pixel = 0; pixel < finer.size(); ++pixel)
+                {
+                    if (finer[pixel] == 0.0F)
+                        finer[pixel] = upsampled[pixel];
+                }
 
-            std::vector<float> result(persisted_depth_levels[0].begin(), persisted_depth_levels[0].end());
-            std::vector<float> upsampled_fine;
-            if (!upsample(composed_middle, widths[1], heights[1], downscales[1], widths[0], heights[0], upsampled_fine))
-                return false;
-            for (std::size_t pixel = 0; pixel < result.size(); ++pixel)
-            {
-                if (result[pixel] == 0.0F)
-                    result[pixel] = upsampled_fine[pixel];
+                result = std::move(finer);
             }
             output = std::move(result);
             error.clear();
@@ -1916,6 +2002,35 @@ namespace metmodel
             error = exception.what();
             return false;
         }
+    }
+
+    bool
+    compose_recovered_depthmap_default_image_d4(const Camera& camera,
+                                                const std::array<std::span<const float>, 3>& persisted_depth_levels,
+                                                std::vector<float>& output,
+                                                std::string& error)
+    {
+        return compose_recovered_depthmap_default_image_impl(camera, persisted_depth_levels, 4U, 3U, output, error);
+    }
+
+    bool
+    compose_recovered_depthmap_default_image_d1(const Camera& camera,
+                                                const std::array<std::span<const float>, 3>& persisted_depth_levels,
+                                                std::vector<float>& output,
+                                                std::string& error)
+    {
+        return compose_recovered_depthmap_default_image_impl(camera, persisted_depth_levels, 1U, 3U, output, error);
+    }
+
+    bool compose_recovered_depthmap_default_image(const Camera& camera,
+                                                  const std::array<std::span<const float>, 3>& persisted_depth_levels,
+                                                  std::uint32_t base_downscale,
+                                                  std::size_t stored_level_count,
+                                                  std::vector<float>& output,
+                                                  std::string& error)
+    {
+        return compose_recovered_depthmap_default_image_impl(
+            camera, persisted_depth_levels, base_downscale, stored_level_count, output, error);
     }
 
     bool make_recovered_patchmatch_voting_level_product(std::span<const float> component_filtered_depth,
@@ -2226,6 +2341,631 @@ namespace metmodel
         }
     }
 
+    static bool run_recovered_patchmatch_scaled_pyramid_single_area_cuda(
+        const Scene& scene,
+        std::size_t reference_camera_index,
+        std::span<const std::size_t> ranked_neighbor_camera_indices,
+        std::uint32_t target_downscale,
+        std::size_t device_index,
+        RecoveredPatchMatchD4PyramidOutput& output,
+        std::string& error,
+        std::span<const RecoveredPatchMatchPreparedCamera> prepared_camera_cache,
+        bool capture_diagnostic_checkpoints,
+        RecoveredPatchMatchHostPreparation* prebuilt_host_preparation,
+        double prebuilt_host_preparation_seconds)
+    {
+        try
+        {
+            using Clock = std::chrono::steady_clock;
+            if (target_downscale == 4U)
+            {
+                return run_recovered_patchmatch_d4_pyramid_cuda(scene,
+                                                                reference_camera_index,
+                                                                ranked_neighbor_camera_indices,
+                                                                device_index,
+                                                                output,
+                                                                error,
+                                                                prepared_camera_cache,
+                                                                capture_diagnostic_checkpoints,
+                                                                prebuilt_host_preparation,
+                                                                prebuilt_host_preparation_seconds);
+            }
+            if (target_downscale != 1U && target_downscale != 2U && target_downscale != 8U && target_downscale != 16U)
+            {
+                error = "scaled PatchMatch pyramid requires target downscale 1, 2, 4, 8, or 16";
+                return false;
+            }
+            const std::size_t neighbor_count = ranked_neighbor_camera_indices.size();
+            if (reference_camera_index >= scene.cameras.size() || neighbor_count == 0U || neighbor_count > 16U)
+            {
+                error = "scaled PatchMatch pyramid requires one reference and 1..16 ranked neighbors";
+                return false;
+            }
+            RecoveredCudaModuleSessionScope cuda_session;
+            if (!cuda_session.open(device_index, error))
+                return false;
+            const Camera& camera = scene.cameras[reference_camera_index];
+            if (camera.index != reference_camera_index || camera.image.width == 0U || camera.image.height == 0U)
+            {
+                error = "scaled PatchMatch pyramid requires an index-stable non-empty camera";
+                return false;
+            }
+
+            const auto preparation_started = Clock::now();
+            RecoveredPatchMatchHostPreparation preparation;
+            double host_preparation_seconds = 0.0;
+            if (prebuilt_host_preparation == nullptr)
+            {
+                if (!make_recovered_patchmatch_unmasked_host_preparation(scene,
+                                                                         reference_camera_index,
+                                                                         ranked_neighbor_camera_indices,
+                                                                         target_downscale,
+                                                                         device_index,
+                                                                         preparation,
+                                                                         error,
+                                                                         prepared_camera_cache,
+                                                                         capture_diagnostic_checkpoints))
+                    return false;
+                host_preparation_seconds = std::chrono::duration<double>(Clock::now() - preparation_started).count();
+            }
+            else
+            {
+                preparation = std::move(*prebuilt_host_preparation);
+                host_preparation_seconds = prebuilt_host_preparation_seconds;
+                if (preparation.reference_camera_index != reference_camera_index ||
+                    preparation.target_downscale != target_downscale || preparation.device_index != device_index ||
+                    preparation.ranked_neighbor_camera_indices.size() != ranked_neighbor_camera_indices.size() ||
+                    !std::equal(preparation.ranked_neighbor_camera_indices.begin(),
+                                preparation.ranked_neighbor_camera_indices.end(),
+                                ranked_neighbor_camera_indices.begin()))
+                {
+                    error = "prebuilt scaled PatchMatch host preparation identity is invalid";
+                    return false;
+                }
+            }
+
+            const auto registration_started = Clock::now();
+            RecoveredCudaPinnedNeighborTextures pinned_neighbor_textures;
+            if (!pin_recovered_patchmatch_neighbor_textures_cuda(
+                    preparation.neighbor_resources, device_index, pinned_neighbor_textures, error))
+                return false;
+            const double host_registration_seconds =
+                std::chrono::duration<double>(Clock::now() - registration_started).count();
+
+            const auto find_level = [&](std::uint32_t downscale) -> const RecoveredPatchMatchPreparedLevel*
+            {
+                const auto level = std::find_if(preparation.reference.image_levels.begin(),
+                                                preparation.reference.image_levels.end(),
+                                                [downscale](const RecoveredPatchMatchPreparedLevel& value)
+                                                { return value.downscale == downscale; });
+                return level == preparation.reference.image_levels.end() ? nullptr : &*level;
+            };
+            const auto* level32 = find_level(32U);
+            if (level32 == nullptr)
+            {
+                error = "scaled PatchMatch preparation lacks the d32 image";
+                return false;
+            }
+
+            RecoveredPatchMatchD4PyramidOutput result;
+            result.camera_index = reference_camera_index;
+            result.base_downscale = target_downscale;
+            result.stored_level_count = target_downscale == 16U ? 2U : 3U;
+            result.host_preparation_seconds = host_preparation_seconds;
+            result.host_registration_seconds = host_registration_seconds;
+            std::array<std::vector<float>, 6> product_depth;
+            std::array<std::vector<std::uint8_t>, 6> product_masks;
+            const auto level_slot = [](std::uint32_t downscale) -> std::size_t
+            { return static_cast<std::size_t>(std::countr_zero(downscale)); };
+            const auto retain_boundary_product = [&](std::uint32_t downscale,
+                                                     const RecoveredPatchMatchLevelState& state,
+                                                     const PatchMatchLevelBoundaryOutput& boundary)
+            {
+                const std::size_t width = (camera.image.width + downscale - 1U) / downscale;
+                const std::size_t height = (camera.image.height + downscale - 1U) / downscale;
+                const std::size_t pixels = width * height;
+                const std::size_t groups = (neighbor_count + 7U) / 8U;
+                const std::size_t packed_bytes = groups * pixels;
+                if (boundary.filter.depth_allocation.size() < pixels ||
+                    state.neighbor_inlier_masks.size() < packed_bytes)
+                {
+                    throw std::runtime_error("scaled PatchMatch retained boundary is incomplete at d" +
+                                             std::to_string(downscale));
+                }
+                const std::size_t slot = level_slot(downscale);
+                product_depth[slot].assign(boundary.filter.depth_allocation.begin(),
+                                           boundary.filter.depth_allocation.begin() + pixels);
+                product_masks[slot].assign(state.neighbor_inlier_masks.begin(),
+                                           state.neighbor_inlier_masks.begin() + packed_bytes);
+            };
+            const auto retain_finer_product = [&](RecoveredPatchMatchFinerLevelOutput& level)
+            {
+                const std::size_t slot = level_slot(level.downscale);
+                product_depth[slot] = std::move(level.level_product_depth);
+                product_masks[slot] = std::move(level.level_product_inlier_masks);
+            };
+            const auto product_is_requested = [&](std::uint32_t downscale)
+            {
+                for (std::size_t level = 0U; level < result.stored_level_count; ++level)
+                {
+                    if ((target_downscale << level) == downscale)
+                        return true;
+                }
+                return false;
+            };
+
+            auto camera_atlas_state = make_recovered_patchmatch_cost_atlas_state(preparation.neighbor_resources);
+            const auto x32_started = Clock::now();
+            RecoveredPatchMatchCoarsestLevelOutput x32;
+            if (!run_recovered_patchmatch_coarsest_level_cuda(
+                    preparation, level32->data.image, x32, error, &camera_atlas_state, capture_diagnostic_checkpoints))
+                return false;
+            result.x32_seconds = std::chrono::duration<double>(Clock::now() - x32_started).count();
+            if (product_is_requested(32U))
+                retain_boundary_product(32U, x32.state_before_filter, x32.boundary);
+
+            RecoveredPatchMatchLevelState previous_state;
+            PatchMatchLevelBoundaryOutput previous_boundary;
+            if (target_downscale == 16U)
+            {
+                const auto x16_started = Clock::now();
+                RecoveredPatchMatchFinerLevelOutput x16;
+                if (!run_recovered_patchmatch_finer_level_cuda(
+                        camera,
+                        preparation,
+                        16U,
+                        x32.state_before_filter,
+                        x32.boundary,
+                        {},
+                        x16,
+                        error,
+                        &camera_atlas_state,
+                        capture_diagnostic_checkpoints,
+                        capture_diagnostic_checkpoints ? nullptr : &x32.state_before_filter))
+                    return false;
+                result.x16_seconds = std::chrono::duration<double>(Clock::now() - x16_started).count();
+                if (!x16.target_level || x16.bilateral_executed)
+                {
+                    error = "scaled d16 PatchMatch target-level schedule is invalid";
+                    return false;
+                }
+                retain_finer_product(x16);
+                result.ranked_neighbor_camera_indices = std::move(x16.ranked_neighbor_camera_indices);
+                x32 = {};
+            }
+            else
+            {
+                const auto* level16 = find_level(16U);
+                if (level16 == nullptr)
+                {
+                    error = "scaled PatchMatch preparation lacks the d16 image";
+                    return false;
+                }
+                const auto x16_started = Clock::now();
+                RecoveredPatchMatchX16LevelOutput x16;
+                if (!run_recovered_patchmatch_x16_level_cuda(camera,
+                                                             preparation,
+                                                             x32,
+                                                             level16->data.image,
+                                                             x16,
+                                                             error,
+                                                             &camera_atlas_state,
+                                                             capture_diagnostic_checkpoints,
+                                                             capture_diagnostic_checkpoints ? nullptr
+                                                                                            : &x32.state_before_filter))
+                    return false;
+                result.x16_seconds = std::chrono::duration<double>(Clock::now() - x16_started).count();
+                if (product_is_requested(16U))
+                    retain_boundary_product(16U, x16.state_before_filter, x16.boundary);
+                x32 = {};
+                previous_state = std::move(x16.state_before_filter);
+                previous_boundary = std::move(x16.boundary);
+
+                for (std::uint32_t downscale = 8U; downscale >= target_downscale; downscale >>= 1U)
+                {
+                    const auto* image_level = find_level(downscale);
+                    if (image_level == nullptr)
+                    {
+                        error = "scaled PatchMatch preparation lacks the d" + std::to_string(downscale) + " image";
+                        return false;
+                    }
+                    const auto started = Clock::now();
+                    RecoveredPatchMatchFinerLevelOutput finer;
+                    const std::span<const std::uint8_t> bilateral_image =
+                        downscale == target_downscale ? std::span<const std::uint8_t>{}
+                                                      : std::span<const std::uint8_t>(image_level->data.image);
+                    if (!run_recovered_patchmatch_finer_level_cuda(camera,
+                                                                   preparation,
+                                                                   downscale,
+                                                                   previous_state,
+                                                                   previous_boundary,
+                                                                   bilateral_image,
+                                                                   finer,
+                                                                   error,
+                                                                   &camera_atlas_state,
+                                                                   capture_diagnostic_checkpoints,
+                                                                   capture_diagnostic_checkpoints ? nullptr
+                                                                                                  : &previous_state))
+                        return false;
+                    const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+                    if (downscale == 8U)
+                        result.x8_seconds = seconds;
+                    if (downscale == 4U)
+                        result.x4_seconds = seconds;
+                    if (downscale == 2U)
+                        result.x2_seconds = seconds;
+                    if (product_is_requested(downscale))
+                        retain_finer_product(finer);
+                    if (downscale == target_downscale)
+                    {
+                        if (!finer.target_level || finer.bilateral_executed)
+                        {
+                            error = "scaled PatchMatch terminal-level schedule is invalid";
+                            return false;
+                        }
+                        result.ranked_neighbor_camera_indices = std::move(finer.ranked_neighbor_camera_indices);
+                    }
+                    else
+                    {
+                        if (finer.target_level || !finer.bilateral_executed)
+                        {
+                            error = "scaled PatchMatch intermediate-level schedule is invalid";
+                            return false;
+                        }
+                        previous_state = std::move(finer.state_before_filter);
+                        previous_boundary = std::move(finer.boundary);
+                    }
+                    if (downscale == target_downscale)
+                        break;
+                }
+            }
+
+            const auto product_started = Clock::now();
+            if (result.ranked_neighbor_camera_indices.size() != neighbor_count ||
+                !std::equal(result.ranked_neighbor_camera_indices.begin(),
+                            result.ranked_neighbor_camera_indices.end(),
+                            ranked_neighbor_camera_indices.begin()))
+            {
+                error = "scaled PatchMatch ranked-neighbor mapping changed during execution";
+                return false;
+            }
+            result.neighbor_atlas_prepare_count = camera_atlas_state.prepare_count;
+            for (std::size_t level = 0U; level < result.stored_level_count; ++level)
+            {
+                const std::uint32_t downscale = target_downscale << level;
+                const std::size_t slot = level_slot(downscale);
+                if (product_depth[slot].empty() || product_masks[slot].empty())
+                {
+                    error = "scaled PatchMatch lacks persisted product d" + std::to_string(downscale);
+                    return false;
+                }
+                if (!make_recovered_patchmatch_voting_level_product(product_depth[slot],
+                                                                    product_masks[slot],
+                                                                    neighbor_count,
+                                                                    result.depth_levels[level],
+                                                                    result.packed_inlier_masks[level],
+                                                                    error))
+                {
+                    error = "scaled PatchMatch d" + std::to_string(downscale) + " voting product: " + error;
+                    return false;
+                }
+            }
+            result.product_seconds = std::chrono::duration<double>(Clock::now() - product_started).count();
+            RecoveredCudaModuleSessionStats ignored_session_stats;
+            if (!cuda_session.close(ignored_session_stats, error))
+                return false;
+            output = std::move(result);
+            error.clear();
+            return true;
+        }
+        catch (const std::exception& exception)
+        {
+            error = exception.what();
+            return false;
+        }
+    }
+
+    bool run_recovered_patchmatch_scaled_pyramid_cuda(
+        const Scene& scene,
+        std::size_t reference_camera_index,
+        std::span<const std::size_t> ranked_neighbor_camera_indices,
+        std::uint32_t target_downscale,
+        std::size_t device_index,
+        RecoveredPatchMatchD4PyramidOutput& output,
+        std::string& error,
+        std::span<const RecoveredPatchMatchPreparedCamera> prepared_camera_cache,
+        bool capture_diagnostic_checkpoints,
+        RecoveredPatchMatchHostPreparation* prebuilt_host_preparation,
+        double prebuilt_host_preparation_seconds)
+    {
+        try
+        {
+            if (target_downscale != 1U || reference_camera_index >= scene.cameras.size())
+            {
+                return run_recovered_patchmatch_scaled_pyramid_single_area_cuda(scene,
+                                                                                reference_camera_index,
+                                                                                ranked_neighbor_camera_indices,
+                                                                                target_downscale,
+                                                                                device_index,
+                                                                                output,
+                                                                                error,
+                                                                                prepared_camera_cache,
+                                                                                capture_diagnostic_checkpoints,
+                                                                                prebuilt_host_preparation,
+                                                                                prebuilt_host_preparation_seconds);
+            }
+            const Camera& full_camera = scene.cameras[reference_camera_index];
+            if (full_camera.image.width > std::numeric_limits<std::uint32_t>::max() ||
+                full_camera.image.height > std::numeric_limits<std::uint32_t>::max())
+            {
+                error = "recovered d1 tiled PatchMatch dimensions exceed uint32";
+                return false;
+            }
+            const std::vector<RecoveredPatchMatchD1Tile> tiles =
+                make_recovered_patchmatch_d1_tile_plan(static_cast<std::uint32_t>(full_camera.image.width),
+                                                       static_cast<std::uint32_t>(full_camera.image.height));
+            if (tiles.size() == 1U)
+            {
+                return run_recovered_patchmatch_scaled_pyramid_single_area_cuda(scene,
+                                                                                reference_camera_index,
+                                                                                ranked_neighbor_camera_indices,
+                                                                                target_downscale,
+                                                                                device_index,
+                                                                                output,
+                                                                                error,
+                                                                                prepared_camera_cache,
+                                                                                capture_diagnostic_checkpoints,
+                                                                                prebuilt_host_preparation,
+                                                                                prebuilt_host_preparation_seconds);
+            }
+            if (ranked_neighbor_camera_indices.empty() || ranked_neighbor_camera_indices.size() > 16U)
+            {
+                error = "recovered d1 tiled PatchMatch requires 1..16 ranked neighbors";
+                return false;
+            }
+            if (full_camera.image.width % 4U != 0U || full_camera.image.height % 4U != 0U)
+            {
+                error = "recovered d1 tiled output dimensions are not divisible by the persisted d4 level";
+                return false;
+            }
+
+            std::vector<RecoveredPatchMatchPreparedCamera> owned_cache;
+            std::span<const RecoveredPatchMatchPreparedCamera> full_cache = prepared_camera_cache;
+            const auto cache_entry_valid = [&](std::size_t camera_index)
+            {
+                return full_cache.size() == scene.cameras.size() && camera_index < full_cache.size() &&
+                       full_cache[camera_index].valid && full_cache[camera_index].camera_index == camera_index &&
+                       full_cache[camera_index].target_downscale == 1U &&
+                       full_cache[camera_index].device_index == device_index;
+            };
+            bool cache_is_usable = cache_entry_valid(reference_camera_index);
+            for (const std::size_t camera_index : ranked_neighbor_camera_indices)
+            {
+                cache_is_usable = cache_is_usable && cache_entry_valid(camera_index);
+            }
+            if (!cache_is_usable)
+            {
+                owned_cache.resize(scene.cameras.size());
+                std::vector<std::size_t> required;
+                required.reserve(ranked_neighbor_camera_indices.size() + 1U);
+                required.push_back(reference_camera_index);
+                for (const std::size_t camera_index : ranked_neighbor_camera_indices)
+                {
+                    if (camera_index >= scene.cameras.size())
+                    {
+                        error = "recovered d1 tiled neighbor camera is out of range";
+                        return false;
+                    }
+                    if (std::find(required.begin(), required.end(), camera_index) == required.end())
+                    {
+                        required.push_back(camera_index);
+                    }
+                }
+                for (const std::size_t camera_index : required)
+                {
+                    if (!make_recovered_patchmatch_unmasked_camera_preparation(
+                            scene, camera_index, 1U, device_index, owned_cache[camera_index], error, 1U))
+                    {
+                        error =
+                            "recovered d1 tiled full-camera preparation " + std::to_string(camera_index) + ": " + error;
+                        return false;
+                    }
+                }
+                full_cache = owned_cache;
+            }
+
+            Scene tile_scene;
+            tile_scene.sparse_points = scene.sparse_points;
+            tile_scene.region = scene.region;
+            tile_scene.neighbor_common_threshold = scene.neighbor_common_threshold;
+            tile_scene.cameras.reserve(scene.cameras.size());
+            for (const Camera& source : scene.cameras)
+            {
+                Camera camera;
+                camera.index = source.index;
+                camera.name = source.name;
+                camera.path = source.path;
+                camera.aligned = source.aligned;
+                camera.model = source.model;
+                camera.pose = source.pose;
+                camera.center = source.center;
+                camera.image.width = source.image.width;
+                camera.image.height = source.image.height;
+                camera.image.focal_length_35mm = source.image.focal_length_35mm;
+                camera.working_model = source.working_model;
+                camera.working_image.width = source.working_image.width;
+                camera.working_image.height = source.working_image.height;
+                camera.working_image.focal_length_35mm = source.working_image.focal_length_35mm;
+                camera.track_ids = source.track_ids;
+                tile_scene.cameras.push_back(std::move(camera));
+            }
+
+            RecoveredPatchMatchD4PyramidOutput result;
+            result.camera_index = reference_camera_index;
+            result.base_downscale = 1U;
+            result.stored_level_count = 3U;
+            result.ranked_neighbor_camera_indices.assign(ranked_neighbor_camera_indices.begin(),
+                                                         ranked_neighbor_camera_indices.end());
+            constexpr std::array<std::uint32_t, 3> downscales{1U, 2U, 4U};
+            const std::size_t groups = (ranked_neighbor_camera_indices.size() + 7U) / 8U;
+            for (std::size_t level = 0U; level < downscales.size(); ++level)
+            {
+                const std::size_t width = full_camera.image.width / downscales[level];
+                const std::size_t height = full_camera.image.height / downscales[level];
+                if (width > std::numeric_limits<std::size_t>::max() / height ||
+                    groups > std::numeric_limits<std::size_t>::max() / (width * height))
+                {
+                    error = "recovered d1 tiled output allocation overflows size_t";
+                    return false;
+                }
+                result.depth_levels[level].assign(width * height, 0.0F);
+                result.packed_inlier_masks[level].assign(groups * width * height, std::uint8_t{0});
+            }
+
+            for (const RecoveredPatchMatchD1Tile& tile : tiles)
+            {
+                Camera& tile_camera = tile_scene.cameras[reference_camera_index];
+                tile_camera.model = full_camera.model;
+                tile_camera.model.cx -= tile.area_left;
+                tile_camera.model.cy -= tile.area_top;
+                tile_camera.image.width = tile.area_right - tile.area_left;
+                tile_camera.image.height = tile.area_bottom - tile.area_top;
+                tile_camera.model.cx_offset = tile_camera.model.cx - static_cast<double>(tile_camera.image.width) * 0.5;
+                tile_camera.model.cy_offset =
+                    tile_camera.model.cy - static_cast<double>(tile_camera.image.height) * 0.5;
+
+                const auto host_started = std::chrono::steady_clock::now();
+                RecoveredPatchMatchHostPreparation host;
+                host.reference_camera_index = reference_camera_index;
+                host.target_downscale = 1U;
+                host.device_index = device_index;
+                if (!make_recovered_patchmatch_d1_tile_reference_preparation(
+                        full_camera, full_cache[reference_camera_index], tile, host.reference, error))
+                {
+                    error = "recovered d1 tile reference preparation: " + error;
+                    return false;
+                }
+                if (!make_recovered_patchmatch_d1_tile_neighbor_resources(scene,
+                                                                          reference_camera_index,
+                                                                          full_cache,
+                                                                          ranked_neighbor_camera_indices,
+                                                                          tile,
+                                                                          host.neighbor_resources,
+                                                                          error))
+                {
+                    error = "recovered d1 tile neighbor resources: " + error;
+                    return false;
+                }
+                host.ranked_neighbor_camera_indices = host.neighbor_resources.active_neighbor_camera_indices;
+                if (host.ranked_neighbor_camera_indices.empty())
+                {
+                    error = "recovered d1 tile has no active ranked neighbors";
+                    return false;
+                }
+                const auto base =
+                    std::find_if(host.reference.image_levels.begin(),
+                                 host.reference.image_levels.end(),
+                                 [](const RecoveredPatchMatchPreparedLevel& level) { return level.downscale == 1U; });
+                if (base == host.reference.image_levels.end())
+                {
+                    error = "recovered d1 tile reference lacks its d1 image";
+                    return false;
+                }
+                host.deviation_threshold_multiplier = base->deviation_ratio;
+                host.reference_camera = make_patchmatch_reference_camera(tile_camera, 1);
+                host.normal_rotations = make_patchmatch_normal_rotation_cameras(host.reference_camera);
+                host.propagation_rotation = make_patchmatch_propagation_rotation(host.reference_camera);
+                const double host_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - host_started).count();
+
+                RecoveredPatchMatchD4PyramidOutput tile_output;
+                if (!run_recovered_patchmatch_scaled_pyramid_single_area_cuda(tile_scene,
+                                                                              reference_camera_index,
+                                                                              host.ranked_neighbor_camera_indices,
+                                                                              1U,
+                                                                              device_index,
+                                                                              tile_output,
+                                                                              error,
+                                                                              {},
+                                                                              capture_diagnostic_checkpoints,
+                                                                              &host,
+                                                                              host_seconds))
+                {
+                    error = "recovered d1 tile execution: " + error;
+                    return false;
+                }
+                result.neighbor_atlas_prepare_count += tile_output.neighbor_atlas_prepare_count;
+                result.host_preparation_seconds += tile_output.host_preparation_seconds;
+                result.host_registration_seconds += tile_output.host_registration_seconds;
+                result.x32_seconds += tile_output.x32_seconds;
+                result.x16_seconds += tile_output.x16_seconds;
+                result.x8_seconds += tile_output.x8_seconds;
+                result.x4_seconds += tile_output.x4_seconds;
+                result.x2_seconds += tile_output.x2_seconds;
+                result.product_seconds += tile_output.product_seconds;
+
+                for (std::size_t level = 0U; level < downscales.size(); ++level)
+                {
+                    const std::uint32_t downscale = downscales[level];
+                    const std::size_t full_width = full_camera.image.width / downscale;
+                    const std::size_t full_height = full_camera.image.height / downscale;
+                    const std::size_t area_width = (tile.area_right - tile.area_left) / downscale;
+                    const std::size_t area_height = (tile.area_bottom - tile.area_top) / downscale;
+                    const std::size_t core_width = (tile.core_right - tile.core_left) / downscale;
+                    const std::size_t core_height = (tile.core_bottom - tile.core_top) / downscale;
+                    const std::size_t source_x = (tile.core_left - tile.area_left) / downscale;
+                    const std::size_t source_y = (tile.core_top - tile.area_top) / downscale;
+                    const std::size_t destination_x = tile.core_left / downscale;
+                    const std::size_t destination_y = tile.core_top / downscale;
+                    const std::size_t tile_pixels = area_width * area_height;
+                    const std::size_t full_pixels = full_width * full_height;
+                    std::vector<std::uint8_t> camera_wide_masks;
+                    if (!remap_recovered_patchmatch_inlier_masks(tile_output.packed_inlier_masks[level],
+                                                                 tile_pixels,
+                                                                 tile_output.ranked_neighbor_camera_indices,
+                                                                 ranked_neighbor_camera_indices,
+                                                                 camera_wide_masks,
+                                                                 error))
+                    {
+                        error = "recovered d1 tile packed-mask remap: " + error;
+                        return false;
+                    }
+                    if (tile_output.depth_levels[level].size() != tile_pixels ||
+                        camera_wide_masks.size() != groups * tile_pixels)
+                    {
+                        error = "recovered d1 tile persisted product dimensions are invalid";
+                        return false;
+                    }
+                    for (std::size_t row = 0U; row < core_height; ++row)
+                    {
+                        const std::size_t source_offset = (source_y + row) * area_width + source_x;
+                        const std::size_t destination_offset = (destination_y + row) * full_width + destination_x;
+                        std::copy_n(
+                            tile_output.depth_levels[level].begin() + static_cast<std::ptrdiff_t>(source_offset),
+                            core_width,
+                            result.depth_levels[level].begin() + static_cast<std::ptrdiff_t>(destination_offset));
+                        for (std::size_t group = 0U; group < groups; ++group)
+                        {
+                            std::copy_n(camera_wide_masks.begin() +
+                                            static_cast<std::ptrdiff_t>(group * tile_pixels + source_offset),
+                                        core_width,
+                                        result.packed_inlier_masks[level].begin() +
+                                            static_cast<std::ptrdiff_t>(group * full_pixels + destination_offset));
+                        }
+                    }
+                }
+            }
+            output = std::move(result);
+            error.clear();
+            return true;
+        }
+        catch (const std::exception& exception)
+        {
+            error = exception.what();
+            return false;
+        }
+    }
+
     bool run_recovered_patchmatch_d4_scene_cuda(const Scene& scene,
                                                 std::span<const std::size_t> reference_camera_indices,
                                                 std::span<const std::vector<std::size_t>> ranked_neighbors_by_camera,
@@ -2235,14 +2975,22 @@ namespace metmodel
                                                 std::string& error,
                                                 bool retain_voting_diagnostics,
                                                 const std::filesystem::path& patchmatch_store_root,
-                                                std::size_t voting_batch_size)
+                                                std::size_t voting_batch_size,
+                                                std::uint32_t base_downscale)
     {
         try
         {
             using Clock = std::chrono::steady_clock;
+            if (base_downscale != 1U && base_downscale != 2U && base_downscale != 4U && base_downscale != 8U &&
+                base_downscale != 16U)
+            {
+                error = "recovered scaled scene requires base downscale 1, 2, 4, 8, or 16";
+                return false;
+            }
+            const std::size_t stored_level_count = base_downscale == 16U ? 2U : 3U;
             if (reference_camera_indices.empty() || ranked_neighbors_by_camera.size() != scene.cameras.size())
             {
-                error = "recovered d4 scene requires explicit references and one neighbor row per scene camera";
+                error = "recovered scaled scene requires explicit references and one neighbor row per scene camera";
                 return false;
             }
             RecoveredCudaModuleSessionScope cuda_session;
@@ -2250,26 +2998,27 @@ namespace metmodel
                 return false;
 
             std::vector<std::size_t> product_for_camera(scene.cameras.size(), std::numeric_limits<std::size_t>::max());
+            const bool rpc_direct_depth_transfer = false;
             for (std::size_t ordinal = 0; ordinal < reference_camera_indices.size(); ++ordinal)
             {
                 const std::size_t camera_index = reference_camera_indices[ordinal];
                 if (camera_index >= scene.cameras.size() || !scene.cameras[camera_index].aligned ||
                     product_for_camera[camera_index] != std::numeric_limits<std::size_t>::max())
                 {
-                    error = "recovered d4 scene reference set is invalid or duplicated";
+                    error = "recovered scaled scene reference set is invalid or duplicated";
                     return false;
                 }
                 const auto& neighbors = ranked_neighbors_by_camera[camera_index];
                 if (neighbors.empty() || neighbors.size() > 16U)
                 {
-                    error = "recovered d4 scene reference lies outside the evidence-backed 1..16-neighbor domain";
+                    error = "recovered scaled scene reference lies outside the evidence-backed 1..16-neighbor domain";
                     return false;
                 }
                 for (const std::size_t neighbor : neighbors)
                 {
                     if (neighbor >= scene.cameras.size() || !scene.cameras[neighbor].aligned)
                     {
-                        error = "recovered d4 scene neighbor mapping is invalid";
+                        error = "recovered scaled scene neighbor mapping is invalid";
                         return false;
                     }
                 }
@@ -2281,7 +3030,7 @@ namespace metmodel
                 {
                     if (product_for_camera[neighbor] == std::numeric_limits<std::size_t>::max())
                     {
-                        error = "recovered d4 scene reference closure omits a voting neighbor";
+                        error = "recovered scaled scene reference closure omits a voting neighbor";
                         return false;
                     }
                 }
@@ -2308,16 +3057,20 @@ namespace metmodel
                         return;
                     const std::size_t camera_index = reference_camera_indices[ordinal];
                     std::string local_error;
+                    // The packed target atlas starts at max(1, target / 2).
+                    // Preserve the historical d4+ memory floor at d2, but retain
+                    // d1 for a d2 request because that is its actual atlas base.
+                    const std::uint32_t minimum_retained_downscale = std::min(2U, std::max(1U, base_downscale / 2U));
                     if (!make_recovered_patchmatch_unmasked_camera_preparation(scene,
                                                                                camera_index,
-                                                                               4U,
+                                                                               base_downscale,
                                                                                device_index,
                                                                                prepared_camera_cache[camera_index],
                                                                                local_error,
-                                                                               2U))
+                                                                               minimum_retained_downscale))
                     {
-                        local_error = "recovered d4 scene camera preparation " + std::to_string(camera_index) + ": " +
-                                      local_error;
+                        local_error = "recovered scaled scene camera preparation " + std::to_string(camera_index) +
+                                      ": " + local_error;
                         {
                             std::lock_guard lock(preparation_error_mutex);
                             if (preparation_error.empty())
@@ -2336,12 +3089,14 @@ namespace metmodel
                 worker.join();
             if (preparation_failed.load(std::memory_order_relaxed))
             {
-                error = preparation_error.empty() ? "recovered d4 scene camera preparation worker failed"
+                error = preparation_error.empty() ? "recovered scaled scene camera preparation worker failed"
                                                   : preparation_error;
                 return false;
             }
 
             RecoveredPatchMatchD4SceneOutput result;
+            result.base_downscale = base_downscale;
+            result.stored_level_count = stored_level_count;
             result.prepared_camera_cache_bytes = prepared_camera_cache_dynamic_bytes(prepared_camera_cache);
             result.patchmatch_store_root = patchmatch_store_root;
             result.patchmatch_store_used = !patchmatch_store_root.empty();
@@ -2350,12 +3105,13 @@ namespace metmodel
             result.camera_preparation_seconds =
                 std::chrono::duration<double>(Clock::now() - camera_preparation_started).count();
             result.cameras.resize(reference_camera_indices.size());
-            constexpr std::array<std::uint32_t, 3> output_downscales{4U, 8U, 16U};
+            const std::array<std::uint32_t, 3> output_downscales{
+                base_downscale, base_downscale << 1U, base_downscale << 2U};
             for (std::size_t ordinal = 0; ordinal < reference_camera_indices.size(); ++ordinal)
             {
                 const std::size_t camera_index = reference_camera_indices[ordinal];
                 const auto& prepared = prepared_camera_cache[camera_index];
-                for (std::size_t level_index = 0; level_index < output_downscales.size(); ++level_index)
+                for (std::size_t level_index = 0; level_index < stored_level_count; ++level_index)
                 {
                     const auto prepared_level = std::find_if(
                         prepared.image_levels.begin(),
@@ -2364,7 +3120,7 @@ namespace metmodel
                         { return level.downscale == downscale; });
                     if (prepared_level == prepared.image_levels.end())
                     {
-                        error = "recovered d4 scene prepared support pyramid is incomplete";
+                        error = "recovered scaled scene prepared support pyramid is incomplete";
                         return false;
                     }
                     const std::size_t pixels = prepared_level->data.image.size();
@@ -2374,7 +3130,7 @@ namespace metmodel
                     {
                         if (prepared_level->data.rejection_mask.size() != pixels)
                         {
-                            error = "recovered d4 scene prepared support dimensions are inconsistent";
+                            error = "recovered scaled scene prepared support dimensions are inconsistent";
                             return false;
                         }
                         for (std::size_t pixel = 0; pixel < pixels; ++pixel)
@@ -2466,18 +3222,22 @@ namespace metmodel
                     job.ordinal = ordinal;
                     std::string local_error;
                     const auto started = Clock::now();
-                    if (!make_recovered_patchmatch_unmasked_host_preparation(scene,
+                    // d1 may subdivide the camera. Its full-camera preparation
+                    // cache must remain immutable until every tile has built
+                    // its own cropped reference and active-neighbor atlas.
+                    if (base_downscale != 1U &&
+                        !make_recovered_patchmatch_unmasked_host_preparation(scene,
                                                                              camera_index,
                                                                              ranked_neighbors_by_camera[camera_index],
-                                                                             4U,
+                                                                             base_downscale,
                                                                              device_index,
                                                                              job.preparation,
                                                                              local_error,
                                                                              prepared_camera_cache,
                                                                              false))
                     {
-                        fail_worker("recovered d4 scene resource preparation camera " + std::to_string(camera_index) +
-                                    ": " + local_error);
+                        fail_worker("recovered scaled scene resource preparation camera " +
+                                    std::to_string(camera_index) + ": " + local_error);
                         break;
                     }
                     job.preparation_seconds = std::chrono::duration<double>(Clock::now() - started).count();
@@ -2507,13 +3267,16 @@ namespace metmodel
                         prepared_camera_cache_live_bytes -= released_bytes;
                         prepared_camera_cache[consumed_camera_index] = {};
                     };
-                    release_prepared_camera_consumer(camera_index);
-                    for (const std::size_t neighbor : ranked_neighbors_by_camera[camera_index])
-                        release_prepared_camera_consumer(neighbor);
+                    if (base_downscale != 1U)
+                    {
+                        release_prepared_camera_consumer(camera_index);
+                        for (const std::size_t neighbor : ranked_neighbors_by_camera[camera_index])
+                            release_prepared_camera_consumer(neighbor);
+                    }
                     if (!consumer_accounting_valid)
                     {
                         lock.unlock();
-                        fail_worker("recovered d4 scene prepared-camera consumer accounting underflow");
+                        fail_worker("recovered scaled scene prepared-camera consumer accounting underflow");
                         break;
                     }
                     resource_preparation_inflight_bytes =
@@ -2536,7 +3299,7 @@ namespace metmodel
                     if (job.dynamic_bytes > resource_preparation_inflight_bytes || resource_preparation_inflight == 0U)
                     {
                         lock.unlock();
-                        fail_worker("recovered d4 scene resource-preparation byte accounting underflow");
+                        fail_worker("recovered scaled scene resource-preparation byte accounting underflow");
                         break;
                     }
                     resource_preparation_inflight_bytes -= job.dynamic_bytes;
@@ -2581,7 +3344,7 @@ namespace metmodel
                         prepared_jobs.pop_front();
                         if (job.dynamic_bytes > prepared_queue_bytes)
                         {
-                            fail_worker("recovered d4 scene prepared queue byte accounting underflow");
+                            fail_worker("recovered scaled scene prepared queue byte accounting underflow");
                             return;
                         }
                         prepared_queue_bytes -= job.dynamic_bytes;
@@ -2597,18 +3360,21 @@ namespace metmodel
                     std::string local_error;
                     try
                     {
-                        if (!run_recovered_patchmatch_d4_pyramid_cuda(scene,
-                                                                      camera_index,
-                                                                      ranked_neighbors_by_camera[camera_index],
-                                                                      device_index,
-                                                                      result.cameras[ordinal].patchmatch,
-                                                                      local_error,
-                                                                      prepared_camera_cache,
-                                                                      false,
-                                                                      &job.preparation,
-                                                                      job.preparation_seconds))
+                        RecoveredPatchMatchHostPreparation* prebuilt_preparation =
+                            base_downscale == 1U ? nullptr : &job.preparation;
+                        if (!run_recovered_patchmatch_scaled_pyramid_cuda(scene,
+                                                                          camera_index,
+                                                                          ranked_neighbors_by_camera[camera_index],
+                                                                          base_downscale,
+                                                                          device_index,
+                                                                          result.cameras[ordinal].patchmatch,
+                                                                          local_error,
+                                                                          prepared_camera_cache,
+                                                                          false,
+                                                                          prebuilt_preparation,
+                                                                          job.preparation_seconds))
                         {
-                            local_error = "recovered d4 scene PatchMatch camera " + std::to_string(camera_index) +
+                            local_error = "recovered scaled scene PatchMatch camera " + std::to_string(camera_index) +
                                           ": " + local_error;
                         }
                         if (local_error.empty() && !patchmatch_store_root.empty())
@@ -2616,7 +3382,7 @@ namespace metmodel
                             if (!write_recovered_patchmatch_store_camera(
                                     patchmatch_store_root, result.cameras[ordinal].patchmatch, local_error))
                             {
-                                local_error = "recovered d4 scene PatchMatch store camera " +
+                                local_error = "recovered scaled scene PatchMatch store camera " +
                                               std::to_string(camera_index) + ": " + local_error;
                             }
                             else
@@ -2630,8 +3396,8 @@ namespace metmodel
                     }
                     catch (const std::exception& exception)
                     {
-                        local_error = "recovered d4 scene PatchMatch camera " + std::to_string(camera_index) + ": " +
-                                      exception.what();
+                        local_error = "recovered scaled scene PatchMatch camera " + std::to_string(camera_index) +
+                                      ": " + exception.what();
                     }
                     // The complete camera product and optional store publication
                     // no longer read the reference/neighbor preparation. Drop its
@@ -2642,7 +3408,7 @@ namespace metmodel
                         if (job.dynamic_bytes > active_prepared_jobs_bytes || active_prepared_jobs == 0U)
                         {
                             if (local_error.empty())
-                                local_error = "recovered d4 scene active prepared byte accounting underflow";
+                                local_error = "recovered scaled scene active prepared byte accounting underflow";
                         }
                         else
                         {
@@ -2675,20 +3441,87 @@ namespace metmodel
                 worker.join();
             if (worker_failed.load(std::memory_order_relaxed))
             {
-                error = worker_error.empty() ? "recovered d4 scene PatchMatch worker failed" : worker_error;
+                error = worker_error.empty() ? "recovered scaled scene PatchMatch worker failed" : worker_error;
                 return false;
             }
-            result.prepared_camera_cache_final_bytes = prepared_camera_cache_live_bytes;
-            result.patchmatch_seconds = std::chrono::duration<double>(Clock::now() - patchmatch_started).count();
-
             // All reference-specific PatchMatch products have crossed their host
             // level-product boundary. Voting reads only the persisted depth
             // pyramids and packed masks in result.cameras, never these source
             // image pyramids. Release the immutable preparation cache before the
             // voting cache and voting outputs are allocated.
             std::vector<RecoveredPatchMatchPreparedCamera>().swap(prepared_camera_cache);
+            prepared_camera_cache_live_bytes = 0U;
+            result.prepared_camera_cache_final_bytes = prepared_camera_cache_live_bytes;
+            result.patchmatch_seconds = std::chrono::duration<double>(Clock::now() - patchmatch_started).count();
 
             const auto voting_wall_started = Clock::now();
+            // The target's RPC filter phase schedules no reference or neighbor
+            // depth-map uploads and launches no voting kernels.  Its observable
+            // path is "checking N RPC cameras" followed by direct depth-map
+            // transfer.  The generic CalibrationCu projection switch has no
+            // camera-type-8 case, so routing RPC through it is not valid.
+            if (rpc_direct_depth_transfer)
+            {
+                for (std::size_t ordinal = 0; ordinal < result.cameras.size(); ++ordinal)
+                {
+                    auto& camera_output = result.cameras[ordinal];
+                    const std::size_t camera_index = reference_camera_indices[ordinal];
+                    const Camera& camera = scene.cameras[camera_index];
+                    RecoveredPatchMatchD4PyramidOutput loaded_product;
+                    const RecoveredPatchMatchD4PyramidOutput* product = &camera_output.patchmatch;
+                    if (!patchmatch_store_root.empty())
+                    {
+                        if (!read_recovered_patchmatch_store_camera(
+                                patchmatch_store_root, camera_index, loaded_product, error))
+                        {
+                            error = "recovered RPC depth transfer store load camera " + std::to_string(camera_index) +
+                                    ": " + error;
+                            return false;
+                        }
+                        product = &loaded_product;
+                    }
+                    if (product->base_downscale != base_downscale || product->stored_level_count != stored_level_count)
+                    {
+                        error = "recovered RPC depth transfer quality identity is invalid";
+                        return false;
+                    }
+                    for (std::size_t level = 0; level < stored_level_count; ++level)
+                    {
+                        const std::size_t downscale = base_downscale << level;
+                        const std::size_t width = (camera.image.width + downscale - 1U) / downscale;
+                        const std::size_t height = (camera.image.height + downscale - 1U) / downscale;
+                        if (width == 0U || height == 0U || width > std::numeric_limits<std::size_t>::max() / height ||
+                            product->depth_levels[level].size() != width * height)
+                        {
+                            error = "recovered RPC depth transfer level dimensions are invalid for camera " +
+                                    std::to_string(camera_index);
+                            return false;
+                        }
+                        const auto& source = product->depth_levels[level];
+                        if (!std::all_of(
+                                source.begin(), source.end(), [](float value) { return std::isfinite(value); }))
+                        {
+                            error = "recovered RPC depth transfer contains an invalid compact depth for camera " +
+                                    std::to_string(camera_index);
+                            return false;
+                        }
+                        camera_output.voting.depth_after_components[level] = source;
+                        if (retain_voting_diagnostics)
+                            camera_output.voting.depth_before_components[level] = source;
+                    }
+                    // RPC DepthMap.image() does not use the perspective
+                    // coarse-triangle compositor.  Preserve the transferred
+                    // finest level until its separate public-image conversion is
+                    // recovered.
+                    camera_output.public_depth = camera_output.voting.depth_after_components[0];
+                }
+                result.voting_wall_seconds = std::chrono::duration<double>(Clock::now() - voting_wall_started).count();
+                if (!cuda_session.close(result.cuda_module_session, error))
+                    return false;
+                output = std::move(result);
+                error.clear();
+                return true;
+            }
             std::vector<RecoveredPatchMatchStoreBatch> voting_batches;
             if (patchmatch_store_root.empty())
             {
@@ -2703,7 +3536,7 @@ namespace metmodel
                                                               voting_batches,
                                                               error))
             {
-                error = "recovered d4 scene voting batch plan: " + error;
+                error = "recovered scaled scene voting batch plan: " + error;
                 return false;
             }
 
@@ -2723,7 +3556,7 @@ namespace metmodel
                         if (!read_recovered_patchmatch_store_camera(
                                 patchmatch_store_root, camera_index, loaded_products[camera_index], error))
                         {
-                            error = "recovered d4 scene voting store load camera " + std::to_string(camera_index) +
+                            error = "recovered scaled scene voting store load camera " + std::to_string(camera_index) +
                                     ": " + error;
                             return false;
                         }
@@ -2731,15 +3564,21 @@ namespace metmodel
                     }
                 }
                 std::vector<std::span<const float>> voting_depth_levels;
-                voting_depth_levels.reserve(voting_batch.closure.size() * 3U);
+                voting_depth_levels.reserve(voting_batch.closure.size() * stored_level_count);
                 for (const std::size_t camera_index : voting_batch.closure)
                 {
-                    for (const auto& level : voting_products[camera_index]->depth_levels)
-                        voting_depth_levels.emplace_back(level);
+                    const auto* product = voting_products[camera_index];
+                    if (product->base_downscale != base_downscale || product->stored_level_count != stored_level_count)
+                    {
+                        error = "recovered scene voting quality identity is invalid";
+                        return false;
+                    }
+                    for (std::size_t level = 0; level < stored_level_count; ++level)
+                        voting_depth_levels.emplace_back(product->depth_levels[level]);
                 }
                 if (!prime_recovered_cuda_voting_depth_cache(voting_depth_levels, device_index, error))
                 {
-                    error = "recovered d4 scene voting depth cache: " + error;
+                    error = "recovered scaled scene voting depth cache: " + error;
                     return false;
                 }
 
@@ -2762,7 +3601,7 @@ namespace metmodel
                         {
                             DepthVotingPreparedReference reference;
                             reference.camera_index = patchmatch.camera_index;
-                            for (std::size_t level = 0; level < 3U; ++level)
+                            for (std::size_t level = 0; level < stored_level_count; ++level)
                                 reference.depth_level_views[level] = patchmatch.depth_levels[level];
 
                             std::vector<DepthVotingPreparedNeighbor> voting_neighbors;
@@ -2773,15 +3612,15 @@ namespace metmodel
                                 if (neighbor_camera >= voting_products.size() ||
                                     voting_products[neighbor_camera] == nullptr)
                                 {
-                                    local_error = "recovered d4 scene voting neighbor product is missing";
+                                    local_error = "recovered scaled scene voting neighbor product is missing";
                                     break;
                                 }
                                 DepthVotingPreparedNeighbor neighbor;
                                 neighbor.camera_index = neighbor_camera;
-                                for (std::size_t level = 0; level < 3U; ++level)
+                                for (std::size_t level = 0; level < stored_level_count; ++level)
                                     neighbor.depth_level_views[level] =
                                         voting_products[neighbor_camera]->depth_levels[level];
-                                for (std::size_t level = 0; local_error.empty() && level < 3U; ++level)
+                                for (std::size_t level = 0; local_error.empty() && level < stored_level_count; ++level)
                                 {
                                     const std::size_t pixels = patchmatch.depth_levels[level].size();
                                     if (!unpack_recovered_patchmatch_inlier_mask(
@@ -2792,7 +3631,7 @@ namespace metmodel
                                             neighbor.inlier_masks[level],
                                             local_error))
                                     {
-                                        local_error = "recovered d4 scene voting mask camera " +
+                                        local_error = "recovered scaled scene voting mask camera " +
                                                       std::to_string(patchmatch.camera_index) + " rank " +
                                                       std::to_string(rank) + ": " + local_error;
                                         break;
@@ -2807,25 +3646,30 @@ namespace metmodel
                             DepthVotingChainInput voting_input;
                             if (local_error.empty())
                             {
-                                voting_input = make_recovered_depth_voting_chain_input(
-                                    scene, reference, voting_neighbors, 4U, filter_mode, device_index);
+                                voting_input = make_recovered_depth_voting_chain_input(scene,
+                                                                                       reference,
+                                                                                       voting_neighbors,
+                                                                                       base_downscale,
+                                                                                       filter_mode,
+                                                                                       device_index,
+                                                                                       stored_level_count);
                                 const auto started = Clock::now();
                                 if (!run_recovered_depth_voting_chain_cuda(
                                         voting_input, camera_output.voting, local_error))
                                 {
-                                    local_error = "recovered d4 scene voting camera " +
+                                    local_error = "recovered scaled scene voting camera " +
                                                   std::to_string(patchmatch.camera_index) + ": " + local_error;
                                 }
                                 else
                                 {
-                                    for (std::size_t level = 0; level < 3U; ++level)
+                                    for (std::size_t level = 0; level < stored_level_count; ++level)
                                     {
                                         auto& depth = camera_output.voting.depth_after_components[level];
                                         const auto& support_mask = camera_output.support_masks[level];
                                         if (support_mask.size() != depth.size())
                                         {
                                             local_error =
-                                                "recovered d4 scene voting support dimensions are inconsistent";
+                                                "recovered scaled scene voting support dimensions are inconsistent";
                                             break;
                                         }
                                         for (std::size_t pixel = 0; pixel < depth.size(); ++pixel)
@@ -2837,15 +3681,17 @@ namespace metmodel
                                         }
                                     }
                                     std::array<std::span<const float>, 3> persisted_levels{};
-                                    for (std::size_t level = 0; level < 3U; ++level)
+                                    for (std::size_t level = 0; level < stored_level_count; ++level)
                                         persisted_levels[level] = camera_output.voting.depth_after_components[level];
-                                    if (local_error.empty() && !compose_recovered_depthmap_default_image_d4(
+                                    if (local_error.empty() && !compose_recovered_depthmap_default_image(
                                                                    scene.cameras[patchmatch.camera_index],
                                                                    persisted_levels,
+                                                                   base_downscale,
+                                                                   stored_level_count,
                                                                    camera_output.public_depth,
                                                                    local_error))
                                     {
-                                        local_error = "recovered d4 scene public depth camera " +
+                                        local_error = "recovered scaled scene public depth camera " +
                                                       std::to_string(patchmatch.camera_index) + ": " + local_error;
                                     }
                                     if (local_error.empty())
@@ -2880,7 +3726,7 @@ namespace metmodel
                         }
                         catch (const std::exception& exception)
                         {
-                            local_error = "recovered d4 scene voting input camera " +
+                            local_error = "recovered scaled scene voting input camera " +
                                           std::to_string(patchmatch.camera_index) + ": " + exception.what();
                         }
                         if (!local_error.empty())
@@ -2902,12 +3748,12 @@ namespace metmodel
                     worker.join();
                 if (worker_failed.load(std::memory_order_relaxed))
                 {
-                    error = worker_error.empty() ? "recovered d4 scene voting worker failed" : worker_error;
+                    error = worker_error.empty() ? "recovered scaled scene voting worker failed" : worker_error;
                     return false;
                 }
                 if (!patchmatch_store_root.empty() && !clear_recovered_cuda_voting_depth_cache(device_index, error))
                 {
-                    error = "recovered d4 scene voting cache epoch clear: " + error;
+                    error = "recovered scaled scene voting cache epoch clear: " + error;
                     return false;
                 }
             }

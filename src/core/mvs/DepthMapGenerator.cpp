@@ -11100,6 +11100,7 @@ namespace xjw
                                         _sparse,
                                         recovered_device_index,
                                         recovered_workspace_root,
+                                        _config.qualityProfile,
                                         &recovered_result,
                                         &recovered_error))
             {

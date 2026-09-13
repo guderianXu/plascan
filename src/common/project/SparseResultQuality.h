@@ -35,7 +35,6 @@ QJsonObject mergeSparseQualityIntoRecord(const QJsonObject &record,
                                          const QJsonObject &quality);
 
 QString sparseResultKind(const QJsonObject &record);
-QString sparseResultKindDisplayName(const QString &resultKind);
 bool isPairwisePreviewSparseResult(const QJsonObject &record);
 bool isProductionSparseResult(const QJsonObject &record);
 bool isStandardMvsCompatibleSparseResult(const QJsonObject &record);
@@ -58,7 +57,6 @@ using xjw::common::project::kSparseResultKindUnknown;
 using xjw::common::project::mergeSparseQualityIntoRecord;
 using xjw::common::project::sparseResultBlockingReason;
 using xjw::common::project::sparseResultKind;
-using xjw::common::project::sparseResultKindDisplayName;
 using xjw::common::project::sparseResultWarningText;
 using xjw::common::project::standardMvsBlockingReason;
 } // namespace xjw::gui::project

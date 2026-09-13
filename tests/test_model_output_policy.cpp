@@ -325,14 +325,13 @@ TEST(ModelOutputPolicyTest,
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
               QStringLiteral("none"));
-    EXPECT_TRUE(result.errorMessage.contains(
-        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("modelGenerationContractRevision=2")));
     EXPECT_TRUE(result.payload.value(QStringLiteral("model_ply")).toString().isEmpty());
     EXPECT_FALSE(QFileInfo::exists(QDir(request.outputRoot).filePath(
         QStringLiteral("model_runs/%1").arg(request.runId))));
 }
 
-TEST(ModelOutputPolicyTest, CanonicalLowDiagnosticsUseResolvedTargetInsteadOfUnusedCustomValue)
+TEST(ModelOutputPolicyTest, RecoveredLowFacePresetSurvivesContractResolution)
 {
     QTemporaryDir temporary;
     ASSERT_TRUE(temporary.isValid());
@@ -341,34 +340,65 @@ TEST(ModelOutputPolicyTest, CanonicalLowDiagnosticsUseResolvedTargetInsteadOfUnu
     request.sourceData = QStringLiteral("rpc_height_plane_sweep");
     request.outputRoot = temporary.filePath(QStringLiteral("model"));
     request.runId = QStringLiteral("low-diagnostics");
-    request.settings = QJsonObject{{QStringLiteral("modelGenerationContractRevision"), 1},
+    request.settings = QJsonObject{{QStringLiteral("modelGenerationContractRevision"), 2},
                                    {QStringLiteral("depthQualityProfile"), QStringLiteral("medium")},
                                    {QStringLiteral("surfaceQualityProfile"), QStringLiteral("rpc_height_plane_sweep")},
                                    {QStringLiteral("reconstruction_mode"), QStringLiteral("rpc_height_plane_sweep")},
                                    {QStringLiteral("faceCountMode"), QStringLiteral("low")},
-                                   {QStringLiteral("faceCountCustom"), 200000}};
+                                   {QStringLiteral("faceCountCustom"), 200000},
+                                   {QStringLiteral("interpolation"), QStringLiteral("enabled")}};
 
     const auto result = xjw::mesh::workflow::buildModel(request);
 
-    // The intentionally incomplete RPC input fails after canonical settings
-    // are resolved, so it exercises diagnostics without producing a mesh.
     EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.payload.value(QStringLiteral("face_count_mode")).toString(), QStringLiteral("low"));
-    EXPECT_EQ(result.payload.value(QStringLiteral("requested_target_faces")).toInt(), 20000);
-    EXPECT_EQ(result.payload.value(QStringLiteral("effective_target_faces")).toInt(), 20000);
-    EXPECT_EQ(result.payload.value(QStringLiteral("requested_face_count")).toInt(), 20000);
-    EXPECT_EQ(result.payload.value(QStringLiteral("effective_face_count")).toInt(), 20000);
-    EXPECT_EQ(result.payload.value(QStringLiteral("requested_model_generation_contract"))
-                  .toObject()
-                  .value(QStringLiteral("requestedTargetFaces"))
-                  .toInt(),
-              20000);
-    EXPECT_EQ(result.payload.value(QStringLiteral("effective_model_generation_contract"))
-                  .toObject()
-                  .value(QStringLiteral("effectiveTargetFaces"))
-                  .toInt(),
-              20000);
+    EXPECT_FALSE(result.errorMessage.contains(QStringLiteral("面数档位必须")));
+    const QJsonObject requested_contract =
+        result.payload.value(QStringLiteral("requested_model_generation_contract")).toObject();
+    EXPECT_EQ(requested_contract.value(QStringLiteral("faceCountMode")).toString(), QStringLiteral("low"));
+    EXPECT_EQ(requested_contract.value(QStringLiteral("requestedTargetFaces")).toInt(-1), 0);
     EXPECT_FALSE(result.payload.contains(QStringLiteral("actual_output_face_count")));
+}
+
+TEST(ModelOutputPolicyTest, FiveQualityAndThreeInterpolationValuesSurviveContractResolution)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+
+    const QStringList qualities{QStringLiteral("highest"),
+                                QStringLiteral("high"),
+                                QStringLiteral("medium"),
+                                QStringLiteral("low"),
+                                QStringLiteral("lowest")};
+    const QStringList interpolations{
+        QStringLiteral("disabled"), QStringLiteral("enabled"), QStringLiteral("extrapolated")};
+    for (const QString& quality : qualities)
+    {
+        for (const QString& interpolation : interpolations)
+        {
+            xjw::mesh::workflow::ModelBuildRequest request;
+            request.sourceData = QStringLiteral("rpc_height_plane_sweep");
+            request.outputRoot = temporary.filePath(QStringLiteral("model"));
+            request.runId = QStringLiteral("contract-%1-%2").arg(quality, interpolation);
+            request.settings =
+                QJsonObject{{QStringLiteral("modelGenerationContractRevision"), 2},
+                            {QStringLiteral("depthQualityProfile"), quality},
+                            {QStringLiteral("surfaceQualityProfile"), QStringLiteral("rpc_height_plane_sweep")},
+                            {QStringLiteral("reconstruction_mode"), QStringLiteral("rpc_height_plane_sweep")},
+                            {QStringLiteral("faceCountMode"), QStringLiteral("high")},
+                            {QStringLiteral("faceCountCustom"), 200000},
+                            {QStringLiteral("interpolation"), interpolation}};
+
+            const auto result = xjw::mesh::workflow::buildModel(request);
+
+            EXPECT_FALSE(result.ok);
+            const QJsonObject requested_contract =
+                result.payload.value(QStringLiteral("requested_model_generation_contract")).toObject();
+            EXPECT_EQ(requested_contract.value(QStringLiteral("depthQualityProfile")).toString(), quality);
+            EXPECT_EQ(requested_contract.value(QStringLiteral("interpolation")).toString(), interpolation);
+            EXPECT_FALSE(result.errorMessage.contains(QStringLiteral("模型生成质量必须")));
+            EXPECT_FALSE(result.errorMessage.contains(QStringLiteral("模型插值必须")));
+        }
+    }
 }
 
 TEST(ModelOutputPolicyTest, LegacyPointCloudIsRejectedBeforeCancellationOrPublication)
@@ -405,8 +435,7 @@ TEST(ModelOutputPolicyTest, LegacyPointCloudIsRejectedBeforeCancellationOrPublic
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.payload.value(QStringLiteral("fallback")).toString(),
               QStringLiteral("none"));
-    EXPECT_TRUE(result.errorMessage.contains(
-        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("modelGenerationContractRevision=2")));
     EXPECT_FALSE(cancelRequested.load(std::memory_order_relaxed));
     EXPECT_FALSE(result.payload.value(QStringLiteral("cancelled")).toBool());
     EXPECT_FALSE(result.payload.contains(
@@ -456,8 +485,7 @@ TEST(ModelOutputPolicyTest,
     EXPECT_FALSE(failed.ok);
     EXPECT_EQ(failed.payload.value(QStringLiteral("fallback")).toString(),
               QStringLiteral("none"));
-    EXPECT_TRUE(failed.errorMessage.contains(
-        QStringLiteral("modelGenerationContractRevision=1")));
+    EXPECT_TRUE(failed.errorMessage.contains(QStringLiteral("modelGenerationContractRevision=2")));
     EXPECT_FALSE(QFileInfo::exists(QDir(outputRoot).filePath(
         QStringLiteral("model_runs/failed-run"))));
     EXPECT_TRUE(QFileInfo(committedDirectory).isDir());

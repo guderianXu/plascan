@@ -9006,7 +9006,7 @@ namespace metmodel
                                                     std::string& error)
     {
         const RecoveredCudaTransferPhaseScope transfer_phase(RecoveredCudaTransferPhase::voting);
-        constexpr std::size_t level_count = 3U;
+        const std::size_t level_count = input.level_count;
         auto calibration_u32 = [](const DepthVotingCalibrationCu& calibration, std::size_t offset)
         {
             std::uint32_t value = 0;
@@ -9055,7 +9055,12 @@ namespace metmodel
 
         bool use_source_voting_kernels = true;
 
-        std::array<std::size_t, level_count> reference_pixels{};
+        if (level_count < 2U || level_count > 3U)
+        {
+            error = "depth-voting stored level count must be two or three";
+            return false;
+        }
+        std::array<std::size_t, 3U> reference_pixels{};
         std::size_t largest_neighbor_pixels = 0U;
         for (std::size_t level = 0; level < level_count; ++level)
         {
@@ -9085,16 +9090,17 @@ namespace metmodel
         }
         for (const auto& neighbor : input.neighbors)
         {
-            const bool use_depth_views = neighbor.depth_levels.empty() &&
-                                         std::all_of(neighbor.depth_level_views.begin(),
-                                                     neighbor.depth_level_views.end(),
-                                                     [](std::span<const float> level) { return !level.empty(); });
+            const bool use_depth_views =
+                neighbor.depth_levels.empty() &&
+                std::all_of(neighbor.depth_level_views.begin(),
+                            neighbor.depth_level_views.begin() + static_cast<std::ptrdiff_t>(level_count),
+                            [](std::span<const float> level) { return !level.empty(); });
             std::size_t neighbor_pyramid_size = neighbor.depth_levels.size();
             if (use_depth_views)
             {
                 neighbor_pyramid_size = 0U;
-                for (const std::span<const float> level : neighbor.depth_level_views)
-                    neighbor_pyramid_size += level.size();
+                for (std::size_t level = 0; level < level_count; ++level)
+                    neighbor_pyramid_size += neighbor.depth_level_views[level].size();
             }
             if (neighbor_pyramid_size == 0U)
             {

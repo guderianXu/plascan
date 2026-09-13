@@ -50,6 +50,7 @@ namespace xjw::mvs
                                 const SparseCloud& sparseCloud,
                                 int cudaDeviceIndex,
                                 const std::string& workspaceRoot,
+                                const std::string& qualityProfile,
                                 RecoveredDepthSceneResult* result,
                                 std::string* errorMessage);
 

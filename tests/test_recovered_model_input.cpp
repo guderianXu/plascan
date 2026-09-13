@@ -180,9 +180,54 @@ namespace
         }
     }
 
+    TEST_F(RecoveredModelInputTest, RoundTripPreservesAllFiveQualityIdentities)
+    {
+        for (const std::uint32_t base_downscale : {1U, 2U, 4U, 8U, 16U})
+        {
+            const std::size_t stored_level_count = base_downscale == 16U ? 2U : 3U;
+            _depth.base_downscale = base_downscale;
+            _depth.stored_level_count = stored_level_count;
+            for (auto& camera : _depth.cameras)
+            {
+                camera.patchmatch.base_downscale = base_downscale;
+                camera.patchmatch.stored_level_count = stored_level_count;
+                for (std::size_t level = 0; level < stored_level_count; ++level)
+                {
+                    const std::size_t downscale = static_cast<std::size_t>(base_downscale) << level;
+                    const std::size_t sample_count = (32U / downscale) * (32U / downscale);
+                    camera.voting.depth_after_components[level].assign(sample_count,
+                                                                       static_cast<float>(base_downscale + level));
+                }
+            }
+
+            const QString quality_path = _directory->filePath(QStringLiteral("quality-d%1").arg(base_downscale));
+            ASSERT_NO_THROW(xjw::mvs::writeRecoveredModelInput(quality_path, _scene, _depth));
+            metmodel::Scene loaded_scene;
+            metmodel::RecoveredPatchMatchD4SceneOutput loaded_depth;
+            ASSERT_NO_THROW(xjw::mvs::readRecoveredModelInput(quality_path, loaded_scene, loaded_depth));
+            EXPECT_EQ(loaded_depth.base_downscale, base_downscale);
+            EXPECT_EQ(loaded_depth.stored_level_count, stored_level_count);
+            EXPECT_EQ(loaded_depth.cameras.size(), _depth.cameras.size());
+            EXPECT_TRUE(
+                QFileInfo::exists(QDir(quality_path).filePath(QStringLiteral("camera_0_d%1.bin").arg(base_downscale))));
+            EXPECT_FALSE(QFileInfo::exists(
+                QDir(quality_path)
+                    .filePath(QStringLiteral("camera_0_d%1.bin").arg(base_downscale << stored_level_count))));
+        }
+    }
+
     TEST_F(RecoveredModelInputTest, RejectsMissingLevelAndDoesNotPublish)
     {
         _depth.cameras[1].voting.depth_after_components[2].clear();
+        EXPECT_THROW(xjw::mvs::writeRecoveredModelInput(_path, _scene, _depth), std::runtime_error);
+        EXPECT_FALSE(QFileInfo::exists(_path));
+    }
+
+    TEST_F(RecoveredModelInputTest, LowestQualityRejectsDimensionsOutsideD32Grid)
+    {
+        _scene.cameras[0].image.width = 48;
+        _depth.base_downscale = 16U;
+        _depth.stored_level_count = 2U;
         EXPECT_THROW(xjw::mvs::writeRecoveredModelInput(_path, _scene, _depth), std::runtime_error);
         EXPECT_FALSE(QFileInfo::exists(_path));
     }
@@ -276,7 +321,7 @@ namespace
     TEST_F(RecoveredModelInputTest, RejectsUnsupportedModelOptionsBeforeGpuWork)
     {
         EXPECT_THROW(xjw::mesh::buildRecoveredModel(_path, {{"compute_mode", "cpu"}}, 100, {}, {}), std::runtime_error);
-        EXPECT_THROW(xjw::mesh::buildRecoveredModel(_path, {{"interpolation", "disabled"}}, 100, {}, {}),
+        EXPECT_THROW(xjw::mesh::buildRecoveredModel(_path, {{"interpolation", "invalid"}}, 100, {}, {}),
                      std::runtime_error);
         EXPECT_THROW(xjw::mesh::buildRecoveredModel(_path, {{"strictVolumetricMasks", true}}, 100, {}, {}),
                      std::runtime_error);

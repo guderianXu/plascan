@@ -31,6 +31,8 @@ struct SparsePointWorkflowResult
 
 SparsePointWorkflowSpec sparsePointWorkflowSpec(SparsePointWorkflowKind kind);
 
+QString sparseOperationDisplayName(const QString &operation);
+
 bool runSparsePointWorkflow(SparsePointWorkflowKind kind,
                             const xjw::core::project::SparsePointContext &context,
                             const QJsonObject &settings,

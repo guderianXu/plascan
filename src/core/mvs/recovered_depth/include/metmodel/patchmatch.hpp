@@ -321,6 +321,7 @@ namespace metmodel
     {
         std::array<DepthVotingChainReferenceLevelInput, 3> reference;
         std::vector<DepthVotingChainNeighborInput> neighbors;
+        std::size_t level_count = 3U;
         std::array<std::int32_t, 7> direct_counters{};
         std::array<std::int32_t, 2> occlusion_counters{};
         std::array<std::int32_t, 4> final_counters{};
@@ -364,7 +365,8 @@ namespace metmodel
                                             const std::vector<DepthVotingPreparedNeighbor>& neighbors,
                                             std::uint32_t downscale,
                                             FilterMode filter_mode,
-                                            std::size_t device_index = 0);
+                                            std::size_t device_index = 0,
+                                            std::size_t level_count = 3U);
 
     bool run_recovered_depth_voting_chain_cuda(const DepthVotingChainInput& input,
                                                DepthVotingChainOutput& output,
@@ -581,6 +583,42 @@ namespace metmodel
         // level-0 downscale is target_downscale/2, not the current depth level.
         PatchMatchCamera camera;
     };
+
+    // Ultra High (d1) cameras are evaluated in balanced, non-overlapping
+    // 2048-pixel cores. Each execution area carries a 32-pixel halo aligned to
+    // the six-level pyramid; only the core is written back to the full raster.
+    struct RecoveredPatchMatchD1Tile
+    {
+        std::uint32_t core_left = 0;
+        std::uint32_t core_top = 0;
+        std::uint32_t core_right = 0;
+        std::uint32_t core_bottom = 0;
+        std::uint32_t area_left = 0;
+        std::uint32_t area_top = 0;
+        std::uint32_t area_right = 0;
+        std::uint32_t area_bottom = 0;
+    };
+
+    struct RecoveredPatchMatchNeighborResources;
+
+    std::vector<RecoveredPatchMatchD1Tile> make_recovered_patchmatch_d1_tile_plan(std::uint32_t width,
+                                                                                  std::uint32_t height);
+
+    bool
+    make_recovered_patchmatch_d1_tile_reference_preparation(const Camera& full_camera,
+                                                            const RecoveredPatchMatchPreparedCamera& full_preparation,
+                                                            const RecoveredPatchMatchD1Tile& tile,
+                                                            RecoveredPatchMatchPreparedCamera& output,
+                                                            std::string& error);
+
+    bool make_recovered_patchmatch_d1_tile_neighbor_resources(
+        const Scene& scene,
+        std::size_t reference_camera_index,
+        std::span<const RecoveredPatchMatchPreparedCamera> prepared_camera_cache,
+        std::span<const std::size_t> ranked_neighbor_camera_indices,
+        const RecoveredPatchMatchD1Tile& tile,
+        RecoveredPatchMatchNeighborResources& output,
+        std::string& error);
 
     // Exact 72-byte image-area record produced by target worker 0x1CFDA70 for
     // every reference/neighbor pair. Coordinates are half-open and expressed at
@@ -1137,6 +1175,10 @@ namespace metmodel
         std::uint32_t texture_height = 0;
         std::vector<PatchMatchCostResourceGroup> resource_groups;
         std::vector<PatchMatchCostNeighbor> ranked_neighbors;
+        // Original camera identities retained after empty per-tile crops are
+        // removed. Local inlier-mask bits are remapped through this list when
+        // the tile core is stitched into the full camera product.
+        std::vector<std::size_t> active_neighbor_camera_indices;
     };
 
     // Page-locks immutable per-neighbour atlas sources for one reference-camera
@@ -1899,6 +1941,8 @@ namespace metmodel
     struct RecoveredPatchMatchD4PyramidOutput
     {
         std::size_t camera_index = 0;
+        std::uint32_t base_downscale = 4U;
+        std::size_t stored_level_count = 3U;
         std::array<std::vector<float>, 3> depth_levels;
         std::array<std::vector<std::uint8_t>, 3> packed_inlier_masks;
         std::vector<std::size_t> ranked_neighbor_camera_indices;
@@ -1909,6 +1953,7 @@ namespace metmodel
         double x16_seconds = 0.0;
         double x8_seconds = 0.0;
         double x4_seconds = 0.0;
+        double x2_seconds = 0.0;
         double product_seconds = 0.0;
     };
 
@@ -1916,6 +1961,19 @@ namespace metmodel
         const Scene& scene,
         std::size_t reference_camera_index,
         std::span<const std::size_t> ranked_neighbor_camera_indices,
+        std::size_t device_index,
+        RecoveredPatchMatchD4PyramidOutput& output,
+        std::string& error,
+        std::span<const RecoveredPatchMatchPreparedCamera> prepared_camera_cache = {},
+        bool capture_diagnostic_checkpoints = true,
+        RecoveredPatchMatchHostPreparation* prebuilt_host_preparation = nullptr,
+        double prebuilt_host_preparation_seconds = 0.0);
+
+    bool run_recovered_patchmatch_scaled_pyramid_cuda(
+        const Scene& scene,
+        std::size_t reference_camera_index,
+        std::span<const std::size_t> ranked_neighbor_camera_indices,
+        std::uint32_t target_downscale,
         std::size_t device_index,
         RecoveredPatchMatchD4PyramidOutput& output,
         std::string& error,
@@ -1958,6 +2016,13 @@ namespace metmodel
                                                 const std::array<std::span<const float>, 3>& persisted_depth_levels,
                                                 std::vector<float>& output,
                                                 std::string& error);
+
+    bool compose_recovered_depthmap_default_image(const Camera& camera,
+                                                  const std::array<std::span<const float>, 3>& persisted_depth_levels,
+                                                  std::uint32_t base_downscale,
+                                                  std::size_t stored_level_count,
+                                                  std::vector<float>& output,
+                                                  std::string& error);
 
     // Measured physical CUDA module/function activity for one explicit recovered
     // execution session. A scene session may contain nested per-camera scopes;
@@ -2146,6 +2211,8 @@ namespace metmodel
     struct RecoveredPatchMatchD4SceneOutput
     {
         std::vector<RecoveredPatchMatchD4CameraOutput> cameras;
+        std::uint32_t base_downscale = 4U;
+        std::size_t stored_level_count = 3U;
         std::size_t patchmatch_worker_count = 0;
         // Host-side dynamic allocation high-water accounting for the scene
         // scheduler. These counts use vector capacities (not logical sizes), so
@@ -2181,7 +2248,8 @@ namespace metmodel
                                                 std::string& error,
                                                 bool retain_voting_diagnostics = true,
                                                 const std::filesystem::path& patchmatch_store_root = {},
-                                                std::size_t voting_batch_size = 16U);
+                                                std::size_t voting_batch_size = 16U,
+                                                std::uint32_t base_downscale = 4U);
 
     bool unpack_recovered_patchmatch_inlier_mask(std::span<const std::uint8_t> packed_masks,
                                                  std::size_t pixels,

@@ -576,31 +576,6 @@ QJsonObject makeSparsePointSidecar(QJsonObject sourceRoot,
 
 } // namespace
 
-QString sparseOperationDisplayName(const QString &operation)
-{
-    if (operation == QLatin1String("triangulation"))
-    {
-        return QStringLiteral("两视预览云");
-    }
-    if (operation == QLatin1String("outlier_removal"))
-    {
-        return QStringLiteral("离群点剔除");
-    }
-    if (operation == QLatin1String("sparse_refine"))
-    {
-        return QStringLiteral("稀疏点云精修");
-    }
-    if (operation == QLatin1String("bundle_adjust"))
-    {
-        return QStringLiteral("平差稀疏点云");
-    }
-    if (operation == QLatin1String("spatial_cleanup"))
-    {
-        return QStringLiteral("空间清理点云");
-    }
-    return QStringLiteral("稀疏点云");
-}
-
 int findLatestAtResultIndex(const QJsonObject &meta,
                             const QString &operation)
 {
@@ -1281,81 +1256,6 @@ bool runSparsePointRefine(const SparsePointContext &context,
             xjw::common::project::mergeSparseQualityIntoRecord(result->extraRecord, quality);
     }
     return true;
-}
-
-QJsonArray summarizeAtResults(const QJsonObject &meta)
-{
-    const QJsonArray atArray = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
-    QJsonArray summary;
-    for (int i = 0; i < atArray.size(); ++i)
-    {
-        const QJsonObject at = atArray.at(i).toObject();
-        const QJsonObject files = at.value(QStringLiteral("files")).toObject();
-        const QJsonObject quality = at.value(QStringLiteral("quality")).toObject();
-        int sparsePointCount = at.value(QStringLiteral("sparse_point_count")).toInt(0);
-        if (sparsePointCount <= 0)
-        {
-            sparsePointCount = at.value(QStringLiteral("point_count")).toInt(
-                quality.value(QStringLiteral("point_count")).toInt(0));
-        }
-
-        QJsonObject item;
-        item[QStringLiteral("index")] = i;
-        item[QStringLiteral("created_at")] = at.value(QStringLiteral("created_at")).toString();
-        item[QStringLiteral("output_dir")] = at.value(QStringLiteral("output_dir")).toString();
-        item[QStringLiteral("sparse_point_count")] = sparsePointCount;
-        item[QStringLiteral("point_count")] = sparsePointCount;
-        const QJsonArray selImgs = at.value(QStringLiteral("selected_images")).toArray();
-        item[QStringLiteral("image_count")] = selImgs.size();
-        item[QStringLiteral("image0")] = selImgs.isEmpty() ? QString() : selImgs.first().toString();
-        item[QStringLiteral("image1")] = selImgs.size() > 1 ? selImgs.last().toString() : QString();
-        item[QStringLiteral("sparse_cloud_xyz")] = files.value(QStringLiteral("sparse_cloud_xyz")).toString();
-        item[QStringLiteral("sparse_cloud_points_json")] =
-            files.value(QStringLiteral("sparse_cloud_points_json")).toString();
-        item[QStringLiteral("operation")] = at.value(QStringLiteral("operation")).toString(QStringLiteral("triangulation"));
-        item[QStringLiteral("operation_display_name")] = at.value(QStringLiteral("operation_display_name")).toString(
-            sparseOperationDisplayName(item.value(QStringLiteral("operation")).toString()));
-        item[QStringLiteral("source_result_index")] = at.value(QStringLiteral("source_result_index")).toInt(-1);
-        item[QStringLiteral("is_latest")] = (i == atArray.size() - 1);
-        if (!quality.isEmpty())
-        {
-            item[QStringLiteral("quality")] = quality;
-            for (auto it = quality.begin(); it != quality.end(); ++it)
-            {
-                if (!item.contains(it.key()))
-                {
-                    item[it.key()] = it.value();
-                }
-            }
-        }
-        if (at.contains(QStringLiteral("operation_summary")))
-        {
-            item[QStringLiteral("operation_summary")] = at.value(QStringLiteral("operation_summary"));
-        }
-
-        const QString opLabel = sparseOperationDisplayName(item.value(QStringLiteral("operation")).toString());
-        const QString dirName = QFileInfo(item.value(QStringLiteral("output_dir")).toString()).fileName();
-        QString displayName = QStringLiteral("#%1 %2").arg(i).arg(opLabel);
-        if (sparsePointCount > 0)
-        {
-            displayName += QStringLiteral("  [%1 点]").arg(sparsePointCount);
-        }
-        if (!dirName.isEmpty())
-        {
-            displayName += QStringLiteral("  (%1)").arg(dirName);
-        }
-        if (item.value(QStringLiteral("source_result_index")).toInt(-1) >= 0)
-        {
-            displayName += QStringLiteral("  [源 #%1]").arg(item.value(QStringLiteral("source_result_index")).toInt());
-        }
-        if (item.value(QStringLiteral("is_latest")).toBool())
-        {
-            displayName += QStringLiteral("  [当前]");
-        }
-        item[QStringLiteral("display_name")] = displayName;
-        summary.append(item);
-    }
-    return summary;
 }
 
 } // namespace xjw::core::project

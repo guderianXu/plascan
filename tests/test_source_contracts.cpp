@@ -919,7 +919,7 @@ TEST(AutoSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
                       });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, ModelGenerationSettingsMigrateToCanonicalV1)
+TEST(GuiAlgorithmAlignmentContractTest, ModelGenerationSettingsMigrateToCanonicalV2)
 {
     const QString workflow_settings = readSourceFile(
         QStringLiteral("src/gui/dialogs/application/WorkflowSettingsDialog.cpp"));
@@ -929,20 +929,20 @@ TEST(GuiAlgorithmAlignmentContractTest, ModelGenerationSettingsMigrateToCanonica
                                                   "QJsonObject WorkflowSettingsDialog::modelGenerationSettings",
                                                   "void WorkflowSettingsDialog::setupUi");
 
-    expectContainsAll(model_settings,
-                      {
-                          R"(model_settings[QStringLiteral("modelGenerationContractRevision")] = 1)",
-                          R"(model_settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium"))",
-                          R"(model_settings[QStringLiteral("surfaceQualityProfile")] = QStringLiteral("recovered_ooc"))",
-                          R"(model_settings[QStringLiteral("faceCountMode")] = QStringLiteral("high"))",
-                          R"(model_settings[QStringLiteral("faceCountCustom")] = 200000)",
-                          R"(source.value(QStringLiteral("targetFaces")))",
-                          R"(source.value(QStringLiteral("simplifyTargetFaces")))",
-                          "legacy_faces <= 20000",
-                          "legacy_faces <= 100000",
-                          "legacy_faces <= 200000",
-                          "qBound(1, legacy_faces, 2000000)",
-                      });
+    expectContainsAll(
+        model_settings,
+        {
+            R"(model_settings[QStringLiteral("modelGenerationContractRevision")] = 2)",
+            R"(model_settings[QStringLiteral("depthQualityProfile")] =)",
+            R"(model_settings[QStringLiteral("interpolation")] =)",
+            R"(model_settings[QStringLiteral("surfaceQualityProfile")] = QStringLiteral("recovered_ooc"))",
+            R"(model_settings[QStringLiteral("faceCountMode")] = QStringLiteral("high"))",
+            R"(model_settings[QStringLiteral("faceCountCustom")] = 200000)",
+            R"(source.value(QStringLiteral("targetFaces")))",
+            R"(source.value(QStringLiteral("simplifyTargetFaces")))",
+            "legacy_faces <= 200000",
+            "qBound(1, legacy_faces, 2000000)",
+        });
     expectNotContainsAll(model_settings,
                          {
                              "qualityProfile",
@@ -1005,14 +1005,16 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
                              "当前版本还不能直接从深度图生成模型",
                          });
 
-    expectContainsAll(dialog,
-                      {
-                          R"(_reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested))",
-                          R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
-                          R"(settings[QStringLiteral("modelGenerationContractRevision")] = 1)",
-                          R"(settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium"))",
-                          R"(settings[QStringLiteral("surfaceQualityProfile")] =)",
-                      });
+    expectContainsAll(
+        dialog,
+        {
+            R"(_reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested))",
+            R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
+            R"(settings[QStringLiteral("modelGenerationContractRevision")] = 2)",
+            R"(settings[QStringLiteral("depthQualityProfile")] =)",
+            R"(settings[QStringLiteral("interpolation")] = _interpolationCombo->currentData().toString())",
+            R"(settings[QStringLiteral("surfaceQualityProfile")] =)",
+        });
     expectNotContainsAll(dialog,
                          {
                              "splitIntoBlocks",
@@ -1353,9 +1355,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
                           "QStringLiteral(\"high\")",
                           "QStringLiteral(\"custom\")",
                           "_customFaceCountSpin->setRange(1, 2000000)",
-                          "? 20000",
-                          "? 100000",
-                          "? 200000",
+                          R"(face_count_mode == QStringLiteral("custom") ? custom_faces : 0)",
                           R"(settings[QStringLiteral("simplifyTargetFaces")] = target_faces)",
                       });
     expectNotContainsAll(dialog,
@@ -1366,6 +1366,9 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
                              "blockSizeMeters",
                              "strictVolumetricMasks",
                              "saveAfterEachStep",
+                             "? 20000",
+                             "? 100000",
+                             "? 200000",
                          });
 }
 
@@ -1435,7 +1438,7 @@ TEST(MvsSchedulerContractTest, RecoveredVotingUsesBoundedFileBackedBatches)
                           "QUuid::createUuid()",
                           "qScopeGuard",
                           "false,",
-                          "patchmatch_store_root))",
+                          "patchmatch_store_root,",
                           "read_recovered_patchmatch_store_camera(",
                           "std::filesystem::remove_all(patchmatch_store_root",
                           "writeRecoveredModelInput(model_root, scene, recovered, true)",
@@ -1447,7 +1450,7 @@ TEST(MvsSchedulerContractTest, RecoveredVotingUsesBoundedFileBackedBatches)
     expectContainsAll(orchestrator,
                       {
                           "result.voting_batch_size =",
-                          "patchmatch_store_root.empty() ? reference_camera_indices.size() : voting_batch_size;",
+                          "patchmatch_store_root.empty() ? reference_camera_indices.size() : voting_batch_size",
                           "plan_recovered_patchmatch_store_batches(",
                           "for (const auto& voting_batch : voting_batches)",
                       });

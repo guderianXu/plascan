@@ -16,16 +16,6 @@
 #include "DataTreeWidget.h"
 #include "WorkspaceSectionIcons.h"
 
-namespace xjw::gui::project
-{
-
-QString sparseOperationDisplayName(const QString &operation)
-{
-    return operation;
-}
-
-} // namespace xjw::gui::project
-
 namespace
 {
 

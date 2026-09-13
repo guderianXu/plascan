@@ -97,6 +97,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
 
     _sourceCombo = new QComboBox(generalGroup);
     _sourceItemCombo = new QComboBox(generalGroup);
+    _qualityCombo = new QComboBox(generalGroup);
     _faceCountModeCombo = new QComboBox(generalGroup);
     _customFaceCountSpin = new QSpinBox(generalGroup);
     _rpcHeightMinSpin = new QDoubleSpinBox(generalGroup);
@@ -105,25 +106,25 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     _sourceCombo->setObjectName(QStringLiteral("modelSourceCombo"));
     _sourceItemCombo->setObjectName(QStringLiteral("modelSourceItemCombo"));
     _sourceItemCombo->hide();
+    _qualityCombo->setObjectName(QStringLiteral("modelQualityCombo"));
     _faceCountModeCombo->setObjectName(QStringLiteral("modelFaceCountModeCombo"));
     _customFaceCountSpin->setObjectName(QStringLiteral("modelCustomFaceCountSpin"));
     _rpcHeightMinSpin->setObjectName(QStringLiteral("rpcHeightMinMetersSpin"));
     _rpcHeightMaxSpin->setObjectName(QStringLiteral("rpcHeightMaxMetersSpin"));
-    for (QComboBox* comboBox : {_sourceCombo, _sourceItemCombo, _faceCountModeCombo})
+    for (QComboBox* comboBox : {_sourceCombo, _sourceItemCombo, _qualityCombo, _faceCountModeCombo})
     {
         xjw::gui::dialogs::configureWorkflowComboBox(comboBox);
     }
 
-    _effectiveDepthQualityLabel = new QLabel(generalGroup);
-    _effectiveDepthQualityLabel->setObjectName(QStringLiteral("effectiveDepthQualityLabel"));
-    _effectiveDepthQualityLabel->setWordWrap(true);
-
-    _effectiveSurfaceQualityLabel = new QLabel(generalGroup);
-    _effectiveSurfaceQualityLabel->setObjectName(QStringLiteral("effectiveSurfaceQualityLabel"));
-    _effectiveSurfaceQualityLabel->setWordWrap(true);
-    _faceCountModeCombo->addItem(tr("低 (20,000)"), QStringLiteral("low"));
-    _faceCountModeCombo->addItem(tr("中 (100,000)"), QStringLiteral("medium"));
-    _faceCountModeCombo->addItem(tr("高 (200,000)"), QStringLiteral("high"));
+    _qualityCombo->addItem(tr("超高"), QStringLiteral("highest"));
+    _qualityCombo->addItem(tr("高"), QStringLiteral("high"));
+    _qualityCombo->addItem(tr("中"), QStringLiteral("medium"));
+    _qualityCombo->addItem(tr("低"), QStringLiteral("low"));
+    _qualityCombo->addItem(tr("最低"), QStringLiteral("lowest"));
+    _qualityCombo->setCurrentIndex(2);
+    _faceCountModeCombo->addItem(tr("低"), QStringLiteral("low"));
+    _faceCountModeCombo->addItem(tr("中"), QStringLiteral("medium"));
+    _faceCountModeCombo->addItem(tr("高"), QStringLiteral("high"));
     _faceCountModeCombo->addItem(tr("自定义"), QStringLiteral("custom"));
     _faceCountModeCombo->setCurrentIndex(2);
     _customFaceCountSpin->setRange(1, 2000000);
@@ -138,8 +139,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     }
 
     generalForm->addRow(tr("源数据:"), _sourceCombo);
-    generalForm->addRow(tr("深度质量:"), _effectiveDepthQualityLabel);
-    generalForm->addRow(tr("表面算法:"), _effectiveSurfaceQualityLabel);
+    generalForm->addRow(tr("质量:"), _qualityCombo);
     generalForm->addRow(tr("面数:"), _faceCountModeCombo);
     generalForm->addRow(tr("自定义面数:"), _customFaceCountSpin);
     generalForm->addRow(tr("RPC 最低高程:"), _rpcHeightMinSpin);
@@ -165,6 +165,16 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     _reuseDepthMapsCheck->setObjectName(QStringLiteral("reuseDepthMapsCheck"));
     _replaceDefaultCheck = new QCheckBox(tr("替换默认模型"), _advancedContent);
     _reuseDepthMapsCheck->setChecked(true);
+
+    _interpolationCombo = new QComboBox(_advancedContent);
+    _interpolationCombo->setObjectName(QStringLiteral("modelInterpolationCombo"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_interpolationCombo);
+    _interpolationCombo->addItem(tr("关闭"), QStringLiteral("disabled"));
+    _interpolationCombo->addItem(tr("启用"), QStringLiteral("enabled"));
+    _interpolationCombo->addItem(tr("外推"), QStringLiteral("extrapolated"));
+    _interpolationCombo->setCurrentIndex(1);
+
+    advancedForm->addRow(tr("插值:"), _interpolationCombo);
 
     advancedForm->addRow(QString(), _reuseDepthMapsCheck);
     advancedForm->addRow(QString(), _replaceDefaultCheck);
@@ -192,6 +202,14 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
             this,
             &GenerateModelDialog::emitSettingsNow);
     connect(_faceCountModeCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            &GenerateModelDialog::emitSettingsNow);
+    connect(_qualityCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            &GenerateModelDialog::emitSettingsNow);
+    connect(_interpolationCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
             &GenerateModelDialog::emitSettingsNow);
@@ -273,15 +291,24 @@ void GenerateModelDialog::applySettings(const QJsonObject& settings)
     else if (settings.contains(QStringLiteral("targetFaces")))
     {
         const int legacy_faces = settings.value(QStringLiteral("targetFaces")).toInt();
-        const QString legacy_mode = legacy_faces <= 20000    ? QStringLiteral("low")
-                                    : legacy_faces <= 100000 ? QStringLiteral("medium")
-                                    : legacy_faces <= 200000 ? QStringLiteral("high")
-                                                             : QStringLiteral("custom");
+        const QString legacy_mode = legacy_faces <= 200000 ? QStringLiteral("high") : QStringLiteral("custom");
         _faceCountModeCombo->setCurrentIndex(_faceCountModeCombo->findData(legacy_mode));
         _customFaceCountSpin->setValue(qBound(1, legacy_faces, 2000000));
     }
     _customFaceCountSpin->setValue(
         qBound(1, settings.value(QStringLiteral("faceCountCustom")).toInt(_customFaceCountSpin->value()), 2000000));
+    const QString depth_quality = settings.value(QStringLiteral("depthQualityProfile")).toString().trimmed();
+    const int quality_index = _qualityCombo->findData(depth_quality);
+    if (quality_index >= 0)
+    {
+        _qualityCombo->setCurrentIndex(quality_index);
+    }
+    const QString interpolation = settings.value(QStringLiteral("interpolation")).toString().trimmed();
+    const int interpolation_index = _interpolationCombo->findData(interpolation);
+    if (interpolation_index >= 0)
+    {
+        _interpolationCombo->setCurrentIndex(interpolation_index);
+    }
     if (settings.contains(QStringLiteral("rpcHeightMinMeters")))
     {
         _rpcHeightMinSpin->setValue(settings.value(QStringLiteral("rpcHeightMinMeters")).toDouble());
@@ -342,6 +369,14 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
                 _rpcHeightMaxSpin->setValue(candidate.value(QStringLiteral("rpcHeightMaxMeters")).toDouble());
             }
         }
+        else if (source_data == QStringLiteral("point_cloud") || source_data == QStringLiteral("tie_points"))
+        {
+            QJsonObject visible_candidate = candidate;
+            visible_candidate[QLatin1String(kSupported)] = false;
+            visible_candidate[QLatin1String(kNote)] =
+                QStringLiteral("参考 recovered 生产链尚未闭合该数据源；不会回退到 PlaScan 旧建模算法。");
+            _candidates.append(visible_candidate);
+        }
     }
 
     // 仅针孔候选可自动估计深度图后进入 recovered OOC；不允许回落到旧表面算法。
@@ -375,21 +410,19 @@ QJsonObject GenerateModelDialog::collectSettings() const
     const QString sourcePath = candidate.value(QLatin1String(kSourcePath)).toString();
     const QString face_count_mode = _faceCountModeCombo->currentData().toString();
     const int custom_faces = _customFaceCountSpin->value();
-    const int target_faces = face_count_mode == QStringLiteral("low")      ? 20000
-                             : face_count_mode == QStringLiteral("medium") ? 100000
-                             : face_count_mode == QStringLiteral("high")   ? 200000
-                                                                           : custom_faces;
+    const int target_faces = face_count_mode == QStringLiteral("custom") ? custom_faces : 0;
     const bool rpc_mode = usesRpcHeightPlaneSweep();
 
     QJsonObject settings;
-    settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    settings[QStringLiteral("modelGenerationContractRevision")] = 2;
     settings[QLatin1String(kSourceData)] = sourceData;
     settings[QLatin1String(kSourceLabel)] =
         candidate.value(QLatin1String(kSourceLabel)).toString(defaultSourceLabel(sourceData));
     settings[QLatin1String(kSourcePath)] = sourcePath;
     settings[QStringLiteral("source_display")] = candidate.value(QLatin1String(kDisplay)).toString();
     settings[QStringLiteral("source_supported")] = candidate.value(QLatin1String(kSupported)).toBool(false);
-    settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    settings[QStringLiteral("depthQualityProfile")] =
+        rpc_mode ? QStringLiteral("medium") : _qualityCombo->currentData().toString();
     settings[QStringLiteral("surfaceQualityProfile")] =
         rpc_mode ? QStringLiteral("rpc_height_plane_sweep") : QStringLiteral("recovered_ooc");
     settings[QStringLiteral("reconstruction_mode")] =
@@ -400,6 +433,7 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("requestedTargetFaces")] = target_faces;
     settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
     settings[QStringLiteral("depthFiltering")] = QStringLiteral("mild");
+    settings[QStringLiteral("interpolation")] = _interpolationCombo->currentData().toString();
     if (rpc_mode)
     {
         settings[QStringLiteral("rpcImagePaths")] = candidate.value(QStringLiteral("rpcImagePaths"));
@@ -610,9 +644,7 @@ void GenerateModelDialog::updateAvailability()
     const bool selected_depth_batch_compatible = candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
     const bool can_reuse_depth_maps = _hasReusableDepthMaps && selected_depth_batch_compatible;
     const bool rpc_mode = usesRpcHeightPlaneSweep();
-    _effectiveDepthQualityLabel->setText(rpc_mode ? tr("RPC 高程平面扫描（需物理高程范围）")
-                                                  : tr("中（d4，参考已验证）"));
-    _effectiveSurfaceQualityLabel->setText(rpc_mode ? tr("RPC 高程平面扫描") : tr("recovered_ooc（参考已验证链）"));
+    _qualityCombo->setVisible(!rpc_mode);
     _customFaceCountSpin->setVisible(_faceCountModeCombo->currentData().toString() == QStringLiteral("custom"));
     _rpcHeightMinSpin->setVisible(rpc_mode);
     _rpcHeightMaxSpin->setVisible(rpc_mode);
@@ -647,7 +679,13 @@ void GenerateModelDialog::updateAvailability()
                                          (rpc_mode && std::isfinite(_rpcHeightMinSpin->value()) &&
                                           std::isfinite(_rpcHeightMaxSpin->value()) &&
                                           _rpcHeightMinSpin->value() < _rpcHeightMaxSpin->value());
-    _okButton->setEnabled(hasCandidate && supported && valid_rpc_configuration);
+    const QString face_mode = _faceCountModeCombo->currentData().toString();
+    const bool validated_face_mode =
+        rpc_mode || face_mode == QStringLiteral("high") || face_mode == QStringLiteral("custom");
+    const QString note = candidate.value(QLatin1String(kNote)).toString();
+    _sourceCombo->setToolTip(note);
+    _okButton->setToolTip(validated_face_mode ? note : tr("参考生产链目前只验证了“高”和“自定义”面数模式。"));
+    _okButton->setEnabled(hasCandidate && supported && valid_rpc_configuration && validated_face_mode);
 }
 
 void GenerateModelDialog::emitSettingsNow()

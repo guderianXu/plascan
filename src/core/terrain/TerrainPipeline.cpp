@@ -1069,7 +1069,7 @@ namespace xjw
                                                           QJsonObject* result,
                                                           QString* errorMsg,
                                                           const std::atomic_bool* cancelFlag,
-                                                          const OrthoProgressCallback& progressCallback)
+                                                          const SmallBodyProgressCallback& progressCallback)
     {
         SmallBodyGlobalProducts products;
         if (!SmallBodyGlobalProductGenerator::generate(

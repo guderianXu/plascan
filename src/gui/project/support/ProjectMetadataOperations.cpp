@@ -2,7 +2,7 @@
 
 #include "project/ProjectSessionModel.h"
 #include "ProjectResultRecords.h"
-#include "ProjectWorkflowOperations.h"
+#include "ProjectSparseWorkflow.h"
 #include "project/ProjectIO.h"
 
 #include <QDateTime>
@@ -240,8 +240,7 @@ TiePointMutationResult replaceTiePointResult(ProjectData *projectData,
                                            outputDir,
                                            extraRecord);
     entry[QStringLiteral("operation_display_name")] =
-        xjw::core::project::sparseOperationDisplayName(
-            entry.value(QStringLiteral("operation")).toString());
+        sparseOperationDisplayName(entry.value(QStringLiteral("operation")).toString());
 
     return ProjectTiePointResultService::replaceCurrent(projectData, entry);
 }

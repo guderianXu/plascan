@@ -65,24 +65,53 @@ namespace metmodel
         return static_cast<std::size_t>(scaled);
     }
 
-    QemDecimationStats decimate_mesh_qem_mode3(Mesh& mesh,
-                                               std::size_t target_faces,
-                                               std::span<const float> vertex_scale,
-                                               std::vector<QemCollapseEvent>* trace,
-                                               std::vector<RecoveredMeshTrimAttribute>* vertex_attributes,
-                                               const std::function<bool()>& is_cancelled)
+    float recovered_qem_preset_maximum_score(RecoveredQemPreset preset)
     {
-        if (target_faces == 0U)
+        switch (preset)
+        {
+        case RecoveredQemPreset::Low:
+            return std::bit_cast<float>(0x3eb851ebU);
+        case RecoveredQemPreset::Medium:
+            return std::bit_cast<float>(0x3d75c28fU);
+        case RecoveredQemPreset::High:
+            return std::bit_cast<float>(0x3c23d70aU);
+        }
+        throw std::invalid_argument("unknown recovered QEM preset");
+    }
+
+    QemDecimationStats decimate_mesh_qem_mode3_impl(Mesh& mesh,
+                                                    std::size_t target_faces,
+                                                    const float* maximum_score,
+                                                    std::span<const float> vertex_scale,
+                                                    std::vector<QemCollapseEvent>* trace,
+                                                    std::vector<RecoveredMeshTrimAttribute>* vertex_attributes,
+                                                    const std::function<bool()>& is_cancelled,
+                                                    std::vector<float>* mutable_vertex_scale,
+                                                    std::vector<std::uint32_t>* compact_source_indices,
+                                                    bool preserve_mutable_scale_index_space)
+    {
+        if (maximum_score == nullptr && target_faces == 0U)
             throw std::runtime_error("QEM decimation target must be positive");
+        if (maximum_score != nullptr && std::isnan(*maximum_score))
+            throw std::runtime_error("QEM preset threshold must not be NaN");
         if (vertex_attributes != nullptr && vertex_attributes->size() != mesh.vertices.size())
         {
             throw std::runtime_error("QEM trim-attribute count does not match vertices");
         }
+        if (mutable_vertex_scale != nullptr && mutable_vertex_scale->size() != mesh.vertices.size())
+            throw std::runtime_error("QEM mutable vertex-scale count does not match vertices");
+        if (compact_source_indices != nullptr)
+            compact_source_indices->clear();
         QemDecimationStats stats;
         stats.input_vertices = mesh.vertices.size();
         stats.input_faces = mesh.faces.size();
-        if (mesh.faces.size() <= target_faces || mesh.vertices.empty())
+        if ((maximum_score == nullptr && mesh.faces.size() <= target_faces) || mesh.vertices.empty())
         {
+            if (compact_source_indices != nullptr)
+            {
+                compact_source_indices->resize(mesh.vertices.size());
+                std::iota(compact_source_indices->begin(), compact_source_indices->end(), 0U);
+            }
             stats.output_vertices = mesh.vertices.size();
             stats.output_faces = mesh.faces.size();
             return stats;
@@ -679,6 +708,8 @@ namespace metmodel
                 incident.emplace_back();
                 if (vertex_attributes != nullptr)
                     vertex_attributes->push_back((*vertex_attributes)[vertex]);
+                if (mutable_vertex_scale != nullptr)
+                    mutable_vertex_scale->push_back((*mutable_vertex_scale)[vertex]);
 
                 std::unordered_set<std::uint32_t> members(components[component].begin(), components[component].end());
                 for (const std::uint32_t fi : chain_faces)
@@ -730,11 +761,15 @@ namespace metmodel
         std::vector<std::uint32_t> affected;
         std::vector<std::uint32_t> other_incident;
         std::vector<std::uint32_t> repair_neighbors;
-        while (active_faces > target_faces && !heap.empty())
+        while ((maximum_score != nullptr || active_faces > target_faces) && !heap.empty())
         {
             if (is_cancelled && is_cancelled())
             {
                 throw std::runtime_error("Recovered QEM cancelled");
+            }
+            if (maximum_score != nullptr && heap.front().cost >= 0.0F && heap.front().cost > *maximum_score)
+            {
+                break;
             }
             const Candidate candidate = pop_candidate();
             if (stats.first_popped_source == std::numeric_limits<std::uint32_t>::max())
@@ -860,6 +895,28 @@ namespace metmodel
                 continue;
             }
 
+            if (mutable_vertex_scale != nullptr)
+            {
+                const auto squared_distance = [](const metalign::Vec3& lhs, const metalign::Vec3& rhs)
+                {
+                    const float dx = static_cast<float>(lhs.x) - static_cast<float>(rhs.x);
+                    const float dy = static_cast<float>(lhs.y) - static_cast<float>(rhs.y);
+                    const float dz = static_cast<float>(lhs.z) - static_cast<float>(rhs.z);
+                    return static_cast<float>(static_cast<float>(dx * dx + dy * dy) + dz * dz);
+                };
+                const float source_distance = squared_distance(solved_point, positions[a]);
+                const float target_distance = squared_distance(solved_point, positions[b]);
+                const float denominator = static_cast<float>(target_distance + source_distance);
+                const float source_value = (*mutable_vertex_scale)[a];
+                const float target_value = (*mutable_vertex_scale)[b];
+                const float merged_value =
+                    denominator > 0.0F ? static_cast<float>(static_cast<float>(target_distance * source_value +
+                                                                               source_distance * target_value) /
+                                                            denominator)
+                                       : static_cast<float>(static_cast<float>(source_value + target_value) * 0.5F);
+                const float source_delta = static_cast<float>(merged_value - source_value);
+                (*mutable_vertex_scale)[a] = static_cast<float>(source_value + source_delta);
+            }
             positions[a] = point;
             if (trace != nullptr)
             {
@@ -1059,6 +1116,8 @@ namespace metmodel
             Vertex vertex = mesh.vertices[index];
             vertex.position = positions[index];
             vertices.push_back(vertex);
+            if (compact_source_indices != nullptr)
+                compact_source_indices->push_back(static_cast<std::uint32_t>(index));
             if (vertex_attributes != nullptr)
                 compact_attributes.push_back((*vertex_attributes)[index]);
         }
@@ -1081,6 +1140,312 @@ namespace metmodel
         mesh.faces = std::move(faces);
         if (vertex_attributes != nullptr)
             *vertex_attributes = std::move(compact_attributes);
+        if (mutable_vertex_scale != nullptr && !preserve_mutable_scale_index_space)
+            mutable_vertex_scale->resize(mesh.vertices.size());
+        recompute_normals(mesh);
+        stats.output_vertices = mesh.vertices.size();
+        stats.output_faces = mesh.faces.size();
+        return stats;
+    }
+
+    QemDecimationStats decimate_mesh_qem_mode3(Mesh& mesh,
+                                               std::size_t target_faces,
+                                               std::span<const float> vertex_scale,
+                                               std::vector<QemCollapseEvent>* trace,
+                                               std::vector<RecoveredMeshTrimAttribute>* vertex_attributes,
+                                               const std::function<bool()>& is_cancelled)
+    {
+        return decimate_mesh_qem_mode3_impl(
+            mesh, target_faces, nullptr, vertex_scale, trace, vertex_attributes, is_cancelled, nullptr, nullptr, false);
+    }
+
+    QemDecimationStats decimate_mesh_qem_mode3_threshold(Mesh& mesh,
+                                                         float maximum_score,
+                                                         std::span<const float> vertex_scale,
+                                                         std::vector<QemCollapseEvent>* trace,
+                                                         std::vector<RecoveredMeshTrimAttribute>* vertex_attributes,
+                                                         const std::function<bool()>& is_cancelled,
+                                                         std::vector<float>* mutable_vertex_scale,
+                                                         std::vector<std::uint32_t>* compact_source_indices,
+                                                         bool preserve_mutable_scale_index_space)
+    {
+        if (mutable_vertex_scale != nullptr && (vertex_scale.data() != mutable_vertex_scale->data() ||
+                                                vertex_scale.size() != mutable_vertex_scale->size()))
+            throw std::runtime_error("QEM mutable vertex scale must be the supplied scale span");
+        return decimate_mesh_qem_mode3_impl(mesh,
+                                            0U,
+                                            &maximum_score,
+                                            vertex_scale,
+                                            trace,
+                                            vertex_attributes,
+                                            is_cancelled,
+                                            mutable_vertex_scale,
+                                            compact_source_indices,
+                                            preserve_mutable_scale_index_space);
+    }
+
+    QemPresetDecimationStats decimate_mesh_qem_mode3_preset(Mesh& mesh,
+                                                            float maximum_score,
+                                                            std::vector<float>& vertex_scale,
+                                                            std::vector<RecoveredMeshTrimAttribute>& vertex_attributes,
+                                                            std::vector<QemCollapseEvent>* main_trace,
+                                                            std::vector<QemCollapseEvent>* seam_trace,
+                                                            bool seam_only,
+                                                            std::span<const std::uint8_t> seam_boundary_seed,
+                                                            const std::function<bool()>& is_cancelled)
+    {
+        if (mesh.vertices.empty() || mesh.faces.empty())
+            throw std::runtime_error("QEM preset mesh must not be empty");
+        if (vertex_scale.size() != mesh.vertices.size() || vertex_attributes.size() != mesh.vertices.size())
+            throw std::runtime_error("QEM preset vertex auxiliary count mismatch");
+        const auto cancelled = [&]() { return is_cancelled && is_cancelled(); };
+        if (cancelled())
+            throw std::runtime_error("QEM decimation cancelled");
+
+        QemPresetDecimationStats stats;
+        const auto centroid = [](const Mesh& value)
+        {
+            std::array<double, 3> sum{};
+            for (const auto& vertex : value.vertices)
+            {
+                sum[0] += vertex.position.x;
+                sum[1] += vertex.position.y;
+                sum[2] += vertex.position.z;
+            }
+            std::array<float, 3> center{};
+            for (std::size_t axis = 0U; axis != 3U; ++axis)
+                center[axis] = static_cast<float>(sum[axis] / static_cast<double>(value.vertices.size()));
+            return center;
+        };
+        const auto translate = [](Mesh& value, const std::array<float, 3>& center, bool subtract)
+        {
+            for (auto& vertex : value.vertices)
+            {
+                const float x = static_cast<float>(vertex.position.x);
+                const float y = static_cast<float>(vertex.position.y);
+                const float z = static_cast<float>(vertex.position.z);
+                vertex.position.x = subtract ? static_cast<float>(x - center[0]) : static_cast<float>(x + center[0]);
+                vertex.position.y = subtract ? static_cast<float>(y - center[1]) : static_cast<float>(y + center[1]);
+                vertex.position.z = subtract ? static_cast<float>(z - center[2]) : static_cast<float>(z + center[2]);
+            }
+        };
+
+        stats.main_center = centroid(mesh);
+        if (!seam_only)
+        {
+            translate(mesh, stats.main_center, true);
+            stats.main = decimate_mesh_qem_mode3_threshold(
+                mesh, maximum_score, vertex_scale, main_trace, &vertex_attributes, is_cancelled, &vertex_scale);
+            translate(mesh, stats.main_center, false);
+        }
+        else
+        {
+            stats.main.input_vertices = mesh.vertices.size();
+            stats.main.input_faces = mesh.faces.size();
+            stats.main.output_vertices = mesh.vertices.size();
+            stats.main.output_faces = mesh.faces.size();
+        }
+        stats.seam_center = centroid(mesh);
+
+        const std::size_t main_vertex_count = mesh.vertices.size();
+        std::vector<std::uint8_t> near_seam(main_vertex_count, 0U);
+        if (!seam_boundary_seed.empty())
+        {
+            if (seam_boundary_seed.size() != main_vertex_count)
+                throw std::runtime_error("QEM preset seam-boundary seed count mismatch");
+            for (std::size_t vertex = 0U; vertex != main_vertex_count; ++vertex)
+                near_seam[vertex] = seam_boundary_seed[vertex] != 0U;
+        }
+        else
+        {
+            std::unordered_map<std::uint64_t, std::uint32_t> edge_counts;
+            edge_counts.reserve(mesh.faces.size() * 2U);
+            const auto edge_key = [](std::size_t a, std::size_t b)
+            {
+                if (a > b)
+                    std::swap(a, b);
+                return (static_cast<std::uint64_t>(a) << 32U) | static_cast<std::uint64_t>(b);
+            };
+            for (const auto& face : mesh.faces)
+            {
+                for (std::size_t corner = 0U; corner != 3U; ++corner)
+                {
+                    const std::size_t a = face.vertices[corner];
+                    const std::size_t b = face.vertices[(corner + 1U) % 3U];
+                    if (a >= main_vertex_count || b >= main_vertex_count)
+                        throw std::runtime_error("QEM preset face index is invalid");
+                    ++edge_counts[edge_key(a, b)];
+                }
+            }
+            for (const auto& [key, count] : edge_counts)
+            {
+                if (count == 1U)
+                {
+                    near_seam[static_cast<std::uint32_t>(key >> 32U)] = 1U;
+                    near_seam[static_cast<std::uint32_t>(key)] = 1U;
+                }
+            }
+        }
+        stats.boundary_vertices =
+            static_cast<std::size_t>(std::count(near_seam.begin(), near_seam.end(), std::uint8_t{1U}));
+        for (std::size_t ring = 0U; ring != 2U; ++ring)
+        {
+            std::vector<std::uint8_t> expanded = near_seam;
+            for (const auto& face : mesh.faces)
+            {
+                for (std::size_t corner = 0U; corner != 3U; ++corner)
+                {
+                    const std::size_t a = face.vertices[corner];
+                    const std::size_t b = face.vertices[(corner + 1U) % 3U];
+                    if (near_seam[a] != 0U)
+                        expanded[b] = 1U;
+                    if (near_seam[b] != 0U)
+                        expanded[a] = 1U;
+                }
+            }
+            near_seam.swap(expanded);
+        }
+
+        std::vector<std::uint32_t> selected;
+        std::vector<std::uint32_t> local_of_global(main_vertex_count, std::numeric_limits<std::uint32_t>::max());
+        for (std::size_t vertex = 0U; vertex != main_vertex_count; ++vertex)
+        {
+            if (near_seam[vertex] == 0U)
+                continue;
+            local_of_global[vertex] = static_cast<std::uint32_t>(selected.size());
+            selected.push_back(static_cast<std::uint32_t>(vertex));
+        }
+        stats.near_seam_vertices = selected.size();
+
+        Mesh seam;
+        std::vector<float> seam_scale;
+        std::vector<RecoveredMeshTrimAttribute> seam_attributes;
+        seam.vertices.reserve(selected.size());
+        seam_scale.reserve(selected.size());
+        seam_attributes.reserve(selected.size());
+        for (const std::uint32_t global : selected)
+        {
+            seam.vertices.push_back(mesh.vertices[global]);
+            seam_scale.push_back(vertex_scale[global]);
+            seam_attributes.push_back(vertex_attributes[global]);
+        }
+        for (const auto& face : mesh.faces)
+        {
+            if (near_seam[face.vertices[0]] == 0U || near_seam[face.vertices[1]] == 0U ||
+                near_seam[face.vertices[2]] == 0U)
+                continue;
+            seam.faces.push_back({{local_of_global[face.vertices[0]],
+                                   local_of_global[face.vertices[1]],
+                                   local_of_global[face.vertices[2]]}});
+        }
+        stats.seam_input_faces = seam.faces.size();
+        if (seam.vertices.empty() || seam.faces.empty())
+        {
+            stats.seam.input_vertices = stats.seam.output_vertices = seam.vertices.size();
+            stats.seam.input_faces = stats.seam.output_faces = seam.faces.size();
+            stats.output_vertices = mesh.vertices.size();
+            stats.output_faces = mesh.faces.size();
+            return stats;
+        }
+
+        translate(seam, stats.seam_center, true);
+        std::vector<QemCollapseEvent> local_trace;
+        std::vector<std::uint32_t> compact_sources;
+        stats.seam = decimate_mesh_qem_mode3_threshold(seam,
+                                                       maximum_score,
+                                                       seam_scale,
+                                                       &local_trace,
+                                                       &seam_attributes,
+                                                       is_cancelled,
+                                                       &seam_scale,
+                                                       &compact_sources,
+                                                       true);
+        translate(seam, stats.seam_center, false);
+        if (seam_trace != nullptr)
+            *seam_trace = local_trace;
+
+        std::size_t internal_count = selected.size();
+        for (const auto& event : local_trace)
+            internal_count = std::max<std::size_t>(internal_count, 1U + std::max(event.source, event.target));
+        for (const std::uint32_t source : compact_sources)
+            internal_count = std::max<std::size_t>(internal_count, 1U + source);
+        std::vector<std::uint32_t> parent(internal_count);
+        std::iota(parent.begin(), parent.end(), 0U);
+        const auto find_representative = [&parent](std::uint32_t vertex)
+        {
+            std::uint32_t root = vertex;
+            while (parent[root] != root)
+                root = parent[root];
+            while (parent[vertex] != vertex)
+            {
+                const std::uint32_t next = parent[vertex];
+                parent[vertex] = root;
+                vertex = next;
+            }
+            return root;
+        };
+        for (const auto& event : local_trace)
+            parent[event.target] = find_representative(event.source);
+        for (std::uint32_t vertex = 0U; vertex != internal_count; ++vertex)
+            parent[vertex] = find_representative(vertex);
+        if (compact_sources.size() != seam.vertices.size() || seam_attributes.size() != seam.vertices.size())
+            throw std::runtime_error("QEM preset seam compact mapping mismatch");
+        for (std::size_t compact = 0U; compact != seam.vertices.size(); ++compact)
+        {
+            const std::uint32_t local = compact_sources[compact];
+            if (local >= internal_count)
+                throw std::runtime_error("QEM preset seam compact source is invalid");
+            if (local >= selected.size())
+                continue;
+            const std::uint32_t global = selected[local];
+            mesh.vertices[global] = seam.vertices[compact];
+            vertex_attributes[global] = seam_attributes[compact];
+            if (local < seam_scale.size())
+                vertex_scale[global] = seam_scale[local];
+        }
+
+        std::vector<Face> merged_faces;
+        merged_faces.reserve(mesh.faces.size());
+        for (Face face : mesh.faces)
+        {
+            for (std::size_t& global : face.vertices)
+            {
+                const std::uint32_t local = local_of_global[global];
+                if (local == std::numeric_limits<std::uint32_t>::max())
+                    continue;
+                const std::uint32_t representative = parent[local];
+                if (representative >= selected.size())
+                    throw std::runtime_error("QEM preset seam representative is not an original vertex");
+                global = selected[representative];
+            }
+            if (face.vertices[0] != face.vertices[1] && face.vertices[1] != face.vertices[2] &&
+                face.vertices[2] != face.vertices[0])
+                merged_faces.push_back(face);
+        }
+        std::vector<std::uint8_t> used(mesh.vertices.size(), 0U);
+        for (const auto& face : merged_faces)
+            for (const std::size_t vertex : face.vertices)
+                used[vertex] = 1U;
+        std::vector<std::size_t> remap(mesh.vertices.size(), std::numeric_limits<std::size_t>::max());
+        std::vector<Vertex> merged_vertices;
+        std::vector<RecoveredMeshTrimAttribute> merged_attributes;
+        std::vector<float> merged_scale;
+        for (std::size_t global = 0U; global != mesh.vertices.size(); ++global)
+        {
+            if (used[global] == 0U)
+                continue;
+            remap[global] = merged_vertices.size();
+            merged_vertices.push_back(mesh.vertices[global]);
+            merged_attributes.push_back(vertex_attributes[global]);
+            merged_scale.push_back(vertex_scale[global]);
+        }
+        for (auto& face : merged_faces)
+            for (std::size_t& vertex : face.vertices)
+                vertex = remap[vertex];
+        mesh.vertices = std::move(merged_vertices);
+        mesh.faces = std::move(merged_faces);
+        vertex_attributes = std::move(merged_attributes);
+        vertex_scale = std::move(merged_scale);
         recompute_normals(mesh);
         stats.output_vertices = mesh.vertices.size();
         stats.output_faces = mesh.faces.size();

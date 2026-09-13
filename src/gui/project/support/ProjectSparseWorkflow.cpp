@@ -28,6 +28,31 @@ SparsePointWorkflowSpec sparsePointWorkflowSpec(SparsePointWorkflowKind kind)
     return {};
 }
 
+QString sparseOperationDisplayName(const QString &operation)
+{
+    if (operation == QLatin1String("triangulation"))
+    {
+        return QStringLiteral("两视预览云");
+    }
+    if (operation == QLatin1String("outlier_removal"))
+    {
+        return QStringLiteral("离群点剔除");
+    }
+    if (operation == QLatin1String("sparse_refine"))
+    {
+        return QStringLiteral("稀疏点云精修");
+    }
+    if (operation == QLatin1String("bundle_adjust"))
+    {
+        return QStringLiteral("平差稀疏点云");
+    }
+    if (operation == QLatin1String("spatial_cleanup"))
+    {
+        return QStringLiteral("空间清理点云");
+    }
+    return QStringLiteral("稀疏点云");
+}
+
 bool runSparsePointWorkflow(SparsePointWorkflowKind kind,
                             const xjw::core::project::SparsePointContext &context,
                             const QJsonObject &settings,

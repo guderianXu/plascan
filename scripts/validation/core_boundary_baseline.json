@@ -1,0 +1,1357 @@
+{
+  "frozen_debt": {
+    "core_library_qt_link": {
+      "src/core/aerial_triangulation/CMakeLists.txt": {
+        "aerial_triangulation|PRIVATE|Qt6::Gui": 1,
+        "aerial_triangulation|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/camera_reference/CMakeLists.txt": {
+        "camera_reference|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/control_points/CMakeLists.txt": {
+        "control_points|PUBLIC|Qt6::Core": 1,
+        "control_points|PUBLIC|Qt6::Gui": 1
+      },
+      "src/core/image_matching/CMakeLists.txt": {
+        "image_matching|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/inference/CMakeLists.txt": {
+        "plascan_inference|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/lidar/CMakeLists.txt": {
+        "lidar|PRIVATE|Qt6::Core": 1
+      },
+      "src/core/matchphototask/CMakeLists.txt": {
+        "matchphototask|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/mesh/CMakeLists.txt": {
+        "meshing|PRIVATE|Qt6::Core": 1,
+        "meshing|PRIVATE|Qt6::Gui": 1
+      },
+      "src/core/mvs/CMakeLists.txt": {
+        "mvs|PRIVATE|Qt6::Concurrent": 1,
+        "mvs|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/project_workflows/CMakeLists.txt": {
+        "project_workflows|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/qc/CMakeLists.txt": {
+        "qc|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/sfm/CMakeLists.txt": {
+        "sfm_project|PUBLIC|Qt6::Core": 1,
+        "sfm_project|PUBLIC|Qt6::Gui": 1
+      },
+      "src/core/stereo_dem/CMakeLists.txt": {
+        "stereo_dem|PRIVATE|Qt6::Core": 1
+      },
+      "src/core/terrain/CMakeLists.txt": {
+        "terrain|PRIVATE|Qt6::Core": 1,
+        "terrain|PRIVATE|Qt6::Gui": 1
+      }
+    },
+    "display_name": {
+      "src/core/camera_reference/io/CameraReferenceSetJson.cpp": {
+        "display_name": 1
+      },
+      "src/core/camera_reference/io/CameraReferenceSetJsonDecode.cpp": {
+        "display_name": 1
+      }
+    },
+    "public_header_qt_include": {
+      "src/core/aerial_triangulation/model/AerialTriangulationOptions.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/aerial_triangulation/model/AerialTriangulationResolvedConfig.h": {
+        "QJsonObject": 1
+      },
+      "src/core/aerial_triangulation/model/AerialTriangulationResult.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/preparation/MatchResultCatalog.h": {
+        "QByteArray": 1,
+        "QDateTime": 1,
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/aerial_triangulation/preparation/ReconstructionPrerequisiteReport.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/CameraIntrinsicPriorSanitizer.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QStringList": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/MarkerPriorLoader.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/RpcAerialTriangulationRunner.h": {
+        "QMap": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.h": {
+        "QMap": 1,
+        "QSize": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmMatchDiagnostics.h": {
+        "QMap": 1,
+        "QPair": 1,
+        "QSet": 1,
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h": {
+        "QDir": 1,
+        "QFileInfo": 1,
+        "QSet": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/aerial_triangulation/reporting/AerialTriangulationResultWriter.h": {
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reporting/QualityReportWriter.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1
+      },
+      "src/core/aerial_triangulation/search/AdaptiveFocalSearch.h": {
+        "QVector": 1
+      },
+      "src/core/camera/CameraIntrinsicPrior.h": {
+        "QString": 1
+      },
+      "src/core/camera/ProjectCameraIO.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/camera_reference/io/CameraReferenceSetJson.h": {
+        "QJsonObject": 1
+      },
+      "src/core/camera_reference/io/CameraReferenceSetStore.h": {
+        "QString": 1
+      },
+      "src/core/camera_reference/model/CameraReferenceSet.h": {
+        "QDateTime": 1,
+        "QVector": 1
+      },
+      "src/core/camera_reference/model/CameraReferenceTypes.h": {
+        "QString": 1
+      },
+      "src/core/control_points/commands/MarkerChangeSet.h": {
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/detection/DetectionIntegrator.h": {
+        "QHash": 1
+      },
+      "src/core/control_points/detection/DetectionReviewStore.h": {
+        "QDateTime": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/detection/MarkerDetector.h": {
+        "QImage": 1,
+        "QPointF": 1,
+        "QPolygonF": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/geometry/MarkerGeometry.h": {
+        "QHash": 1,
+        "QSize": 1
+      },
+      "src/core/control_points/io/MarkerCsv.h": {
+        "QHash": 1,
+        "QString": 1
+      },
+      "src/core/control_points/io/MarkerSetJson.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/control_points/io/MarkerSetStore.h": {
+        "QString": 1
+      },
+      "src/core/control_points/model/MarkerSet.h": {
+        "QDateTime": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/model/MarkerSetValidator.h": {
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/model/MarkerTypes.h": {
+        "QPointF": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/print/MarkerSheetRenderer.h": {
+        "QImage": 1,
+        "QSizeF": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/quality/MarkerQualityReport.h": {
+        "QVector": 1
+      },
+      "src/core/control_points/reference/CoordinateReference.h": {
+        "QString": 1
+      },
+      "src/core/image_matching/ImageFeaturePointFile.h": {
+        "QString": 1
+      },
+      "src/core/image_matching/ImageMatchFile.h": {
+        "QString": 1
+      },
+      "src/core/image_matching/ImageMatchIndexFile.h": {
+        "QString": 1
+      },
+      "src/core/image_matching/ImageMatchRepository.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/image_matching/ImageMatchTypes.h": {
+        "QByteArray": 1,
+        "QString": 1
+      },
+      "src/core/image_matching/ImageMatchingAlgorithm.h": {
+        "QByteArray": 1,
+        "QString": 1
+      },
+      "src/core/image_matching/lightglue/LightGlueFeatureBudget.h": {
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/image_matching/plamatch_hct/PlaMatchHctFeatureCacheFile.h": {
+        "QString": 1
+      },
+      "src/core/image_matching/sift/SiftComputeBackend.h": {
+        "QString": 1
+      },
+      "src/core/inference/tensorrt/TensorRtBuildSupport.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/inference/tensorrt/TensorRtCapabilities.h": {
+        "QString": 1
+      },
+      "src/core/inference/tensorrt/TensorRtEngineBuilder.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/inference/tensorrt/TensorRtEngineCache.h": {
+        "QJsonObject": 1
+      },
+      "src/core/inference/tensorrt/TensorRtTensorInfo.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/algorithm/MatchPhotosAlgorithmPlan.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/pair_selection/PairTypes.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/matchphototask/pair_selection/PlaMatchHctPairPreselector.h": {
+        "QMap": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/matchphototask/runtime/MatchPhotosFeatureCache.h": {
+        "QHash": 1,
+        "QString": 1
+      },
+      "src/core/matchphototask/runtime/MatchPhotosMaskSupport.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/runtime/MatchPhotosParallelism.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/runtime/MatchPhotosRuntime.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/matchphototask/stages/FeaturePreparationQueue.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/stages/GeometryVerifyStage.h": {
+        "QByteArray": 1
+      },
+      "src/core/matchphototask/stages/GuidedMatchPolicy.h": {
+        "QHash": 1
+      },
+      "src/core/matchphototask/stages/MatchingStage.h": {
+        "QByteArray": 1
+      },
+      "src/core/matchphototask/task/MatchPhotosContext.h": {
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/matchphototask/task/MatchPhotosOptions.h": {
+        "QString": 1
+      },
+      "src/core/matchphototask/task/MatchPhotosResult.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/matchphototask/tie_points/TiePointTrackManager.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/CameraTextureMapperV4.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/DepthConstrainedSurfaceRefiner.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/DepthMapMeshBuilder.h": {
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/mesh/DepthMeshCompleteness.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/DepthTsdfFinalQualityGate.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/DepthTsdfRecoveryTransaction.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/DepthTsdfSurfaceBuilder.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/mesh/MeshAcquisitionGapReport.h": {
+        "QJsonObject": 1,
+        "QStringList": 1
+      },
+      "src/core/mesh/MeshBoundaryAttribution.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mesh/MeshColorizer.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/ModelOutputPolicy.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/ModelWorkflowService.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/RecoveredModelBuilder.h": {
+        "QJsonObject": 1,
+        "QJsonValue": 1,
+        "QString": 1
+      },
+      "src/core/mesh/RpcPlaneSweepModelBuilder.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/TextureAtlasPacker.h": {
+        "QRect": 1,
+        "QSize": 1,
+        "QVector": 1
+      },
+      "src/core/mesh/TextureMapper.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/TextureMappingV4Internal.h": {
+        "QPointF": 1,
+        "QRect": 1,
+        "QVector": 1
+      },
+      "src/core/mesh/VisualHullDepthRefiner.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/recovered_model/RecoveredModelColorizer.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthCompletenessMetrics.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthCrossViewHoleRepair.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthEvidenceConfidence.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthFrameQualificationPolicy.h": {
+        "QString": 1
+      },
+      "src/core/mvs/DepthFrameUtils.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/mvs/DepthGapTargetedRecovery.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthGeometryConsistency.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mvs/DepthLayerReliability.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthMapGenerator.h": {
+        "QFuture": 1,
+        "QJsonObject": 1,
+        "QMetaType": 1,
+        "QObject": 1,
+        "QSharedPointer": 1,
+        "QString": 1
+      },
+      "src/core/mvs/DepthMissingReason.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthProvenance.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthResidualReestimation.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/GpuDeviceLease.h": {
+        "QLockFile": 1
+      },
+      "src/core/mvs/MvsQualityReport.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/MvsSourcePlanner.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/MvsStageSnapshot.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mvs/MvsWorkspaceManifest.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/mvs/MvsWorkspaceReplay.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mvs/PointCloudArtifactIO.h": {
+        "QString": 1
+      },
+      "src/core/mvs/RecoveredModelInput.h": {
+        "QString": 1
+      },
+      "src/core/project_workflows/MvsSourcePairQualityLoader.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/PointCloudInputPreparation.h": {
+        "QString": 1
+      },
+      "src/core/project_workflows/PointCloudWorkflowConfig.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/project_workflows/ProjectResourceCleanup.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/ProjectResourceCleanupArtifacts.h": {
+        "QJsonObject": 1,
+        "QJsonValue": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/ProjectResourceCleanupPlan.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/ProjectResourceCleanupTransaction.h": {
+        "QByteArray": 1,
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/project_workflows/ProjectWorkflowOperations.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/ReferenceDatasetWorkflow.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/qc/DemDifference.h": {
+        "QString": 1
+      },
+      "src/core/qc/ModelGeometryComparator.h": {
+        "QString": 1
+      },
+      "src/core/qc/ModelImageQualityTypes.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/qc/PointCloudAlignment.h": {
+        "QString": 1
+      },
+      "src/core/qc/ProcessingBaselineManager.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/qc/ReconstructionQualityReport.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/qc/SurveyControlReport.h": {
+        "QJsonObject": 1
+      },
+      "src/core/sfm/TriangulationService.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/sfm/project/BaInputBuilder.h": {
+        "QHash": 1,
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QStringList": 1
+      },
+      "src/core/sfm/project/MarkerBaAdapter.h": {
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/sfm/project/ProjectMatchInputReader.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QStringList": 1
+      },
+      "src/core/sfm/project/SfmQualityJsonSerializer.h": {
+        "QJsonObject": 1
+      },
+      "src/core/sfm/project/SurveyControlBaAdapter.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/stereo_dem/RpcDomGenerator.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/stereo_dem/RpcGeospatialSupport.h": {
+        "QString": 1
+      },
+      "src/core/stereo_dem/RpcStereoDemGenerator.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/terrain/DemDomIO.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DemDomTypes.h": {
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/terrain/DemGenerator.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DemGridAggregator.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DemMosaic.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DomGenerator.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/terrain/GlobalTerrainReportRenderer.h": {
+        "QString": 1
+      },
+      "src/core/terrain/ObjMtlLoader.h": {
+        "QString": 1
+      },
+      "src/core/terrain/OrthoGenerationOptions.h": {
+        "QJsonObject": 1,
+        "QtGlobal": 1
+      },
+      "src/core/terrain/OrthoProjector.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/terrain/PointCloudDomGenerator.h": {
+        "QJsonObject": 1
+      },
+      "src/core/terrain/SmallBodyGlobalProducts.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/terrain/TerrainComputeBackend.h": {
+        "QString": 1
+      },
+      "src/core/terrain/TerrainPipeline.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/terrain/TerrainProductManifest.h": {
+        "QJsonObject": 1,
+        "QString": 1,
+        "QVector": 1
+      },
+      "src/core/terrain/projection/AsteroidProjection.h": {
+        "QString": 1
+      }
+    },
+    "public_header_qt_symbol": {
+      "src/core/aerial_triangulation/model/AerialTriangulationOptions.h": {
+        "QJsonObject": 2,
+        "QMap": 3,
+        "QString": 27,
+        "QStringList": 5,
+        "QStringLiteral": 6
+      },
+      "src/core/aerial_triangulation/model/AerialTriangulationResolvedConfig.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/model/AerialTriangulationResult.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 4,
+        "QMap": 1,
+        "QString": 5
+      },
+      "src/core/aerial_triangulation/preparation/MatchResultCatalog.h": {
+        "QByteArray": 1,
+        "QDateTime": 1,
+        "QString": 16,
+        "QStringList": 1,
+        "QVector": 2
+      },
+      "src/core/aerial_triangulation/preparation/ReconstructionPrerequisiteReport.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/CameraIntrinsicPriorSanitizer.h": {
+        "QJsonObject": 2,
+        "QMap": 1,
+        "QString": 1,
+        "QStringList": 2
+      },
+      "src/core/aerial_triangulation/reconstruction/MarkerPriorLoader.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 3
+      },
+      "src/core/aerial_triangulation/reconstruction/RpcAerialTriangulationRunner.h": {
+        "QMap": 2,
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.h": {
+        "QMap": 1,
+        "QSize": 1,
+        "QString": 3,
+        "QStringList": 2
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmMatchDiagnostics.h": {
+        "QMap": 1,
+        "QPair": 4,
+        "QSet": 4,
+        "QString": 5,
+        "QStringList": 1,
+        "QStringLiteral": 6,
+        "QVector": 14,
+        "Q_UNUSED": 1
+      },
+      "src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h": {
+        "QDir": 1,
+        "QFileInfo": 1,
+        "QSet": 2,
+        "QString": 23,
+        "QStringList": 14,
+        "QStringLiteral": 7
+      },
+      "src/core/aerial_triangulation/reporting/AerialTriangulationResultWriter.h": {
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/reporting/QualityReportWriter.h": {
+        "QJsonArray": 2,
+        "QJsonObject": 3
+      },
+      "src/core/aerial_triangulation/search/AdaptiveFocalSearch.h": {
+        "QVector": 1
+      },
+      "src/core/aerial_triangulation/workflow/AerialTriangulationPipeline.h": {
+        "QString": 1
+      },
+      "src/core/aerial_triangulation/workflow/AerialTriangulationWorkflow.h": {
+        "QString": 1
+      },
+      "src/core/camera/CameraIntrinsicPrior.h": {
+        "QString": 3
+      },
+      "src/core/camera/ProjectCameraIO.h": {
+        "QJsonObject": 10,
+        "QString": 4
+      },
+      "src/core/camera_reference/io/CameraReferenceSetJson.h": {
+        "QJsonObject": 2,
+        "QString": 1
+      },
+      "src/core/camera_reference/io/CameraReferenceSetStore.h": {
+        "QString": 4
+      },
+      "src/core/camera_reference/model/CameraReferenceSet.h": {
+        "QDateTime": 4,
+        "QString": 5,
+        "QVector": 9
+      },
+      "src/core/camera_reference/model/CameraReferenceTypes.h": {
+        "QString": 34,
+        "QStringLiteral": 3
+      },
+      "src/core/control_points/commands/MarkerChangeSet.h": {
+        "QString": 11,
+        "QVector": 5
+      },
+      "src/core/control_points/detection/AprilTagDetector.h": {
+        "QImage": 2,
+        "QString": 1,
+        "QVector": 2
+      },
+      "src/core/control_points/detection/DetectionIntegrator.h": {
+        "QHash": 1,
+        "QString": 7,
+        "QVector": 3
+      },
+      "src/core/control_points/detection/DetectionMerger.h": {
+        "QVector": 2
+      },
+      "src/core/control_points/detection/DetectionReviewStore.h": {
+        "QDateTime": 3,
+        "QString": 9,
+        "QVector": 1,
+        "quint64": 1
+      },
+      "src/core/control_points/detection/MarkerDetector.h": {
+        "QImage": 2,
+        "QPointF": 1,
+        "QPolygonF": 1,
+        "QString": 2,
+        "QVector": 1
+      },
+      "src/core/control_points/detection/MarkerDetectorFactory.h": {
+        "QString": 1
+      },
+      "src/core/control_points/detection/NonCodedTargetDetector.h": {
+        "QImage": 2,
+        "QVector": 1
+      },
+      "src/core/control_points/geometry/MarkerGeometry.h": {
+        "QHash": 1,
+        "QPointF": 6,
+        "QSize": 1,
+        "QString": 4,
+        "QStringList": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/geometry/MarkerProjectionPredictor.h": {
+        "QVector": 2
+      },
+      "src/core/control_points/io/MarkerCsv.h": {
+        "QHash": 1,
+        "QString": 11,
+        "QStringLiteral": 1
+      },
+      "src/core/control_points/io/MarkerSetJson.h": {
+        "QJsonObject": 2,
+        "QString": 1
+      },
+      "src/core/control_points/io/MarkerSetStore.h": {
+        "QString": 5
+      },
+      "src/core/control_points/model/MarkerSet.h": {
+        "QDateTime": 4,
+        "QString": 7,
+        "QVector": 4
+      },
+      "src/core/control_points/model/MarkerSetValidator.h": {
+        "QString": 3,
+        "QVector": 1
+      },
+      "src/core/control_points/model/MarkerTypes.h": {
+        "QPointF": 1,
+        "QString": 18,
+        "QStringLiteral": 1,
+        "QVector": 1
+      },
+      "src/core/control_points/print/MarkerPdfWriter.h": {
+        "QString": 3
+      },
+      "src/core/control_points/print/MarkerSheetRenderer.h": {
+        "QImage": 2,
+        "QSizeF": 2,
+        "QString": 1,
+        "QVector": 2
+      },
+      "src/core/control_points/quality/MarkerQualityReport.h": {
+        "QVector": 1
+      },
+      "src/core/control_points/reference/CoordinateReference.h": {
+        "QString": 17
+      },
+      "src/core/image_matching/ImageFeaturePointFile.h": {
+        "QString": 8
+      },
+      "src/core/image_matching/ImageMatchFile.h": {
+        "QByteArray": 1,
+        "QString": 16
+      },
+      "src/core/image_matching/ImageMatchIndexFile.h": {
+        "QByteArray": 2,
+        "QString": 8
+      },
+      "src/core/image_matching/ImageMatchRepository.h": {
+        "QByteArray": 4,
+        "QString": 20,
+        "QStringList": 1
+      },
+      "src/core/image_matching/ImageMatchTypes.h": {
+        "QByteArray": 8,
+        "QString": 8
+      },
+      "src/core/image_matching/ImageMatchingAlgorithm.h": {
+        "QByteArray": 2,
+        "QString": 6
+      },
+      "src/core/image_matching/ImageMatchingRegistry.h": {
+        "QString": 4
+      },
+      "src/core/image_matching/lightglue/LightGlueFeatureBudget.h": {
+        "QVector": 2,
+        "Q_UNUSED": 1
+      },
+      "src/core/image_matching/loma_r/LoMaRTensorRtBackend.h": {
+        "QString": 2
+      },
+      "src/core/image_matching/plamatch_hct/PlaMatchHctAlgorithm.h": {
+        "QString": 4
+      },
+      "src/core/image_matching/plamatch_hct/PlaMatchHctFeatureCacheFile.h": {
+        "QString": 11
+      },
+      "src/core/image_matching/sift/SiftComputeBackend.h": {
+        "QString": 3
+      },
+      "src/core/inference/tensorrt/TensorRtBuildSupport.h": {
+        "QLatin1Char": 2,
+        "QString": 6,
+        "QStringList": 1,
+        "QStringLiteral": 1
+      },
+      "src/core/inference/tensorrt/TensorRtCapabilities.h": {
+        "QString": 3
+      },
+      "src/core/inference/tensorrt/TensorRtEngineBuilder.h": {
+        "QJsonObject": 1,
+        "QString": 12,
+        "QStringList": 1
+      },
+      "src/core/inference/tensorrt/TensorRtEngineCache.h": {
+        "QJsonObject": 4,
+        "QString": 19,
+        "QStringList": 1
+      },
+      "src/core/inference/tensorrt/TensorRtNetworkBuilder.h": {
+        "QString": 4,
+        "QStringList": 1
+      },
+      "src/core/inference/tensorrt/TensorRtSession.h": {
+        "QString": 1
+      },
+      "src/core/inference/tensorrt/TensorRtTensorInfo.h": {
+        "QString": 5
+      },
+      "src/core/lidar/PlanetaryLaserJsonInternal.h": {
+        "QJsonObject": 2
+      },
+      "src/core/matchphototask/algorithm/MatchPhotosAlgorithmPlan.h": {
+        "QString": 9
+      },
+      "src/core/matchphototask/pair_selection/PairSelector.h": {
+        "QString": 1,
+        "QStringList": 2
+      },
+      "src/core/matchphototask/pair_selection/PairTypes.h": {
+        "QString": 11,
+        "QStringList": 2
+      },
+      "src/core/matchphototask/pair_selection/PlaMatchHctPairPreselector.h": {
+        "QMap": 3,
+        "QString": 6,
+        "QStringList": 2
+      },
+      "src/core/matchphototask/runtime/MatchPhotosFeatureCache.h": {
+        "QHash": 1,
+        "QString": 6
+      },
+      "src/core/matchphototask/runtime/MatchPhotosMaskSupport.h": {
+        "QString": 4
+      },
+      "src/core/matchphototask/runtime/MatchPhotosParallelism.h": {
+        "QString": 2
+      },
+      "src/core/matchphototask/runtime/MatchPhotosRuntime.h": {
+        "QJsonObject": 4,
+        "QString": 23,
+        "QStringList": 2
+      },
+      "src/core/matchphototask/stages/FeaturePreparationQueue.h": {
+        "QString": 7
+      },
+      "src/core/matchphototask/stages/GeometryVerifyStage.h": {
+        "QByteArray": 1,
+        "QString": 2
+      },
+      "src/core/matchphototask/stages/GuidedMatchPolicy.h": {
+        "QHash": 1,
+        "QString": 3
+      },
+      "src/core/matchphototask/stages/MatchingStage.h": {
+        "QByteArray": 2
+      },
+      "src/core/matchphototask/task/MatchPhotosContext.h": {
+        "QMap": 3,
+        "QString": 10
+      },
+      "src/core/matchphototask/task/MatchPhotosOptions.h": {
+        "QLatin1String": 25,
+        "QString": 13,
+        "QStringLiteral": 16
+      },
+      "src/core/matchphototask/task/MatchPhotosResult.h": {
+        "QJsonObject": 5,
+        "QString": 13,
+        "QStringList": 1
+      },
+      "src/core/matchphototask/tie_points/TiePointTrackManager.h": {
+        "QJsonObject": 1,
+        "QString": 2
+      },
+      "src/core/mesh/CameraTextureMapperV4.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/DepthConstrainedSurfaceRefiner.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/DepthMapMeshBuilder.h": {
+        "QString": 32,
+        "QStringList": 1,
+        "QVector": 3
+      },
+      "src/core/mesh/DepthMeshCompleteness.h": {
+        "QVector": 2
+      },
+      "src/core/mesh/DepthTsdfFinalQualityGate.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/DepthTsdfRecoveryTransaction.h": {
+        "QJsonObject": 1,
+        "QString": 1
+      },
+      "src/core/mesh/DepthTsdfSurfaceBuilder.h": {
+        "QJsonArray": 3,
+        "QJsonObject": 2,
+        "QString": 11,
+        "QVector": 18
+      },
+      "src/core/mesh/MeshAcquisitionGapReport.h": {
+        "QJsonObject": 1,
+        "QStringList": 1
+      },
+      "src/core/mesh/MeshBoundaryAttribution.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mesh/MeshColorizer.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/MeshFaceColorOptimizer.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/ModelOutputPolicy.h": {
+        "QJsonObject": 1,
+        "QString": 20
+      },
+      "src/core/mesh/ModelWorkflowService.h": {
+        "QJsonObject": 10,
+        "QString": 26,
+        "QStringLiteral": 1,
+        "qint64": 2
+      },
+      "src/core/mesh/RecoveredModelBuilder.h": {
+        "QJsonObject": 2,
+        "QJsonValue": 1,
+        "QString": 3
+      },
+      "src/core/mesh/RpcPlaneSweepModelBuilder.h": {
+        "QJsonObject": 2,
+        "QString": 1
+      },
+      "src/core/mesh/TextureAtlasPacker.h": {
+        "QRect": 1,
+        "QSize": 1,
+        "QVector": 2
+      },
+      "src/core/mesh/TextureAtlasPackingInternal.h": {
+        "QVector": 4
+      },
+      "src/core/mesh/TextureMapper.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/TextureMappingV4Internal.h": {
+        "QPointF": 5,
+        "QRect": 3,
+        "QVector": 8
+      },
+      "src/core/mesh/VisualHullDepthRefiner.h": {
+        "QVector": 1
+      },
+      "src/core/mesh/recovered_model/RecoveredModelColorizer.h": {
+        "QJsonObject": 2,
+        "QString": 1
+      },
+      "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthCompletenessMetrics.h": {
+        "QJsonObject": 2
+      },
+      "src/core/mvs/DepthCrossViewHoleRepair.h": {
+        "QJsonObject": 2
+      },
+      "src/core/mvs/DepthEvidenceConfidence.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthFrameQualificationPolicy.h": {
+        "QString": 14,
+        "QStringLiteral": 8
+      },
+      "src/core/mvs/DepthFrameUtils.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 5,
+        "QString": 38,
+        "QStringList": 1
+      },
+      "src/core/mvs/DepthGapTargetedRecovery.h": {
+        "QJsonObject": 1,
+        "QString": 2
+      },
+      "src/core/mvs/DepthGeometryConsistency.h": {
+        "QJsonObject": 2,
+        "QString": 1
+      },
+      "src/core/mvs/DepthLayerReliability.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthMapGenerator.h": {
+        "QFuture": 1,
+        "QJsonObject": 10,
+        "QObject": 2,
+        "QSharedPointer": 25,
+        "QString": 15,
+        "Q_DECLARE_METATYPE": 3,
+        "Q_INVOKABLE": 1,
+        "Q_OBJECT": 1
+      },
+      "src/core/mvs/DepthMissingReason.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthProvenance.h": {
+        "QJsonObject": 1
+      },
+      "src/core/mvs/DepthResidualReestimation.h": {
+        "QJsonObject": 1,
+        "QString": 3
+      },
+      "src/core/mvs/GpuDeviceLease.h": {
+        "QLockFile": 1,
+        "QString": 2
+      },
+      "src/core/mvs/MvsQualityReport.h": {
+        "QJsonObject": 2
+      },
+      "src/core/mvs/MvsSourcePlanner.h": {
+        "QJsonObject": 3
+      },
+      "src/core/mvs/MvsStageSnapshot.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 2,
+        "QString": 9
+      },
+      "src/core/mvs/MvsWorkspaceManifest.h": {
+        "QJsonArray": 2,
+        "QJsonObject": 22,
+        "QString": 48,
+        "QStringList": 1,
+        "QVector": 5,
+        "qint64": 1
+      },
+      "src/core/mvs/MvsWorkspaceReplay.h": {
+        "QJsonObject": 1,
+        "QString": 5
+      },
+      "src/core/mvs/PointCloudArtifactIO.h": {
+        "QString": 2
+      },
+      "src/core/mvs/RecoveredModelInput.h": {
+        "QString": 2
+      },
+      "src/core/project_workflows/MvsSourcePairQualityLoader.h": {
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/project_workflows/PointCloudInputPreparation.h": {
+        "QString": 3
+      },
+      "src/core/project_workflows/PointCloudWorkflowConfig.h": {
+        "QJsonObject": 2,
+        "QString": 12,
+        "QStringLiteral": 3
+      },
+      "src/core/project_workflows/ProjectResourceCleanup.h": {
+        "QString": 4,
+        "QStringList": 6
+      },
+      "src/core/project_workflows/ProjectResourceCleanupArtifacts.h": {
+        "QJsonObject": 2,
+        "QJsonValue": 1,
+        "QString": 19,
+        "QStringList": 5
+      },
+      "src/core/project_workflows/ProjectResourceCleanupPlan.h": {
+        "QJsonObject": 2,
+        "QString": 10,
+        "QStringList": 6
+      },
+      "src/core/project_workflows/ProjectResourceCleanupTransaction.h": {
+        "QByteArray": 2,
+        "QJsonObject": 2,
+        "QString": 30,
+        "QStringList": 3,
+        "QVector": 1
+      },
+      "src/core/project_workflows/ProjectWorkflowOperations.h": {
+        "QJsonObject": 13,
+        "QString": 25,
+        "QStringList": 2
+      },
+      "src/core/project_workflows/ReferenceDatasetWorkflow.h": {
+        "QJsonObject": 1,
+        "QString": 15,
+        "QStringLiteral": 3
+      },
+      "src/core/qc/DemDifference.h": {
+        "QString": 2
+      },
+      "src/core/qc/ModelGeometryComparator.h": {
+        "QString": 2
+      },
+      "src/core/qc/ModelImageQualityEvaluator.h": {
+        "QJsonObject": 1,
+        "QString": 3,
+        "QStringList": 2,
+        "QVector": 3
+      },
+      "src/core/qc/ModelImageQualityTypes.h": {
+        "QString": 19,
+        "QVector": 1
+      },
+      "src/core/qc/PointCloudAlignment.h": {
+        "QString": 2
+      },
+      "src/core/qc/ProcessingBaselineManager.h": {
+        "QJsonObject": 13,
+        "QString": 12,
+        "QStringList": 2
+      },
+      "src/core/qc/ReconstructionQualityReport.h": {
+        "QJsonObject": 4,
+        "QString": 5
+      },
+      "src/core/qc/SurveyControlReport.h": {
+        "QJsonObject": 2
+      },
+      "src/core/sfm/TriangulationService.h": {
+        "QJsonObject": 2,
+        "QString": 3,
+        "QStringList": 1
+      },
+      "src/core/sfm/project/BaInputBuilder.h": {
+        "QHash": 1,
+        "QJsonObject": 2,
+        "QMap": 1,
+        "QString": 3,
+        "QStringList": 2,
+        "QVector": 2
+      },
+      "src/core/sfm/project/MarkerBaAdapter.h": {
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/sfm/project/ProjectMatchInputReader.h": {
+        "QJsonObject": 2,
+        "QMap": 4,
+        "QString": 7,
+        "QStringList": 3
+      },
+      "src/core/sfm/project/SfmQualityJsonSerializer.h": {
+        "QJsonObject": 1
+      },
+      "src/core/sfm/project/SurveyControlBaAdapter.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QString": 1
+      },
+      "src/core/stereo_dem/RpcDomGenerator.h": {
+        "QJsonObject": 1,
+        "QString": 4,
+        "QStringList": 1
+      },
+      "src/core/stereo_dem/RpcGeospatialSupport.h": {
+        "QString": 5
+      },
+      "src/core/stereo_dem/RpcStereoDemGenerator.h": {
+        "QJsonObject": 1,
+        "QString": 5
+      },
+      "src/core/terrain/DemDomIO.h": {
+        "QString": 22
+      },
+      "src/core/terrain/DemDomTypes.h": {
+        "QMap": 1,
+        "QString": 8
+      },
+      "src/core/terrain/DemGenerator.h": {
+        "QString": 2
+      },
+      "src/core/terrain/DemGridAggregator.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DemMosaic.h": {
+        "QString": 1
+      },
+      "src/core/terrain/DomGenerator.h": {
+        "QString": 2,
+        "QStringList": 1
+      },
+      "src/core/terrain/GlobalTerrainReportRenderer.h": {
+        "QString": 2
+      },
+      "src/core/terrain/ObjMtlLoader.h": {
+        "QString": 2
+      },
+      "src/core/terrain/OrthoGenerationOptions.h": {
+        "QJsonObject": 2,
+        "QString": 8,
+        "qint64": 1
+      },
+      "src/core/terrain/OrthoProjector.h": {
+        "QJsonObject": 1,
+        "QString": 7,
+        "QStringList": 1,
+        "qint64": 3
+      },
+      "src/core/terrain/OrthoProjectorGpu.h": {
+        "QString": 2,
+        "qint64": 1
+      },
+      "src/core/terrain/OrthoProjectorInternal.h": {
+        "QString": 1,
+        "qint64": 1
+      },
+      "src/core/terrain/PointCloudDomGenerator.h": {
+        "QJsonObject": 1,
+        "QString": 3,
+        "qint64": 3
+      },
+      "src/core/terrain/SmallBodyGlobalProductGenerator.h": {
+        "QString": 6
+      },
+      "src/core/terrain/SmallBodyGlobalProducts.h": {
+        "QJsonObject": 1,
+        "QString": 14,
+        "QStringLiteral": 3
+      },
+      "src/core/terrain/SmallBodyMeshRaycaster.h": {
+        "QString": 2
+      },
+      "src/core/terrain/TerrainComputeBackend.h": {
+        "QString": 7,
+        "QStringLiteral": 1
+      },
+      "src/core/terrain/TerrainPipeline.h": {
+        "QJsonObject": 14,
+        "QString": 30,
+        "QStringList": 3
+      },
+      "src/core/terrain/TerrainProductManifest.h": {
+        "QJsonObject": 4,
+        "QString": 19,
+        "QVector": 3
+      },
+      "src/core/terrain/projection/AsteroidProjection.h": {
+        "QString": 1
+      }
+    },
+    "runtime_qt_dependency": {
+      "src/core/mvs/DepthMapGenerator.cpp": {
+        "include:QtConcurrent/QtConcurrent": 1,
+        "symbol:QObject": 2,
+        "symbol:QtConcurrent": 1
+      },
+      "src/core/mvs/DepthMapGenerator.h": {
+        "include:QFuture": 1,
+        "include:QObject": 1,
+        "symbol:QFuture": 1,
+        "symbol:QObject": 2,
+        "symbol:Q_OBJECT": 1
+      },
+      "src/core/project_workflows/ProjectResourceCleanup.cpp": {
+        "symbol:QObject": 2
+      }
+    }
+  },
+  "schema_version": 1
+}

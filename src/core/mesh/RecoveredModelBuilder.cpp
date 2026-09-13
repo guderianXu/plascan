@@ -9,12 +9,16 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace xjw::mesh
@@ -57,6 +61,355 @@ namespace xjw::mesh
             }
             metmodel::recompute_normals(mesh);
             return mesh;
+        }
+
+        struct PartitionedPresetResult
+        {
+            metmodel::Mesh mesh;
+            std::vector<float> vertexScale;
+            std::vector<metmodel::RecoveredMeshTrimAttribute> vertexAttributes;
+            metmodel::QemPresetDecimationStats stats;
+            std::size_t localParts = 0U;
+        };
+
+        PartitionedPresetResult decimatePartitionedPreset(const metmodel::RecoveredOocMultilevelModelOutput& model,
+                                                          float maximumScore,
+                                                          const std::function<bool()>& isCancelled)
+        {
+            if (model.marching_mini_parts.empty() ||
+                model.raw_vertex_mini_boundary_mask.size() != model.raw_mesh.vertices.size())
+                throw std::runtime_error("Recovered preset QEM requires complete marching mini-part metadata");
+
+            struct LocalResult
+            {
+                metmodel::Mesh mesh;
+                std::vector<float> scale;
+                std::vector<metmodel::RecoveredMeshTrimAttribute> attributes;
+                std::vector<std::uint8_t> boundary;
+                metmodel::QemDecimationStats stats;
+            };
+            std::vector<std::optional<LocalResult>> local(model.marching_mini_parts.size());
+            std::atomic<std::size_t> next{0U};
+            std::atomic<bool> stopped{false};
+            std::exception_ptr failure;
+            std::mutex failureMutex;
+            const std::size_t workerCount = std::min<std::size_t>(4U, local.size());
+            std::vector<std::thread> workers;
+            workers.reserve(workerCount);
+            for (std::size_t worker = 0U; worker != workerCount; ++worker)
+            {
+                workers.emplace_back(
+                    [&]
+                    {
+                        while (!stopped.load(std::memory_order_relaxed))
+                        {
+                            const std::size_t index = next.fetch_add(1U, std::memory_order_relaxed);
+                            if (index >= local.size())
+                                return;
+                            try
+                            {
+                                if (isCancelled && isCancelled())
+                                    throw std::runtime_error("Recovered model cancelled");
+                                const auto& part = model.marching_mini_parts[index];
+                                LocalResult result;
+                                const std::size_t vertexCount = part.vertex_end - part.vertex_begin;
+                                result.mesh.vertices.resize(vertexCount);
+                                result.scale.assign(model.raw_mesh.vertex_scale.begin() +
+                                                        static_cast<std::ptrdiff_t>(part.vertex_begin),
+                                                    model.raw_mesh.vertex_scale.begin() +
+                                                        static_cast<std::ptrdiff_t>(part.vertex_end));
+                                result.attributes.assign(model.raw_mesh.vertex_trim_attribute.begin() +
+                                                             static_cast<std::ptrdiff_t>(part.vertex_begin),
+                                                         model.raw_mesh.vertex_trim_attribute.begin() +
+                                                             static_cast<std::ptrdiff_t>(part.vertex_end));
+                                const std::vector<std::uint8_t> inputBoundary(
+                                    model.raw_vertex_mini_boundary_mask.begin() +
+                                        static_cast<std::ptrdiff_t>(part.vertex_begin),
+                                    model.raw_vertex_mini_boundary_mask.begin() +
+                                        static_cast<std::ptrdiff_t>(part.vertex_end));
+                                for (std::size_t vertex = 0U; vertex != vertexCount; ++vertex)
+                                {
+                                    const auto& source = model.raw_mesh.vertices[part.vertex_begin + vertex];
+                                    result.mesh.vertices[vertex].position = {
+                                        source.position[0], source.position[1], source.position[2]};
+                                }
+                                result.mesh.faces.reserve(part.face_end - part.face_begin);
+                                for (std::size_t face = part.face_begin; face != part.face_end; ++face)
+                                {
+                                    metmodel::Face outputFace;
+                                    for (std::size_t corner = 0U; corner != 3U; ++corner)
+                                    {
+                                        const std::size_t source = model.raw_mesh.triangles[face].vertices[corner];
+                                        if (source < part.vertex_begin || source >= part.vertex_end)
+                                            throw std::runtime_error(
+                                                "Recovered mini-part face crosses its vertex range");
+                                        outputFace.vertices[corner] = source - part.vertex_begin;
+                                    }
+                                    result.mesh.faces.push_back(outputFace);
+                                }
+                                if (!result.mesh.vertices.empty() && !result.mesh.faces.empty())
+                                {
+                                    metmodel::recompute_normals(result.mesh);
+                                    std::array<double, 3> sum{};
+                                    for (const auto& vertex : result.mesh.vertices)
+                                    {
+                                        sum[0] += vertex.position.x;
+                                        sum[1] += vertex.position.y;
+                                        sum[2] += vertex.position.z;
+                                    }
+                                    std::array<float, 3> center{};
+                                    for (std::size_t axis = 0U; axis != 3U; ++axis)
+                                        center[axis] = static_cast<float>(sum[axis] / result.mesh.vertices.size());
+                                    for (auto& vertex : result.mesh.vertices)
+                                    {
+                                        vertex.position.x = static_cast<float>(vertex.position.x) - center[0];
+                                        vertex.position.y = static_cast<float>(vertex.position.y) - center[1];
+                                        vertex.position.z = static_cast<float>(vertex.position.z) - center[2];
+                                    }
+                                    std::vector<std::uint32_t> compactSources;
+                                    result.stats = metmodel::decimate_mesh_qem_mode3_threshold(result.mesh,
+                                                                                               maximumScore,
+                                                                                               result.scale,
+                                                                                               nullptr,
+                                                                                               &result.attributes,
+                                                                                               isCancelled,
+                                                                                               &result.scale,
+                                                                                               &compactSources);
+                                    for (auto& vertex : result.mesh.vertices)
+                                    {
+                                        vertex.position.x = static_cast<float>(vertex.position.x) + center[0];
+                                        vertex.position.y = static_cast<float>(vertex.position.y) + center[1];
+                                        vertex.position.z = static_cast<float>(vertex.position.z) + center[2];
+                                    }
+                                    result.boundary.resize(compactSources.size(), 0U);
+                                    for (std::size_t compact = 0U; compact != compactSources.size(); ++compact)
+                                    {
+                                        if (compactSources[compact] < inputBoundary.size())
+                                            result.boundary[compact] = inputBoundary[compactSources[compact]];
+                                    }
+                                }
+                                else
+                                {
+                                    result.stats.input_vertices = result.stats.output_vertices =
+                                        result.mesh.vertices.size();
+                                    result.stats.input_faces = result.stats.output_faces = result.mesh.faces.size();
+                                    result.boundary = inputBoundary;
+                                }
+                                local[index] = std::move(result);
+                            }
+                            catch (...)
+                            {
+                                std::lock_guard lock(failureMutex);
+                                if (!failure)
+                                    failure = std::current_exception();
+                                stopped.store(true, std::memory_order_relaxed);
+                            }
+                        }
+                    });
+            }
+            for (auto& worker : workers)
+                worker.join();
+            if (failure)
+                std::rethrow_exception(failure);
+
+            PartitionedPresetResult output;
+            output.localParts = local.size();
+            struct JoinedPart
+            {
+                metmodel::OocMarchingWorkCell root;
+                std::size_t vertexBegin{};
+                std::size_t vertexEnd{};
+            };
+            std::vector<JoinedPart> parts;
+            std::vector<std::uint8_t> boundary;
+            for (std::size_t index = 0U; index != local.size(); ++index)
+            {
+                if (!local[index])
+                    throw std::runtime_error("Recovered partitioned QEM worker omitted a result");
+                LocalResult& result = *local[index];
+                const std::size_t vertexBegin = output.mesh.vertices.size();
+                output.stats.main.input_vertices += result.stats.input_vertices;
+                output.stats.main.input_faces += result.stats.input_faces;
+                output.stats.main.output_vertices += result.stats.output_vertices;
+                output.stats.main.output_faces += result.stats.output_faces;
+                output.stats.main.accepted_collapses += result.stats.accepted_collapses;
+                output.stats.main.stale_candidates += result.stats.stale_candidates;
+                output.stats.main.topology_rejections += result.stats.topology_rejections;
+                output.stats.main.normal_rejections += result.stats.normal_rejections;
+                output.mesh.vertices.insert(
+                    output.mesh.vertices.end(), result.mesh.vertices.begin(), result.mesh.vertices.end());
+                output.vertexScale.insert(output.vertexScale.end(), result.scale.begin(), result.scale.end());
+                output.vertexAttributes.insert(
+                    output.vertexAttributes.end(), result.attributes.begin(), result.attributes.end());
+                boundary.insert(boundary.end(), result.boundary.begin(), result.boundary.end());
+                for (metmodel::Face face : result.mesh.faces)
+                {
+                    for (std::size_t& vertex : face.vertices)
+                        vertex += vertexBegin;
+                    output.mesh.faces.push_back(face);
+                }
+                parts.push_back({model.marching_mini_parts[index].root, vertexBegin, output.mesh.vertices.size()});
+            }
+
+            const auto bounds = [&](const JoinedPart& part)
+            {
+                const std::uint32_t shift = model.marching_maximum_level - part.root.level;
+                return std::array<std::array<std::uint32_t, 3>, 2>{
+                    std::array<std::uint32_t, 3>{part.root.x << shift, part.root.y << shift, part.root.z << shift},
+                    std::array<std::uint32_t, 3>{
+                        (part.root.x + 1U) << shift, (part.root.y + 1U) << shift, (part.root.z + 1U) << shift}};
+            };
+            struct Neighbor
+            {
+                std::size_t part{};
+                std::uint8_t mask{};
+            };
+            std::vector<std::vector<Neighbor>> neighbors(parts.size());
+            for (std::size_t left = 0U; left != parts.size(); ++left)
+            {
+                const auto leftBounds = bounds(parts[left]);
+                for (std::size_t right = left + 1U; right != parts.size(); ++right)
+                {
+                    const auto rightBounds = bounds(parts[right]);
+                    std::uint8_t leftMask = 0U;
+                    std::uint8_t rightMask = 0U;
+                    for (std::size_t axis = 0U; axis != 3U; ++axis)
+                    {
+                        const std::size_t a = (axis + 1U) % 3U;
+                        const std::size_t b = (axis + 2U) % 3U;
+                        const bool overlaps =
+                            leftBounds[1][a] >= rightBounds[0][a] && rightBounds[1][a] >= leftBounds[0][a] &&
+                            leftBounds[1][b] >= rightBounds[0][b] && rightBounds[1][b] >= leftBounds[0][b];
+                        if (!overlaps)
+                            continue;
+                        if (leftBounds[0][axis] == rightBounds[1][axis])
+                        {
+                            leftMask |= static_cast<std::uint8_t>(1U << (2U * axis));
+                            rightMask |= static_cast<std::uint8_t>(1U << (2U * axis + 1U));
+                        }
+                        else if (leftBounds[1][axis] == rightBounds[0][axis])
+                        {
+                            leftMask |= static_cast<std::uint8_t>(1U << (2U * axis + 1U));
+                            rightMask |= static_cast<std::uint8_t>(1U << (2U * axis));
+                        }
+                    }
+                    if (leftMask != 0U)
+                    {
+                        neighbors[left].push_back({right, leftMask});
+                        neighbors[right].push_back({left, rightMask});
+                    }
+                }
+            }
+
+            std::vector<std::uint32_t> parent(output.mesh.vertices.size());
+            std::iota(parent.begin(), parent.end(), 0U);
+            const auto distance = [&](std::size_t a, std::size_t b)
+            {
+                const auto& left = output.mesh.vertices[a].position;
+                const auto& right = output.mesh.vertices[b].position;
+                const float dx = static_cast<float>(right.x - left.x);
+                const float dy = static_cast<float>(right.y - left.y);
+                const float dz = static_cast<float>(right.z - left.z);
+                return static_cast<float>(static_cast<float>(dx * dx + dy * dy) + dz * dz);
+            };
+            for (std::size_t partIndex = 0U; partIndex != parts.size(); ++partIndex)
+            {
+                for (std::size_t vertex = parts[partIndex].vertexBegin; vertex != parts[partIndex].vertexEnd; ++vertex)
+                {
+                    if (boundary[vertex] == 0U)
+                        continue;
+                    float bestDistance = std::numeric_limits<float>::max();
+                    for (const Neighbor& neighbor : neighbors[partIndex])
+                    {
+                        if ((boundary[vertex] & neighbor.mask) == 0U)
+                            continue;
+                        for (std::size_t candidate = parts[neighbor.part].vertexBegin;
+                             candidate != parts[neighbor.part].vertexEnd;
+                             ++candidate)
+                        {
+                            if (boundary[candidate] == 0U)
+                                continue;
+                            const float value = distance(vertex, candidate);
+                            if (value < bestDistance)
+                            {
+                                bestDistance = value;
+                                parent[vertex] = static_cast<std::uint32_t>(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+            const auto nearest = parent;
+            std::iota(parent.begin(), parent.end(), 0U);
+            const auto findRoot = [&](auto&& self, std::uint32_t vertex) -> std::uint32_t
+            {
+                if (parent[vertex] == vertex)
+                    return vertex;
+                parent[vertex] = self(self, parent[vertex]);
+                return parent[vertex];
+            };
+            for (std::size_t vertex = 0U; vertex != nearest.size(); ++vertex)
+            {
+                if (nearest[vertex] == vertex)
+                    continue;
+                const std::uint32_t a = findRoot(findRoot, static_cast<std::uint32_t>(vertex));
+                const std::uint32_t b = findRoot(findRoot, nearest[vertex]);
+                if (a != b)
+                    parent[std::max(a, b)] = std::min(a, b);
+            }
+            for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+                parent[vertex] = findRoot(findRoot, static_cast<std::uint32_t>(vertex));
+
+            std::vector<std::size_t> remap(parent.size(), std::numeric_limits<std::size_t>::max());
+            std::vector<std::uint8_t> componentBoundary(parent.size(), 0U);
+            for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+                if (boundary[vertex] != 0U)
+                    componentBoundary[parent[vertex]] = 1U;
+            metmodel::Mesh joined;
+            std::vector<float> joinedScale;
+            std::vector<metmodel::RecoveredMeshTrimAttribute> joinedAttributes;
+            std::vector<std::uint8_t> joinedBoundary;
+            for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+            {
+                if (parent[vertex] != vertex)
+                    continue;
+                remap[vertex] = joined.vertices.size();
+                joined.vertices.push_back(output.mesh.vertices[vertex]);
+                joinedScale.push_back(output.vertexScale[vertex]);
+                joinedAttributes.push_back(output.vertexAttributes[vertex]);
+                joinedBoundary.push_back(componentBoundary[vertex]);
+            }
+            for (std::size_t vertex = 0U; vertex != parent.size(); ++vertex)
+                remap[vertex] = remap[parent[vertex]];
+            for (metmodel::Face face : output.mesh.faces)
+            {
+                for (std::size_t& vertex : face.vertices)
+                    vertex = remap[vertex];
+                if (face.vertices[0] != face.vertices[1] && face.vertices[1] != face.vertices[2] &&
+                    face.vertices[2] != face.vertices[0])
+                    joined.faces.push_back(face);
+            }
+            output.mesh = std::move(joined);
+            output.vertexScale = std::move(joinedScale);
+            output.vertexAttributes = std::move(joinedAttributes);
+            metmodel::recompute_normals(output.mesh);
+            const auto seam = metmodel::decimate_mesh_qem_mode3_preset(output.mesh,
+                                                                       maximumScore,
+                                                                       output.vertexScale,
+                                                                       output.vertexAttributes,
+                                                                       nullptr,
+                                                                       nullptr,
+                                                                       true,
+                                                                       joinedBoundary,
+                                                                       isCancelled);
+            output.stats.seam = seam.seam;
+            output.stats.boundary_vertices = seam.boundary_vertices;
+            output.stats.near_seam_vertices = seam.near_seam_vertices;
+            output.stats.seam_input_faces = seam.seam_input_faces;
+            output.stats.seam_center = seam.seam_center;
+            output.stats.output_vertices = output.mesh.vertices.size();
+            output.stats.output_faces = output.mesh.faces.size();
+            return output;
         }
 
         std::array<double, 15> regionValues(const metmodel::ReconstructionRegion& region)
@@ -181,13 +534,39 @@ namespace xjw::mesh
         }
         checkpoint(isCancelled, progress, "读取三层投票深度与模型相机…", 2);
         if (settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false) ||
-            settings.value(QStringLiteral("splitIntoBlocks")).toBool(false) ||
-            settings.value(QStringLiteral("interpolation")).toString(QStringLiteral("enabled")) !=
-                QStringLiteral("enabled"))
+            settings.value(QStringLiteral("splitIntoBlocks")).toBool(false))
         {
-            throw std::runtime_error(
-                "Recovered OOC currently requires interpolation=enabled, no volumetric masks, and a single part");
+            throw std::runtime_error("Recovered OOC requires no volumetric masks and a single part");
         }
+        const QString interpolation =
+            settings.value(QStringLiteral("interpolation")).toString(QStringLiteral("enabled"));
+        if (interpolation != QStringLiteral("disabled") && interpolation != QStringLiteral("enabled") &&
+            interpolation != QStringLiteral("extrapolated"))
+        {
+            throw std::runtime_error("Recovered interpolation must be disabled, enabled, or extrapolated");
+        }
+        const QString face_count_mode =
+            settings.value(QStringLiteral("faceCountMode")).toString(QStringLiteral("high"));
+        const std::optional<float> preset_maximum_score = [&]() -> std::optional<float>
+        {
+            if (face_count_mode == QStringLiteral("low"))
+            {
+                return metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::Low);
+            }
+            if (face_count_mode == QStringLiteral("medium"))
+            {
+                return metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::Medium);
+            }
+            if (face_count_mode == QStringLiteral("high"))
+            {
+                return metmodel::recovered_qem_preset_maximum_score(metmodel::RecoveredQemPreset::High);
+            }
+            if (face_count_mode == QStringLiteral("custom"))
+            {
+                return std::nullopt;
+            }
+            throw std::runtime_error("Recovered face-count mode must be low, medium, high, or custom");
+        }();
         xjw::mvs::GpuDeviceLeaseSet lease;
         QString lease_error;
         const auto gpu_identity = xjw::mvs::PatchMatchDepthEstimator::cudaDeviceIdentity(device);
@@ -199,6 +578,18 @@ namespace xjw::mesh
         metmodel::Scene scene;
         metmodel::RecoveredPatchMatchD4SceneOutput depth;
         xjw::mvs::readRecoveredModelInput(inputDirectory, scene, depth);
+        const QString quality =
+            settings.value(QStringLiteral("depthQualityProfile")).toString(QStringLiteral("medium"));
+        const std::uint32_t requested_downscale = quality == QStringLiteral("highest")  ? 1U
+                                                  : quality == QStringLiteral("high")   ? 2U
+                                                  : quality == QStringLiteral("medium") ? 4U
+                                                  : quality == QStringLiteral("low")    ? 8U
+                                                  : quality == QStringLiteral("lowest") ? 16U
+                                                                                        : 0U;
+        if (requested_downscale == 0U || requested_downscale != depth.base_downscale)
+        {
+            throw std::runtime_error("Recovered model quality does not match the completed depth batch");
+        }
         const auto expected_cameras = settings.value(QStringLiteral("recovered_expected_camera_count")).toInteger(-1);
         if (expected_cameras >= 0 && static_cast<std::size_t>(expected_cameras) != scene.cameras.size())
         {
@@ -241,8 +632,10 @@ namespace xjw::mesh
         const bool diagonal = settings.value(QStringLiteral("recovered_diagonal_scale")).toBool(true);
         input.diagonal_policy = diagonal ? metmodel::RecoveredOocDiagonalPolicy::DeterministicEnabled
                                          : metmodel::RecoveredOocDiagonalPolicy::DeterministicDisabled;
+        input.depth_downscale = depth.base_downscale;
+        input.stored_level_count = depth.stored_level_count;
         checkpoint(isCancelled, progress, "构造 OOC 深度与采样尺度金字塔…", 8);
-        auto pyramid = metmodel::build_recovered_d4_voting_to_ooc_bundle_mode0_consuming(scene, depth, input);
+        auto pyramid = metmodel::build_recovered_scaled_voting_to_ooc_bundle_mode0_consuming(scene, depth, input);
         depth = {};
         pyramid.ooc.bundle = {};
         // Compressed cache diagnostics are not needed by the in-process solver.
@@ -258,12 +651,25 @@ namespace xjw::mesh
         {
             maximum_level = std::max(maximum_level, static_cast<std::uint32_t>(node.level));
         }
-        const std::vector<std::uint32_t> levels =
-            planRecoveredSupportLevels(maximum_level, settings.value(QStringLiteral("recovered_support_levels")));
+        const QJsonValue requested_support_levels = settings.value(QStringLiteral("recovered_support_levels"));
+        std::vector<std::uint32_t> levels;
+        std::optional<metmodel::RecoveredOocSupportSchedule> default_support_schedule;
+        if (requested_support_levels.isUndefined() || requested_support_levels.isNull())
+        {
+            default_support_schedule = metmodel::select_recovered_ooc_support_schedule(weighted.balanced_nodes);
+            maximum_level = default_support_schedule->maximum_level;
+            levels = default_support_schedule->levels;
+        }
+        else
+        {
+            levels = planRecoveredSupportLevels(maximum_level, requested_support_levels);
+        }
         RecoveredModelResult result;
         result.diagnostics[QStringLiteral("actual_mesh_algorithm")] = QStringLiteral("recovered_ooc");
         result.diagnostics[QStringLiteral("fusion_backend")] = QStringLiteral("cuda");
         result.diagnostics[QStringLiteral("fusion_device_index")] = device;
+        result.diagnostics[QStringLiteral("recovered_depth_downscale")] = static_cast<int>(input.depth_downscale);
+        result.diagnostics[QStringLiteral("recovered_stored_level_count")] = static_cast<int>(input.stored_level_count);
         result.diagnostics[QStringLiteral("recovered_ooc_camera_pyramid_execution")] =
             pyramid.camera_pyramid_execution == metmodel::RecoveredOocCameraPyramidExecution::Parallel
                 ? QStringLiteral("parallel")
@@ -277,6 +683,17 @@ namespace xjw::mesh
             static_cast<double>(weighted.balanced_nodes.size());
         result.diagnostics[QStringLiteral("recovered_root_scale")] = weighted.root_scale;
         result.diagnostics[QStringLiteral("recovered_maximum_level")] = static_cast<int>(maximum_level);
+        if (default_support_schedule.has_value())
+        {
+            result.diagnostics[QStringLiteral("recovered_support_first_level")] =
+                static_cast<int>(default_support_schedule->first_level);
+            result.diagnostics[QStringLiteral("recovered_support_level_step")] =
+                static_cast<int>(default_support_schedule->level_step);
+            result.diagnostics[QStringLiteral("recovered_support_total_voxels")] =
+                static_cast<double>(default_support_schedule->total_voxels);
+            result.diagnostics[QStringLiteral("recovered_support_quantile_threshold")] =
+                static_cast<double>(default_support_schedule->maximum_quantile_threshold);
+        }
         QJsonArray stage_json;
         for (const auto level : levels)
         {
@@ -313,21 +730,42 @@ namespace xjw::mesh
                                                                        identity,
                                                                        static_cast<std::size_t>(device),
                                                                        cuda_stats,
-                                                                       fusion_parameters);
+                                                                       fusion_parameters,
+                                                                       preset_maximum_score.has_value());
         const double root_scale = weighted.root_scale;
         weighted = {};
         histogram = {};
-        auto mesh = makeMesh(model.raw_mesh);
-        if (mesh.vertices.empty() || mesh.faces.empty())
-        {
-            throw std::runtime_error("Recovered adaptive marching produced an empty mesh");
-        }
-        auto attributes = std::move(model.raw_mesh.vertex_trim_attribute);
-        auto scales = std::move(model.raw_mesh.vertex_scale);
-        result.diagnostics[QStringLiteral("recovered_raw_faces")] = static_cast<double>(mesh.faces.size());
-        model = {};
+        result.diagnostics[QStringLiteral("recovered_raw_faces")] =
+            static_cast<double>(model.raw_mesh.triangles.size());
         checkpoint(isCancelled, progress, "面积加权 QEM 简化…", 76);
-        if (targetFaces > 0)
+        metmodel::Mesh mesh;
+        std::vector<metmodel::RecoveredMeshTrimAttribute> attributes;
+        std::vector<float> scales;
+        if (preset_maximum_score.has_value())
+        {
+            auto partitioned = decimatePartitionedPreset(model, *preset_maximum_score, isCancelled);
+            mesh = std::move(partitioned.mesh);
+            attributes = std::move(partitioned.vertexAttributes);
+            scales = std::move(partitioned.vertexScale);
+            result.diagnostics[QStringLiteral("recovered_qem_preset_maximum_score")] =
+                static_cast<double>(*preset_maximum_score);
+            result.diagnostics[QStringLiteral("recovered_qem_local_parts")] =
+                static_cast<double>(partitioned.localParts);
+            result.diagnostics[QStringLiteral("recovered_qem_collapses")] = static_cast<double>(
+                partitioned.stats.main.accepted_collapses + partitioned.stats.seam.accepted_collapses);
+            result.diagnostics[QStringLiteral("recovered_qem_boundary_vertices")] =
+                static_cast<double>(partitioned.stats.boundary_vertices);
+        }
+        else
+        {
+            mesh = makeMesh(model.raw_mesh);
+            attributes = std::move(model.raw_mesh.vertex_trim_attribute);
+            scales = std::move(model.raw_mesh.vertex_scale);
+        }
+        model = {};
+        if (mesh.vertices.empty() || mesh.faces.empty())
+            throw std::runtime_error("Recovered adaptive marching produced an empty mesh");
+        if (!preset_maximum_score.has_value() && targetFaces > 0)
         {
             std::array<double, 3> sum{};
             for (const auto& vertex : mesh.vertices)
@@ -358,12 +796,27 @@ namespace xjw::mesh
                 vertex.position.z = static_cast<float>(static_cast<float>(vertex.position.z) + center[2]);
             }
         }
+        result.diagnostics[QStringLiteral("recovered_qem_mode")] = face_count_mode;
         checkpoint(isCancelled, progress, "修复反向三角形并按支持度裁剪…", 88);
         const auto repair = metmodel::fix_back_triangles_recovered(mesh);
         result.diagnostics[QStringLiteral("recovered_repair_passes")] = static_cast<double>(repair.passes);
         metmodel::assign_recovered_vertex_confidence(mesh, attributes);
-        const auto trim = metmodel::recover_mesh_trim_mask(mesh.faces, attributes, {1, 0.1F});
+        const metmodel::RecoveredMeshTrimParameters trim_parameters = [&]()
+        {
+            if (interpolation == QStringLiteral("disabled"))
+            {
+                return metmodel::RecoveredMeshTrimParameters{0, 0.0F};
+            }
+            if (interpolation == QStringLiteral("enabled"))
+            {
+                return metmodel::RecoveredMeshTrimParameters{1, 0.1F};
+            }
+            return metmodel::RecoveredMeshTrimParameters{2, 0.0F};
+        }();
+        const auto trim = metmodel::recover_mesh_trim_mask(mesh.faces, attributes, trim_parameters);
         metmodel::compact_mesh_recovered_trim(mesh, attributes, trim.final_keep);
+        result.diagnostics[QStringLiteral("effective_interpolation")] = interpolation;
+        result.diagnostics[QStringLiteral("recovered_mesh_cleanup_kind")] = trim_parameters.kind;
         const auto region = regionValues(scene.region);
         restoreWorld(mesh, root_scale, region);
         const double tolerance = static_cast<double>(static_cast<float>(root_scale)) /

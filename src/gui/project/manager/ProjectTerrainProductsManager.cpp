@@ -39,6 +39,24 @@ using xjw::gui::project::upsertMetaArrayRecordByPath;
 namespace
 {
 
+QString smallBodyGlobalStageText(xjw::SmallBodyGlobalStage stage)
+{
+    switch (stage)
+    {
+    case xjw::SmallBodyGlobalStage::LoadSurface:
+        return QStringLiteral("读取体固连表面模型");
+    case xjw::SmallBodyGlobalStage::BuildSpatialIndex:
+        return QStringLiteral("建立三角网 BVH");
+    case xjw::SmallBodyGlobalStage::RasterizeGlobalProducts:
+        return QStringLiteral("生成全球径向 DEM/DOM");
+    case xjw::SmallBodyGlobalStage::WriteProducts:
+        return QStringLiteral("写出全球 GeoTIFF");
+    case xjw::SmallBodyGlobalStage::Completed:
+        return QStringLiteral("全球 DEM/DOM 与报告完成");
+    }
+    return QStringLiteral("处理小天体全球 DEM/DOM");
+}
+
 QString normalizedAbsolutePath(const QString &path)
 {
     if (path.trimmed().isEmpty())
@@ -248,7 +266,7 @@ TerrainPipelineResult runSmallBodyGlobalProducts(
     const QString &projectRoot,
     const xjw::SmallBodyGlobalOptions &options,
     const std::atomic_bool *cancelFlag,
-    const xjw::TerrainPipeline::OrthoProgressCallback &progressCallback)
+    const xjw::SmallBodyProgressCallback &progressCallback)
 {
     TerrainPipelineResult result;
     const auto rollback_run = [&]()
@@ -578,12 +596,15 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
 
     QPointer<ProjectTerrainProductsManager> self(this);
     const auto progress_callback =
-        [self, cancel_flag, session, background_task_id](const QString &stage, int percent)
+        [self, cancel_flag, session, background_task_id](
+            const xjw::SmallBodyGlobalProgress &progress)
     {
         if (!self)
         {
             return;
         }
+        const QString stage = smallBodyGlobalStageText(progress.stage);
+        const int percent = progress.overallPercent;
         QMetaObject::invokeMethod(
             self.data(),
             [self, cancel_flag, session, stage, percent, background_task_id]()

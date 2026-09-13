@@ -2,7 +2,6 @@
 
 #include "result/OperationResult.h"
 
-#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -46,8 +45,6 @@ struct TerrainPipelineResult
     QJsonObject payload;
     QString error;
 };
-
-QString sparseOperationDisplayName(const QString &operation);
 
 int findLatestAtResultIndex(const QJsonObject &meta,
                             const QString &operation = QString());
@@ -100,7 +97,5 @@ bool runSparsePointRefine(const SparsePointContext &context,
                           const QString &outputDir,
                           SparsePointOperationResult *result,
                           QString *errorMessage);
-
-QJsonArray summarizeAtResults(const QJsonObject &meta);
 
 } // namespace xjw::core::project

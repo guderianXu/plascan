@@ -52,6 +52,24 @@ private:
     SignalHandler _previousTerminate = SIG_DFL;
 };
 
+QString smallBodyGlobalStageText(xjw::SmallBodyGlobalStage stage)
+{
+    switch (stage)
+    {
+    case xjw::SmallBodyGlobalStage::LoadSurface:
+        return QStringLiteral("读取体固连表面模型");
+    case xjw::SmallBodyGlobalStage::BuildSpatialIndex:
+        return QStringLiteral("建立三角网 BVH");
+    case xjw::SmallBodyGlobalStage::RasterizeGlobalProducts:
+        return QStringLiteral("生成全球径向 DEM/DOM");
+    case xjw::SmallBodyGlobalStage::WriteProducts:
+        return QStringLiteral("写出全球 GeoTIFF");
+    case xjw::SmallBodyGlobalStage::Completed:
+        return QStringLiteral("全球 DEM/DOM 与报告完成");
+    }
+    return QStringLiteral("处理小天体全球 DEM/DOM");
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -112,9 +130,12 @@ int main(int argc, char *argv[])
     QJsonObject result;
     QString error;
     ScopedCancellationSignals cancellation_signals;
-    const auto progress = [](const QString &stage, int percent)
+    const auto progress = [](const xjw::SmallBodyGlobalProgress &progressEvent)
     {
-        const QByteArray line = QStringLiteral("[%1%] %2\n").arg(percent).arg(stage).toUtf8();
+        const QByteArray line = QStringLiteral("[%1%] %2\n")
+                                    .arg(progressEvent.overallPercent)
+                                    .arg(smallBodyGlobalStageText(progressEvent.stage))
+                                    .toUtf8();
         std::fwrite(line.constData(), 1, static_cast<std::size_t>(line.size()), stderr);
         std::fflush(stderr);
     };

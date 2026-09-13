@@ -4869,9 +4869,8 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer* cb, SceneUniforms& 
         }
     };
 
-    const float point_diameter = _isTiePointCloud
-                                     ? qMax(2.4f, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
-                                     : _pointCloudPointSize;
+    const float point_diameter =
+        _isTiePointCloud ? xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode) : _pointCloudPointSize;
     uniforms.lightDirPointSize = {-0.45f, 0.70f, 0.70f, point_diameter * float(devicePixelRatioF())};
     const float pixel_ratio = float(devicePixelRatioF());
     const QSize viewport_size(qMax(1, qRound(float(width()) * pixel_ratio)),

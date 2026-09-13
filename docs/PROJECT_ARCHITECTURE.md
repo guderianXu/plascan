@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-09-04。
+行星表面摄影测量处理系统。最后更新: 2026-09-12。
 
 ## 顶层目录
 
@@ -97,6 +97,18 @@ common/
 ## 二、core/ — 核心算法库
 
 按模块组织，每个模块通过 `plascan_core_add_optional_module()` 注册到 `core/CMakeLists.txt`。
+
+### Core/GUI 依赖边界
+
+- `src/core` 不得包含 `src/gui`、Qt Widgets、对话框或消息框；核心算法通过数据结构和回调暴露结果、进度、
+  取消与错误，GUI 负责中文展示文案和控件状态。
+- 现存 core target 的 Qt 链接、头文件 Qt API，以及 `QObject`、`QFuture`、QtConcurrent 等运行时依赖由
+  `scripts/validation/core_boundary_baseline.json` 按 target、文件和符号精确冻结。新增依赖、跨文件搬移或
+  CMake 链接可见性升级都会由 `CoreBoundaryContractTest` 拒绝。
+- `scripts/validation/check_core_boundaries.py` 是边界检查入口；只有经过审查的迁移才可使用
+  `--write-baseline` 更新基线。减少历史依赖也需要同步刷新基线，使每次边界变化在评审中可见。
+- 项目格式需要保留的快照式展示字段由 `src/gui/project` 序列化适配层写入。核心工作流不生成中文操作名，
+  也不提供无消费者的展示摘要。
 
 ```
 core/
@@ -465,6 +477,7 @@ core/
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务；保留 PLY 几何并可写 OBJ/MTL/相机纹理图集
 ├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
 │   ├── DemDomTypes.h           # DEM/DOM 类型
+│   ├── SmallBodyGlobalProducts.h # 小天体全球产品与无本地化文本的阶段/进度事件
 │   ├── DemGridAggregator.h/cpp # mean/median/NMAD/P80/count/confidence/error weighted 聚合
 │   ├── DemMosaic.h/cpp         # CPU/CUDA/OpenCL 同网格多 tile DEM mosaic
 │   ├── TerrainProductManifest.h/cpp # DEM/DOM/error/count/confidence/coverage 产品记录
@@ -1571,3 +1584,5 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   South Building 默认复制工程元数据与共享影像，并用稀疏文件隔离大型派生产物，禁止 Agent 启动写工程工作流。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。
+- 小天体全球 DEM/DOM 核心只发布 `SmallBodyGlobalStage`、总进度和栅格行计数；GUI 与 CLI 各自在边界层
+  映射中文文案。GUI 在项目成果登记成功前最多显示 99%，登记完成后才发布 100%。

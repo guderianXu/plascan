@@ -19,7 +19,7 @@ namespace metmodel {
 namespace {
 
 constexpr std::array<char, 8> magic{'M', 'M', 'P', 'M', 'D', '4', '0', '1'};
-constexpr std::uint32_t format_version = 1U;
+constexpr std::uint32_t format_version = 2U;
 constexpr std::uint64_t maximum_elements = 1ULL << 32U;
 std::atomic<std::uint64_t> temporary_sequence{0U};
 
@@ -113,13 +113,29 @@ bool write_recovered_patchmatch_store_camera(
         }
         const std::size_t groups =
             (camera.ranked_neighbor_camera_indices.size() + 7U) / 8U;
-        for (std::size_t level = 0; level < 3U; ++level) {
+        if ((camera.base_downscale != 1U && camera.base_downscale != 2U && camera.base_downscale != 4U &&
+             camera.base_downscale != 8U && camera.base_downscale != 16U) ||
+            camera.stored_level_count != (camera.base_downscale == 16U ? 2U : 3U))
+        {
+            error = "PatchMatch store quality identity is invalid";
+            return false;
+        }
+        for (std::size_t level = 0; level < camera.stored_level_count; ++level)
+        {
             if (camera.depth_levels[level].empty() ||
                 camera.depth_levels[level].size() >
                     std::numeric_limits<std::size_t>::max() / groups ||
                 camera.packed_inlier_masks[level].size() !=
                     groups * camera.depth_levels[level].size()) {
                 error = "PatchMatch store level dimensions are invalid";
+                return false;
+            }
+        }
+        for (std::size_t level = camera.stored_level_count; level < 3U; ++level)
+        {
+            if (!camera.depth_levels[level].empty() || !camera.packed_inlier_masks[level].empty())
+            {
+                error = "PatchMatch store inactive level is not empty";
                 return false;
             }
         }
@@ -138,12 +154,14 @@ bool write_recovered_patchmatch_store_camera(
         }
         stream.write(magic.data(), static_cast<std::streamsize>(magic.size()));
         bool ok = stream && write_scalar(stream, format_version) &&
-            write_scalar(stream, static_cast<std::uint64_t>(camera.camera_index)) &&
-            write_scalar(stream, static_cast<std::uint64_t>(
-                camera.ranked_neighbor_camera_indices.size()));
+                  write_scalar(stream, static_cast<std::uint64_t>(camera.camera_index)) &&
+                  write_scalar(stream, camera.base_downscale) &&
+                  write_scalar(stream, static_cast<std::uint32_t>(camera.stored_level_count)) &&
+                  write_scalar(stream, static_cast<std::uint64_t>(camera.ranked_neighbor_camera_indices.size()));
         for (const std::size_t neighbor : camera.ranked_neighbor_camera_indices)
             ok = ok && write_scalar(stream, static_cast<std::uint64_t>(neighbor));
-        for (std::size_t level = 0; ok && level < 3U; ++level) {
+        for (std::size_t level = 0; ok && level < camera.stored_level_count; ++level)
+        {
             ok = write_vector(stream, std::span<const float>(camera.depth_levels[level])) &&
                  write_vector(stream, std::span<const std::uint8_t>(
                      camera.packed_inlier_masks[level]));
@@ -185,20 +203,26 @@ bool read_recovered_patchmatch_store_camera(
         std::array<char, 8> actual_magic{};
         std::uint32_t version = 0;
         std::uint64_t camera_index = 0;
+        std::uint32_t base_downscale = 0U;
+        std::uint32_t stored_level_count = 0U;
         stream.read(actual_magic.data(),
                     static_cast<std::streamsize>(actual_magic.size()));
         RecoveredPatchMatchD4PyramidOutput result;
         std::uint64_t neighbor_count = 0;
-        if (!stream || actual_magic != magic ||
-            !read_scalar(stream, version) || version != format_version ||
-            !read_scalar(stream, camera_index) ||
-            camera_index != expected_camera_index ||
-            !read_scalar(stream, neighbor_count) ||
-            neighbor_count > maximum_elements) {
+        if (!stream || actual_magic != magic || !read_scalar(stream, version) || version != format_version ||
+            !read_scalar(stream, camera_index) || camera_index != expected_camera_index ||
+            !read_scalar(stream, base_downscale) || !read_scalar(stream, stored_level_count) ||
+            (base_downscale != 1U && base_downscale != 2U && base_downscale != 4U && base_downscale != 8U &&
+             base_downscale != 16U) ||
+            stored_level_count != (base_downscale == 16U ? 2U : 3U) || !read_scalar(stream, neighbor_count) ||
+            neighbor_count > maximum_elements)
+        {
             error = "PatchMatch store header or identity is invalid";
             return false;
         }
         result.camera_index = expected_camera_index;
+        result.base_downscale = base_downscale;
+        result.stored_level_count = stored_level_count;
         result.ranked_neighbor_camera_indices.resize(
             static_cast<std::size_t>(neighbor_count));
         for (std::size_t& neighbor : result.ranked_neighbor_camera_indices) {
@@ -210,7 +234,8 @@ bool read_recovered_patchmatch_store_camera(
             }
             neighbor = static_cast<std::size_t>(encoded);
         }
-        for (std::size_t level = 0; level < 3U; ++level) {
+        for (std::size_t level = 0; level < result.stored_level_count; ++level)
+        {
             if (!read_vector(stream, result.depth_levels[level]) ||
                 !read_vector(stream, result.packed_inlier_masks[level])) {
                 error = "PatchMatch store payload or checksum is invalid";
@@ -223,7 +248,8 @@ bool read_recovered_patchmatch_store_camera(
             error = "PatchMatch store has no ranked neighbours";
             return false;
         }
-        for (std::size_t level = 0; level < 3U; ++level) {
+        for (std::size_t level = 0; level < result.stored_level_count; ++level)
+        {
             if (result.depth_levels[level].empty() ||
                 result.depth_levels[level].size() >
                     std::numeric_limits<std::size_t>::max() / groups ||

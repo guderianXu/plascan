@@ -721,6 +721,10 @@ TEST(CameraSceneRenderContractTest, PointScalarsAndSelectionHighlightStayOnGpu)
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("_highlightPointPipeline")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("renderModeFlags[2] = 1.0f")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("renderModeFlags[3] = 1.0f")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "? xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode)")));
+    EXPECT_FALSE(source.contains(QStringLiteral(
+        "qMax(2.4f, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))")));
     EXPECT_TRUE(source.contains(QStringLiteral("kMaximumCompactSelectionPoints")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "selection_region.bounds = region.bounds.normalized().intersected(QRectF(rect()))")));

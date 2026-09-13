@@ -40,6 +40,7 @@ namespace metmodel
         // accepted and silently ignored.
         std::span<const std::uint8_t> captured_diagonal_pixel_scale;
         std::uint32_t depth_downscale = 4U;
+        std::size_t stored_level_count = 3U;
         std::size_t workitem_size_cameras = 20U;
         std::size_t max_workgroup_size = 100U;
         bool volumetric_masks = false;
@@ -53,6 +54,7 @@ namespace metmodel
     {
         std::uint32_t abi_version = 1U;
         std::uint32_t depth_downscale = 4U;
+        std::size_t stored_level_count = 3U;
         RecoveredPatchMatchNoPriorPolicy no_prior_policy = RecoveredPatchMatchNoPriorPolicy::DeterministicZero;
         RecoveredOocDiagonalPolicy diagonal_policy = RecoveredOocDiagonalPolicy::DeterministicDisabled;
         bool volumetric_masks = false;
@@ -93,6 +95,13 @@ namespace metmodel
     build_recovered_d4_voting_to_ooc_bundle_mode0_consuming(const Scene& scene,
                                                             RecoveredPatchMatchD4SceneOutput& recovered_depth,
                                                             const RecoveredD4VotingToOocMode0Input& input);
+
+    // Shared perspective bridge for High/Medium/Low/Lowest. The input quality
+    // and active level count must match the scene output identity.
+    [[nodiscard]] RecoveredD4VotingToOocMode0Output
+    build_recovered_scaled_voting_to_ooc_bundle_mode0_consuming(const Scene& scene,
+                                                                RecoveredPatchMatchD4SceneOutput& recovered_depth,
+                                                                const RecoveredD4VotingToOocMode0Input& input);
 
     // Per-camera accounting for the next recovered production boundary.  The
     // target consumes only the first saved depth/sample-scale pyramid level in

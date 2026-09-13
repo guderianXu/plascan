@@ -93,8 +93,9 @@ int main(int argc, char *argv[])
     settings.remove(QStringLiteral("surface_type"));
     settings.remove(QStringLiteral("interpolation"));
     settings.remove(QStringLiteral("calculateVertexColors"));
-    settings[QStringLiteral("modelGenerationContractRevision")] = 1;
+    settings[QStringLiteral("modelGenerationContractRevision")] = 2;
     settings[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    settings[QStringLiteral("interpolation")] = QStringLiteral("enabled");
     const QString face_mode = settings.value(QStringLiteral("faceCountMode")).toString();
     const int custom_faces = qBound(1, settings.value(QStringLiteral("faceCountCustom")).toInt(200000), 2000000);
     const int target_faces = face_mode == QStringLiteral("low")      ? 20000

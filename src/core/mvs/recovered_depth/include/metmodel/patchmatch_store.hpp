@@ -15,7 +15,7 @@ struct RecoveredPatchMatchStoreBatch {
     std::vector<std::size_t> closure;
 };
 
-// Stable, versioned per-camera persistence boundary for d4/d8/d16 PM products.
+// Stable, versioned per-camera persistence boundary for d2/d4/d8/d16 PM products.
 // Existing camera files are never overwritten. The reader validates identity,
 // sizes, checksums and exact EOF before publishing output.
 bool write_recovered_patchmatch_store_camera(

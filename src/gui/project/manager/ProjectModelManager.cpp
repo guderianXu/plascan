@@ -118,25 +118,60 @@ bool canonicalModelGenerationSettings(const QJsonObject &settings,
         canonical[QStringLiteral("source_path")] = rpc_images.at(0).toString().trimmed();
     }
 
-    for (const char *key : {"quality", "qualityProfile", "modelQualityProfile", "targetFaces",
-                            "splitIntoBlocks", "blockSizeMeters", "skipBoundaryBlocks", "saveAfterEachStep",
-                            "strictVolumetricMasks", "surface_type", "interpolation", "calculateVertexColors"})
+    for (const char* key : {"quality",
+                            "qualityProfile",
+                            "modelQualityProfile",
+                            "targetFaces",
+                            "splitIntoBlocks",
+                            "blockSizeMeters",
+                            "skipBoundaryBlocks",
+                            "saveAfterEachStep",
+                            "strictVolumetricMasks",
+                            "surface_type",
+                            "calculateVertexColors"})
     {
         canonical.remove(QLatin1String(key));
     }
-    canonical[QStringLiteral("modelGenerationContractRevision")] = 1;
-    canonical[QStringLiteral("depthQualityProfile")] = QStringLiteral("medium");
+    canonical[QStringLiteral("modelGenerationContractRevision")] = 2;
+    const QString depth_quality =
+        canonical.value(QStringLiteral("depthQualityProfile")).toString(QStringLiteral("medium")).trimmed().toLower();
+    if (depth_quality != QStringLiteral("highest") && depth_quality != QStringLiteral("high") &&
+        depth_quality != QStringLiteral("medium") && depth_quality != QStringLiteral("low") &&
+        depth_quality != QStringLiteral("lowest"))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("depthQualityProfile 必须为 lowest、low、medium、high 或 highest。");
+        }
+        return false;
+    }
+    canonical[QStringLiteral("depthQualityProfile")] = depth_quality;
+    const QString interpolation =
+        canonical.value(QStringLiteral("interpolation")).toString(QStringLiteral("enabled")).trimmed().toLower();
+    if (interpolation != QStringLiteral("disabled") && interpolation != QStringLiteral("enabled") &&
+        interpolation != QStringLiteral("extrapolated"))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("interpolation 必须为 disabled、enabled 或 extrapolated。");
+        }
+        return false;
+    }
+    canonical[QStringLiteral("interpolation")] = interpolation;
     const QString face_mode = canonical.value(QStringLiteral("faceCountMode")).toString();
     const int custom_faces = qBound(1, canonical.value(QStringLiteral("faceCountCustom")).toInt(200000), 2000000);
-    const int target_faces = face_mode == QStringLiteral("low")      ? 20000
-                             : face_mode == QStringLiteral("medium") ? 100000
-                             : face_mode == QStringLiteral("high")   ? 200000
-                                                                     : custom_faces;
-    canonical[QStringLiteral("faceCountMode")] =
-        face_mode == QStringLiteral("low") || face_mode == QStringLiteral("medium") ||
-                face_mode == QStringLiteral("high") || face_mode == QStringLiteral("custom")
-            ? face_mode
-            : QStringLiteral("high");
+    const QString effective_face_mode = face_mode.isEmpty() ? QStringLiteral("high") : face_mode;
+    if (effective_face_mode != QStringLiteral("low") && effective_face_mode != QStringLiteral("medium") &&
+        effective_face_mode != QStringLiteral("high") && effective_face_mode != QStringLiteral("custom"))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("faceCountMode 必须为 low、medium、high 或 custom。");
+        }
+        return false;
+    }
+    const int target_faces = effective_face_mode == QStringLiteral("custom") ? custom_faces : 0;
+    canonical[QStringLiteral("faceCountMode")] = effective_face_mode;
     canonical[QStringLiteral("faceCountCustom")] = custom_faces;
     canonical[QStringLiteral("simplifyTargetFaces")] = target_faces;
     canonical[QStringLiteral("source_data")] = source_data;
@@ -692,7 +727,7 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
     modelRecord[QStringLiteral("source_path")] = sourcePath;
     modelRecord[QStringLiteral("source_label")] = settings.value(QStringLiteral("source_label")).toString();
     modelRecord[QStringLiteral("model_generation_contract_revision")] =
-        settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(1);
+        settings.value(QStringLiteral("modelGenerationContractRevision")).toInt(2);
     modelRecord[QStringLiteral("reconstruction_mode")] =
         taskResult.value(QStringLiteral("reconstruction_mode"))
             .toString(settings.value(QStringLiteral("reconstruction_mode")).toString());

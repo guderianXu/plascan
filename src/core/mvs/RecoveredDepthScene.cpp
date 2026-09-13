@@ -34,19 +34,49 @@ namespace xjw::mvs
                 *errorMessage = std::move(message);
             }
         }
+        std::uint32_t recoveredQualityDownscale(const std::string& profile)
+        {
+            if (profile == "highest" || profile == "ultra-high")
+            {
+                return 1U;
+            }
+            if (profile == "high")
+            {
+                return 2U;
+            }
+            if (profile == "medium")
+            {
+                return 4U;
+            }
+            if (profile == "low")
+            {
+                return 8U;
+            }
+            if (profile == "lowest")
+            {
+                return 16U;
+            }
+            throw std::invalid_argument("recovered depth quality must be highest, high, medium, low, or lowest");
+        }
+
+        FramePinholeCamera recoveredPublicCamera(const FramePinholeCamera& source, std::uint32_t downscale)
+        {
+            const auto original = source.normalizedForPositiveDepth();
+            const auto intrinsics = original.intrinsics();
+            const double scale = static_cast<double>(downscale);
+            auto result = original.scaledIntrinsics(1.0 / scale, 1.0 / scale);
+            result.setIntrinsics(intrinsics.focalY / scale,
+                                 intrinsics.focalY / scale,
+                                 intrinsics.principalX / scale,
+                                 intrinsics.principalY / scale);
+            result.setDistortion(FramePinholeCamera::Distortion{});
+            return result;
+        }
     } // namespace
 
     FramePinholeCamera recoveredPublicD4Camera(const FramePinholeCamera& source)
     {
-        const auto original = source.normalizedForPositiveDepth();
-        const auto intrinsics = original.intrinsics();
-        auto result = original.scaledIntrinsics(0.25, 0.25);
-        // Supplied depth.cpp::make_depth_camera_model: the published domain
-        // removes b1/b2 and distortion; principal points use direct division.
-        result.setIntrinsics(
-            intrinsics.focalY / 4.0, intrinsics.focalY / 4.0, intrinsics.principalX / 4.0, intrinsics.principalY / 4.0);
-        result.setDistortion(FramePinholeCamera::Distortion{});
-        return result;
+        return recoveredPublicCamera(source, 4U);
     }
 
     bool prepareRecoveredSourceMask(const CameraView& view, RecoveredSourceMask* result, std::string* errorMessage)
@@ -250,6 +280,7 @@ namespace xjw::mvs
                                 const SparseCloud& sparseCloud,
                                 int cudaDeviceIndex,
                                 const std::string& workspaceRoot,
+                                const std::string& qualityProfile,
                                 RecoveredDepthSceneResult* result,
                                 std::string* errorMessage)
     {
@@ -304,6 +335,16 @@ namespace xjw::mvs
                 return false;
             }
         }
+        std::uint32_t base_downscale = 4U;
+        try
+        {
+            base_downscale = recoveredQualityDownscale(qualityProfile);
+        }
+        catch (const std::exception& exception)
+        {
+            setError(errorMessage, exception.what());
+            return false;
+        }
         metmodel::RecoveredPatchMatchD4SceneOutput recovered;
         std::string recovered_error;
         const std::size_t device_index = static_cast<std::size_t>(std::max(0, cudaDeviceIndex));
@@ -315,7 +356,9 @@ namespace xjw::mvs
                                                               recovered,
                                                               recovered_error,
                                                               false,
-                                                              patchmatch_store_root))
+                                                              patchmatch_store_root,
+                                                              16U,
+                                                              base_downscale))
         {
             setError(errorMessage, std::move(recovered_error));
             return false;
@@ -328,11 +371,13 @@ namespace xjw::mvs
         {
             const std::size_t camera_index = references[ordinal];
             const auto& camera_output = recovered.cameras[ordinal];
-            const int width = (views[camera_index].imageWidth + 3) / 4;
-            const int height = (views[camera_index].imageHeight + 3) / 4;
+            const int width = (views[camera_index].imageWidth + static_cast<int>(base_downscale) - 1) /
+                              static_cast<int>(base_downscale);
+            const int height = (views[camera_index].imageHeight + static_cast<int>(base_downscale) - 1) /
+                               static_cast<int>(base_downscale);
             if (camera_output.public_depth.size() != static_cast<std::size_t>(width * height))
             {
-                setError(errorMessage, "recovered public depth dimensions do not match the d4 camera grid");
+                setError(errorMessage, "recovered public depth dimensions do not match the selected quality grid");
                 return false;
             }
             RecoveredDepthFrame frame;
@@ -340,7 +385,7 @@ namespace xjw::mvs
             frame.depth = cv::Mat(height, width, CV_32F, const_cast<float*>(camera_output.public_depth.data())).clone();
             if (camera_output.support_masks[0].size() != camera_output.public_depth.size())
             {
-                setError(errorMessage, "recovered public support dimensions do not match the d4 camera grid");
+                setError(errorMessage, "recovered public support dimensions do not match the selected quality grid");
                 return false;
             }
             frame.supportRegionMask =
@@ -391,7 +436,7 @@ namespace xjw::mvs
                 }
             }
             frame.photometricSourceMask.setTo(0, frame.validMask == 0);
-            frame.camera = recoveredPublicD4Camera(views[camera_index].camera);
+            frame.camera = recoveredPublicCamera(views[camera_index].camera, base_downscale);
             if (!views[camera_index].preparedValidMaskPath.empty())
             {
                 const std::string& prepared_source = views[camera_index].preparedValidMaskSource;
@@ -440,6 +485,7 @@ namespace xjw::mvs
         (void)sparseCloud;
         (void)cudaDeviceIndex;
         (void)workspaceRoot;
+        (void)qualityProfile;
         (void)result;
         setError(errorMessage, "recovered depth requires a CUDA build");
         return false;
