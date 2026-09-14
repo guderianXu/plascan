@@ -41,6 +41,18 @@ namespace
         EXPECT_NO_THROW(metmodel::make_depth_voting_perspective_calibration(camera, 1U, 0U));
     }
 
+    TEST(RecoveredModelReference, PatchMatchFinerSpeckleThresholdMatchesReferenceRecordIndex)
+    {
+        EXPECT_EQ(metmodel::patchmatch_finer_level_speckle_component_threshold(16U), 6U);
+        EXPECT_EQ(metmodel::patchmatch_finer_level_speckle_component_threshold(8U), 6U);
+        EXPECT_EQ(metmodel::patchmatch_finer_level_speckle_component_threshold(4U), 24U);
+        EXPECT_EQ(metmodel::patchmatch_finer_level_speckle_component_threshold(2U), 96U);
+        EXPECT_EQ(metmodel::patchmatch_finer_level_speckle_component_threshold(1U), 384U);
+        EXPECT_THROW(metmodel::patchmatch_finer_level_speckle_component_threshold(0U), std::invalid_argument);
+        EXPECT_THROW(metmodel::patchmatch_finer_level_speckle_component_threshold(3U), std::invalid_argument);
+        EXPECT_THROW(metmodel::patchmatch_finer_level_speckle_component_threshold(32U), std::invalid_argument);
+    }
+
     TEST(RecoveredModelReference, D1TilePlanMatchesBalancedReferenceSubdivision)
     {
         const auto south = metmodel::make_recovered_patchmatch_d1_tile_plan(3072U, 2304U);

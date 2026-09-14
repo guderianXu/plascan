@@ -3518,10 +3518,18 @@ namespace metmodel
             };
             if (outside(border_x_px, border_x_py) || outside(border_y_px, border_y_py))
                 return -1.0F;
-            float dx_x = __fdiv_rn(__fsub_rn(border_x_px, center_px), shift);
-            float dx_y = __fdiv_rn(__fsub_rn(border_x_py, center_py), shift);
-            float dy_x = __fdiv_rn(__fsub_rn(border_y_px, center_px), shift);
-            float dy_y = __fdiv_rn(__fsub_rn(border_y_py, center_py), shift);
+            const auto divide_by_patch_shift = [](float value)
+            {
+                if constexpr (Radius == 3U)
+                    // The target's radius-3 PTX emits mul.f32 by 0.5, not div.f32.
+                    return __fmul_rn(value, 0.5F);
+                else
+                    return __fdiv_rn(value, static_cast<float>(Radius - 1U));
+            };
+            float dx_x = divide_by_patch_shift(__fsub_rn(border_x_px, center_px));
+            float dx_y = divide_by_patch_shift(__fsub_rn(border_x_py, center_py));
+            float dy_x = divide_by_patch_shift(__fsub_rn(border_y_px, center_px));
+            float dy_y = divide_by_patch_shift(__fsub_rn(border_y_py, center_py));
             if (detailed)
             {
                 dx_x = __fmul_rn(dx_x, 0.5F);

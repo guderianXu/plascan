@@ -1652,9 +1652,10 @@ namespace metmodel
                 boundary.filter.cuda_inlier_masks_materialized = state.cuda_inlier_masks_materialized;
                 boundary.filter.neighbor_inlier_masks_allocation = state.neighbor_inlier_masks;
             }
-            // sub_1D0A360 selects 30 for the target level (v818 == 0) and 6
-            // for inherited intermediate levels before applying the scale shift.
-            boundary.speckle_component_size_threshold = target_level ? 30U : 6U;
+            // sub_1D0A360 indexes the prepared finer-level record. Regular
+            // x8/x4/x2/x1 records therefore use 6/24/96/384, while the Lowest
+            // x32->x16 schedule treats x16 as record zero and uses 6.
+            boundary.speckle_component_size_threshold = patchmatch_finer_level_speckle_component_threshold(downscale);
             if (!target_level)
                 boundary.bilateral_image.assign(bilateral_image.begin(), bilateral_image.end());
 

@@ -384,6 +384,11 @@ namespace metmodel
     // both use internal mode 0; Moderate/Aggressive use modes 1/2.
     std::uint32_t recovered_depth_component_threshold(FilterMode mode);
 
+    // Exact CUDA PatchMatch host post-pass threshold selected by sub_1D0A360
+    // in Metashape 2.3.2 build 22956. The prepared finer records x8/x4/x2/x1
+    // have indices 0/1/2/3 and the target computes 6 << (2 * record_index).
+    std::uint32_t patchmatch_finer_level_speckle_component_threshold(std::uint32_t depth_downscale);
+
     enum class PatchMatchScheduleOperation
     {
         Refinement,

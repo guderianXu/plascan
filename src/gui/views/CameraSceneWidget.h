@@ -384,6 +384,8 @@ private:
         bool fitAfterLoad = false;
         bool pointCloudResource = true;
         int generation = 0;
+        bool preserveCurrentView = false;
+        QString tiePointSidecarPath;
     };
     void requestSceneLoad(SceneLoadRequest request);
     void pumpSceneLoad();
@@ -427,7 +429,7 @@ private:
         PointCloudEditResult result,
         const xjw::gui::tie_points::ScalarRange &imageCountRange);
 
-    // 取消未完成的异步加载并等待结束（在新加载开始前调用）
+    // 取消未完成的异步加载和编辑任务；当前已显示的几何保持不变。
     void cancelPendingLoad();
     void cancelMeshTexturePreparation();
     void prepareMeshTextureUploadImage(int maximumTextureSize);

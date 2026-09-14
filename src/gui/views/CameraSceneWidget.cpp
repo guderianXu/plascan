@@ -853,6 +853,7 @@ void CameraSceneWidget::cancelPendingLoad()
     {
         _tiePointMetadataCancellation->store(true, std::memory_order_relaxed);
     }
+    _tiePointMetadataLoading = false;
     _pendingSceneLoad.reset();
     _pendingTiePointMetadataLoad.reset();
     _pendingTiePointPrunePreview.reset();
@@ -1139,29 +1140,24 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString& objPath,
 
 void CameraSceneWidget::requestSceneLoad(SceneLoadRequest request)
 {
+    // Keep the published scene and navigation reference alive while the next
+    // file is parsed and converted into render-ready buffers off the GUI thread.
+    const bool has_displayed_geometry = _cloud.size() > 0;
     cancelPendingLoad();
     request.generation = _loadGen;
-    _currentCloudPath = request.path;
-    _cloud = RenderCloud();
-    _isTiePointCloud = request.tiePointCloud;
-    _tiePointImageCounts.clear();
-    _tiePointQualityMetadata = {};
-    emit tiePointQualityMetadataReady(false);
-    _tiePointMetadataLoading = false;
-    _tiePointMetadataError.clear();
-    _meshTextureImage = QImage();
-    _meshTextureUploadImage = QImage();
-    _meshTexturePath.clear();
-    _meshHasTexture = false;
-    _texturedMeshResourceFailed = false;
-    _renderWarning.clear();
-    clearPreparedGeometry();
-    _texturedMeshPipeline.uploadedTexturePath.clear();
-    _hasFocusedGeometryBounds = false;
-    _fitViewAfterLoad = request.fitAfterLoad;
-    _pointCloudPointSize = 2.4f;
-    _cacheDirty = true;
-    _gpuDirty = true;
+    request.preserveCurrentView = has_displayed_geometry;
+    if (request.preserveCurrentView && !_hasFocusedGeometryBounds)
+    {
+        const QVector3D current_center = sceneCenter();
+        const float current_radius = sceneRadius();
+        if (std::isfinite(current_radius) && current_radius > 0.0f)
+        {
+            _focusedGeometryCenter = current_center;
+            _focusedGeometryRadius = current_radius;
+            _hasFocusedGeometryBounds = true;
+        }
+    }
+    _fitViewAfterLoad = request.fitAfterLoad && !request.preserveCurrentView;
     _loading = true;
     _plyLoadProgressPercent = request.format == SceneLoadFormat::Obj ? -1 : 0;
     const QString format_name = request.format == SceneLoadFormat::Xyz   ? QStringLiteral("XYZ")
@@ -1286,8 +1282,28 @@ void CameraSceneWidget::pumpSceneLoad()
             if (is_current && outcome.succeeded())
             {
                 SceneLoadTaskResult result = std::move(*outcome.value);
-                if (result.cloud)
+                if (result.cloud && result.cloud->size() > 0)
                 {
+                    self->cancelMeshTexturePreparation();
+                    self->_currentCloudPath = request.path;
+                    self->_isTiePointCloud = request.tiePointCloud;
+                    self->_tiePointImageCounts.clear();
+                    self->_tiePointQualityMetadata = {};
+                    self->_tiePointMetadataLoading = false;
+                    self->_tiePointMetadataError.clear();
+                    emit self->tiePointQualityMetadataReady(false);
+                    self->_meshTextureImage = QImage();
+                    self->_meshTextureUploadImage = QImage();
+                    self->_meshTexturePath.clear();
+                    self->_meshHasTexture = false;
+                    self->_texturedMeshResourceFailed = false;
+                    self->_renderWarning.clear();
+                    self->clearPreparedGeometry();
+                    self->_texturedMeshPipeline.uploadedTexturePath.clear();
+                    if (!request.preserveCurrentView)
+                    {
+                        self->_hasFocusedGeometryBounds = false;
+                    }
                     self->_cloud = std::move(*result.cloud);
                     self->updateSampleCountForGeometry();
                     if (request.format == SceneLoadFormat::Obj)
@@ -1335,7 +1351,7 @@ void CameraSceneWidget::pumpSceneLoad()
                                                  : self->_cloud.size() >= 1'000'000 ? 1.4f
                                                                                     : 2.4f;
                     self->invalidateCache();
-                    if (request.fitAfterLoad)
+                    if (request.fitAfterLoad && !request.preserveCurrentView)
                     {
                         self->fitViewToLoadedGeometry();
                     }
@@ -1351,6 +1367,11 @@ void CameraSceneWidget::pumpSceneLoad()
                     {
                         LOG_WARN(QStringLiteral("[3D] %1").arg(result.textureWarning));
                     }
+                    if (request.tiePointCloud)
+                    {
+                        self->startTiePointMetadataLoad(request.tiePointSidecarPath, request.generation);
+                    }
+                    self->_gpuDirty = true;
                 }
                 else
                 {
@@ -1359,7 +1380,6 @@ void CameraSceneWidget::pumpSceneLoad()
                     self->setProperty("lastAsyncTaskError", error);
                     LOG_ERROR(QStringLiteral("[3D] %1").arg(error));
                 }
-                self->_gpuDirty = true;
                 self->update();
             }
             else if (is_current)
@@ -1379,22 +1399,22 @@ void CameraSceneWidget::pumpSceneLoad()
 void CameraSceneWidget::loadTiePointCloudFromFile(const QString& pointCloudPath, const QString& sidecarPath)
 {
     const QString extension = QFileInfo(pointCloudPath).suffix().toLower();
+    SceneLoadRequest request;
+    request.path = pointCloudPath;
+    request.tiePointCloud = true;
+    request.fitAfterLoad = true;
+    request.pointCloudResource = true;
     if (extension == QLatin1String("ply"))
     {
-        loadModelFromPlyInternal(pointCloudPath, true, true, true);
+        request.format = SceneLoadFormat::Ply;
     }
     else if (extension == QLatin1String("obj"))
     {
-        loadModelFromObjInternal(pointCloudPath, true, true, true);
+        request.format = SceneLoadFormat::Obj;
     }
     else
     {
-        loadPointCloudFromXyzInternal(pointCloudPath, true, true);
-    }
-
-    if (_loading)
-    {
-        _plyLoadProgressText = tr("正在加载连接点...");
+        request.format = SceneLoadFormat::Xyz;
     }
 
     QString metadataPath = sidecarPath.trimmed();
@@ -1402,8 +1422,9 @@ void CameraSceneWidget::loadTiePointCloudFromFile(const QString& pointCloudPath,
     {
         metadataPath = xjw::gui::tie_points::inferSidecarPath(pointCloudPath);
     }
-    startTiePointMetadataLoad(metadataPath, _loadGen);
-    _gpuDirty = true;
+    request.tiePointSidecarPath = metadataPath;
+    requestSceneLoad(std::move(request));
+    _plyLoadProgressText = tr("正在加载连接点...");
     update();
 }
 
@@ -5998,6 +6019,16 @@ void CameraSceneWidget::resetView()
     if (_manualSelecting || _manualSelectionRunning || _manualPreviewUsesScreenRect)
     {
         clearManualPointSelection();
+    }
+    if (_cloud.size() > 0 && _cloudSpatialSummary.valid && _cloudSpatialSummary.sourcePointCount == _cloud.size())
+    {
+        _focusedGeometryCenter = _cloudSpatialSummary.center;
+        _focusedGeometryRadius = _cloudSpatialSummary.p95Radius;
+        _hasFocusedGeometryBounds = true;
+    }
+    else
+    {
+        _hasFocusedGeometryBounds = false;
     }
     _viewRot = QQuaternion();
     _zoomScale = 1.0;

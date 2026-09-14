@@ -1916,8 +1916,10 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPa
                       {"c2p.depth_view = state.depth;",
                        "c2p.normal_view = state.normal;",
                        "c2p.cost_view = state.cost;",
+                       "patchmatch_finer_level_speckle_component_threshold(downscale)",
                        "const std::size_t x16_width = (camera.image.width + 15U) / 16U;",
                        "const std::size_t x16_height = (camera.image.height + 15U) / 16U;"});
+    EXPECT_FALSE(orchestrator.contains(QStringLiteral("target_level ? 30U : 6U")));
     expectContainsAll(octree,
                       {"run_recovered_ooc_neighbors_cuda_source(",
                        "bool same_index_space = records.size() == balanced_records.size();",

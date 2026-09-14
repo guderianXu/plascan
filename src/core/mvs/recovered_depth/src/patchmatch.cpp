@@ -392,6 +392,18 @@ namespace metmodel
         throw std::invalid_argument("unsupported depth filter mode");
     }
 
+    std::uint32_t patchmatch_finer_level_speckle_component_threshold(std::uint32_t depth_downscale)
+    {
+        if (depth_downscale == 0U || depth_downscale > 16U || (depth_downscale & (depth_downscale - 1U)) != 0U)
+        {
+            throw std::invalid_argument("PatchMatch finer speckle threshold requires downscale 1/2/4/8/16");
+        }
+
+        const std::uint32_t indexed_downscale = std::min(depth_downscale, 8U);
+        const unsigned level_index = std::countr_zero(8U / indexed_downscale);
+        return 6U << (2U * level_index);
+    }
+
     std::uint32_t patchmatch_balanced_batch_span(std::uint32_t items, std::uint32_t alignment, std::uint32_t capacity)
     {
         if (alignment == 0 || capacity == 0)

@@ -1392,7 +1392,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuDepthAndViewMatchedImageRegis
     ASSERT_GT(thumbnailsCall, geometryCall);
 }
 
-TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
+TEST(CameraSceneRenderContractTest, SceneReplacementKeepsVisibleGeometryAndViewUntilCommit)
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -1402,6 +1402,8 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void fitViewToLoadedGeometry();")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool _fitViewAfterLoad = false;")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool _hasFocusedGeometryBounds = false;")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool preserveCurrentView = false;")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("QString tiePointSidecarPath;")));
 
     const qsizetype tiePointLoadStart =
         sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::loadTiePointCloudFromFile"));
@@ -1409,44 +1411,56 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
         sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::fitViewToLoadedGeometry"));
     ASSERT_GE(tiePointLoadStart, 0);
     ASSERT_GT(fitViewStart, tiePointLoadStart);
-    const QString tiePointLoadBlock =
-        sceneSource.mid(tiePointLoadStart, fitViewStart - tiePointLoadStart);
-    EXPECT_TRUE(tiePointLoadBlock.contains(
-        QStringLiteral("loadModelFromPlyInternal(pointCloudPath, true, true, true);")));
-    EXPECT_TRUE(tiePointLoadBlock.contains(
-        QStringLiteral("loadModelFromObjInternal(pointCloudPath, true, true, true);")));
-    EXPECT_TRUE(tiePointLoadBlock.contains(
-        QStringLiteral("loadPointCloudFromXyzInternal(pointCloudPath, true, true);")));
+    const QString tiePointLoadBlock = sceneSource.mid(tiePointLoadStart, fitViewStart - tiePointLoadStart);
+    EXPECT_TRUE(tiePointLoadBlock.contains(QStringLiteral("request.format = SceneLoadFormat::Ply;")));
+    EXPECT_TRUE(tiePointLoadBlock.contains(QStringLiteral("request.format = SceneLoadFormat::Obj;")));
+    EXPECT_TRUE(tiePointLoadBlock.contains(QStringLiteral("request.format = SceneLoadFormat::Xyz;")));
+    EXPECT_TRUE(tiePointLoadBlock.contains(QStringLiteral("request.tiePointSidecarPath = metadataPath;")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("readBinaryPlyPreview")));
 
     const qsizetype plyLoadStart =
         sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::loadModelFromPlyInternal"));
     const qsizetype requestLoadStart =
         sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::requestSceneLoad"), plyLoadStart);
-    const qsizetype guardedLoadStart =
-        sceneSource.indexOf(QStringLiteral("runGuardedWithOutcome("), requestLoadStart);
-    const qsizetype plyTiePointState =
-        sceneSource.indexOf(QStringLiteral("_isTiePointCloud = request.tiePointCloud;"), requestLoadStart);
-    const qsizetype plyFitState =
-        sceneSource.indexOf(QStringLiteral("_fitViewAfterLoad = request.fitAfterLoad;"), requestLoadStart);
+    const qsizetype pumpLoadStart =
+        sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::pumpSceneLoad"), requestLoadStart);
     ASSERT_GE(plyLoadStart, 0);
     ASSERT_GT(requestLoadStart, plyLoadStart);
-    ASSERT_GT(guardedLoadStart, requestLoadStart);
-    EXPECT_GT(plyTiePointState, requestLoadStart);
-    EXPECT_LT(plyTiePointState, guardedLoadStart);
-    EXPECT_GT(plyFitState, requestLoadStart);
-    EXPECT_LT(plyFitState, guardedLoadStart);
+    ASSERT_GT(pumpLoadStart, requestLoadStart);
+    const QString requestLoadBlock = sceneSource.mid(requestLoadStart, pumpLoadStart - requestLoadStart);
+    EXPECT_TRUE(requestLoadBlock.contains(QStringLiteral("const bool has_displayed_geometry = _cloud.size() > 0;")));
+    EXPECT_TRUE(requestLoadBlock.contains(QStringLiteral("request.preserveCurrentView = has_displayed_geometry;")));
+    EXPECT_TRUE(requestLoadBlock.contains(
+        QStringLiteral("_fitViewAfterLoad = request.fitAfterLoad && !request.preserveCurrentView;")));
+    EXPECT_FALSE(requestLoadBlock.contains(QStringLiteral("_cloud = RenderCloud();")));
+    EXPECT_FALSE(requestLoadBlock.contains(QStringLiteral("clearPreparedGeometry();")));
+    EXPECT_FALSE(requestLoadBlock.contains(QStringLiteral("_currentCloudPath = request.path;")));
+    EXPECT_FALSE(requestLoadBlock.contains(QStringLiteral("_isTiePointCloud = request.tiePointCloud;")));
 
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("if (request.fitAfterLoad)")));
+    const qsizetype resultCommitStart =
+        sceneSource.indexOf(QStringLiteral("if (result.cloud && result.cloud->size() > 0)"), pumpLoadStart);
+    const qsizetype emptyResultStart =
+        sceneSource.indexOf(QStringLiteral("else\n                {"), resultCommitStart);
+    ASSERT_GE(resultCommitStart, 0);
+    ASSERT_GT(emptyResultStart, resultCommitStart);
+    const QString resultCommitBlock = sceneSource.mid(resultCommitStart, emptyResultStart - resultCommitStart);
+    const qsizetype clearPrepared = resultCommitBlock.indexOf(QStringLiteral("self->clearPreparedGeometry();"));
+    const qsizetype replaceCloud =
+        resultCommitBlock.indexOf(QStringLiteral("self->_cloud = std::move(*result.cloud);"));
+    ASSERT_GE(clearPrepared, 0);
+    ASSERT_GT(replaceCloud, clearPrepared);
+    EXPECT_TRUE(
+        resultCommitBlock.contains(QStringLiteral("if (request.fitAfterLoad && !request.preserveCurrentView)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("self->fitViewToLoadedGeometry();")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "if (_hasFocusedGeometryBounds)\n"
-        "    {\n"
-        "        return _focusedGeometryCenter;")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "if (_hasFocusedGeometryBounds)\n"
-        "    {\n"
-        "        return _focusedGeometryRadius;")));
+    EXPECT_TRUE(resultCommitBlock.contains(
+        QStringLiteral("self->startTiePointMetadataLoad(request.tiePointSidecarPath, request.generation);")));
+    EXPECT_TRUE(resultCommitBlock.contains(QStringLiteral("self->_gpuDirty = true;")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("if (_hasFocusedGeometryBounds)\n"
+                                                    "    {\n"
+                                                    "        return _focusedGeometryCenter;")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("if (_hasFocusedGeometryBounds)\n"
+                                                    "    {\n"
+                                                    "        return _focusedGeometryRadius;")));
 }
 
 TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFitView)
