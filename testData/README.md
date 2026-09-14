@@ -375,6 +375,24 @@ Recommended near-term test sets:
 
 ## Prepare benchmark camera files for PlaScan
 
+For a deterministic 3D-object fixture with independently generated camera,
+depth, closed-mesh, radial-elevation, and radial-DOM truth, use
+`scripts/validation/generate_synthetic_object_dataset.py`. The generator writes
+only to an empty output directory under `build/tmp/`; its format, truth boundary,
+and validation command are documented in
+`docs/testing/SYNTHETIC_3D_OBJECT_DATASET.md`.
+
+The object generator supports `coarse`, `medium`, and `fine` fidelity presets.
+For a separate aerial height-field fixture with metric DEM, DOM, mesh, depth,
+mask, and camera truth, use
+`scripts/validation/generate_synthetic_terrain_dataset.py`; see
+`docs/testing/SYNTHETIC_TERRAIN_DATASET.md`. Object and terrain fixtures have
+different accuracy metrics and must not be collapsed into one score.
+Run PlaScan against either fixture with
+`scripts/validation/run_synthetic_e2e.py`; commands, quality gates, report
+artifacts, and exit codes are documented in
+`docs/testing/SYNTHETIC_E2E_TESTING.md`.
+
 Use `prepare_photogrammetry_benchmarks.py` after downloading and extracting supported datasets. It does not modify
 the original benchmark files. It writes a PlaScan-ready view under each dataset:
 

@@ -35,6 +35,7 @@ DEFAULT_NOVNC_WEB_PORT = 6081
 DEFAULT_SCREEN = "1440x900"
 PROCESS_ORDER = ("xvfb", "window_manager", "vnc", "novnc", "hub", "web", "plascan")
 MAXIMUM_DEFAULT_PROJECT_COPY_BYTES = 5 * 1024 * 1024 * 1024
+CURRENT_PROCESS_START_TOKEN = str(time.time_ns())
 
 
 def repository_root() -> Path:
@@ -67,6 +68,8 @@ def browser_url(host: str, port: int, token: str) -> str:
 
 
 def process_start_time(pid: int) -> str | None:
+    if os.name == "nt":
+        return CURRENT_PROCESS_START_TOKEN if pid == os.getpid() else None
     try:
         text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except (FileNotFoundError, PermissionError, ProcessLookupError):
@@ -76,6 +79,8 @@ def process_start_time(pid: int) -> str | None:
 
 
 def process_command(pid: int) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline([sys.executable, *sys.argv]) if pid == os.getpid() else ""
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
     except (FileNotFoundError, PermissionError, ProcessLookupError):
@@ -184,7 +189,8 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
+    if os.name != "nt":
+        temporary.chmod(0o600)
     temporary.replace(path)
 
 
@@ -668,7 +674,8 @@ def command_start(args: argparse.Namespace) -> int:
         }
         ready_file.write_text(
             json.dumps(ready_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        ready_file.chmod(0o600)
+        if os.name != "nt":
+            ready_file.chmod(0o600)
     except Exception:
         for name in reversed(PROCESS_ORDER):
             if name in processes:

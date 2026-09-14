@@ -831,6 +831,10 @@ namespace xjw::aerial_triangulation
         QMap<ImageId, QMap<qulonglong, FeatureIdx>> compactIndexByOriginal;
         std::map<quint64, std::size_t> pairPosition;
         std::map<quint64, std::set<std::pair<FeatureIdx, FeatureIdx>>> pairObservations;
+        qsizetype persistedObservationCount = 0;
+        qsizetype acceptedObservationCount = 0;
+        qsizetype persistedDirectEdgeCount = 0;
+        qsizetype acceptedDirectEdgeCount = 0;
         graph->usesRawDirectEdges = formatVersion >= 2;
 
         const auto addMatch = [&](ParsedObservation observationA,
@@ -882,6 +886,7 @@ namespace xjw::aerial_triangulation
             const float confidence =
                 static_cast<float>(std::clamp(trackObject.value(QStringLiteral("confidence")).toDouble(1.0), 0.0, 1.0));
             const QJsonArray persistedObservationArray = trackObject.value(QStringLiteral("observations")).toArray();
+            persistedObservationCount += persistedObservationArray.size();
             std::vector<std::optional<ParsedObservation>> persistedObservations(
                 static_cast<std::size_t>(persistedObservationArray.size()));
             std::vector<ParsedObservation> observations;
@@ -939,6 +944,7 @@ namespace xjw::aerial_triangulation
                 const ParsedObservation parsed{imageId, compactIndex};
                 persistedObservations[static_cast<std::size_t>(persistedIndex)] = parsed;
                 observations.push_back(parsed);
+                ++acceptedObservationCount;
             }
 
             // 一条多视轨迹在同一影像最多保留一个观测，避免生成自相矛盾 pair。
@@ -972,6 +978,7 @@ namespace xjw::aerial_triangulation
                 // 混为一谈，否则 A-B-C 的传递闭包会伪造并不存在的 A-C 匹配。
                 for (const QJsonValue& edgeValue : trackObject.value(QStringLiteral("direct_edges")).toArray())
                 {
+                    ++persistedDirectEdgeCount;
                     const QJsonArray edge = edgeValue.toArray();
                     if (edge.size() < 2)
                     {
@@ -991,7 +998,11 @@ namespace xjw::aerial_triangulation
                     {
                         continue;
                     }
-                    addedTrackEdge |= addMatch(*firstObservation, *secondObservation, confidence, false);
+                    if (addMatch(*firstObservation, *secondObservation, confidence, false))
+                    {
+                        addedTrackEdge = true;
+                        ++acceptedDirectEdgeCount;
+                    }
                 }
             }
             else
@@ -1012,7 +1023,15 @@ namespace xjw::aerial_triangulation
         graph->trackCount = static_cast<int>(graph->tracks.size());
         if (graph->tracks.empty() || graph->matchPairs.empty())
         {
-            return fail(QStringLiteral("连接点文件中没有可用于 SfM 的多视图轨迹"), errorMessage);
+            return fail(QStringLiteral("连接点文件中没有可用于 SfM 的多视图轨迹（轨迹 %1，匹配对 %2，"
+                                       "接受观测 %3/%4，接受直接边 %5/%6）")
+                            .arg(graph->tracks.size())
+                            .arg(graph->matchPairs.size())
+                            .arg(acceptedObservationCount)
+                            .arg(persistedObservationCount)
+                            .arg(acceptedDirectEdgeCount)
+                            .arg(persistedDirectEdgeCount),
+                        errorMessage);
         }
         return true;
     }

@@ -3886,6 +3886,11 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
     config.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
     config.poissonSolverIterations = qBound(
         1, settings.value(QStringLiteral("poissonSolverIterations")).toInt(200), 2000);
+    config.poissonSolverTolerance = std::clamp(
+        settings.value(QStringLiteral("poissonSolverTolerance"))
+            .toDouble(config.poissonSolverTolerance),
+        1.0e-8,
+        1.0);
     config.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
 
     const double pointWeight =

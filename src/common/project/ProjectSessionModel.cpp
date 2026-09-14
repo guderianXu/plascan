@@ -2621,7 +2621,8 @@ bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
 
     int skipped = std::max(0, previouslySkipped);
     QStringList publishedPaths;
-    const QString sharedImagesRoot = QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath));
+    const QString sharedImagesRoot = QDir::fromNativeSeparators(
+        QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath)));
     for (const QString& projectImagePath : projectImagePaths)
     {
         const QString cleanPath = QDir::cleanPath(projectImagePath.trimmed());
@@ -2646,7 +2647,8 @@ bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
         }
 
         existingPaths.insert(cleanPath);
-        const bool isSharedImage = cleanPath.startsWith(sharedImagesRoot + QDir::separator(), Qt::CaseInsensitive);
+        const QString comparablePath = QDir::fromNativeSeparators(cleanPath);
+        const bool isSharedImage = comparablePath.startsWith(sharedImagesRoot + QLatin1Char('/'), Qt::CaseInsensitive);
         if (isSharedImage)
         {
             publishedPaths.append(cleanPath);

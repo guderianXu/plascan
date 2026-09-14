@@ -369,7 +369,8 @@ namespace xjw
                     }
                 }
                 const DepthPixelDomainScale pixel_scale = depthPixelDomainScale(raster_size, cv::Size(g.W, g.H));
-                const float max_reprojection_error = scaleDepthPixelDistance(_config.maxReprojError, pixel_scale);
+                const float max_reprojection_error =
+                    scaleDepthNearestSampleDistance(_config.maxReprojError, pixel_scale);
                 g.maxReprojectionErrorSquared = max_reprojection_error * max_reprojection_error;
                 g.localDepthGradientRadiusPixels =
                     std::clamp(scaleDepthPixelRadius(_config.localDepthGradientRadiusPixels, pixel_scale), 0, 2);
@@ -1705,7 +1706,17 @@ namespace xjw
                 }
             }
 
+            const FusionRejectionStats stats = rejectionStats();
             LOG_INFO("[MVS][深度融合] 快速反投影完成: points=%d", static_cast<int>(fusedPoints.size()));
+            LOG_DEBUG("[MVS][深度融合] 快速反投影 rejected mask=%llu support=%llu gradient=%llu "
+                      "reprojection=%llu depth=%llu normal=%llu observations=%llu",
+                      static_cast<unsigned long long>(stats.maskRejected),
+                      static_cast<unsigned long long>(stats.supportRejected),
+                      static_cast<unsigned long long>(stats.depthGradientRejected),
+                      static_cast<unsigned long long>(stats.reprojectionRejected),
+                      static_cast<unsigned long long>(stats.depthConsistencyRejected),
+                      static_cast<unsigned long long>(stats.normalRejected),
+                      static_cast<unsigned long long>(stats.insufficientObservations));
             if (progressCb)
             {
                 progressCb("快速反投影已过滤深度图完成", 1.0f);

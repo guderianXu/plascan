@@ -921,10 +921,9 @@ TEST(AutoSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
 
 TEST(GuiAlgorithmAlignmentContractTest, ModelGenerationSettingsMigrateToCanonicalV2)
 {
-    const QString workflow_settings = readSourceFile(
-        QStringLiteral("src/gui/dialogs/application/WorkflowSettingsDialog.cpp"));
-    const QString cli = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+    const QString workflow_settings =
+        readSourceFile(QStringLiteral("src/gui/dialogs/application/WorkflowSettingsDialog.cpp"));
+    const QString cli = readSourceFile(QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
     const QString model_settings = sectionBetween(workflow_settings,
                                                   "QJsonObject WorkflowSettingsDialog::modelGenerationSettings",
                                                   "void WorkflowSettingsDialog::setupUi");
@@ -1584,6 +1583,10 @@ TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvide
 
     expectContainsAll(adapter,
                       {
+                          "frame.geometrySupportCount = cv::Mat::zeros(height, width, CV_16U)",
+                          "frame.geometrySupportCount.setTo(2, frame.validMask)",
+                          "frame.inverseDepthRelativeSpread = cv::Mat::zeros(height, width, CV_32F)",
+                          "std::numeric_limits<float>::quiet_NaN(), frame.validMask",
                           "frame.photometricSourceMask = cv::Mat::zeros(height, width, CV_32S)",
                           "unpack_recovered_patchmatch_inlier_mask(",
                           "destination[column] |= source_bit",
@@ -1593,6 +1596,12 @@ TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvide
                       {
                           "frame.photometricSourceMask =",
                           "std::move(recovered_frame.photometricSourceMask)",
+                          "frame.geometrySupportCount =",
+                          "std::move(recovered_frame.geometrySupportCount)",
+                          "frame.inverseDepthRelativeSpread =",
+                          "std::move(recovered_frame.inverseDepthRelativeSpread)",
+                          "adaptive_geometry_fallback_to_discrete_core",
+                          "recovered_voting_geometry_proxy",
                           "saveDepthFrameArtifacts(",
                           "QStringLiteral(\"recovered三层投票\")",
                           "markManifestFrameRunning(frame_index)",
@@ -1888,23 +1897,21 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPa
     const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
     const QString patchmatchHeader =
         readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/include/metmodel/patchmatch.hpp"));
-    const QString patchmatch =
-        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch.cpp"));
+    const QString patchmatch = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch.cpp"));
     const QString orchestrator =
         readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
-    const QString octree =
-        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/octree_prepare.cpp"));
-    const QString neighbors =
-        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/ooc_neighbors_cuda.cu"));
+    const QString octree = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/octree_prepare.cpp"));
+    const QString neighbors = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/ooc_neighbors_cuda.cu"));
 
     expectContainsAll(cmake, {"recovered_depth/src/ooc_neighbors_cuda.cu"});
-    expectContainsAll(patchmatchHeader, {"std::span<const float> depth_view;",
-                                         "std::span<const std::uint8_t> normal_view;",
-                                         "std::span<const float> cost_view;",
-                                         "std::uint64_t set_device_nanoseconds = 0;",
-                                         "std::uint64_t cuda_free_nanoseconds = 0;",
-                                         "std::uint64_t cost_phase_nanoseconds = 0;",
-                                         "std::uint64_t voting_phase_nanoseconds = 0;"});
+    expectContainsAll(patchmatchHeader,
+                      {"std::span<const float> depth_view;",
+                       "std::span<const std::uint8_t> normal_view;",
+                       "std::span<const float> cost_view;",
+                       "std::uint64_t set_device_nanoseconds = 0;",
+                       "std::uint64_t cuda_free_nanoseconds = 0;",
+                       "std::uint64_t cost_phase_nanoseconds = 0;",
+                       "std::uint64_t voting_phase_nanoseconds = 0;"});
     expectContainsAll(patchmatch,
                       {"parallel_for_recovered_patchmatch_rows(",
                        "pixels < 131072U",

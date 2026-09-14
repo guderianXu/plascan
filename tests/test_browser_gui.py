@@ -70,7 +70,8 @@ class BrowserGuiLauncherTest(unittest.TestCase):
             BROWSER_GUI.save_state(state_path, expected)
             self.assertEqual(expected, BROWSER_GUI.load_state(state_path))
             self.assertFalse(state_path.with_suffix(".tmp").exists())
-            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
 
     def test_copy_project_for_case_preserves_source(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

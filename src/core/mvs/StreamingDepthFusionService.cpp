@@ -171,6 +171,14 @@ namespace xjw::mvs
             fusionConfig.cancelFlag = config.cancelFlag;
             fusionConfig.minGeometryObservationCount =
                 std::min(std::max(1, config.minConsistentViews), static_cast<int>(frames.size()));
+            const bool geometry_support_prevalidated =
+                std::all_of(frames.cbegin(),
+                            frames.cend(),
+                            [](const FusionFrameInput& frame) { return frame.geometrySupportPrevalidated; });
+            if (geometry_support_prevalidated)
+            {
+                fusionConfig.minGeometryObservationCount = 0;
+            }
             if (frameCount <= 32)
             {
                 fusionConfig.minNumPixels = std::min(fusionConfig.minNumPixels, 2);

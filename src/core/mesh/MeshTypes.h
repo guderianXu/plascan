@@ -66,6 +66,7 @@ namespace xjw
             // Keep the Poisson CUDA/OpenCL/CPU solver selection independent from preprocessing.
             plapoint::ProcessingDevice poissonSolverDevice = plapoint::ProcessingDevice::Auto;
             int poissonSolverIterations = 200;
+            double poissonSolverTolerance = 1.0e-3;
             bool forcePoisson = true;
             bool allowHeightGridFallback = true;
             bool orientNormalsForClosedSurface = false;

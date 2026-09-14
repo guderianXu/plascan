@@ -253,7 +253,6 @@ namespace xjw::common::project
         {
             return false;
         }
-        PlascanArchive archive(temporaryZip, PlascanArchivePathType::DirectArchive);
         QVector<QPair<QString, QString>> entries;
         QDir stagingRoot(staging);
         QDirIterator iterator(staging, QDir::Files, QDirIterator::Subdirectories);
@@ -262,9 +261,15 @@ namespace xjw::common::project
             const QString path = iterator.next();
             entries.append(qMakePair(QDir::fromNativeSeparators(stagingRoot.relativeFilePath(path)), path));
         }
-        if (!archive.updateFileEntries(
-                entries, {QStringLiteral("placeholder")}, PlascanArchiveCompression::Store, errorMessage) ||
-            !QFile::rename(temporaryZip, output))
+        {
+            PlascanArchive archive(temporaryZip, PlascanArchivePathType::DirectArchive);
+            if (!archive.updateFileEntries(
+                    entries, {QStringLiteral("placeholder")}, PlascanArchiveCompression::Store, errorMessage))
+            {
+                return false;
+            }
+        }
+        if (!QFile::rename(temporaryZip, output))
         {
             if (!errorMessage || errorMessage->isEmpty())
             {

@@ -33,6 +33,14 @@ namespace xjw::mvs
         cv::Mat validMask;
         cv::Mat supportRegionMask;
         cv::Mat photometricSourceMask;
+        /// Conservative bridge from recovered weighted voting to PlaScan's
+        /// persisted fusion contract. A retained pixel proves at least the
+        /// reference plus one cross-view observation, but the recovered
+        /// producer does not expose an exact unweighted observation count.
+        cv::Mat geometrySupportCount;
+        /// CV_32FC1. Retained pixels are NaN because recovered voting does not
+        /// expose the samples needed to measure inverse-depth dispersion.
+        cv::Mat inverseDepthRelativeSpread;
         FramePinholeCamera camera;
         std::vector<int> sourceViewIndices;
         std::string maskSource = "full_image";

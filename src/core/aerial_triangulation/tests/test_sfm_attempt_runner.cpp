@@ -229,7 +229,7 @@ TEST(SfmAttemptRunnerTest, ReadsVersion3CompactObservations)
                        {QStringLiteral("confidence"), 0.75},
                        {QStringLiteral("observations"),
                         QJsonArray{QJsonArray{0, 10, 12.5, 20.0, 1.5}, QJsonArray{1, 20, 13.0, 20.5, 2.5}}},
-                       {QStringLiteral("direct_edges"), QJsonArray{QJsonArray{0, 1}}},
+                       {QStringLiteral("direct_edges"), QJsonArray{QJsonValue(QJsonArray{0, 1})}},
                    }}},
               });
 

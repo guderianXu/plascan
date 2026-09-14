@@ -239,7 +239,7 @@ namespace xjw
                 const float consistency_round_trip =
                     scaleDepthPixelDistance(kFullRasterConsistencyRoundTripPixels, scale);
                 const int minimum_hole_area = scaleDepthPixelArea(kFullRasterMinimumSmallHoleArea, scale);
-                const float fusion_reprojection = scaleDepthPixelDistance(fusion_config.pixelThresh, scale);
+                const float fusion_reprojection = scaleDepthNearestSampleDistance(fusion_config.pixelThresh, scale);
                 const bool boundary_retention_active =
                     fusion_config.enableBoundaryAwareRetention && boundary_edge_radius > 0;
 
@@ -307,6 +307,7 @@ namespace xjw
                         value.insert(QStringLiteral("scope"),
                                      QStringLiteral("base_before_view_count_or_streaming_runtime_override"));
                         value.insert(QStringLiteral("runtime_scaled_per_target_frame"), true);
+                        value.insert(QStringLiteral("nearest_sample_quantization_floor"), scale.usesReducedGrid());
                         return value;
                     }());
                 parameters.insert(QStringLiteral("fusion_local_gradient_base_radius_pixels"),
@@ -1467,12 +1468,11 @@ namespace xjw
                     {
                         return 0;
                     }
-                    std::sort(spans.begin(),
-                              spans.end(),
-                              [](const MatAllocationSpan& left, const MatAllocationSpan& right) {
-                                  return left.begin < right.begin ||
-                                         (left.begin == right.begin && left.end < right.end);
-                              });
+                    std::sort(
+                        spans.begin(),
+                        spans.end(),
+                        [](const MatAllocationSpan& left, const MatAllocationSpan& right)
+                        { return left.begin < right.begin || (left.begin == right.begin && left.end < right.end); });
 
                     uint64_t resident_bytes = 0;
                     std::uintptr_t allocation_begin = spans.front().begin;
@@ -11144,6 +11144,10 @@ namespace xjw
                 frame.validMask = QSharedPointer<cv::Mat>::create(std::move(recovered_frame.validMask));
                 frame.photometricSourceMask =
                     QSharedPointer<cv::Mat>::create(std::move(recovered_frame.photometricSourceMask));
+                frame.geometrySupportCount =
+                    QSharedPointer<cv::Mat>::create(std::move(recovered_frame.geometrySupportCount));
+                frame.inverseDepthRelativeSpread =
+                    QSharedPointer<cv::Mat>::create(std::move(recovered_frame.inverseDepthRelativeSpread));
                 frame.supportRegionMask = QSharedPointer<cv::Mat>::create(std::move(recovered_frame.supportRegionMask));
                 frame.qualityMetrics = analyzeDepthMapQuality(
                     *frame.depthMap, *frame.confidence, static_cast<int>(frame.sourceViewIndices.size()));
@@ -11158,15 +11162,20 @@ namespace xjw
                 frame.depthCompleteness.outputFilterRetentionRatio = 1.0f;
                 frame.depthPostprocess.validBeforePostprocess = valid_count;
                 frame.depthPostprocess.validAfterPostprocess = valid_count;
-                frame.pixelDomainDiagnostics = QJsonObject{
-                    {QStringLiteral("producer"), QStringLiteral("recovered_scene_d4")},
-                    {QStringLiteral("confidence_semantics"), QStringLiteral("binary_valid_after_three_level_voting")},
-                    {QStringLiteral("source_selection"), QStringLiteral("sfm_track_ranked_1_to_16")}};
+                frame.pixelDomainDiagnostics = makePixelDomainDiagnostics(
+                    frame.preparedRasterSize, frame.depthMap->size(), _config.fusion, true, true);
+                frame.pixelDomainDiagnostics.insert(QStringLiteral("producer"), QStringLiteral("recovered_scene_d4"));
+                frame.pixelDomainDiagnostics.insert(QStringLiteral("confidence_semantics"),
+                                                    QStringLiteral("binary_valid_after_three_level_voting"));
+                frame.pixelDomainDiagnostics.insert(QStringLiteral("source_selection"),
+                                                    QStringLiteral("sfm_track_ranked_1_to_16"));
                 // The reference implementation's three-level voting chain is the
                 // complete recovered quality filter.  Do not opt this frame into
                 // PlaScan's legacy consistency/quality gate, which can rewrite the
                 // voted depth and downgrade an otherwise valid reference camera.
                 frame.qualityDecision.acceptance = DepthFrameAcceptance::Accepted;
+                frame.qualityDecision.reasons.emplace_back("adaptive_geometry_fallback_to_discrete_core");
+                frame.qualityDecision.reasons.emplace_back("recovered_voting_geometry_proxy");
                 frame.initialQualityAcceptanceAvailable = false;
                 frame.initialQualityAcceptance = DepthFrameAcceptance::Accepted;
                 frame.maskSource = std::move(recovered_frame.maskSource);

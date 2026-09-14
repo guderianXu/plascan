@@ -393,6 +393,10 @@ namespace xjw::mvs
             frame.validMask = frame.depth > 0.0F;
             frame.confidence = cv::Mat::zeros(height, width, CV_32F);
             frame.confidence.setTo(1.0F, frame.validMask);
+            frame.geometrySupportCount = cv::Mat::zeros(height, width, CV_16U);
+            frame.geometrySupportCount.setTo(2, frame.validMask);
+            frame.inverseDepthRelativeSpread = cv::Mat::zeros(height, width, CV_32F);
+            frame.inverseDepthRelativeSpread.setTo(std::numeric_limits<float>::quiet_NaN(), frame.validMask);
             frame.photometricSourceMask = cv::Mat::zeros(height, width, CV_32S);
             metmodel::RecoveredPatchMatchD4PyramidOutput stored_patchmatch;
             std::string store_error;

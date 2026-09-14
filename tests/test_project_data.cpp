@@ -168,12 +168,19 @@ namespace
     {
         QCryptographicHash digest(QCryptographicHash::Sha256);
         QStringList paths{QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath())};
-        QDirIterator iterator(ProjectPackageLayout::dataDirectory(projectPath),
-                              QDir::Files,
-                              QDirIterator::Subdirectories);
+        const QDir dataRoot(ProjectPackageLayout::dataDirectory(projectPath));
+        QDirIterator iterator(dataRoot.absolutePath(), QDir::Files, QDirIterator::Subdirectories);
         while (iterator.hasNext())
         {
-            paths.append(iterator.next());
+            const QString path = iterator.next();
+            const QString relative = QDir::fromNativeSeparators(dataRoot.relativeFilePath(path));
+            if (relative.contains(QStringLiteral(".plascan_tmp/")) ||
+                relative.endsWith(QStringLiteral(".plascan_tmp")) || relative.endsWith(QStringLiteral(".lock")) ||
+                relative.endsWith(QStringLiteral(".recover")))
+            {
+                continue;
+            }
+            paths.append(path);
         }
         std::sort(paths.begin(), paths.end());
         for (const QString& path : paths)

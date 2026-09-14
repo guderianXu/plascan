@@ -6673,13 +6673,14 @@ TEST(FeatureResidualLoaderTest, ReadsCompactAerialObservationRows)
                           {QStringLiteral("images"), images},
                           {QStringLiteral("points"),
                            QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
-                                                  {QStringLiteral("observations"), QJsonArray{observation}}}}},
+                                                  {QStringLiteral("observations"),
+                                                   QJsonArray{QJsonValue(observation)}}}}},
                       })
             .toJson(QJsonDocument::Compact));
     sidecar.close();
 
     const auto diagnostics = xjw::gui::views::loadValidTiePointDiagnosticsFromSidecar(sidecarPath, imagePath);
-    ASSERT_TRUE(diagnostics.available);
+    ASSERT_TRUE(diagnostics.available) << qPrintable(diagnostics.message);
     ASSERT_EQ(diagnostics.keypoints.size(), 1U);
     EXPECT_EQ(diagnostics.keypoints.front().class_id, 19);
     EXPECT_FLOAT_EQ(diagnostics.keypoints.front().size, 2.5F);

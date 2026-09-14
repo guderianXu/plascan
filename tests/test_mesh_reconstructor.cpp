@@ -8190,12 +8190,14 @@ TEST(MeshWorkflowSettingsTest, MapsModelComputeModesToIndependentGpuStages)
         xjw::mesh::workflow::reconstructionConfigFromModelSettings(
             QJsonObject{{QStringLiteral("compute_mode"),
                          QStringLiteral("opencl")},
-                        {QStringLiteral("poissonSolverIterations"), 321}});
+                        {QStringLiteral("poissonSolverIterations"), 321},
+                        {QStringLiteral("poissonSolverTolerance"), 0.0025}});
     EXPECT_EQ(opencl_config.preprocessingDevice,
               plapoint::ProcessingDevice::OpenCL);
     EXPECT_EQ(opencl_config.poissonSolverDevice,
               plapoint::ProcessingDevice::OpenCL);
     EXPECT_EQ(opencl_config.poissonSolverIterations, 321);
+    EXPECT_DOUBLE_EQ(opencl_config.poissonSolverTolerance, 0.0025);
 
     const auto hybrid_config =
         xjw::mesh::workflow::reconstructionConfigFromModelSettings(
@@ -9759,6 +9761,7 @@ TEST(MeshWorkflowSettingsTest, DenseOrbitalSceneKeepsPoissonPolicy)
     EXPECT_FALSE(config.allowHeightGridFallback);
     EXPECT_TRUE(config.orientNormalsForClosedSurface);
     EXPECT_EQ(config.resolution, 224);
+    EXPECT_DOUBLE_EQ(config.poissonSolverTolerance, 1.0e-3);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthMapMeshRequestPreservesSourceAndSettings)
