@@ -145,6 +145,24 @@ namespace metmodel
             float z;
         };
 
+        // The recovered propagation ABI passes Matrix3x3f as three float4 rows.
+        // Keep the matrix in the kernel parameter buffer instead of passing a
+        // pointer to ordinary host memory, which is only device-accessible on
+        // systems with HMM/ATS.
+        struct alignas(16) RecoveredPropagationMatrix3x3f
+        {
+            float values[12];
+        };
+        static_assert(sizeof(RecoveredPropagationMatrix3x3f) == 48U);
+
+        RecoveredPropagationMatrix3x3f make_recovered_propagation_rotation(const float* rotation_to_local)
+        {
+            RecoveredPropagationMatrix3x3f result{};
+            for (std::uint32_t index = 0U; index < 12U; ++index)
+                result.values[index] = rotation_to_local[index];
+            return result;
+        }
+
         __device__ __forceinline__ bool recovered_calibration_unproject3(const DepthVotingCalibrationCu& calibration,
                                                                          float projection_x,
                                                                          float projection_y,
@@ -2375,7 +2393,7 @@ namespace metmodel
             const float* coarse_depth,
             const float* coarse_radius,
             PatchMatchCamera camera,
-            const float* rotation_to_local,
+            RecoveredPropagationMatrix3x3f rotation_to_local,
             std::uint32_t depth_downscale,
             const std::uint8_t* reference_image,
             std::uint32_t image_one_step_more_detailed,
@@ -2490,11 +2508,11 @@ namespace metmodel
                 const auto rotation_row = [&](std::uint32_t row)
                 {
                     const std::uint32_t base = 4U * row;
-                    return __fmaf_rn(rotation_to_local[base + 2U],
+                    return __fmaf_rn(rotation_to_local.values[base + 2U],
                                      global_normal.z,
-                                     __fmaf_rn(rotation_to_local[base + 0U],
+                                     __fmaf_rn(rotation_to_local.values[base + 0U],
                                                global_normal.x,
-                                               __fmul_rn(rotation_to_local[base + 1U], global_normal.y)));
+                                               __fmul_rn(rotation_to_local.values[base + 1U], global_normal.y)));
                 };
                 const RecoveredFloat3 local_normal{rotation_row(0U), rotation_row(1U), rotation_row(2U)};
                 const float pace =
@@ -2555,24 +2573,23 @@ namespace metmodel
         // U8/type-0 deliberately remains in the dedicated kernel above so compiling
         // another camera model cannot perturb its accepted instruction graph.
         template <class ReferenceSample, std::uint32_t CameraType>
-        __global__
-            __launch_bounds__(128,
-                              1) void patchmatch_propagation_extended_kernel(float* depth,
-                                                                             std::uint8_t* normal,
-                                                                             float* cost,
-                                                                             const float* coarse_depth,
-                                                                             const float* coarse_radius,
-                                                                             PatchMatchCamera camera,
-                                                                             const float* rotation_to_local,
-                                                                             std::uint32_t depth_downscale,
-                                                                             const ReferenceSample* reference_image,
-                                                                             std::uint32_t image_one_step_more_detailed,
-                                                                             float deviation_threshold_multiplier,
-                                                                             float* candidate_depth,
-                                                                             float* candidate_normal,
-                                                                             std::uint32_t checkerboard_step,
-                                                                             std::uint32_t only_each_fourth_pixel,
-                                                                             std::uint32_t pixel_offset)
+        __global__ __launch_bounds__(128, 1) void patchmatch_propagation_extended_kernel(
+            float* depth,
+            std::uint8_t* normal,
+            float* cost,
+            const float* coarse_depth,
+            const float* coarse_radius,
+            PatchMatchCamera camera,
+            RecoveredPropagationMatrix3x3f rotation_to_local,
+            std::uint32_t depth_downscale,
+            const ReferenceSample* reference_image,
+            std::uint32_t image_one_step_more_detailed,
+            float deviation_threshold_multiplier,
+            float* candidate_depth,
+            float* candidate_normal,
+            std::uint32_t checkerboard_step,
+            std::uint32_t only_each_fourth_pixel,
+            std::uint32_t pixel_offset)
         {
             constexpr std::uint32_t capacity = 128U * 1024U;
             const std::uint32_t temporary_index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2712,11 +2729,11 @@ namespace metmodel
                 const auto rotation_row = [&](std::uint32_t row)
                 {
                     const std::uint32_t base = 4U * row;
-                    return __fmaf_rn(rotation_to_local[base + 2U],
+                    return __fmaf_rn(rotation_to_local.values[base + 2U],
                                      global_normal.z,
-                                     __fmaf_rn(rotation_to_local[base + 0U],
+                                     __fmaf_rn(rotation_to_local.values[base + 0U],
                                                global_normal.x,
-                                               __fmul_rn(rotation_to_local[base + 1U], global_normal.y)));
+                                               __fmul_rn(rotation_to_local.values[base + 1U], global_normal.y)));
                 };
                 const RecoveredFloat3 local_normal{rotation_row(0U), rotation_row(1U), rotation_row(2U)};
                 const float pace =
@@ -5494,10 +5511,12 @@ namespace metmodel
                                                                   std::size_t work_items,
                                                                   cudaStream_t stream)
     {
-        if ((camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
+        if (rotation_to_local == nullptr ||
+            (camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
              camera.type != 9U && camera.type != 10U) ||
             depth_downscale == 0U || (image_one_step_more_detailed != 0U && depth_downscale < 2U))
             return cudaErrorInvalidValue;
+        const RecoveredPropagationMatrix3x3f rotation_value = make_recovered_propagation_rotation(rotation_to_local);
         constexpr unsigned int threads = 128U;
         const unsigned int blocks = static_cast<unsigned int>((work_items + threads - 1U) / threads);
         if (camera.type == 0U)
@@ -5509,7 +5528,7 @@ namespace metmodel
                 coarse_depth,
                 coarse_radius,
                 camera,
-                rotation_to_local,
+                rotation_value,
                 depth_downscale,
                 reference_image,
                 image_one_step_more_detailed,
@@ -5529,7 +5548,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5549,7 +5568,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5569,7 +5588,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5589,7 +5608,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5609,7 +5628,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5629,7 +5648,7 @@ namespace metmodel
                                                   coarse_depth,
                                                   coarse_radius,
                                                   camera,
-                                                  rotation_to_local,
+                                                  rotation_value,
                                                   depth_downscale,
                                                   reference_image,
                                                   image_one_step_more_detailed,
@@ -5663,10 +5682,12 @@ namespace metmodel
                                                                    std::size_t work_items,
                                                                    cudaStream_t stream)
     {
-        if ((camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
+        if (rotation_to_local == nullptr ||
+            (camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
              camera.type != 9U && camera.type != 10U) ||
             depth_downscale == 0U || (image_one_step_more_detailed != 0U && depth_downscale < 2U))
             return cudaErrorInvalidValue;
+        const RecoveredPropagationMatrix3x3f rotation_value = make_recovered_propagation_rotation(rotation_to_local);
         constexpr unsigned int threads = 128U;
         const unsigned int blocks = static_cast<unsigned int>((work_items + threads - 1U) / threads);
 #define METMODEL_LAUNCH_PROPAGATION_U16(camera_type)                                                                   \
@@ -5677,7 +5698,7 @@ namespace metmodel
                                           coarse_depth,                                                                \
                                           coarse_radius,                                                               \
                                           camera,                                                                      \
-                                          rotation_to_local,                                                           \
+                                          rotation_value,                                                              \
                                           depth_downscale,                                                             \
                                           reference_image,                                                             \
                                           image_one_step_more_detailed,                                                \
@@ -5735,10 +5756,12 @@ namespace metmodel
                                                                    std::size_t work_items,
                                                                    cudaStream_t stream)
     {
-        if ((camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
+        if (rotation_to_local == nullptr ||
+            (camera.type != 0U && camera.type != 2U && camera.type != 3U && camera.type != 4U && camera.type != 8U &&
              camera.type != 9U && camera.type != 10U) ||
             depth_downscale == 0U || (image_one_step_more_detailed != 0U && depth_downscale < 2U))
             return cudaErrorInvalidValue;
+        const RecoveredPropagationMatrix3x3f rotation_value = make_recovered_propagation_rotation(rotation_to_local);
         constexpr unsigned int threads = 128U;
         const unsigned int blocks = static_cast<unsigned int>((work_items + threads - 1U) / threads);
 #define METMODEL_LAUNCH_PROPAGATION_F32(camera_type)                                                                   \
@@ -5749,7 +5772,7 @@ namespace metmodel
                                           coarse_depth,                                                                \
                                           coarse_radius,                                                               \
                                           camera,                                                                      \
-                                          rotation_to_local,                                                           \
+                                          rotation_value,                                                              \
                                           depth_downscale,                                                             \
                                           reference_image,                                                             \
                                           image_one_step_more_detailed,                                                \

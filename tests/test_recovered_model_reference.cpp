@@ -248,6 +248,73 @@ namespace
         EXPECT_EQ(affine_output.filtered_mask_allocation, projective_output.filtered_mask_allocation);
     }
 
+    TEST(RecoveredModelReference, SourceCudaPropagationPassesRotationByValue)
+    {
+        constexpr std::uint32_t width = 8U;
+        constexpr std::uint32_t height = 8U;
+        constexpr std::size_t pixels = static_cast<std::size_t>(width) * height;
+
+        metmodel::PatchMatchPropagationInput input;
+        input.camera.type = 0U;
+        input.camera.f = 8.0F;
+        input.camera.width_original = width;
+        input.camera.height_original = height;
+        input.reference_to_neighbor_rotation = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F};
+        input.depth_downscale = 1U;
+        input.reference_image_sample_bytes = 1U;
+        input.reference_image.assign(pixels, 128U);
+        input.depth.assign(pixels, 2.0F);
+        input.normal.resize(pixels * 3U);
+        for (std::size_t pixel = 0U; pixel < pixels; ++pixel)
+        {
+            input.normal[3U * pixel + 0U] = 128U;
+            input.normal[3U * pixel + 1U] = 128U;
+            input.normal[3U * pixel + 2U] = 255U;
+        }
+        input.cost.assign(pixels, 0.0F);
+        input.coarse_depth.assign(pixels, 0.0F);
+        input.coarse_depth_radius.assign(pixels, 0.0F);
+        input.global_work_items = ((width + 1U) / 2U) * height;
+
+        metmodel::PatchMatchCandidateOutput output;
+        std::string error;
+        if (!metmodel::run_recovered_patchmatch_propagation_cuda_source(input, output, error))
+        {
+            if (error.find("not compiled") != std::string::npos ||
+                error.find("context initialization failed") != std::string::npos)
+            {
+                GTEST_SKIP() << error;
+            }
+            FAIL() << error;
+        }
+
+        ASSERT_EQ(output.depth.size(),
+                  metmodel::PatchMatchCandidateOutput::hypotheses * metmodel::PatchMatchCandidateOutput::capacity);
+        EXPECT_TRUE(std::isfinite(output.depth.front()));
+        EXPECT_GT(output.depth.front(), 0.0F);
+
+        metmodel::PatchMatchCandidateOutput oracle;
+        if (!metmodel::run_recovered_patchmatch_propagation_cuda_ptx_oracle(input, oracle, error))
+        {
+            EXPECT_NE(error.find("operation not supported"), std::string::npos) << error;
+            return;
+        }
+        for (std::size_t hypothesis = 0U; hypothesis < metmodel::PatchMatchCandidateOutput::hypotheses; ++hypothesis)
+        {
+            for (std::size_t item = 0U; item < input.global_work_items; ++item)
+            {
+                const std::size_t candidate = hypothesis * metmodel::PatchMatchCandidateOutput::capacity + item;
+                EXPECT_EQ(std::bit_cast<std::uint32_t>(output.depth[candidate]),
+                          std::bit_cast<std::uint32_t>(oracle.depth[candidate]));
+                for (std::size_t component = 0U; component < 3U; ++component)
+                {
+                    EXPECT_EQ(std::bit_cast<std::uint32_t>(output.normal[3U * candidate + component]),
+                              std::bit_cast<std::uint32_t>(oracle.normal[3U * candidate + component]));
+                }
+            }
+        }
+    }
+
     TEST(RecoveredModelReference, ParallelCudaSpeckleBandsRemainConnected)
     {
         constexpr std::uint32_t width = 512U;

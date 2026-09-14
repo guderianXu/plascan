@@ -1853,6 +1853,36 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloating
                          });
 }
 
+TEST(MvsHeterogeneousSchedulingContractTest, RecoveredPropagationPassesRotationByValue)
+{
+    const QString cudaSource =
+        readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/recovered_cuda_source.cu"));
+    const QString perspectiveKernel = sectionBetween(cudaSource,
+                                                     "patchmatch_propagation_u8_perspective_kernel(",
+                                                     "__device__ __forceinline__ float recovered_propagation_sample");
+    const QString extendedKernel = sectionBetween(
+        cudaSource, "patchmatch_propagation_extended_kernel(", "patchmatch_final_refinement_extended_kernel(");
+
+    expectContainsAll(cudaSource,
+                      {
+                          "struct alignas(16) RecoveredPropagationMatrix3x3f",
+                          "static_assert(sizeof(RecoveredPropagationMatrix3x3f) == 48U)",
+                          "make_recovered_propagation_rotation(rotation_to_local)",
+                      });
+    expectContainsAll(perspectiveKernel,
+                      {
+                          "RecoveredPropagationMatrix3x3f rotation_to_local",
+                          "rotation_to_local.values[base + 2U]",
+                      });
+    expectContainsAll(extendedKernel,
+                      {
+                          "RecoveredPropagationMatrix3x3f rotation_to_local",
+                          "rotation_to_local.values[base + 2U]",
+                      });
+    EXPECT_FALSE(perspectiveKernel.contains(QStringLiteral("const float* rotation_to_local")));
+    EXPECT_FALSE(extendedKernel.contains(QStringLiteral("const float* rotation_to_local")));
+}
+
 TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPaths)
 {
     const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
