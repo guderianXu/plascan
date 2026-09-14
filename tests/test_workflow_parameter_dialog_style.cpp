@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -67,31 +68,47 @@ TEST(WorkflowParameterDialogStyleTest, CreateDemHasOnlyOnePrimaryActionRow)
     EXPECT_EQ(close_buttons.constFirst()->text(), QStringLiteral("关闭"));
 }
 
-TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
+TEST(WorkflowParameterDialogStyleTest, GenerateModelMatchesReferenceDialogLayout)
 {
     GenerateModelDialog dialog;
-    EXPECT_TRUE(dialog.property("workflowParameterDialog").toBool());
-    EXPECT_EQ(dialog.minimumWidth(), 520);
+    EXPECT_EQ(dialog.objectName(), QStringLiteral("BuildModelDialog"));
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("生成网格"));
+    EXPECT_TRUE(dialog.windowFlags().testFlag(Qt::FramelessWindowHint));
+    EXPECT_TRUE(dialog.isModal());
+    EXPECT_EQ(dialog.minimumWidth(), 404);
+    EXPECT_EQ(dialog.maximumWidth(), 404);
     ASSERT_NE(dialog.layout(), nullptr);
-    EXPECT_EQ(dialog.layout()->sizeConstraint(), QLayout::SetMinimumSize);
+    EXPECT_EQ(dialog.layout()->contentsMargins(), QMargins(12, 10, 12, 10));
+    EXPECT_EQ(dialog.layout()->spacing(), 4);
 
-    auto* generalGroup = dialog.findChild<QGroupBox*>(QStringLiteral("workflowGeneralGroup"));
-    auto* advancedGroup = dialog.findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup"));
+    auto* title = dialog.findChild<QLabel*>(QStringLiteral("DialogTitle"));
+    auto* close = dialog.findChild<QPushButton*>(QStringLiteral("DialogClose"));
+    auto* generalGroup = dialog.findChild<QFrame*>(QStringLiteral("workflowGeneralGroup"));
+    auto* blocksGroup = dialog.findChild<QFrame*>(QStringLiteral("groupBlocks"));
+    auto* advancedGroup = dialog.findChild<QFrame*>(QStringLiteral("workflowAdvancedGroup"));
+    ASSERT_NE(title, nullptr);
+    ASSERT_NE(close, nullptr);
     ASSERT_NE(generalGroup, nullptr);
+    ASSERT_NE(blocksGroup, nullptr);
     ASSERT_NE(advancedGroup, nullptr);
+    EXPECT_EQ(title->text(), QStringLiteral("生成网格"));
+    EXPECT_EQ(close->text(), QStringLiteral("×"));
 
-    auto* generalForm = qobject_cast<QFormLayout*>(generalGroup->layout());
+    auto* generalBody = generalGroup->findChild<QFrame*>(QStringLiteral("SectionBody"));
+    ASSERT_NE(generalBody, nullptr);
+    auto* generalForm = qobject_cast<QFormLayout*>(generalBody->layout());
     ASSERT_NE(generalForm, nullptr);
     EXPECT_EQ(generalForm->fieldGrowthPolicy(), QFormLayout::AllNonFixedFieldsGrow);
     EXPECT_EQ(generalForm->horizontalSpacing(), 12);
     EXPECT_EQ(generalForm->verticalSpacing(), 6);
 
-    EXPECT_EQ(dialog.findChild<QGroupBox*>(QStringLiteral("workflowRegionGroup")), nullptr);
-    EXPECT_EQ(dialog.findChild<QComboBox*>(QStringLiteral("modelSurfaceTypeCombo")), nullptr);
+    EXPECT_NE(dialog.findChild<QComboBox*>(QStringLiteral("modelSurfaceTypeCombo")), nullptr);
     auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
     auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    auto* filtering = dialog.findChild<QComboBox*>(QStringLiteral("modelDepthFilteringCombo"));
     ASSERT_NE(quality, nullptr);
     ASSERT_NE(interpolation, nullptr);
+    ASSERT_NE(filtering, nullptr);
     ASSERT_EQ(quality->count(), 5);
     EXPECT_EQ(quality->itemData(0).toString(), QStringLiteral("highest"));
     EXPECT_EQ(quality->itemData(1).toString(), QStringLiteral("high"));
@@ -102,15 +119,22 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_EQ(interpolation->itemData(0).toString(), QStringLiteral("disabled"));
     EXPECT_EQ(interpolation->itemData(1).toString(), QStringLiteral("enabled"));
     EXPECT_EQ(interpolation->itemData(2).toString(), QStringLiteral("extrapolated"));
-    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("splitRegionCheck")), nullptr);
-    EXPECT_EQ(dialog.findChild<QDoubleSpinBox*>(QStringLiteral("blockSizeSpin")), nullptr);
-    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("saveAfterEachStepCheck")), nullptr);
-    EXPECT_EQ(dialog.findChild<QCheckBox*>(QStringLiteral("strictVolumetricMasksCheck")), nullptr);
+    EXPECT_EQ(filtering->currentData().toString(), QStringLiteral("mild"));
+    EXPECT_NE(dialog.findChild<QCheckBox*>(QStringLiteral("checkSplitInBlocks")), nullptr);
+    EXPECT_NE(dialog.findChild<QDoubleSpinBox*>(QStringLiteral("editBlocksSize")), nullptr);
+    auto* saveAfterStep = dialog.findChild<QCheckBox*>(QStringLiteral("checkSaveProject"));
+    auto* strictMasks = dialog.findChild<QCheckBox*>(QStringLiteral("checkStrictVolumetricMasks"));
+    ASSERT_NE(saveAfterStep, nullptr);
+    ASSERT_NE(strictMasks, nullptr);
+    EXPECT_FALSE(saveAfterStep->isEnabled());
+    EXPECT_FALSE(strictMasks->isEnabled());
+    EXPECT_NE(dialog.findChild<QCheckBox*>(QStringLiteral("checkVertexColors")), nullptr);
+    EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("buttonBlocksPreview")), nullptr);
 
     auto* sourceItems = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceItemCombo"));
     ASSERT_NE(sourceItems, nullptr);
     EXPECT_EQ(sourceItems->sizeAdjustPolicy(), QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    EXPECT_EQ(sourceItems->minimumContentsLength(), 24);
+    EXPECT_EQ(sourceItems->minimumContentsLength(), 10);
     EXPECT_TRUE(sourceItems->isHidden());
     EXPECT_EQ(generalForm->labelForField(sourceItems), nullptr);
     EXPECT_EQ(dialog.findChild<QLabel*>(QStringLiteral("workflowStatusLabel")), nullptr);
@@ -120,30 +144,25 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     ASSERT_NE(faceCountMode, nullptr);
     ASSERT_NE(customFaceCount, nullptr);
     ASSERT_EQ(faceCountMode->count(), 4);
-    EXPECT_EQ(faceCountMode->itemData(0).toString(), QStringLiteral("low"));
+    EXPECT_EQ(faceCountMode->itemData(0).toString(), QStringLiteral("high"));
     EXPECT_EQ(faceCountMode->itemData(1).toString(), QStringLiteral("medium"));
-    EXPECT_EQ(faceCountMode->itemData(2).toString(), QStringLiteral("high"));
+    EXPECT_EQ(faceCountMode->itemData(2).toString(), QStringLiteral("low"));
     EXPECT_EQ(faceCountMode->itemData(3).toString(), QStringLiteral("custom"));
-    EXPECT_EQ(faceCountMode->itemText(0), QStringLiteral("低"));
+    EXPECT_EQ(faceCountMode->itemText(0), QStringLiteral("高"));
     EXPECT_EQ(faceCountMode->itemText(1), QStringLiteral("中"));
-    EXPECT_EQ(faceCountMode->itemText(2), QStringLiteral("高"));
+    EXPECT_EQ(faceCountMode->itemText(2), QStringLiteral("低"));
     EXPECT_EQ(faceCountMode->itemText(3), QStringLiteral("自定义"));
     EXPECT_EQ(customFaceCount->minimum(), 1);
     EXPECT_EQ(customFaceCount->maximum(), 2000000);
 
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
-    auto* scrollArea = dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea"));
     ASSERT_NE(buttonBox, nullptr);
-    ASSERT_NE(scrollArea, nullptr);
-    EXPECT_TRUE(scrollArea->widgetResizable());
-    EXPECT_GT(scrollArea->minimumHeight(), 0);
-    EXPECT_EQ(scrollArea->minimumHeight(), scrollArea->maximumHeight());
-    EXPECT_EQ(scrollArea->horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
-    EXPECT_EQ(scrollArea->findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox")), nullptr);
-    EXPECT_NE(scrollArea->findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup")), nullptr);
+    EXPECT_EQ(dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea")), nullptr);
     EXPECT_TRUE(buttonBox->centerButtons());
-    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Ok)->text(), QStringLiteral("生成"));
-    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Cancel)->text(), QStringLiteral("取消"));
+    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Ok)->text(), QStringLiteral("OK"));
+    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Cancel)->text(), QStringLiteral("Cancel"));
+    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Ok)->width(), 86);
+    EXPECT_EQ(buttonBox->button(QDialogButtonBox::Cancel)->width(), 86);
 }
 
 TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameterLayout)
@@ -242,18 +261,25 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudBlocksWithoutProductionSp
     EXPECT_FALSE(replace->isEnabled());
 }
 
-TEST(WorkflowParameterDialogStyleTest, AdvancedSectionKeepsOnlyCanonicalModelControls)
+TEST(WorkflowParameterDialogStyleTest, AdvancedSectionUsesReferenceCollapsibleControls)
 {
     GenerateModelDialog dialog;
     dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
 
-    auto* toggle = dialog.findChild<QToolButton*>(QStringLiteral("workflowAdvancedToggle"));
-    auto* advanced = dialog.findChild<QGroupBox*>(QStringLiteral("workflowAdvancedGroup"));
-    auto* scrollArea = dialog.findChild<QScrollArea*>(QStringLiteral("workflowParameterScrollArea"));
+    QToolButton* toggle = nullptr;
+    for (QToolButton* candidate : dialog.findChildren<QToolButton*>(QStringLiteral("SectionHeader")))
+    {
+        if (candidate->text() == QStringLiteral("高级"))
+        {
+            toggle = candidate;
+            break;
+        }
+    }
+    auto* advancedSection = dialog.findChild<QFrame*>(QStringLiteral("workflowAdvancedGroup"));
+    auto* advanced = advancedSection ? advancedSection->findChild<QFrame*>(QStringLiteral("SectionBody")) : nullptr;
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
     ASSERT_NE(toggle, nullptr);
     ASSERT_NE(advanced, nullptr);
-    ASSERT_NE(scrollArea, nullptr);
     ASSERT_NE(buttonBox, nullptr);
 
     EXPECT_FALSE(toggle->isChecked());
@@ -261,27 +287,50 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionKeepsOnlyCanonicalModelCon
 
     dialog.show();
     QApplication::processEvents();
-    const qreal scaleFactor = qEnvironmentVariable("QT_SCALE_FACTOR", QStringLiteral("1.0")).toDouble();
-    if (scaleFactor >= 2.0)
-    {
-        EXPECT_TRUE(scrollArea->verticalScrollBar()->isVisible());
-        EXPECT_TRUE(buttonBox->isVisible());
-    }
-    else
-    {
-        EXPECT_FALSE(scrollArea->verticalScrollBar()->isVisible());
-    }
-    dialog.resize(dialog.width() + 160, dialog.height());
-    QApplication::processEvents();
     const int resizedWidth = dialog.width();
+    const int collapsedHeight = dialog.height();
     toggle->setChecked(true);
     QApplication::processEvents();
     EXPECT_FALSE(advanced->isHidden());
     EXPECT_EQ(dialog.width(), resizedWidth);
+    EXPECT_GT(dialog.height(), collapsedHeight);
     toggle->setChecked(false);
     QApplication::processEvents();
     EXPECT_TRUE(advanced->isHidden());
     EXPECT_EQ(dialog.width(), resizedWidth);
+    EXPECT_TRUE(buttonBox->isVisible());
+}
+
+TEST(WorkflowParameterDialogStyleTest, ModelBlockControlsExposeReferenceStateWithoutSilentFallback)
+{
+    GenerateModelDialog dialog;
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
+
+    auto* split = dialog.findChild<QCheckBox*>(QStringLiteral("checkSplitInBlocks"));
+    auto* blockSize = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("editBlocksSize"));
+    auto* preview = dialog.findChild<QPushButton*>(QStringLiteral("buttonBlocksPreview"));
+    auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(split, nullptr);
+    ASSERT_NE(blockSize, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    ASSERT_NE(buttonBox->button(QDialogButtonBox::Ok), nullptr);
+
+    EXPECT_FALSE(split->isChecked());
+    EXPECT_FALSE(blockSize->isEnabled());
+    EXPECT_FALSE(preview->isEnabled());
+    EXPECT_TRUE(buttonBox->button(QDialogButtonBox::Ok)->isEnabled());
+
+    split->setChecked(true);
+    EXPECT_TRUE(blockSize->isEnabled());
+    EXPECT_TRUE(preview->isEnabled());
+    EXPECT_FALSE(buttonBox->button(QDialogButtonBox::Ok)->isEnabled());
+    EXPECT_TRUE(buttonBox->button(QDialogButtonBox::Ok)->toolTip().contains(QStringLiteral("分块模型调度")));
+
+    split->setChecked(false);
+    EXPECT_FALSE(blockSize->isEnabled());
+    EXPECT_FALSE(preview->isEnabled());
+    EXPECT_TRUE(buttonBox->button(QDialogButtonBox::Ok)->isEnabled());
 }
 
 TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings)
@@ -355,7 +404,7 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelFixesRecoveredPipelineParame
     EXPECT_EQ(settings.value(QStringLiteral("interpolation")).toString(), QStringLiteral("disabled"));
     EXPECT_FALSE(settings.contains(QStringLiteral("calculateVertexColors")));
     EXPECT_FALSE(settings.contains(QStringLiteral("surface_type")));
-    EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("mild"));
+    EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(), QStringLiteral("aggressive"));
 }
 
 TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsQualityAndInterpolationControls)
@@ -721,6 +770,10 @@ TEST(WorkflowParameterDialogStyleTest, StylesheetRulesAreScopedToWorkflowDialogs
     EXPECT_TRUE(
         style.contains(QStringLiteral("QDialog[workflowParameterDialog=\"true\"] QToolButton#workflowAdvancedToggle")));
     EXPECT_TRUE(style.contains(QStringLiteral("QDialog[workflowParameterDialog=\"true\"] QLabel#workflowStatusLabel")));
+    EXPECT_TRUE(style.contains(QStringLiteral("QDialog#BuildModelDialog")));
+    EXPECT_TRUE(style.contains(QStringLiteral("QToolButton[modelSectionHeader=\"true\"]")));
+    EXPECT_TRUE(style.contains(QStringLiteral("QFrame[modelSectionBody=\"true\"]")));
+    EXPECT_TRUE(style.contains(QStringLiteral("QDialog#BuildModelPreviewDialog")));
 }
 
 int main(int argc, char** argv)

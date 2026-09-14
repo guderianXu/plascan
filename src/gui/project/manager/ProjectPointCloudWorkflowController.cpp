@@ -191,16 +191,40 @@ QString sparsePointSidecarPathFromRecord(const QJsonObject &record)
     return path.isEmpty() ? QString() : QDir::cleanPath(path);
 }
 
-QStringList selectedImagesFromRecord(const QJsonObject &record)
+QStringList selectedImagesFromRecord(const QJsonObject &record,
+                                     const QJsonObject &metadata,
+                                     QString *error_message)
 {
+    if (error_message)
+    {
+        error_message->clear();
+    }
+
     QStringList images;
     for (const QJsonValue &value : record.value(QStringLiteral("selected_images")).toArray())
     {
-        const QString path = QDir::cleanPath(value.toString().trimmed());
-        if (!path.isEmpty())
+        const QString token = value.toString().trimmed();
+        const auto resolved =
+            xjw::common::project::resolveProjectImageToken(token, metadata);
+        if (resolved.status !=
+                xjw::common::project::ImageResolveStatus::Found
+            || resolved.path.isEmpty())
         {
-            images.push_back(path);
+            if (error_message)
+            {
+                *error_message =
+                    resolved.status ==
+                            xjw::common::project::ImageResolveStatus::Ambiguous
+                        ? QStringLiteral(
+                              "空三注册影像在当前工程中存在多个同名候选：%1")
+                              .arg(token)
+                        : QStringLiteral(
+                              "无法将空三注册影像映射到当前工程影像：%1")
+                              .arg(token);
+            }
+            return {};
         }
+        images.push_back(QDir::cleanPath(resolved.path));
     }
     return images;
 }
@@ -475,7 +499,14 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     context->atIndex = at_index;
     context->sparseCloudPath = sparseCloudPathFromRecord(at_record);
     context->sparsePointSidecarPath = sparsePointSidecarPathFromRecord(at_record);
-    context->selectedImages = selectedImagesFromRecord(at_record);
+    QString selected_image_error;
+    context->selectedImages =
+        selectedImagesFromRecord(at_record, metadata, &selected_image_error);
+    if (!selected_image_error.isEmpty())
+    {
+        failTask(selected_image_error, dialog_title);
+        return false;
+    }
     context->projectInputSignature =
         xjw::gui::project::projectDepthInputSignature(metadata, at_index);
     context->reconstructionGenerationId =

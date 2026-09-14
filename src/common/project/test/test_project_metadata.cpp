@@ -1,6 +1,9 @@
 #include "project/ProjectMetadata.h"
 #include "project/ProjectConfigManager.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 
@@ -176,6 +179,37 @@ TEST(ProjectMetadataTest, ResolvesStableImageUuidBeforeDisplayTokens)
         resolveProjectImageToken(QStringLiteral("stable-image-id"), metadata);
     EXPECT_EQ(resolved.status, ImageResolveStatus::Found);
     EXPECT_EQ(resolved.path, image_path);
+}
+
+TEST(ProjectMetadataTest, ResolvesPersistedImportedAssetBackToOriginalImageIdentity)
+{
+    const QString left = QDir::cleanPath(
+        QFileInfo(QStringLiteral("/dataset/left/frame001.tif"))
+            .absoluteFilePath());
+    const QString right = QDir::cleanPath(
+        QFileInfo(QStringLiteral("/dataset/right/frame001.tif"))
+            .absoluteFilePath());
+    const QString bucket = QString::fromLatin1(
+        QCryptographicHash::hash(left.toUtf8(), QCryptographicHash::Sha256)
+            .toHex()
+            .left(24));
+    const QString uri =
+        QStringLiteral("plascan:///chunk/assets/imported/%1/frame001.tif")
+            .arg(bucket);
+    const QString materialized =
+        QStringLiteral("/tmp/project.files/1/assets/imported/%1/frame001.tif")
+            .arg(bucket);
+    const QStringList project_images{left, right};
+
+    const ImageResolveResult from_uri =
+        resolveProjectImageToken(uri, project_images);
+    EXPECT_EQ(from_uri.status, ImageResolveStatus::Found);
+    EXPECT_EQ(from_uri.path, left);
+
+    const ImageResolveResult from_materialized_path =
+        resolveProjectImageToken(materialized, project_images);
+    EXPECT_EQ(from_materialized_path.status, ImageResolveStatus::Found);
+    EXPECT_EQ(from_materialized_path.path, left);
 }
 
 } // namespace

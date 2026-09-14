@@ -456,3 +456,143 @@ QDialog[workflowParameterDialog="true"] QLabel#workflowStatusLabel {
 QDialog[workflowParameterDialog="true"] QDialogButtonBox QPushButton {
     min-width: 72px;
 }
+
+QDialog#BuildModelDialog,
+QDialog#BuildModelPreviewDialog {
+    background: #f1f1f1;
+    color: #171717;
+    font-size: 13px;
+}
+
+QDialog#BuildModelDialog QWidget,
+QDialog#BuildModelPreviewDialog QWidget {
+    background: transparent;
+}
+
+QDialog#BuildModelDialog QWidget#DialogTitleBar {
+    background: #f1f1f1;
+}
+
+QDialog#BuildModelDialog QLabel#DialogTitle {
+    font-size: 15px;
+    font-weight: 500;
+}
+
+QDialog#BuildModelDialog QPushButton#DialogClose {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #8b8b8b;
+    font-size: 24px;
+}
+
+QDialog#BuildModelDialog QPushButton#DialogClose:hover {
+    background: #dfdfdf;
+    color: #555555;
+}
+
+QDialog#BuildModelDialog QToolButton[modelSectionHeader="true"] {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0 8px 0 4px;
+    min-height: 22px;
+    font-weight: 600;
+    text-align: left;
+}
+
+QDialog#BuildModelDialog QToolButton[modelSectionHeader="true"]:hover {
+    background: #e6e6e6;
+}
+
+QDialog#BuildModelDialog QFrame[modelSectionBody="true"] {
+    border: 1px solid #d2d2d2;
+    background: #f1f1f1;
+}
+
+QDialog#BuildModelDialog QComboBox,
+QDialog#BuildModelDialog QLineEdit,
+QDialog#BuildModelDialog QSpinBox,
+QDialog#BuildModelDialog QDoubleSpinBox,
+QDialog#BuildModelPreviewDialog QLineEdit {
+    min-height: 24px;
+    padding: 1px 8px;
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 2px;
+    selection-background-color: #32d871;
+}
+
+QDialog#BuildModelDialog QComboBox:hover,
+QDialog#BuildModelDialog QLineEdit:hover,
+QDialog#BuildModelDialog QSpinBox:hover,
+QDialog#BuildModelDialog QDoubleSpinBox:hover,
+QDialog#BuildModelPreviewDialog QLineEdit:hover {
+    border-color: #a9a9a9;
+}
+
+QDialog#BuildModelDialog QComboBox:focus,
+QDialog#BuildModelDialog QLineEdit:focus,
+QDialog#BuildModelDialog QSpinBox:focus,
+QDialog#BuildModelDialog QDoubleSpinBox:focus,
+QDialog#BuildModelPreviewDialog QLineEdit:focus {
+    border-color: #35c96d;
+}
+
+QDialog#BuildModelDialog QComboBox:disabled,
+QDialog#BuildModelDialog QLineEdit:disabled,
+QDialog#BuildModelDialog QSpinBox:disabled,
+QDialog#BuildModelDialog QDoubleSpinBox:disabled,
+QDialog#BuildModelPreviewDialog QLineEdit:disabled {
+    color: #969696;
+    background: #f8f8f8;
+}
+
+QDialog#BuildModelDialog QPushButton,
+QDialog#BuildModelPreviewDialog QPushButton {
+    min-height: 28px;
+    min-width: 76px;
+    padding: 0 10px;
+    border: 1px solid #777777;
+    border-radius: 2px;
+    color: #ffffff;
+    background: #737373;
+}
+
+QDialog#BuildModelDialog QPushButton:hover,
+QDialog#BuildModelPreviewDialog QPushButton:hover {
+    background: #666666;
+}
+
+QDialog#BuildModelDialog QPushButton:pressed,
+QDialog#BuildModelPreviewDialog QPushButton:pressed {
+    background: #595959;
+}
+
+QDialog#BuildModelDialog QPushButton:disabled,
+QDialog#BuildModelPreviewDialog QPushButton:disabled {
+    color: #9d9d9d;
+    border-color: #c8c8c8;
+    background: #d2d2d2;
+}
+
+QDialog#BuildModelDialog QCheckBox,
+QDialog#BuildModelPreviewDialog QCheckBox {
+    min-height: 23px;
+    spacing: 8px;
+}
+
+QDialog#BuildModelDialog QCheckBox::indicator,
+QDialog#BuildModelPreviewDialog QCheckBox::indicator {
+    width: 24px;
+    height: 24px;
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 2px;
+}
+
+QDialog#BuildModelDialog QCheckBox:disabled {
+    color: #969696;
+}

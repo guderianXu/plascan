@@ -3,26 +3,22 @@
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QMetaObject>
 #include <QString>
 
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QFrame;
 class QLabel;
 class QPushButton;
-class QScrollArea;
-class QScreen;
-class QShowEvent;
 class QSpinBox;
 class QToolButton;
-class QWidget;
 
 /**
- * @brief Metashape-style model generation dialog.
+ * @brief Reference-model-compatible mesh generation dialog.
  *
- * The dialog exposes source-data choices based on project artifacts, then maps
- * supported point-like sources to the existing mesh reconstruction pipeline.
+ * The widget layout mirrors the recovered reference GUI while source
+ * candidates and submitted settings remain backed by PlaScan project data.
  */
 class GenerateModelDialog : public QDialog
 {
@@ -38,9 +34,6 @@ signals:
     void runRequested(const QJsonObject& settings);
     void settingsChanged(const QJsonObject& settings);
 
-protected:
-    void showEvent(QShowEvent* event) override;
-
 private slots:
     void emitSettingsNow();
     void onRun();
@@ -54,10 +47,8 @@ private:
     void refreshSourceTypes();
     void refreshSourceItems();
     void setAdvancedExpanded(bool expanded);
-    void bindScreenGeometryUpdates(QScreen* targetScreen);
-    void refreshScrollableDialogSize();
     void updateAvailability();
-    void updateScrollableContentHeight();
+    void updateCustomFaceCountVisibility();
 
     QJsonArray _candidates;
     QString _pendingSourceData;
@@ -68,17 +59,38 @@ private:
 
     QComboBox* _sourceCombo = nullptr;
     QComboBox* _sourceItemCombo = nullptr;
+    QComboBox* _surfaceTypeCombo = nullptr;
+    QLabel* _qualityLabel = nullptr;
     QComboBox* _qualityCombo = nullptr;
     QComboBox* _faceCountModeCombo = nullptr;
+    QLabel* _customFaceCountLabel = nullptr;
     QSpinBox* _customFaceCountSpin = nullptr;
+    QLabel* _rpcHeightMinLabel = nullptr;
+    QLabel* _rpcHeightMaxLabel = nullptr;
     QDoubleSpinBox* _rpcHeightMinSpin = nullptr;
     QDoubleSpinBox* _rpcHeightMaxSpin = nullptr;
-    QScrollArea* _contentScrollArea = nullptr;
-    QMetaObject::Connection _screenGeometryConnection;
-    bool _screenChangeConnected = false;
+    QCheckBox* _saveAfterEachStepCheck = nullptr;
+
+    QCheckBox* _splitInBlocksCheck = nullptr;
+    QComboBox* _coordinateSystemCombo = nullptr;
+    QDoubleSpinBox* _blockSizeSpin = nullptr;
+    QDoubleSpinBox* _blockOriginXSpin = nullptr;
+    QDoubleSpinBox* _blockOriginYSpin = nullptr;
+    QCheckBox* _skipBoundaryBlocksCheck = nullptr;
+    QPushButton* _blocksPreviewButton = nullptr;
+    bool _exportCompletedBlocks = false;
+    bool _generatePreviewTextures = true;
+    QString _blockOutputFolder;
+
+    QFrame* _advancedContent = nullptr;
     QToolButton* _advancedToggle = nullptr;
-    QWidget* _advancedContent = nullptr;
     QComboBox* _interpolationCombo = nullptr;
+    QLabel* _depthFilteringLabel = nullptr;
+    QComboBox* _depthFilteringCombo = nullptr;
+    QLabel* _pointClassesLabel = nullptr;
+    QPushButton* _selectPointClassesButton = nullptr;
+    QCheckBox* _vertexColorsCheck = nullptr;
+    QCheckBox* _strictVolumetricMasksCheck = nullptr;
     QCheckBox* _reuseDepthMapsCheck = nullptr;
     QCheckBox* _replaceDefaultCheck = nullptr;
     QPushButton* _okButton = nullptr;

@@ -1,7 +1,9 @@
 #include "ProjectMetadata.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 
 namespace xjw::common::project
@@ -38,6 +40,41 @@ ImageResolveResult resultForCandidates(const QStringList &candidates)
         return {ImageResolveStatus::Ambiguous, {}, unique};
     }
     return {ImageResolveStatus::NotFound, {}, {}};
+}
+
+QString externalPathStableToken(const QString &path)
+{
+    const QString absolute_path =
+        QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    return QString::fromLatin1(
+        QCryptographicHash::hash(absolute_path.toUtf8(),
+                                 QCryptographicHash::Sha256)
+            .toHex()
+            .left(24));
+}
+
+bool importedImageIdentity(const QString &token,
+                           QString *stable_token,
+                           QString *file_name)
+{
+    static const QRegularExpression expression(
+        QStringLiteral("(?:^|/)assets/imported/([0-9a-fA-F]{24})/([^/]+)$"));
+    QString normalized = QDir::fromNativeSeparators(token.trimmed());
+    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QRegularExpressionMatch match = expression.match(normalized);
+    if (!match.hasMatch())
+    {
+        return false;
+    }
+    if (stable_token)
+    {
+        *stable_token = match.captured(1).toCaseFolded();
+    }
+    if (file_name)
+    {
+        *file_name = match.captured(2);
+    }
+    return true;
 }
 
 } // namespace
@@ -213,6 +250,30 @@ ImageResolveResult resolveProjectImageToken(
     {
         return resultForCandidates(exact_matches);
     }
+
+    QString imported_stable_token;
+    QString imported_file_name;
+    if (importedImageIdentity(token,
+                              &imported_stable_token,
+                              &imported_file_name))
+    {
+        QStringList imported_matches;
+        for (const QString &image_path : project_image_paths)
+        {
+            if (externalPathStableToken(image_path) == imported_stable_token
+                && QFileInfo(QDir::fromNativeSeparators(image_path))
+                       .fileName()
+                       .compare(imported_file_name, Qt::CaseInsensitive) == 0)
+            {
+                imported_matches.append(image_path);
+            }
+        }
+        if (!imported_matches.isEmpty())
+        {
+            return resultForCandidates(imported_matches);
+        }
+    }
+
     if (token.contains(QLatin1Char('/')) || token.contains(QLatin1Char('\\')))
     {
         return {ImageResolveStatus::NotFound, {}, {}};

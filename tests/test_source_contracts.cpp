@@ -1019,8 +1019,8 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
                          {
                              "splitIntoBlocks",
                              "blockSizeMeters",
-                             "strictVolumetricMasks",
-                             "saveAfterEachStep",
+                             R"(settings[QStringLiteral("strictVolumetricMasks")])",
+                             R"(settings[QStringLiteral("saveAfterEachStep")])",
                          });
 }
 
@@ -1034,7 +1034,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
                       {
                           R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
                           R"(settings[QStringLiteral("reuseDepthMaps")] =)",
-                          R"(_hasReusableDepthMaps && selected_depth_batch_compatible)",
+                          R"(_hasReusableDepthMaps && selectedDepthBatchCompatible)",
                           R"(settings[QStringLiteral("force_depth_recompute")] =)",
                       });
 
@@ -1348,6 +1348,14 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
 
     expectContainsAll(dialog,
                       {
+                          "BuildModelDialog",
+                          "workflowGeneralGroup",
+                          "groupBlocks",
+                          "workflowAdvancedGroup",
+                          "checkSplitInBlocks",
+                          "checkVertexColors",
+                          "checkStrictVolumetricMasks",
+                          "modelDepthFilteringCombo",
                           "modelFaceCountModeCombo",
                           "modelCustomFaceCountSpin",
                           "QStringLiteral(\"low\")",
@@ -1355,17 +1363,16 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
                           "QStringLiteral(\"high\")",
                           "QStringLiteral(\"custom\")",
                           "_customFaceCountSpin->setRange(1, 2000000)",
-                          R"(face_count_mode == QStringLiteral("custom") ? custom_faces : 0)",
-                          R"(settings[QStringLiteral("simplifyTargetFaces")] = target_faces)",
+                          R"(faceCountMode == QStringLiteral("custom") ? customFaces : 0)",
+                          R"(settings[QStringLiteral("simplifyTargetFaces")] = targetFaces)",
                       });
     expectNotContainsAll(dialog,
                          {
                              "_splitRegionCheck",
-                             "_blockSizeSpin",
                              "splitIntoBlocks",
                              "blockSizeMeters",
-                             "strictVolumetricMasks",
-                             "saveAfterEachStep",
+                             R"(settings[QStringLiteral("strictVolumetricMasks")])",
+                             R"(settings[QStringLiteral("saveAfterEachStep")])",
                              "? 20000",
                              "? 100000",
                              "? 200000",
