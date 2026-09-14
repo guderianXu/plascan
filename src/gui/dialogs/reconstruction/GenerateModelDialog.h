@@ -42,7 +42,6 @@ private slots:
 private:
     QJsonObject collectSettings() const;
     QJsonObject currentCandidate() const;
-    bool usesRecoveredModelPipeline() const;
     bool usesRpcHeightPlaneSweep() const;
     void refreshSourceTypes();
     void refreshSourceItems();

@@ -10,13 +10,16 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -76,6 +79,22 @@ namespace
         return combo;
     }
 
+    void fitDialogHeightToVisibleContent(QDialog* dialog)
+    {
+        QLayout* windowLayout = dialog->layout();
+        if (!windowLayout)
+        {
+            return;
+        }
+        windowLayout->invalidate();
+        windowLayout->activate();
+        const int contentHeight = windowLayout->totalSizeHint().height();
+        if (contentHeight > 0)
+        {
+            dialog->setFixedHeight(contentHeight);
+        }
+    }
+
     QFrame* makeSection(QWidget* parent,
                         const QString& title,
                         const QString& sectionObjectName,
@@ -116,7 +135,7 @@ namespace
                              body->setVisible(checked);
                              if (auto* dialog = qobject_cast<QDialog*>(toggle->window()))
                              {
-                                 dialog->adjustSize();
+                                 QTimer::singleShot(0, dialog, [dialog]() { fitDialogHeightToVisibleContent(dialog); });
                              }
                          });
 
@@ -162,6 +181,14 @@ namespace
         if (sourceData == QStringLiteral("point_cloud"))
         {
             return QStringLiteral("点云");
+        }
+        if (sourceData == QStringLiteral("laser_scans"))
+        {
+            return QStringLiteral("激光扫描");
+        }
+        if (sourceData == QStringLiteral("depth_maps_laser_scans"))
+        {
+            return QStringLiteral("深度图+激光扫描");
         }
         if (sourceData == QStringLiteral("model"))
         {
@@ -271,6 +298,7 @@ namespace
         {
             if (_exportBlocks->isChecked() && _outputFolder->text().trimmed().isEmpty())
             {
+                QMessageBox::warning(this, tr("区块模型预览"), tr("请选择输出文件夹。"));
                 return;
             }
             QDialog::accept();
@@ -326,19 +354,19 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     QFrame* generalBody = makeSection(this, tr("一般"), QStringLiteral("workflowGeneralGroup"), &generalToggle, true);
     auto* generalForm = makeForm(generalBody);
 
-    _sourceCombo = makeCombo(generalBody, "modelSourceCombo");
+    _sourceCombo = makeCombo(generalBody, "comboSourceData");
     _sourceItemCombo = makeCombo(generalBody, "modelSourceItemCombo");
     _sourceItemCombo->hide();
     generalForm->addRow(tr("源数据:"), _sourceCombo);
 
-    _surfaceTypeCombo = makeCombo(generalBody, "modelSurfaceTypeCombo");
+    _surfaceTypeCombo = makeCombo(generalBody, "comboSurfaceType");
     _surfaceTypeCombo->addItem(tr("任意（3D）"), QStringLiteral("arbitrary_3d"));
     _surfaceTypeCombo->addItem(tr("高度场（2.5D）"), QStringLiteral("height_field"));
     generalForm->addRow(tr("表面类型:"), _surfaceTypeCombo);
 
     _qualityLabel = new QLabel(tr("质量:"), generalBody);
     _qualityLabel->setObjectName(QStringLiteral("labelQuality"));
-    _qualityCombo = makeCombo(generalBody, "modelQualityCombo");
+    _qualityCombo = makeCombo(generalBody, "comboQuality");
     _qualityCombo->addItem(tr("超高"), QStringLiteral("highest"));
     _qualityCombo->addItem(tr("高"), QStringLiteral("high"));
     _qualityCombo->addItem(tr("中"), QStringLiteral("medium"));
@@ -347,7 +375,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     _qualityCombo->setCurrentIndex(2);
     generalForm->addRow(_qualityLabel, _qualityCombo);
 
-    _faceCountModeCombo = makeCombo(generalBody, "modelFaceCountModeCombo");
+    _faceCountModeCombo = makeCombo(generalBody, "comboFaceCount");
     _faceCountModeCombo->addItem(tr("高"), QStringLiteral("high"));
     _faceCountModeCombo->addItem(tr("中"), QStringLiteral("medium"));
     _faceCountModeCombo->addItem(tr("低"), QStringLiteral("low"));
@@ -356,8 +384,8 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
 
     _customFaceCountLabel = new QLabel(tr("自定义面数:"), generalBody);
     _customFaceCountSpin = new QSpinBox(generalBody);
-    _customFaceCountSpin->setObjectName(QStringLiteral("modelCustomFaceCountSpin"));
-    _customFaceCountSpin->setRange(1, 2000000);
+    _customFaceCountSpin->setObjectName(QStringLiteral("editCustomFaceCount"));
+    _customFaceCountSpin->setRange(1, 2000000000);
     _customFaceCountSpin->setValue(200000);
     _customFaceCountSpin->setGroupSeparatorShown(true);
     generalForm->addRow(_customFaceCountLabel, _customFaceCountSpin);
@@ -379,8 +407,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
 
     _saveAfterEachStepCheck = new QCheckBox(tr("在每个步骤完成后保存项目"), generalBody);
     _saveAfterEachStepCheck->setObjectName(QStringLiteral("checkSaveProject"));
-    _saveAfterEachStepCheck->setToolTip(tr("当前模型任务为单阶段提交，此选项仅按参考界面展示。"));
-    _saveAfterEachStepCheck->setEnabled(false);
+    _saveAfterEachStepCheck->setToolTip(tr("在深度图准备和模型生成的阶段边界保存当前项目。"));
     generalForm->addRow(_saveAfterEachStepCheck);
     setLabelColumnWidth(generalForm, 168);
     root->addWidget(generalBody->parentWidget());
@@ -444,7 +471,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     _advancedContent = makeSection(this, tr("高级"), QStringLiteral("workflowAdvancedGroup"), &_advancedToggle, false);
     auto* advancedForm = makeForm(_advancedContent);
 
-    _interpolationCombo = makeCombo(_advancedContent, "modelInterpolationCombo");
+    _interpolationCombo = makeCombo(_advancedContent, "comboInterpolation");
     _interpolationCombo->addItem(tr("已禁用"), QStringLiteral("disabled"));
     _interpolationCombo->addItem(tr("已启用（默认）"), QStringLiteral("enabled"));
     _interpolationCombo->addItem(tr("推断"), QStringLiteral("extrapolated"));
@@ -453,7 +480,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
 
     _depthFilteringLabel = new QLabel(tr("深度过滤:"), _advancedContent);
     _depthFilteringLabel->setObjectName(QStringLiteral("labelFilterMode"));
-    _depthFilteringCombo = makeCombo(_advancedContent, "modelDepthFilteringCombo");
+    _depthFilteringCombo = makeCombo(_advancedContent, "comboFilterMode");
     _depthFilteringCombo->addItem(tr("已禁用"), QStringLiteral("disabled"));
     _depthFilteringCombo->addItem(tr("轻度"), QStringLiteral("mild"));
     _depthFilteringCombo->addItem(tr("中度"), QStringLiteral("moderate"));
@@ -486,12 +513,12 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     advancedForm->addRow(_strictVolumetricMasksCheck);
 
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), _advancedContent);
-    _reuseDepthMapsCheck->setObjectName(QStringLiteral("reuseDepthMapsCheck"));
+    _reuseDepthMapsCheck->setObjectName(QStringLiteral("checkReuseDepth"));
     _reuseDepthMapsCheck->setChecked(true);
     advancedForm->addRow(_reuseDepthMapsCheck);
 
     _replaceDefaultCheck = new QCheckBox(tr("要替换默认模型吗"), _advancedContent);
-    _replaceDefaultCheck->setObjectName(QStringLiteral("replaceDefaultModelCheck"));
+    _replaceDefaultCheck->setObjectName(QStringLiteral("checkReplaceAsset"));
     advancedForm->addRow(_replaceDefaultCheck);
     setLabelColumnWidth(advancedForm, 168);
     root->addWidget(_advancedContent->parentWidget());
@@ -546,6 +573,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
             this,
             &GenerateModelDialog::emitSettingsNow);
     connect(_splitInBlocksCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
+    connect(_saveAfterEachStepCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
     connect(_blocksPreviewButton,
             &QPushButton::clicked,
             this,
@@ -585,8 +613,9 @@ GenerateModelDialog::GenerateModelDialog(QWidget* parent) : QDialog(parent)
     setAdvancedExpanded(false);
     updateCustomFaceCountVisibility();
     refreshSourceTypes();
-    adjustSize();
     setFixedWidth(404);
+    fitDialogHeightToVisibleContent(this);
+    QTimer::singleShot(0, this, [this]() { fitDialogHeightToVisibleContent(this); });
 }
 
 void GenerateModelDialog::applySettings(const QJsonObject& settings)
@@ -622,10 +651,10 @@ void GenerateModelDialog::applySettings(const QJsonObject& settings)
         const int legacyFaces = settings.value(QStringLiteral("targetFaces")).toInt();
         const QString legacyMode = legacyFaces <= 200000 ? QStringLiteral("high") : QStringLiteral("custom");
         _faceCountModeCombo->setCurrentIndex(_faceCountModeCombo->findData(legacyMode));
-        _customFaceCountSpin->setValue(qBound(1, legacyFaces, 2000000));
+        _customFaceCountSpin->setValue(qBound(1, legacyFaces, 2000000000));
     }
     _customFaceCountSpin->setValue(
-        qBound(1, settings.value(QStringLiteral("faceCountCustom")).toInt(_customFaceCountSpin->value()), 2000000));
+        qBound(1, settings.value(QStringLiteral("faceCountCustom")).toInt(_customFaceCountSpin->value()), 2000000000));
 
     const int qualityIndex =
         _qualityCombo->findData(settings.value(QStringLiteral("depthQualityProfile")).toString().trimmed());
@@ -655,6 +684,7 @@ void GenerateModelDialog::applySettings(const QJsonObject& settings)
     }
     _reuseDepthMapsRequested = settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
     _reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested);
+    _saveAfterEachStepCheck->setChecked(settings.value(QStringLiteral("saveAfterEachStep")).toBool(false));
     _replaceDefaultCheck->setChecked(settings.value(QStringLiteral("replaceDefaultModel")).toBool(false));
     updateCustomFaceCountVisibility();
     updateAvailability();
@@ -665,7 +695,6 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
     _candidates = QJsonArray();
     _hasReusableDepthMaps = false;
     bool hasDepthCandidate = false;
-    bool hasRpcCandidate = false;
     bool canGenerateDepthMaps = false;
     for (const QJsonValue& value : candidates)
     {
@@ -697,7 +726,6 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
         else if (sourceData == QStringLiteral("rpc_height_plane_sweep") && hasValidRpcImagePair(candidate))
         {
             _candidates.append(candidate);
-            hasRpcCandidate = true;
             if (candidate.contains(QStringLiteral("rpcHeightMinMeters")))
             {
                 _rpcHeightMinSpin->setValue(candidate.value(QStringLiteral("rpcHeightMinMeters")).toDouble());
@@ -707,7 +735,9 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
                 _rpcHeightMaxSpin->setValue(candidate.value(QStringLiteral("rpcHeightMaxMeters")).toDouble());
             }
         }
-        else if (sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("tie_points"))
+        else if (sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("tie_points") ||
+                 sourceData == QStringLiteral("laser_scans") ||
+                 sourceData == QStringLiteral("depth_maps_laser_scans") || sourceData == QStringLiteral("model"))
         {
             QJsonObject visibleCandidate = candidate;
             visibleCandidate[QLatin1String(kSupported)] = false;
@@ -717,7 +747,7 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
         }
     }
 
-    if (!hasDepthCandidate && !hasRpcCandidate)
+    if (!hasDepthCandidate)
     {
         QJsonObject automaticDepthMaps;
         automaticDepthMaps[QLatin1String(kSourceData)] = QStringLiteral("depth_maps");
@@ -737,6 +767,32 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray& candidates)
             _pendingSourcePath.clear();
         }
     }
+
+    const auto appendUnavailableSource = [this](const QString& sourceData, const QString& sourceLabel)
+    {
+        for (const QJsonValue& value : _candidates)
+        {
+            if (value.toObject().value(QLatin1String(kSourceData)).toString() == sourceData)
+            {
+                return;
+            }
+        }
+
+        QJsonObject candidate;
+        candidate[QLatin1String(kSourceData)] = sourceData;
+        candidate[QLatin1String(kSourceLabel)] = sourceLabel;
+        candidate[QLatin1String(kDisplay)] = sourceLabel;
+        candidate[QLatin1String(kSupported)] = false;
+        candidate[QLatin1String(kNote)] =
+            tr("参考界面保留此数据源；当前 recovered 生产链尚未闭合，不会回退到 PlaScan 旧算法。");
+        _candidates.append(candidate);
+    };
+    appendUnavailableSource(QStringLiteral("point_cloud"), tr("点云"));
+    appendUnavailableSource(QStringLiteral("tie_points"), tr("连接点"));
+    appendUnavailableSource(QStringLiteral("laser_scans"), tr("激光扫描"));
+    appendUnavailableSource(QStringLiteral("depth_maps_laser_scans"), tr("深度图+激光扫描"));
+    appendUnavailableSource(QStringLiteral("model"), tr("模型"));
+
     refreshSourceTypes();
 }
 
@@ -785,6 +841,7 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("automatic_depth_maps")] = automaticDepthMaps;
     settings[QStringLiteral("force_depth_recompute")] =
         automaticDepthMaps || (sourceData == QStringLiteral("depth_maps") && !reuseDepthMaps);
+    settings[QStringLiteral("saveAfterEachStep")] = _saveAfterEachStepCheck->isChecked();
     settings[QStringLiteral("replaceDefaultModel")] = _replaceDefaultCheck->isChecked();
     settings[QLatin1String(kComputeMode)] = _computeMode;
     settings[QStringLiteral("patch_match_backend")] =
@@ -809,12 +866,6 @@ QJsonObject GenerateModelDialog::currentCandidate() const
     return _sourceItemCombo->currentData().toJsonObject();
 }
 
-bool GenerateModelDialog::usesRecoveredModelPipeline() const
-{
-    return currentCandidate().value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps") &&
-           !usesRpcHeightPlaneSweep();
-}
-
 bool GenerateModelDialog::usesRpcHeightPlaneSweep() const
 {
     const QJsonObject candidate = currentCandidate();
@@ -829,22 +880,36 @@ void GenerateModelDialog::refreshSourceTypes()
     _sourceCombo->blockSignals(true);
     _sourceCombo->clear();
 
-    QStringList addedTypes;
+    QStringList orderedTypes{QStringLiteral("depth_maps"),
+                             QStringLiteral("point_cloud"),
+                             QStringLiteral("tie_points"),
+                             QStringLiteral("laser_scans"),
+                             QStringLiteral("depth_maps_laser_scans"),
+                             QStringLiteral("model")};
     for (const QJsonValue& value : _candidates)
     {
         const QJsonObject candidate = value.toObject();
         const QString sourceData = candidate.value(QLatin1String(kSourceData)).toString();
-        if (sourceData.isEmpty() || addedTypes.contains(sourceData))
+        if (!sourceData.isEmpty() && !orderedTypes.contains(sourceData))
         {
-            continue;
+            orderedTypes.append(sourceData);
         }
-        addedTypes.push_back(sourceData);
-        _sourceCombo->addItem(candidate.value(QLatin1String(kSourceLabel)).toString(defaultSourceLabel(sourceData)),
-                              sourceData);
-        const int itemIndex = _sourceCombo->count() - 1;
-        _sourceCombo->setItemData(
-            itemIndex, candidate.value(QLatin1String(kSupported)).toBool(false), Qt::UserRole - 1);
-        _sourceCombo->setItemData(itemIndex, candidate.value(QLatin1String(kNote)).toString(), Qt::ToolTipRole);
+    }
+    for (const QString& sourceData : orderedTypes)
+    {
+        for (const QJsonValue& value : _candidates)
+        {
+            const QJsonObject candidate = value.toObject();
+            if (candidate.value(QLatin1String(kSourceData)).toString() != sourceData)
+            {
+                continue;
+            }
+            _sourceCombo->addItem(candidate.value(QLatin1String(kSourceLabel)).toString(defaultSourceLabel(sourceData)),
+                                  sourceData);
+            _sourceCombo->setItemData(
+                _sourceCombo->count() - 1, candidate.value(QLatin1String(kNote)).toString(), Qt::ToolTipRole);
+            break;
+        }
     }
 
     if (_sourceCombo->count() == 0)
@@ -913,7 +978,7 @@ void GenerateModelDialog::setAdvancedExpanded(bool expanded)
     _advancedToggle->setChecked(expanded);
     _advancedToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
     _advancedContent->setVisible(expanded);
-    adjustSize();
+    fitDialogHeightToVisibleContent(this);
 }
 
 void GenerateModelDialog::updateAvailability()
@@ -923,9 +988,11 @@ void GenerateModelDialog::updateAvailability()
     const QString sourceData = candidate.value(QLatin1String(kSourceData)).toString();
     const bool hasCandidate = !sourceData.isEmpty();
     const bool selectedDepthBatchCompatible = candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
-    const bool canReuseDepthMaps = _hasReusableDepthMaps && selectedDepthBatchCompatible;
+    const bool canReuseDepthMaps =
+        sourceData == QStringLiteral("depth_maps") && _hasReusableDepthMaps && selectedDepthBatchCompatible;
     const bool rpcMode = usesRpcHeightPlaneSweep();
-    const bool usesDepth = usesRecoveredModelPipeline();
+    const bool usesDepth =
+        sourceData == QStringLiteral("depth_maps") || sourceData == QStringLiteral("depth_maps_laser_scans");
 
     _qualityLabel->setVisible(usesDepth);
     _qualityCombo->setVisible(usesDepth);
@@ -968,7 +1035,8 @@ void GenerateModelDialog::updateAvailability()
     _depthFilteringLabel->setEnabled(usesDepth && !_reuseDepthMapsCheck->isChecked());
     _depthFilteringCombo->setEnabled(usesDepth && !_reuseDepthMapsCheck->isChecked());
     const bool usesPointClasses =
-        sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("tie_points");
+        sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("tie_points") ||
+        sourceData == QStringLiteral("laser_scans") || sourceData == QStringLiteral("depth_maps_laser_scans");
     _pointClassesLabel->setEnabled(usesPointClasses);
     _selectPointClassesButton->setEnabled(usesPointClasses);
 
@@ -1008,7 +1076,7 @@ void GenerateModelDialog::updateAvailability()
     }
     _okButton->setToolTip(actionTip);
     _okButton->setEnabled(hasCandidate && supported && validRpcConfiguration && validReferenceOptions);
-    adjustSize();
+    fitDialogHeightToVisibleContent(this);
 }
 
 void GenerateModelDialog::updateCustomFaceCountVisibility()
@@ -1016,6 +1084,7 @@ void GenerateModelDialog::updateCustomFaceCountVisibility()
     const bool custom = _faceCountModeCombo->currentData().toString() == QStringLiteral("custom");
     _customFaceCountLabel->setVisible(custom);
     _customFaceCountSpin->setVisible(custom);
+    fitDialogHeightToVisibleContent(this);
 }
 
 void GenerateModelDialog::emitSettingsNow()

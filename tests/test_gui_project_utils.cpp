@@ -2445,13 +2445,15 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     dialog.applySettings(legacy_settings);
     dialog.setSourceCandidates(QJsonArray{tie_points, model});
 
-    auto* source_combo = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceCombo"));
+    auto* source_combo = dialog.findChild<QComboBox*>(QStringLiteral("comboSourceData"));
     ASSERT_NE(source_combo, nullptr);
     EXPECT_GE(source_combo->findData(QStringLiteral("depth_maps")), 0);
     const int tie_points_index = source_combo->findData(QStringLiteral("tie_points"));
     EXPECT_GE(tie_points_index, 0);
-    EXPECT_FALSE(source_combo->itemData(tie_points_index, Qt::UserRole - 1).toBool());
-    EXPECT_LT(source_combo->findData(QStringLiteral("model")), 0);
+    EXPECT_GE(source_combo->findData(QStringLiteral("point_cloud")), 0);
+    EXPECT_GE(source_combo->findData(QStringLiteral("laser_scans")), 0);
+    EXPECT_GE(source_combo->findData(QStringLiteral("depth_maps_laser_scans")), 0);
+    EXPECT_GE(source_combo->findData(QStringLiteral("model")), 0);
     EXPECT_EQ(source_combo->currentData().toString(), QStringLiteral("depth_maps"));
 
     auto* source_items = dialog.findChild<QComboBox*>(QStringLiteral("modelSourceItemCombo"));
@@ -2489,8 +2491,8 @@ TEST(GenerateModelDialogTest, ReusesCompatibleDepthMapsByDefault)
     dialog.applySettings(QJsonObject());
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    const auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
-    const auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    const auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("comboQuality"));
+    const auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("comboInterpolation"));
     ASSERT_NE(quality, nullptr);
     ASSERT_NE(interpolation, nullptr);
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
@@ -2524,7 +2526,7 @@ TEST(GenerateModelDialogTest, LegacyQualityCannotOverrideCanonicalDepthQuality)
     dialog.applySettings(QJsonObject{{QStringLiteral("quality"), QStringLiteral("ultra")}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("comboQuality"));
     ASSERT_NE(quality, nullptr);
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
 
@@ -2555,7 +2557,7 @@ TEST(GenerateModelDialogTest, LegacyQualityDoesNotRejectCanonicalReusableDepthBa
     dialog.applySettings(QJsonObject{{QStringLiteral("quality"), QStringLiteral("ultra")}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
+    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("checkReuseDepth"));
     ASSERT_NE(reuse_check, nullptr);
     EXPECT_TRUE(reuse_check->isEnabled());
     EXPECT_TRUE(reuse_check->isChecked());
@@ -2586,7 +2588,7 @@ TEST(GenerateModelDialogTest, RecomputesIncompatibleDepthBatch)
     dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), true}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
+    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("checkReuseDepth"));
     ASSERT_NE(reuse_check, nullptr);
     EXPECT_FALSE(reuse_check->isEnabled());
     EXPECT_FALSE(reuse_check->isChecked());
@@ -2615,7 +2617,7 @@ TEST(GenerateModelDialogTest, RecomputesExistingDepthMapsWhenReuseIsUnchecked)
     dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), false}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
+    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("checkReuseDepth"));
     ASSERT_NE(reuse_check, nullptr);
     EXPECT_TRUE(reuse_check->isEnabled());
     EXPECT_FALSE(reuse_check->isChecked());
@@ -2645,7 +2647,7 @@ TEST(GenerateModelDialogTest, DisablesDepthMapReuseWhenProjectHasNoDepthMaps)
     dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), true}});
     dialog.setSourceCandidates(QJsonArray{tie_points});
 
-    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
+    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("checkReuseDepth"));
     ASSERT_NE(reuse_check, nullptr);
     EXPECT_FALSE(reuse_check->isEnabled());
     EXPECT_FALSE(reuse_check->isChecked());
@@ -2665,7 +2667,7 @@ TEST(GenerateModelDialogTest, EnablesDepthMapReuseWhenProjectHasDepthMaps)
     dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), true}});
     dialog.setSourceCandidates(QJsonArray{depth_maps});
 
-    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("reuseDepthMapsCheck"));
+    auto* reuse_check = dialog.findChild<QCheckBox*>(QStringLiteral("checkReuseDepth"));
     ASSERT_NE(reuse_check, nullptr);
     EXPECT_TRUE(reuse_check->isEnabled());
     EXPECT_TRUE(reuse_check->isChecked());

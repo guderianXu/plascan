@@ -102,10 +102,11 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelMatchesReferenceDialogLayout
     EXPECT_EQ(generalForm->horizontalSpacing(), 12);
     EXPECT_EQ(generalForm->verticalSpacing(), 6);
 
-    EXPECT_NE(dialog.findChild<QComboBox*>(QStringLiteral("modelSurfaceTypeCombo")), nullptr);
-    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
-    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
-    auto* filtering = dialog.findChild<QComboBox*>(QStringLiteral("modelDepthFilteringCombo"));
+    EXPECT_NE(dialog.findChild<QComboBox*>(QStringLiteral("comboSourceData")), nullptr);
+    EXPECT_NE(dialog.findChild<QComboBox*>(QStringLiteral("comboSurfaceType")), nullptr);
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("comboQuality"));
+    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("comboInterpolation"));
+    auto* filtering = dialog.findChild<QComboBox*>(QStringLiteral("comboFilterMode"));
     ASSERT_NE(quality, nullptr);
     ASSERT_NE(interpolation, nullptr);
     ASSERT_NE(filtering, nullptr);
@@ -126,7 +127,7 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelMatchesReferenceDialogLayout
     auto* strictMasks = dialog.findChild<QCheckBox*>(QStringLiteral("checkStrictVolumetricMasks"));
     ASSERT_NE(saveAfterStep, nullptr);
     ASSERT_NE(strictMasks, nullptr);
-    EXPECT_FALSE(saveAfterStep->isEnabled());
+    EXPECT_TRUE(saveAfterStep->isEnabled());
     EXPECT_FALSE(strictMasks->isEnabled());
     EXPECT_NE(dialog.findChild<QCheckBox*>(QStringLiteral("checkVertexColors")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("buttonBlocksPreview")), nullptr);
@@ -139,8 +140,8 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelMatchesReferenceDialogLayout
     EXPECT_EQ(generalForm->labelForField(sourceItems), nullptr);
     EXPECT_EQ(dialog.findChild<QLabel*>(QStringLiteral("workflowStatusLabel")), nullptr);
 
-    auto* faceCountMode = dialog.findChild<QComboBox*>(QStringLiteral("modelFaceCountModeCombo"));
-    auto* customFaceCount = dialog.findChild<QSpinBox*>(QStringLiteral("modelCustomFaceCountSpin"));
+    auto* faceCountMode = dialog.findChild<QComboBox*>(QStringLiteral("comboFaceCount"));
+    auto* customFaceCount = dialog.findChild<QSpinBox*>(QStringLiteral("editCustomFaceCount"));
     ASSERT_NE(faceCountMode, nullptr);
     ASSERT_NE(customFaceCount, nullptr);
     ASSERT_EQ(faceCountMode->count(), 4);
@@ -153,7 +154,7 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelMatchesReferenceDialogLayout
     EXPECT_EQ(faceCountMode->itemText(2), QStringLiteral("低"));
     EXPECT_EQ(faceCountMode->itemText(3), QStringLiteral("自定义"));
     EXPECT_EQ(customFaceCount->minimum(), 1);
-    EXPECT_EQ(customFaceCount->maximum(), 2000000);
+    EXPECT_EQ(customFaceCount->maximum(), 2000000000);
 
     auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
     ASSERT_NE(buttonBox, nullptr);
@@ -294,11 +295,36 @@ TEST(WorkflowParameterDialogStyleTest, AdvancedSectionUsesReferenceCollapsibleCo
     EXPECT_FALSE(advanced->isHidden());
     EXPECT_EQ(dialog.width(), resizedWidth);
     EXPECT_GT(dialog.height(), collapsedHeight);
+    const int expandedHeight = dialog.height();
     toggle->setChecked(false);
     QApplication::processEvents();
     EXPECT_TRUE(advanced->isHidden());
     EXPECT_EQ(dialog.width(), resizedWidth);
+    EXPECT_LT(dialog.height(), expandedHeight);
+    EXPECT_EQ(dialog.height(), collapsedHeight);
     EXPECT_TRUE(buttonBox->isVisible());
+}
+
+TEST(WorkflowParameterDialogStyleTest, ModelSourceListKeepsReferenceCategoriesVisibleAndFailsClosed)
+{
+    GenerateModelDialog dialog;
+    dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
+
+    auto* source = dialog.findChild<QComboBox*>(QStringLiteral("comboSourceData"));
+    auto* buttonBox = dialog.findChild<QDialogButtonBox*>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    ASSERT_EQ(source->count(), 6);
+    EXPECT_EQ(source->itemText(0), QStringLiteral("深度图"));
+    EXPECT_EQ(source->itemText(1), QStringLiteral("点云"));
+    EXPECT_EQ(source->itemText(2), QStringLiteral("连接点"));
+    EXPECT_EQ(source->itemText(3), QStringLiteral("激光扫描"));
+    EXPECT_EQ(source->itemText(4), QStringLiteral("深度图+激光扫描"));
+    EXPECT_EQ(source->itemText(5), QStringLiteral("模型"));
+
+    source->setCurrentIndex(source->findData(QStringLiteral("model")));
+    EXPECT_FALSE(buttonBox->button(QDialogButtonBox::Ok)->isEnabled());
+    EXPECT_TRUE(buttonBox->button(QDialogButtonBox::Ok)->toolTip().contains(QStringLiteral("尚未闭合")));
 }
 
 TEST(WorkflowParameterDialogStyleTest, ModelBlockControlsExposeReferenceStateWithoutSilentFallback)
@@ -367,6 +393,7 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings
     EXPECT_EQ(settings.value(QStringLiteral("faceCountCustom")).toInt(), 60000);
     EXPECT_EQ(settings.value(QStringLiteral("simplifyTargetFaces")).toInt(), 0);
     EXPECT_EQ(settings.value(QStringLiteral("requestedTargetFaces")).toInt(), 0);
+    EXPECT_TRUE(settings.value(QStringLiteral("saveAfterEachStep")).toBool());
     for (const QString& retired : {QStringLiteral("quality"),
                                    QStringLiteral("qualityProfile"),
                                    QStringLiteral("modelQualityProfile"),
@@ -374,13 +401,12 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationCanonicalizesModelSettings
                                    QStringLiteral("splitIntoBlocks"),
                                    QStringLiteral("blockSizeMeters"),
                                    QStringLiteral("skipBoundaryBlocks"),
-                                   QStringLiteral("saveAfterEachStep"),
                                    QStringLiteral("strictVolumetricMasks")})
     {
         EXPECT_FALSE(settings.contains(retired)) << qPrintable(retired);
     }
 
-    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("comboQuality"));
     ASSERT_NE(quality, nullptr);
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));
 }
@@ -411,8 +437,8 @@ TEST(WorkflowParameterDialogStyleTest, RecoveredModelShowsQualityAndInterpolatio
 {
     GenerateModelDialog dialog;
     dialog.setSourceCandidates(QJsonArray{depthMapsCandidate()});
-    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("modelQualityCombo"));
-    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("modelInterpolationCombo"));
+    auto* quality = dialog.findChild<QComboBox*>(QStringLiteral("comboQuality"));
+    auto* interpolation = dialog.findChild<QComboBox*>(QStringLiteral("comboInterpolation"));
     ASSERT_NE(quality, nullptr);
     ASSERT_NE(interpolation, nullptr);
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("medium"));

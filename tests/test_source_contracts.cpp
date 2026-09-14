@@ -1020,7 +1020,6 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
                              "splitIntoBlocks",
                              "blockSizeMeters",
                              R"(settings[QStringLiteral("strictVolumetricMasks")])",
-                             R"(settings[QStringLiteral("saveAfterEachStep")])",
                          });
 }
 
@@ -1355,16 +1354,18 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
                           "checkSplitInBlocks",
                           "checkVertexColors",
                           "checkStrictVolumetricMasks",
-                          "modelDepthFilteringCombo",
-                          "modelFaceCountModeCombo",
-                          "modelCustomFaceCountSpin",
+                          "comboSourceData",
+                          "comboFilterMode",
+                          "comboFaceCount",
+                          "editCustomFaceCount",
                           "QStringLiteral(\"low\")",
                           "QStringLiteral(\"medium\")",
                           "QStringLiteral(\"high\")",
                           "QStringLiteral(\"custom\")",
-                          "_customFaceCountSpin->setRange(1, 2000000)",
+                          "_customFaceCountSpin->setRange(1, 2000000000)",
                           R"(faceCountMode == QStringLiteral("custom") ? customFaces : 0)",
                           R"(settings[QStringLiteral("simplifyTargetFaces")] = targetFaces)",
+                          R"(settings[QStringLiteral("saveAfterEachStep")])",
                       });
     expectNotContainsAll(dialog,
                          {
@@ -1372,7 +1373,6 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
                              "splitIntoBlocks",
                              "blockSizeMeters",
                              R"(settings[QStringLiteral("strictVolumetricMasks")])",
-                             R"(settings[QStringLiteral("saveAfterEachStep")])",
                              "? 20000",
                              "? 100000",
                              "? 200000",
