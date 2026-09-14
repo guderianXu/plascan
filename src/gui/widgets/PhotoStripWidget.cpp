@@ -14,6 +14,7 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QColor>
+#include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -56,7 +57,7 @@ constexpr int HiddenListFallbackCount = 8;
 class ThumbnailLoadPool final : public QThreadPool
 {
 public:
-    ThumbnailLoadPool()
+    explicit ThumbnailLoadPool(QObject* parent) : QThreadPool(parent)
     {
         setMaxThreadCount(std::clamp(QThread::idealThreadCount(), 2, 8));
         setExpiryTimeout(30'000);
@@ -65,8 +66,8 @@ public:
 
 QThreadPool *thumbnailLoadPool()
 {
-    static ThumbnailLoadPool pool;
-    return &pool;
+    static auto* pool = new ThumbnailLoadPool(QCoreApplication::instance());
+    return pool;
 }
 
 bool hasAlignmentEvidence(const QJsonObject &entry)
