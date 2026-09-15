@@ -4,7 +4,7 @@
 // 模块: MVS - 稀疏点云预处理
 // 说明:
 //   读取稀疏点云文件（.xyz / .ply），过滤离群值，计算包围盒，
-//   为 DepthMapGenerator 的 SparseCloud 提供来源。
+//   为 MvsPipelineService 的 SparseCloud 提供来源。
 // =============================================================================
 
 #include "MvsTypes.h"
@@ -28,7 +28,7 @@ struct PreprocessResult
     std::array<float,3> minPt = {0,0,0}; ///< AABB 最小值
     std::array<float,3> maxPt = {0,0,0}; ///< AABB 最大值
 
-    SparseCloud cloud;        ///< 处理后的稀疏点云（用于 DepthMapGenerator）
+    SparseCloud cloud; ///< 处理后的稀疏点云（用于 MvsPipelineService）
 };
 
 class SparseCloudPreprocessor

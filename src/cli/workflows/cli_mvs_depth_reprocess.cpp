@@ -1,7 +1,7 @@
 #include "cli_common.h"
 #include "CliJsonIO.h"
 
-#include "DepthMapGenerator.h"
+#include "MvsPipelineService.h"
 #include "MvsSourcePlanner.h"
 #include "MvsWorkspaceManifest.h"
 #include "MvsWorkspaceReplay.h"
@@ -11,14 +11,12 @@
 
 #include <QCoreApplication>
 #include <QDir>
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
-#include <QTimer>
 
 #include <algorithm>
 #include <cstdint>
@@ -687,7 +685,7 @@ int main(int argc, char **argv)
                  pairEvidenceProvenance.toUtf8().constData());
     std::fflush(stdout);
 
-    xjw::mvs::DepthMapGenerator generator;
+    xjw::mvs::MvsPipelineService generator;
     generator.setViews(views);
     if (!referenceIndices.empty())
     {
@@ -711,57 +709,30 @@ int main(int argc, char **argv)
     generator.setConfig(config);
     generator.setOutputDir(xjw::common::io::toUtf8Path(outputDir));
 
-    QEventLoop loop;
     bool success = false;
     QString generatorError;
     QJsonArray depthArtifactEvents;
     int lastProgress = -1;
-    QObject::connect(
-        &generator,
-        &xjw::mvs::DepthMapGenerator::progressChanged,
-        &loop,
-        [&lastProgress](const QString &stage, float ratio)
+    xjw::mvs::MvsPipelineEvents events;
+    events.progressChanged = [&lastProgress](const QString& stage, float ratio)
+    {
+        const int progress = std::clamp(static_cast<int>(ratio * 100.0f), 0, 100);
+        if (progress >= lastProgress + 5 || progress == 100)
         {
-            const int progress = std::clamp(
-                static_cast<int>(ratio * 100.0f), 0, 100);
-            if (progress >= lastProgress + 5 || progress == 100)
-            {
-                lastProgress = progress;
-                std::fprintf(stdout,
-                             "progress=%d stage=%s\n",
-                             progress,
-                             stage.toUtf8().constData());
-                std::fflush(stdout);
-            }
-        });
-    QObject::connect(
-        &generator,
-        &xjw::mvs::DepthMapGenerator::errorOccurred,
-        &loop,
-        [&generatorError](const QString &message)
-        {
-            generatorError = message;
-            std::fprintf(stderr, "mvs_error=%s\n", message.toUtf8().constData());
-        });
-    QObject::connect(
-        &generator,
-        &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved,
-        &loop,
-        [&depthArtifactEvents](const QJsonObject &artifact)
-        {
-            depthArtifactEvents.append(artifact);
-        });
-    QObject::connect(
-        &generator,
-        &xjw::mvs::DepthMapGenerator::finished,
-        &loop,
-        [&loop, &success](bool ok)
-        {
-            success = ok;
-            loop.quit();
-        });
-    QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
-    loop.exec();
+            lastProgress = progress;
+            std::fprintf(stdout, "progress=%d stage=%s\n", progress, stage.toUtf8().constData());
+            std::fflush(stdout);
+        }
+    };
+    events.errorOccurred = [&generatorError](const QString& message)
+    {
+        generatorError = message;
+        std::fprintf(stderr, "mvs_error=%s\n", message.toUtf8().constData());
+    };
+    events.depthMapArtifactSaved = [&depthArtifactEvents](const QJsonObject& artifact)
+    { depthArtifactEvents.append(artifact); };
+    generator.setEvents(std::move(events));
+    success = generator.execute().succeeded();
 
     const QJsonArray artifacts =
         xjw::cli::latestJsonObjectsByNonNegativeIntegerKey(

@@ -22,6 +22,27 @@ def workflow_job_block(workflow_text, job_name):
 
 
 class RepoHygieneTest(unittest.TestCase):
+    def test_ci_builds_pinned_python_opencv_before_running_tests(self):
+        text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        job = workflow_job_block(text, "build-test")
+        self.assertLess(job.index("name: Install Python test dependencies"), job.index("name: Build pinned OpenCV 5"))
+        self.assertLess(job.index("name: Verify Python test runtime"), job.index("name: Configure pinned vcpkg"))
+        self.assertIn("python3-dev", job)
+        self.assertIn("python3 -m venv .venv", job)
+        self.assertIn("-DBUILD_opencv_python3=ON", job)
+        self.assertIn("geometry,stereo,python3", job)
+        self.assertIn('-DPYTHON3_EXECUTABLE="${python_executable}"', job)
+        self.assertIn('-DOPENCV_PYTHON3_INSTALL_PATH="${python_site}"', job)
+        self.assertIn('-DPYTHON3_NUMPY_INCLUDE_DIRS="${numpy_include}"', job)
+        self.assertEqual(job.count('-DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python3"'), 2)
+        self.assertIn('if cv2.__version__ != "5.0.0":', job)
+        self.assertIn("Path(sys.prefix).resolve() != expected", job)
+        self.assertNotIn("pip install opencv", job)
+        self.assertIn("cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)", job)
+        self.assertIn("numpy pillow scipy rasterio trimesh", job)
+        self.assertIn("import rasterio", job)
+        self.assertIn("import trimesh", job)
+
     def test_full_pipeline_entrypoint_is_registered_in_ctest(self):
         cmake = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 

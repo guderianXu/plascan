@@ -151,7 +151,6 @@ int main(int argc, char* argv[])
     cfg.sgmDirections = directions;
     cfg.pyramidLevels = pyramid;
     cfg.computeBackend = computeBackend;
-    cfg.useCuda = computeBackend != xjw::dense_match::DenseMatchComputeBackend::Cpu;
     cfg.cudaDevice = gpu;
     cfg.openClDevice = openClDevice;
     cfg.numThreads = threads;

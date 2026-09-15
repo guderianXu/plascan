@@ -6,6 +6,16 @@ large projects can be resumed and diagnosed.
 
 ## Reusable Workflow Services
 
+- `MvsPipelineService` runs synchronously through private image preparation, source planning, estimation,
+  consistency, recovery and artifact publication stages. Link `mvs_pipeline`; configure inputs and callbacks
+  before execution, keep the service alive until return, and request cancellation through its shared flag.
+- CLI workflows call the synchronous service directly. GUI lifecycle and Qt signals belong to
+  `src/gui/project/tasks/DepthMapTask`, linked through `gui_project`. The old core generator and
+  `mvs` target are removed; algorithms/IO use `mvs_backend`, and pixel postprocessing uses
+  `mvs_depth_processing` directly, without static forwarding wrappers.
+
+See [Core refactoring contracts](../../../docs/CORE_REFACTORING.md) for model/TSDF boundaries and validation.
+
 - `DenseCloudRefinementService` owns chunked binary PLY refinement, multi-pass terrain spike and local-plane
   filtering, plus the in-memory fallback used by `dense_cloud_refine_cli`.
 - `StreamingDepthFusionService` owns reference-window selection, small-project frame caching, consensus tuning,
@@ -33,7 +43,7 @@ regenerated because consistency filtering and repaired coverage can change.
 - `MvsWorkspaceManifest` is the disk record for depth estimation. Each frame stores the reference image,
   selected source images, `source plan`, status, device, elapsed time, `depth_png`, raw depth, raw
   `confidence`, `valid mask`, and a config hash.
-- `DepthMapGenerator` writes initial frame artifacts as non-publishable `running` checkpoints. It marks a frame
+- `MvsPipelineService` writes initial frame artifacts as non-publishable `running` checkpoints. It marks a frame
   `completed` and emits project metadata only after the final required artifact set has been written and verified;
   completed frames with a matching config hash can be reused, while failed or interrupted checkpoints are retried.
 - Orbital depth artifacts at algorithm revision 15 persist adaptive support weight, effective view count,

@@ -21,7 +21,7 @@
 #include "DenseCloudQualityFilter.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
-#include "DepthMapGenerator.h"
+#include "MvsPipelineService.h"
 #include "ModelWorkflowService.h"
 #include "MvsSourcePairQualityLoader.h"
 #include "MvsSceneClassifier.h"
@@ -45,13 +45,11 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QTimer>
 #include <QtGlobal>
 
 #include <opencv2/core.hpp>
@@ -1857,37 +1855,27 @@ xjw::cli::ReconstructionCliOptions options;
     xjw::core::project::applyMvsSourcePairQualities(
         &depthConfig, std::move(source_pair_quality));
 
-    xjw::mvs::DepthMapGenerator generator;
+    xjw::mvs::MvsPipelineService generator;
     generator.setViews(views);
     generator.setSparseCloud(sparse);
     generator.setConfig(depthConfig);
     generator.setOutputDir(xjw::common::io::toUtf8Path(mvsDir));
 
-    QEventLoop loop;
     bool depthOk = false;
     QString mvsError;
     QJsonArray depthArtifactEvents;
-    QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::progressChanged, &loop,
-                     [](const QString &stage, float ratio) {
-        xjw::cli::printScopedProgress(
-            QStringLiteral("MVS"), static_cast<int>(ratio * 100.0f), stage);
-    });
-    QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::errorOccurred, &loop,
-                     [&mvsError](const QString &message) {
+    xjw::mvs::MvsPipelineEvents events;
+    events.progressChanged = [](const QString& stage, float ratio)
+    { xjw::cli::printScopedProgress(QStringLiteral("MVS"), static_cast<int>(ratio * 100.0f), stage); };
+    events.errorOccurred = [&mvsError](const QString& message)
+    {
         mvsError = message;
         std::fprintf(stderr, "  [MVS] %s\n", qUtf8Printable(message));
-    });
-    QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved, &loop,
-                     [&depthArtifactEvents](const QJsonObject &artifact) {
-        depthArtifactEvents.append(artifact);
-    });
-    QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::finished, &loop,
-                     [&loop, &depthOk](bool success) {
-        depthOk = success;
-        loop.quit();
-    });
-    QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
-    loop.exec();
+    };
+    events.depthMapArtifactSaved = [&depthArtifactEvents](const QJsonObject& artifact)
+    { depthArtifactEvents.append(artifact); };
+    generator.setEvents(std::move(events));
+    depthOk = generator.execute().succeeded();
 
     const QJsonArray depthArtifacts =
         xjw::cli::latestJsonObjectsByNonNegativeIntegerKey(
@@ -2232,8 +2220,11 @@ xjw::cli::ReconstructionCliOptions options;
             aerialTerrain,
             preserveMeshDetail);
         meshRequest.reconstruction.preprocessingDevice = denseSettings.processingDevice;
-        meshRequest.progress = [lastMeshProgressPercent = -1,
-                                lastMeshProgressStage = QString()](const QString &stage, int percent) mutable {
+        meshRequest.execution.progress = [lastMeshProgressPercent = -1, lastMeshProgressStage = QString()](
+                                             const xjw::task_runtime::WorkflowProgress& progress) mutable
+        {
+            const QString stage = QString::fromUtf8(progress.stage);
+            const int percent = static_cast<int>(std::lround(progress.ratio * 100.0));
             if (percent == lastMeshProgressPercent && stage == lastMeshProgressStage)
             {
                 return;

@@ -62,16 +62,6 @@ namespace xjw::inference::detail
     std::vector<TensorRtInputShape> normalizeInputShapes(const TensorRtEngineBuildRequest& request)
     {
         std::vector<TensorRtInputShape> result = request.inputShapes;
-        if (result.empty() && request.fixedKeypointCount > 0)
-        {
-            const std::int64_t count = request.fixedKeypointCount;
-            result = {{QStringLiteral("keypoints0"), {1, count, 2}},
-                      {QStringLiteral("keypoints1"), {1, count, 2}},
-                      {QStringLiteral("descriptors0"), {1, count, 256}},
-                      {QStringLiteral("descriptors1"), {1, count, 256}},
-                      {QStringLiteral("valid0"), {1, count}},
-                      {QStringLiteral("valid1"), {1, count}}};
-        }
         std::sort(result.begin(),
                   result.end(),
                   [](const TensorRtInputShape& left, const TensorRtInputShape& right)

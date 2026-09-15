@@ -1,7 +1,7 @@
 #include "DepthFrameUtils.h"
 
 #include "DepthFrameQualificationPolicy.h"
-#include "DepthMapGenerator.h"
+#include "depth_processing/DepthPostprocessor.h"
 #include "MvsWorkspaceReplay.h"
 #include "io/PathIO.h"
 
@@ -953,14 +953,14 @@ namespace xjw::core::project
 
         const auto postprocess_start = resize_done;
         result.frame.depthPostprocess =
-            xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(result.frame.depthMap,
-                                                                   result.frame.confidence,
-                                                                   fusionConfig,
-                                                                   frameIndexFromPath(stored.rawDepthPath),
-                                                                   viewCount,
-                                                                   nullptr,
-                                                                   &evidence,
-                                                                   raster_pixel_domain_size);
+            xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(result.frame.depthMap,
+                                                                    result.frame.confidence,
+                                                                    fusionConfig,
+                                                                    frameIndexFromPath(stored.rawDepthPath),
+                                                                    viewCount,
+                                                                    nullptr,
+                                                                    &evidence,
+                                                                    raster_pixel_domain_size);
         const auto postprocess_done = std::chrono::steady_clock::now();
         result.frame.geometrySupportCount = std::move(evidence.geometrySupportCount);
         if (!result.frame.geometrySupportCount.empty())

@@ -86,7 +86,7 @@ def build_test_environment(
     platform_name: str | None = None,
     working_directory: Path | None = None,
 ) -> dict[str, str]:
-    """Bind Windows build-tree DLLs and Qt plugins for CTest discovery and runs."""
+    """Bind Windows build-tree DLLs, Qt plugins and configured PROJ data for CTest."""
     result = dict(os.environ if environment is None else environment)
     effective_platform = os.name if platform_name is None else platform_name
     if effective_platform != "nt":
@@ -96,6 +96,25 @@ def build_test_environment(
         ctest_args, working_directory=working_directory)
     if test_directory is None:
         return result
+
+    # configure_with_env supplies this during configure/build/test, but this
+    # standalone entry must also use the database matching the build's PROJ DLL.
+    cache_path = test_directory / "CMakeCache.txt"
+    if not result.get("PROJ_DATA") and not result.get("PROJ_LIB") and cache_path.is_file():
+        cache_values = {}
+        for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            declaration, separator, value = line.partition("=")
+            if separator and ":" in declaration and not declaration.startswith(("//", "#")):
+                cache_values[declaration.partition(":")[0]] = value
+        installed = cache_values.get("VCPKG_INSTALLED_DIR")
+        triplet = cache_values.get("VCPKG_TARGET_TRIPLET")
+        if installed and triplet:
+            installed_directory = Path(installed)
+            if not installed_directory.is_absolute():
+                installed_directory = test_directory / installed_directory
+            proj_directory = installed_directory / triplet / "share" / "proj"
+            if (proj_directory / "proj.db").is_file():
+                result["PROJ_DATA"] = str(proj_directory.resolve())
 
     runtime_directories = [test_directory / "bin", test_directory / "tests"]
     existing_runtime_directories = [

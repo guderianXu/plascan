@@ -264,10 +264,6 @@ namespace xjw::dense_match
         {
             backend_candidates.push_back(resolveDenseMatchComputeBackend(_config));
         }
-        else if (!_config.useCuda)
-        {
-            backend_candidates.push_back(DenseMatchComputeBackend::Cpu);
-        }
         else
         {
             if (isDenseMatchComputeBackendAvailable(DenseMatchComputeBackend::Cuda, _config.cudaDevice))
@@ -311,9 +307,7 @@ namespace xjw::dense_match
             {
                 DenseMatchConfig attempt_config = _config;
                 attempt_config.computeBackend = backend;
-                attempt_config.useCuda = backend != DenseMatchComputeBackend::Cpu;
                 reverse_config.computeBackend = backend;
-                reverse_config.useCuda = attempt_config.useCuda;
 
                 _executionReport.deviceIndex = backendDeviceIndex(backend, _config);
 

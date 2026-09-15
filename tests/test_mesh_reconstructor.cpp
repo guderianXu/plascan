@@ -3086,10 +3086,8 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     mesh_request.settings[QStringLiteral("reconstruction_mode")] =
         QStringLiteral("depth_tsdf");
     QStringList mesh_progress_stages;
-    mesh_request.progress = [&mesh_progress_stages](const QString &stage, int)
-    {
-        mesh_progress_stages.push_back(stage);
-    };
+    mesh_request.execution.progress = [&mesh_progress_stages](const xjw::task_runtime::WorkflowProgress& progress)
+    { mesh_progress_stages.push_back(QString::fromUtf8(progress.stage)); };
     const auto auxiliary_mesh =
         xjw::mesh::workflow::buildMeshFromDepthMaps(mesh_request);
     EXPECT_FALSE(auxiliary_mesh.ok);

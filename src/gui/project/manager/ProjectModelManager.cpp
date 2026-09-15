@@ -1330,18 +1330,16 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             request.settings = effectiveSettings;
             request.outputPolicy = outputPolicy;
             request.runId = taskContext->taskId();
-            request.isCancelled = [taskContext]()
-            {
-                return taskContext->isCancellationRequested();
-            };
+            request.execution.cancellationCheck = [taskContext]() { return taskContext->isCancellationRequested(); };
             const auto progress_reporter =
                 makeProgressReporter(self, ownerGuard, taskContext);
-            request.progress = [taskContext, progress_reporter](
-                                   const QString &stage, int percent)
+            request.execution.progress =
+                [taskContext, progress_reporter](const xjw::task_runtime::WorkflowProgress& progress)
             {
                 if (!taskContext->isCancellationRequested())
                 {
-                    progress_reporter(stage, percent);
+                    progress_reporter(QString::fromUtf8(progress.stage),
+                                      static_cast<int>(std::lround(progress.ratio * 100.0)));
                 }
             };
 
@@ -1614,18 +1612,16 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             request.depthMapSourcePath = depthMapSourcePath;
             request.texture = xjw::mesh::workflow::textureConfigFromSettings(settings);
             request.allowVertexColorFallback = allow_vertex_color_fallback;
-            request.isCancelled = [taskContext]()
-            {
-                return taskContext->isCancellationRequested();
-            };
+            request.execution.cancellationCheck = [taskContext]() { return taskContext->isCancellationRequested(); };
             const auto progress_reporter =
                 makeProgressReporter(self, ownerGuard, taskContext);
-            request.progress = [taskContext, progress_reporter](
-                                   const QString &stage, int percent)
+            request.execution.progress =
+                [taskContext, progress_reporter](const xjw::task_runtime::WorkflowProgress& progress)
             {
                 if (!taskContext->isCancellationRequested())
                 {
-                    progress_reporter(stage, percent);
+                    progress_reporter(QString::fromUtf8(progress.stage),
+                                      static_cast<int>(std::lround(progress.ratio * 100.0)));
                 }
             };
 

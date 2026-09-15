@@ -174,9 +174,12 @@ int main(int argc, char *argv[])
     request.sparseScaffoldPointsPath = QString::fromUtf8(sparse_points_json);
     request.outputRoot = QString::fromUtf8(output_dir);
     request.settings = settings;
-    request.progress = [](const QString &stage, int percent)
+    request.execution.progress = [](const xjw::task_runtime::WorkflowProgress& progress)
     {
-        const QByteArray message = QStringLiteral("[%1%] %2\n").arg(percent).arg(stage).toUtf8();
+        const QByteArray message = QStringLiteral("[%1%] %2\n")
+                                       .arg(static_cast<int>(progress.ratio * 100.0))
+                                       .arg(QString::fromUtf8(progress.stage))
+                                       .toUtf8();
         std::fwrite(message.constData(), 1, static_cast<std::size_t>(message.size()), stderr);
         std::fflush(stderr);
     };

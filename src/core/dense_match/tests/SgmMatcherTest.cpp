@@ -53,7 +53,7 @@ DenseMatchConfig cpuSgmConfig(int minDisparity, int maxDisparity)
     config.p1 = 8;
     config.p2 = 32;
     config.sgmDirections = 8;
-    config.useCuda = false;
+    config.computeBackend = DenseMatchComputeBackend::Cpu;
     return config;
 }
 

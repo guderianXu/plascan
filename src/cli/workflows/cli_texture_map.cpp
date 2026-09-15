@@ -90,10 +90,12 @@ int main(int argc, char *argv[])
     request.texture =
         xjw::mesh::workflow::textureConfigFromSettings(settings);
     request.allowVertexColorFallback = allow_vertex_color_fallback;
-    request.progress = [](const QString &stage, int percent)
+    request.execution.progress = [](const xjw::task_runtime::WorkflowProgress& progress)
     {
-        const QByteArray message =
-            QStringLiteral("[%1%] %2\n").arg(percent).arg(stage).toUtf8();
+        const QByteArray message = QStringLiteral("[%1%] %2\n")
+                                       .arg(static_cast<int>(progress.ratio * 100.0))
+                                       .arg(QString::fromUtf8(progress.stage))
+                                       .toUtf8();
         std::fwrite(
             message.constData(),
             1,

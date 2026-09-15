@@ -23,7 +23,7 @@
 #include <cstdint>
 #include <atomic>
 
-#include "camera/FramePinholeCamera.h"
+#include "FramePinholeCamera.h"
 #include "DepthPoseRefinementStage.h"
 
 #include <opencv2/core.hpp>

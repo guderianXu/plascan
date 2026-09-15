@@ -10,6 +10,7 @@ add_library(task_runtime STATIC
     TaskScheduler.h
     TaskTypes.cpp
     TaskTypes.h
+    WorkflowExecution.h
 )
 
 target_include_directories(task_runtime PUBLIC
@@ -24,6 +25,7 @@ if(BUILD_TESTS)
         include(GoogleTest)
         add_executable(test_task_runtime
             tests/test_task_runtime.cpp
+            tests/test_workflow_execution.cpp
         )
         target_link_libraries(test_task_runtime PRIVATE
             task_runtime

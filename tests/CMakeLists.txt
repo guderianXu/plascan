@@ -144,7 +144,7 @@ if(CMAKE_CUDA_COMPILER)
     )
 endif()
 target_link_libraries(test_patchmatch_cpu PRIVATE
-    mvs
+    mvs_pipeline
     camera
     ${OpenCV_LIBS}
     GTest::gtest_main
@@ -555,7 +555,7 @@ add_executable(test_project_depth_batch_lineage
 )
 target_link_libraries(test_project_depth_batch_lineage PRIVATE
     gui_project
-    mvs
+    mvs_pipeline
     Qt6::Core
     GTest::gtest_main
     ${OpenCV_LIBS}
@@ -621,7 +621,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     gui_runtime
     gui_project
     plascan_common_project
-    mvs
+    mvs_pipeline
     sfm
     camera
     intersection
@@ -807,7 +807,7 @@ add_executable(test_workflow_settings_dialog
 )
 target_link_libraries(test_workflow_settings_dialog PRIVATE
     matchphototask
-    mvs
+    mvs_pipeline
     plascan_common_model
     Qt6::Core
     Qt6::Gui
@@ -1036,7 +1036,7 @@ add_executable(test_recovered_model
     test_recovered_model_reference.cpp
     test_recovered_model_input.cpp
 )
-target_link_libraries(test_recovered_model PRIVATE meshing mvs Qt6::Core GTest::gtest_main)
+target_link_libraries(test_recovered_model PRIVATE model_workflow mvs_pipeline Qt6::Core GTest::gtest_main)
 target_include_directories(test_recovered_model PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mvs/recovered_depth/include)
 target_compile_definitions(test_recovered_model PRIVATE
@@ -1065,7 +1065,7 @@ add_executable(test_mesh_reconstructor
     test_native_mesh_simplifier.cpp
 )
 target_link_libraries(test_mesh_reconstructor PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1082,7 +1082,7 @@ add_executable(test_texture_overlap_exposure
     test_texture_overlap_exposure.cpp
 )
 target_link_libraries(test_texture_overlap_exposure PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     GTest::gtest_main
 )
@@ -1095,7 +1095,7 @@ add_executable(test_texture_seam_leveling
     test_texture_seam_leveling.cpp
 )
 target_link_libraries(test_texture_seam_leveling PRIVATE
-    meshing
+    model_workflow
     GTest::gtest_main
 )
 target_include_directories(test_texture_seam_leveling PRIVATE
@@ -1107,7 +1107,7 @@ add_executable(test_texture_natural_blender
     test_texture_natural_blender.cpp
 )
 target_link_libraries(test_texture_natural_blender PRIVATE
-    meshing
+    model_workflow
     plascan_recovered_texture_core
     GTest::gtest_main
 )
@@ -1120,7 +1120,7 @@ add_executable(test_screened_poisson_surface_builder
     test_screened_poisson_surface_builder.cpp
 )
 target_link_libraries(test_screened_poisson_surface_builder PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1134,7 +1134,7 @@ add_executable(test_sparse_orbital_scaffold_builder
     test_sparse_orbital_scaffold_builder.cpp
 )
 target_link_libraries(test_sparse_orbital_scaffold_builder PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1148,7 +1148,7 @@ add_executable(test_mesh_voxel_topology_repair
     test_mesh_voxel_topology_repair.cpp
 )
 target_link_libraries(test_mesh_voxel_topology_repair PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1162,7 +1162,7 @@ add_executable(test_depth_tsdf_final_quality_gate
     test_depth_tsdf_final_quality_gate.cpp
 )
 target_link_libraries(test_depth_tsdf_final_quality_gate PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1176,7 +1176,7 @@ add_executable(test_depth_tsdf_recovery_transaction
     test_depth_tsdf_recovery_transaction.cpp
 )
 target_link_libraries(test_depth_tsdf_recovery_transaction PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1190,7 +1190,7 @@ add_executable(test_depth_auxiliary_bridge_selector
     test_depth_auxiliary_bridge_selector.cpp
 )
 target_link_libraries(test_depth_auxiliary_bridge_selector PRIVATE
-    meshing
+    model_workflow
     GTest::gtest_main
 )
 target_include_directories(test_depth_auxiliary_bridge_selector PRIVATE
@@ -1204,7 +1204,7 @@ add_executable(test_model_output_policy
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectRunArtifactValidator.cpp
 )
 target_link_libraries(test_model_output_policy PRIVATE
-    meshing
+    model_workflow
     plapoint::plapoint
     Qt6::Core
     GTest::gtest_main
@@ -1220,7 +1220,7 @@ add_executable(test_project_model_task_lifecycle
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelTaskLifecycle.cpp
 )
 target_link_libraries(test_project_model_task_lifecycle PRIVATE
-    meshing
+    model_workflow
     Qt6::Core
     GTest::gtest_main
 )
@@ -1234,7 +1234,7 @@ add_executable(test_depth_measured_support_connectivity
     test_depth_measured_support_connectivity.cpp
 )
 target_link_libraries(test_depth_measured_support_connectivity PRIVATE
-    meshing
+    model_workflow
     GTest::gtest_main
 )
 target_include_directories(test_depth_measured_support_connectivity PRIVATE
@@ -1246,7 +1246,7 @@ add_executable(test_depth_geometry_source_encoding
     test_depth_geometry_source_encoding.cpp
 )
 target_link_libraries(test_depth_geometry_source_encoding PRIVATE
-    meshing
+    model_workflow
     GTest::gtest_main
 )
 target_include_directories(test_depth_geometry_source_encoding PRIVATE

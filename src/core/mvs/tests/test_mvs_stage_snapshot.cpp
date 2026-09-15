@@ -1,6 +1,6 @@
 #include "DepthFrameUtils.h"
 #include "DepthLayerReliability.h"
-#include "DepthMapGenerator.h"
+#include "DepthFrameResult.h"
 #include "MvsStageSnapshot.h"
 
 #include <QDir>
@@ -15,87 +15,72 @@
 namespace
 {
 
-QJsonObject loadObject(const QString &path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
-}
-
-xjw::mvs::DepthFrameResult makeFrame(int reference_index,
-                                     int width,
-                                     int height)
-{
-    xjw::mvs::DepthFrameResult result;
-    result.refViewIdx = reference_index;
-    result.success = true;
-    result.preparedRasterSize = cv::Size(width, height);
-    result.depthMap = QSharedPointer<cv::Mat>::create(
-        height, width, CV_32FC1, cv::Scalar(2.0f));
-    result.confidence = QSharedPointer<cv::Mat>::create(
-        height, width, CV_32FC1, cv::Scalar(0.75f));
-    result.photometricConfidence = QSharedPointer<cv::Mat>::create(
-        height, width, CV_32FC1, cv::Scalar(0.6f));
-    result.geometricConfidence = QSharedPointer<cv::Mat>::create(
-        height, width, CV_32FC1, cv::Scalar(0.9f));
-    result.validMask = QSharedPointer<cv::Mat>::create(
-        height, width, CV_8UC1, cv::Scalar(255));
-    result.depthLayerReliabilityClass = QSharedPointer<cv::Mat>::create(
-        height,
-        width,
-        CV_8UC1,
-        cv::Scalar(static_cast<std::uint8_t>(
-            xjw::mvs::DepthLayerReliabilityClass::Reliable)));
-    result.depthLayerReliabilityClass->at<std::uint8_t>(1, 2) =
-        static_cast<std::uint8_t>(
-            xjw::mvs::DepthLayerReliabilityClass::RejectedLayer);
-    result.geometryRerankMaps =
-        QSharedPointer<xjw::mvs::DepthGeometryHypothesisRerankMaps>::create();
-    result.geometryRerankMaps->initialize(cv::Size(width, height));
-    result.geometryRerankMaps->nativeCost.setTo(0.6f);
-    result.geometryRerankMaps->candidateCost.setTo(0.2f);
-    result.geometryRerankMaps->costAdvantage.setTo(0.4f);
-    result.geometryRerankMaps->effectiveSourceWeight.setTo(2.5f);
-    result.geometryRerankMaps->relativeCorrection.setTo(0.008f);
-    result.geometryRerankMaps->weakestSourceConfidence.setTo(0.7f);
-    result.geometryRerankMaps->supportingSourceCount.setTo(3);
-    result.geometryRerankMaps->baselineSectorCount.setTo(2);
-    result.geometryRerankMaps->decisionAction.setTo(static_cast<std::uint8_t>(
-        xjw::mvs::DepthGeometryHypothesisAction::Refine));
-    result.depthMap->at<float>(0, 0) = 0.0f;
-
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(800.0, 810.0, 3.5, 1.5);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
-    camera.setImageSize(xjw::CameraImageSize{width, height});
-    result.cameraModel = camera;
-    result.qualityMetrics.width = width;
-    result.qualityMetrics.height = height;
-    result.qualityMetrics.validPixelCount = width * height - 1;
-    result.qualityMetrics.validCoverage =
-        static_cast<float>(width * height - 1) /
-        static_cast<float>(width * height);
-    return result;
-}
-
-const QJsonObject *recordForStage(const QJsonArray &records,
-                                  const QString &stage,
-                                  QJsonObject *storage)
-{
-    for (const QJsonValue &value : records)
+    QJsonObject loadObject(const QString& path)
     {
-        const QJsonObject object = value.toObject();
-        if (object.value(QStringLiteral("stage")).toString() == stage)
-        {
-            *storage = object;
-            return storage;
-        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        return QJsonDocument::fromJson(file.readAll()).object();
     }
-    return nullptr;
-}
+
+    xjw::mvs::DepthFrameResult makeFrame(int reference_index, int width, int height)
+    {
+        xjw::mvs::DepthFrameResult result;
+        result.refViewIdx = reference_index;
+        result.success = true;
+        result.preparedRasterSize = cv::Size(width, height);
+        result.depthMap = QSharedPointer<cv::Mat>::create(height, width, CV_32FC1, cv::Scalar(2.0f));
+        result.confidence = QSharedPointer<cv::Mat>::create(height, width, CV_32FC1, cv::Scalar(0.75f));
+        result.photometricConfidence = QSharedPointer<cv::Mat>::create(height, width, CV_32FC1, cv::Scalar(0.6f));
+        result.geometricConfidence = QSharedPointer<cv::Mat>::create(height, width, CV_32FC1, cv::Scalar(0.9f));
+        result.validMask = QSharedPointer<cv::Mat>::create(height, width, CV_8UC1, cv::Scalar(255));
+        result.depthLayerReliabilityClass = QSharedPointer<cv::Mat>::create(
+            height,
+            width,
+            CV_8UC1,
+            cv::Scalar(static_cast<std::uint8_t>(xjw::mvs::DepthLayerReliabilityClass::Reliable)));
+        result.depthLayerReliabilityClass->at<std::uint8_t>(1, 2) =
+            static_cast<std::uint8_t>(xjw::mvs::DepthLayerReliabilityClass::RejectedLayer);
+        result.geometryRerankMaps = QSharedPointer<xjw::mvs::DepthGeometryHypothesisRerankMaps>::create();
+        result.geometryRerankMaps->initialize(cv::Size(width, height));
+        result.geometryRerankMaps->nativeCost.setTo(0.6f);
+        result.geometryRerankMaps->candidateCost.setTo(0.2f);
+        result.geometryRerankMaps->costAdvantage.setTo(0.4f);
+        result.geometryRerankMaps->effectiveSourceWeight.setTo(2.5f);
+        result.geometryRerankMaps->relativeCorrection.setTo(0.008f);
+        result.geometryRerankMaps->weakestSourceConfidence.setTo(0.7f);
+        result.geometryRerankMaps->supportingSourceCount.setTo(3);
+        result.geometryRerankMaps->baselineSectorCount.setTo(2);
+        result.geometryRerankMaps->decisionAction.setTo(
+            static_cast<std::uint8_t>(xjw::mvs::DepthGeometryHypothesisAction::Refine));
+        result.depthMap->at<float>(0, 0) = 0.0f;
+
+        xjw::FramePinholeCamera camera;
+        camera.setIntrinsics(800.0, 810.0, 3.5, 1.5);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+        camera.setImageSize(xjw::CameraImageSize{width, height});
+        result.cameraModel = camera;
+        result.qualityMetrics.width = width;
+        result.qualityMetrics.height = height;
+        result.qualityMetrics.validPixelCount = width * height - 1;
+        result.qualityMetrics.validCoverage =
+            static_cast<float>(width * height - 1) / static_cast<float>(width * height);
+        return result;
+    }
+
+    const QJsonObject* recordForStage(const QJsonArray& records, const QString& stage, QJsonObject* storage)
+    {
+        for (const QJsonValue& value : records)
+        {
+            const QJsonObject object = value.toObject();
+            if (object.value(QStringLiteral("stage")).toString() == stage)
+            {
+                *storage = object;
+                return storage;
+            }
+        }
+        return nullptr;
+    }
 
 } // namespace
 
@@ -125,113 +110,82 @@ TEST(MvsStageSnapshotTest, CapturesBoundedTripletAndRecordsMissingStages)
 
     xjw::mvs::MvsStageSnapshotRecorder recorder(config, 3);
     ASSERT_TRUE(recorder.enabled()) << recorder.initializationError().toStdString();
-    recorder.capture(
-        2,
-        xjw::mvs::MvsStageSnapshotStage::PatchMatchOutput,
-        QStringLiteral("test_boundary"),
-        frame,
-        *frame.depthMap,
-        *frame.confidence,
-        *frame.validMask);
-    recorder.capture(
-        2,
-        xjw::mvs::MvsStageSnapshotStage::CrossViewConsistency,
-        QStringLiteral("test_geometry_boundary"),
-        frame,
-        *frame.depthMap,
-        *frame.confidence,
-        *frame.validMask);
+    recorder.capture(2,
+                     xjw::mvs::MvsStageSnapshotStage::PatchMatchOutput,
+                     QStringLiteral("test_boundary"),
+                     frame,
+                     *frame.depthMap,
+                     *frame.confidence,
+                     *frame.validMask);
+    recorder.capture(2,
+                     xjw::mvs::MvsStageSnapshotStage::CrossViewConsistency,
+                     QStringLiteral("test_geometry_boundary"),
+                     frame,
+                     *frame.depthMap,
+                     *frame.confidence,
+                     *frame.validMask);
     recorder.finalize();
 
     const QJsonObject manifest = loadObject(recorder.manifestPath());
-    EXPECT_EQ(manifest.value(QStringLiteral("status")).toString(),
-              QStringLiteral("complete"));
+    EXPECT_EQ(manifest.value(QStringLiteral("status")).toString(), QStringLiteral("complete"));
     EXPECT_FALSE(manifest.value(QStringLiteral("authoritative")).toBool(true));
     const QJsonArray records = manifest.value(QStringLiteral("records")).toArray();
     ASSERT_EQ(records.size(), 4);
     QJsonObject captured;
-    ASSERT_NE(recordForStage(records, QStringLiteral("patchmatch_output"), &captured),
-              nullptr);
-    EXPECT_EQ(captured.value(QStringLiteral("status")).toString(),
-              QStringLiteral("captured"));
+    ASSERT_NE(recordForStage(records, QStringLiteral("patchmatch_output"), &captured), nullptr);
+    EXPECT_EQ(captured.value(QStringLiteral("status")).toString(), QStringLiteral("captured"));
     EXPECT_EQ(captured.value(QStringLiteral("snapshot_width")).toInt(), 4);
     EXPECT_EQ(captured.value(QStringLiteral("snapshot_height")).toInt(), 2);
 
-    const QString depth_path = captured.value(QStringLiteral("depth"))
-                                   .toObject()
-                                   .value(QStringLiteral("path"))
-                                   .toString();
+    const QString depth_path =
+        captured.value(QStringLiteral("depth")).toObject().value(QStringLiteral("path")).toString();
     cv::Mat restored_depth;
-    const auto load_result = xjw::core::project::loadDepthMatStorage(
-        depth_path, &restored_depth);
+    const auto load_result = xjw::core::project::loadDepthMatStorage(depth_path, &restored_depth);
     ASSERT_TRUE(load_result.ok) << load_result.errorMessage.toStdString();
     EXPECT_EQ(restored_depth.size(), cv::Size(4, 2));
     EXPECT_EQ(restored_depth.type(), CV_32FC1);
 
-    const QJsonObject reliability_artifact = captured.value(
-        QStringLiteral("depth_layer_reliability")).toObject();
+    const QJsonObject reliability_artifact = captured.value(QStringLiteral("depth_layer_reliability")).toObject();
     ASSERT_FALSE(reliability_artifact.isEmpty());
     cv::Mat restored_reliability;
-    const auto reliability_load_result =
-        xjw::core::project::loadDepthMatStorage(
-            reliability_artifact.value(QStringLiteral("path")).toString(),
-            &restored_reliability);
-    ASSERT_TRUE(reliability_load_result.ok)
-        << reliability_load_result.errorMessage.toStdString();
+    const auto reliability_load_result = xjw::core::project::loadDepthMatStorage(
+        reliability_artifact.value(QStringLiteral("path")).toString(), &restored_reliability);
+    ASSERT_TRUE(reliability_load_result.ok) << reliability_load_result.errorMessage.toStdString();
     EXPECT_EQ(restored_reliability.size(), cv::Size(4, 2));
     EXPECT_EQ(restored_reliability.type(), CV_8UC1);
 
     EXPECT_TRUE(captured.value(QStringLiteral("geometry_rerank")).isUndefined());
 
     QJsonObject geometry_captured;
-    ASSERT_NE(recordForStage(
-                  records,
-                  QStringLiteral("cross_view_consistency"),
-                  &geometry_captured),
-              nullptr);
-    EXPECT_EQ(geometry_captured.value(QStringLiteral("status")).toString(),
-              QStringLiteral("captured"));
-    const QJsonObject rerank_artifact = geometry_captured.value(
-        QStringLiteral("geometry_rerank")).toObject();
+    ASSERT_NE(recordForStage(records, QStringLiteral("cross_view_consistency"), &geometry_captured), nullptr);
+    EXPECT_EQ(geometry_captured.value(QStringLiteral("status")).toString(), QStringLiteral("captured"));
+    const QJsonObject rerank_artifact = geometry_captured.value(QStringLiteral("geometry_rerank")).toObject();
     ASSERT_FALSE(rerank_artifact.isEmpty());
-    ASSERT_EQ(rerank_artifact.value(QStringLiteral("channel_order"))
-                  .toArray().size(),
-              9);
+    ASSERT_EQ(rerank_artifact.value(QStringLiteral("channel_order")).toArray().size(), 9);
     cv::Mat restored_rerank;
     const auto rerank_load_result = xjw::core::project::loadDepthMatStorage(
-        rerank_artifact.value(QStringLiteral("path")).toString(),
-        &restored_rerank);
-    ASSERT_TRUE(rerank_load_result.ok)
-        << rerank_load_result.errorMessage.toStdString();
+        rerank_artifact.value(QStringLiteral("path")).toString(), &restored_rerank);
+    ASSERT_TRUE(rerank_load_result.ok) << rerank_load_result.errorMessage.toStdString();
     EXPECT_EQ(restored_rerank.size(), cv::Size(4, 2));
     EXPECT_EQ(restored_rerank.type(), CV_32FC(9));
 
-    for (const QString &confidence_key : {
-             QStringLiteral("photometric_confidence"),
-             QStringLiteral("geometric_confidence")})
+    for (const QString& confidence_key :
+         {QStringLiteral("photometric_confidence"), QStringLiteral("geometric_confidence")})
     {
-        const QJsonObject confidence_artifact = geometry_captured.value(
-            confidence_key).toObject();
+        const QJsonObject confidence_artifact = geometry_captured.value(confidence_key).toObject();
         ASSERT_FALSE(confidence_artifact.isEmpty());
         cv::Mat restored_confidence;
-        const auto confidence_load_result =
-            xjw::core::project::loadDepthMatStorage(
-                confidence_artifact.value(QStringLiteral("path")).toString(),
-                &restored_confidence);
-        ASSERT_TRUE(confidence_load_result.ok)
-            << confidence_load_result.errorMessage.toStdString();
+        const auto confidence_load_result = xjw::core::project::loadDepthMatStorage(
+            confidence_artifact.value(QStringLiteral("path")).toString(), &restored_confidence);
+        ASSERT_TRUE(confidence_load_result.ok) << confidence_load_result.errorMessage.toStdString();
         EXPECT_EQ(restored_confidence.size(), cv::Size(4, 2));
         EXPECT_EQ(restored_confidence.type(), CV_32FC1);
     }
 
     QJsonObject missing;
-    ASSERT_NE(recordForStage(
-                  records, QStringLiteral("confidence_postprocess"), &missing),
-              nullptr);
-    EXPECT_EQ(missing.value(QStringLiteral("status")).toString(),
-              QStringLiteral("missing"));
-    EXPECT_EQ(missing.value(QStringLiteral("reason")).toString(),
-              QStringLiteral("stage_not_reached"));
+    ASSERT_NE(recordForStage(records, QStringLiteral("confidence_postprocess"), &missing), nullptr);
+    EXPECT_EQ(missing.value(QStringLiteral("status")).toString(), QStringLiteral("missing"));
+    EXPECT_EQ(missing.value(QStringLiteral("reason")).toString(), QStringLiteral("stage_not_reached"));
 }
 
 TEST(MvsStageSnapshotTest, BudgetSkipsWholeStageWithoutPartialPayload)
@@ -247,25 +201,19 @@ TEST(MvsStageSnapshotTest, BudgetSkipsWholeStageWithoutPartialPayload)
 
     xjw::mvs::MvsStageSnapshotRecorder recorder(config, 1);
     ASSERT_TRUE(recorder.enabled());
-    recorder.capture(
-        0,
-        xjw::mvs::MvsStageSnapshotStage::PatchMatchOutput,
-        QString(),
-        frame,
-        *frame.depthMap,
-        *frame.confidence,
-        *frame.validMask);
+    recorder.capture(0,
+                     xjw::mvs::MvsStageSnapshotStage::PatchMatchOutput,
+                     QString(),
+                     frame,
+                     *frame.depthMap,
+                     *frame.confidence,
+                     *frame.validMask);
     recorder.finalize();
 
-    const QJsonArray records = loadObject(recorder.manifestPath())
-                                   .value(QStringLiteral("records"))
-                                   .toArray();
+    const QJsonArray records = loadObject(recorder.manifestPath()).value(QStringLiteral("records")).toArray();
     QJsonObject skipped;
-    ASSERT_NE(recordForStage(records, QStringLiteral("patchmatch_output"), &skipped),
-              nullptr);
-    EXPECT_EQ(skipped.value(QStringLiteral("status")).toString(),
-              QStringLiteral("skipped"));
-    EXPECT_EQ(skipped.value(QStringLiteral("reason")).toString(),
-              QStringLiteral("snapshot_budget_exhausted"));
+    ASSERT_NE(recordForStage(records, QStringLiteral("patchmatch_output"), &skipped), nullptr);
+    EXPECT_EQ(skipped.value(QStringLiteral("status")).toString(), QStringLiteral("skipped"));
+    EXPECT_EQ(skipped.value(QStringLiteral("reason")).toString(), QStringLiteral("snapshot_budget_exhausted"));
     EXPECT_FALSE(QDir(temporary.filePath("snapshots/ref_0000")).exists());
 }

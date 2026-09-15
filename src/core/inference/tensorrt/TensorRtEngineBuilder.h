@@ -60,10 +60,6 @@ namespace xjw::inference
         QJsonObject fingerprintAttributes;
         TensorRtEngineBuildProgressCallback progressCallback;
 
-        /**
-         * @deprecated LoMa-R 旧调用面的兼容字段。新代码应使用 inputShapes。
-         */
-        int fixedKeypointCount = 0;
     };
 
     struct TensorRtEngineBuildResult

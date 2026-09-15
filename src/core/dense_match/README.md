@@ -159,8 +159,8 @@ cfg.computeBackend = DenseMatchComputeBackend::OpenCl;
 // 如果 OpenCL 未编译或设备 0 不存在，compute() 明确报错，不回退。
 ```
 
-`useCuda` 暂时保留给现有调用方：仅当 `computeBackend == Automatic` 时，
-`useCuda=false` 强制 CPU；新代码应直接设置 `computeBackend`。显式枚举优先于该兼容字段。
+已删除旧 `useCuda` 开关；调用方统一设置 `computeBackend`。
+需要 CPU 时显式选择 `Cpu`，自动加速选择 `Automatic`，指定设备时选择 `Cuda` 或 `OpenCl`。
 
 **当前边界**: Block Match 的 GPU 流水线保持代价卷驻留到最终结果下载；SGM 路径聚合仍在 CPU，因此 SGM 会下载原始代价卷并在聚合后上传一次。Speckle、中值、L-R 一致性和影像支持验证仍在 CPU。
 

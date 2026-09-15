@@ -1,7 +1,7 @@
 #include "MvsWorkspaceManifest.h"
 #include "MvsWorkspaceReplay.h"
 #include "DepthFrameUtils.h"
-#include "DepthMapGenerator.h"
+#include "depth_processing/DepthPostprocessor.h"
 #include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
@@ -24,7 +24,7 @@
 #include <chrono>
 #include <cstdint>
 
-using xjw::mvs::DepthMapGenerator;
+using xjw::mvs::DepthPostprocessor;
 using xjw::mvs::MvsDepthFrameRecord;
 using xjw::mvs::MvsWorkspaceManifest;
 
@@ -2029,7 +2029,7 @@ TEST(MvsDepthPostprocess, RemovesIsolatedDepthSpikeAndConfidence)
     cv::Mat confidence(9, 9, CV_32F, cv::Scalar(1.0f));
     depth.at<float>(4, 4) = 100.0f;
 
-    const int removed = DepthMapGenerator::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.20f, 4);
+    const int removed = DepthPostprocessor::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.20f, 4);
 
     EXPECT_EQ(removed, 1);
     EXPECT_EQ(depth.at<float>(4, 4), 0.0f);
@@ -2046,7 +2046,7 @@ TEST(MvsDepthPostprocess, RemovesSmallConnectedDepthComponentAndConfidence)
     depth(cv::Rect(0, 0, 2, 2)).setTo(9.0f);
     confidence(cv::Rect(0, 0, 2, 2)).setTo(0.8f);
 
-    const int removed = DepthMapGenerator::removeSmallDepthComponents(depth, confidence, 8, 0.20f, 5);
+    const int removed = DepthPostprocessor::removeSmallDepthComponents(depth, confidence, 8, 0.20f, 5);
 
     EXPECT_EQ(removed, 4);
     EXPECT_EQ(depth.at<float>(0, 0), 0.0f);
@@ -2072,7 +2072,7 @@ TEST(MvsDepthPostprocess, RemovesManySmallComponentsWithoutRepeatedFullImageScan
     }
 
     const auto start = std::chrono::steady_clock::now();
-    const int removed = DepthMapGenerator::removeSmallDepthComponents(depth, confidence, 4, 1.0f, 6);
+    const int removed = DepthPostprocessor::removeSmallDepthComponents(depth, confidence, 4, 1.0f, 6);
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
 
@@ -2095,7 +2095,7 @@ TEST(MvsDepthPostprocess, PostprocessReportsSmallComponentRemoval)
     config.enableSpeckleFilter = true;
     config.minSpeckleComponentArea = 8;
 
-    const auto stats = DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 6, 4);
+    const auto stats = DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 6, 4);
 
     EXPECT_EQ(stats.smallComponentRemoved, 4);
     EXPECT_EQ(stats.validAfterPostprocess, 36);

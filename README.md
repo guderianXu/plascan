@@ -342,6 +342,10 @@ python scripts\env\configure_with_env.py --source-deps --build
 
 `.venv/` 已加入 git 忽略列表。后续需要运行 Python 模型导出、测试或辅助脚本时，优先复用这个环境；只有 CI、打包或特殊隔离场景才通过 `--runtime-dir` 指定其它虚拟环境位置。
 
+GitHub Actions 的 Linux 构建测试也使用仓库 `.venv/`：先安装 NumPy/Pillow/SciPy，
+再从固定 OpenCV 5.0.0 源码构建 Python 绑定。运行测试前会校验解释器、OpenCV 版本与
+PNG/TIFF 编解码，CMake/CTest 显式使用同一 Python；不依赖系统 OpenCV 或 OpenCV 4 wheel。
+
 ### 工程文件
 
 PlaScan 使用与 Metashape 相同的双实体工程结构：
@@ -655,9 +659,9 @@ src/
 │   ├── matchphototask/        # 候选对、任务内特征缓存、匹配及连接点编排
 │   ├── aerial_triangulation/  # 对齐照片/空中三角测量工作流
 │   ├── sfm/                   # 增量式 SfM + 光束法平差, ReferenceTerrainPrior
-│   ├── mvs/                   # PatchMatch 深度图, MvsWorkspaceManifest, MvsSourcePlanner, 融合
+│   ├── mvs/                   # 数据/后处理/后端/同步 pipeline 分层；异步生命周期位于 GUI
 │   ├── dense_match/           # MGM/SGM 密集立体匹配 (自研 CUDA)
-│   ├── mesh/                  # Poisson 表面重建 + 纹理映射
+│   ├── mesh/                  # meshing_algorithms + model_workflow；TSDF 阶段与模型编排分离
 │   ├── terrain/               # DEM/DOM, OrthoProjector, TerrainProductManifest, DEM 聚合与 mosaic
 │   ├── stereo_dem/            # RPC TIFF 立体交会生成 DEM，并基于 DEM 生成 RPC DOM
 │   ├── qc/                    # ReconstructionQualityReport, PointCloudAlignment, DemDifference

@@ -3,6 +3,7 @@
 // ============================================================
 
 #include <gtest/gtest.h>
+#include "CoreImplementationBundles.h"
 
 #include "project/ProjectIO.h"
 #include "ProjectCameraImportService.h"
@@ -2842,22 +2843,22 @@ TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
         << "Open-coded QtConcurrent lacks the shared owner check before work starts.";
 }
 
-TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
+TEST(GuiAsyncLifetimeTest, DepthMapTaskOwnsAndJoinsBackgroundFuture)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/tasks/DepthMapTask.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/tasks/DepthMapTask.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    const int destructorStart = source.indexOf(QStringLiteral("DepthMapGenerator::~DepthMapGenerator()"));
+    const int destructorStart = source.indexOf(QStringLiteral("DepthMapTask::~DepthMapTask()"));
     ASSERT_GE(destructorStart, 0);
-    const int setViewsStart = source.indexOf(QStringLiteral("void DepthMapGenerator::setViews"), destructorStart);
+    const int setViewsStart = source.indexOf(QStringLiteral("void DepthMapTask::start"), destructorStart);
     ASSERT_GT(setViewsStart, destructorStart);
     const QString destructorBlock = source.mid(destructorStart, setViewsStart - destructorStart);
 
-    const int startStart = source.indexOf(QStringLiteral("void DepthMapGenerator::start()"));
+    const int startStart = source.indexOf(QStringLiteral("void DepthMapTask::start()"));
     ASSERT_GE(startStart, 0);
-    const int rangeStart = source.indexOf(QStringLiteral("bool DepthMapGenerator::estimateDepthRange"), startStart);
+    const int rangeStart = source.indexOf(QStringLiteral("void DepthMapTask::setViews"), startStart);
     ASSERT_GT(rangeStart, startStart);
     const QString startBlock = source.mid(startStart, rangeStart - startStart);
 
@@ -2865,7 +2866,7 @@ TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
     EXPECT_TRUE(header.contains(QStringLiteral("QFuture<void> _backgroundFuture")));
     EXPECT_TRUE(destructorBlock.contains(QStringLiteral("requestCancel();")));
     EXPECT_TRUE(destructorBlock.contains(QStringLiteral("_backgroundFuture.waitForFinished();")))
-        << "DepthMapGenerator must not be destroyed while its background MVS worker still uses members.";
+        << "DepthMapTask must not be destroyed while its background MVS worker still uses members.";
     EXPECT_TRUE(startBlock.contains(QStringLiteral("_backgroundFuture = QtConcurrent::run([this]()")))
         << "start() should retain the background future so destruction can join it safely.";
     EXPECT_TRUE(startBlock.contains(QStringLiteral("if (_backgroundFuture.isRunning())")))
@@ -3122,14 +3123,14 @@ TEST(CodeStyleTest, ProjectDataUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral(R"(QString\s+_projectPath\s*;)") ,
-        QStringLiteral(R"(mutable\s+ProjectFilesManager\s+_filesManager\s*;)") ,
-        QStringLiteral(R"(ProjectConfigManager\s+_configManager\s*;)") ,
-        QStringLiteral(R"(bool\s+_isDirty\s*=\s*false\s*;)") ,
-        QStringLiteral(R"(mutable\s+bool\s+_resultsLoaded\s*=\s*false\s*;)") ,
-        QStringLiteral(R"(QTimer\s*\*\s*_archiveSyncTimer\s*\{\s*\}\s*;)") ,
-        QStringLiteral(R"(bool\s+_resultsDirtyForArchive\s*\{\s*false\s*\}\s*;)") ,
-        QStringLiteral(R"(bool\s+_coreFileDirtyForArchive\s*\{\s*false\s*\}\s*;)") ,
+        QStringLiteral(R"(QString\s+_projectPath\s*;)"),
+        QStringLiteral(R"(mutable\s+ProjectFilesManager\s+_filesManager\s*;)"),
+        QStringLiteral(R"(ProjectConfigManager\s+_configManager\s*;)"),
+        QStringLiteral(R"(bool\s+_isDirty\s*=\s*false\s*;)"),
+        QStringLiteral(R"(mutable\s+bool\s+_resultsLoaded\s*=\s*false\s*;)"),
+        QStringLiteral(R"(QTimer\s*\*\s*_archiveSyncTimer\s*\{\s*\}\s*;)"),
+        QStringLiteral(R"(bool\s+_resultsDirtyForArchive\s*\{\s*false\s*\}\s*;)"),
+        QStringLiteral(R"(bool\s+_coreFileDirtyForArchive\s*\{\s*false\s*\}\s*;)"),
     };
     for (const QString& expectedMember : expectedMembers)
     {
@@ -4302,14 +4303,14 @@ TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral(R"(QWidget\s*\*\s*_parent\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectData\s*\*\s*_projectData\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(FileDialogStateManager\s*\*\s*_fileDialogState\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectSparseReconstructionManager\s*\*\s*_sparseReconstructionManager\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectModelManager\s*\*\s*_modelManager\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectTerrainProductsManager\s*\*\s*_terrainProductsManager\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectCameraSetupManager\s*\*\s*_cameraSetupManager\s*=\s*nullptr\s*;)") ,
-        QStringLiteral(R"(ProjectUiCommands\s*\*\s*_uiCommands\s*=\s*nullptr\s*;)") ,
+        QStringLiteral(R"(QWidget\s*\*\s*_parent\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectData\s*\*\s*_projectData\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(FileDialogStateManager\s*\*\s*_fileDialogState\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectSparseReconstructionManager\s*\*\s*_sparseReconstructionManager\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectModelManager\s*\*\s*_modelManager\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectTerrainProductsManager\s*\*\s*_terrainProductsManager\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectCameraSetupManager\s*\*\s*_cameraSetupManager\s*=\s*nullptr\s*;)"),
+        QStringLiteral(R"(ProjectUiCommands\s*\*\s*_uiCommands\s*=\s*nullptr\s*;)"),
         QStringLiteral("std::shared_ptr<std::atomic<bool>> _atCancelFlag;"),
         QStringLiteral("QMap<QString, QJsonObject> _pendingBaCameraMeta;"),
         QStringLiteral("QMap<QString, QJsonObject> _pendingBaBeforeCameraMeta;"),
@@ -4414,18 +4415,21 @@ TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_filteredDepths")));
 }
 
-TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
+TEST(CodeStyleTest, DepthMapTaskUsesLowerCamelPrivateMemberNames)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
+    const QString source = xjw::tests::readMvsPipelineImplementation(readProjectSourceFile);
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
+
+    // Naming checks must not depend on clang-format's declaration alignment.
+    const QString normalized_header = header.simplified();
 
     const QStringList expectedMembers = {
         QStringLiteral("std::vector<CameraView> _views;"),
         QStringLiteral("SparseCloud _sparse;"),
         QStringLiteral("DepthGenConfig _config;"),
-        QStringLiteral("std::atomic<bool> _cancelled{false};"),
+        QStringLiteral("std::atomic_bool& _cancelled;"),
         QStringLiteral("std::string _outputDir;"),
         QStringLiteral("std::vector<DepthFrameResult> _depthFrames;"),
         QStringLiteral("std::vector<uint8_t> _skipFrameMask;"),
@@ -4444,7 +4448,7 @@ TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
     };
     for (const QString& member : expectedMembers)
     {
-        EXPECT_TRUE(header.contains(member)) << qPrintable(member);
+        EXPECT_TRUE(normalized_header.contains(member.simplified())) << qPrintable(member);
     }
 
     const QStringList oldMemberNames = {
@@ -4966,12 +4970,12 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
 
 TEST(DepthMapPersistenceTest, PersistsRecoveredFramesAfterReferenceThreeLevelVoting)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString source = xjw::tests::readMvsPipelineImplementation(readProjectSourceFile);
     ASSERT_FALSE(source.isEmpty());
 
     const int recoveredRun = source.indexOf(QStringLiteral("runRecoveredDepthScene("));
     const int recoveredSave = source.indexOf(QStringLiteral("QStringLiteral(\"recovered三层投票\")"), recoveredRun);
-    const int completedSignal = source.indexOf(QStringLiteral("emit depthMapReady("), recoveredSave);
+    const int completedSignal = source.indexOf(QStringLiteral("depthMapReady("), recoveredSave);
     const int recoveredEnd = source.indexOf(QStringLiteral("emitFinishedOnce(true);"), completedSignal);
 
     ASSERT_GE(recoveredRun, 0);
@@ -6668,14 +6672,14 @@ TEST(FeatureResidualLoaderTest, ReadsCompactAerialObservationRows)
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
     sidecar.write(
-        QJsonDocument(QJsonObject{
-                          {QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v2")},
-                          {QStringLiteral("images"), images},
-                          {QStringLiteral("points"),
-                           QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
-                                                  {QStringLiteral("observations"),
-                                                   QJsonArray{QJsonValue(observation)}}}}},
-                      })
+        QJsonDocument(
+            QJsonObject{
+                {QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v2")},
+                {QStringLiteral("images"), images},
+                {QStringLiteral("points"),
+                 QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
+                                        {QStringLiteral("observations"), QJsonArray{QJsonValue(observation)}}}}},
+            })
             .toJson(QJsonDocument::Compact));
     sidecar.close();
 
@@ -7349,8 +7353,7 @@ TEST(TiePointResultIntegrationTest, ReplacingTwiceKeepsOnlyLatestTiePointRecord)
     ASSERT_EQ(records.size(), 1);
     const QJsonObject current = records.first().toObject();
     EXPECT_EQ(current.value(QStringLiteral("sparse_point_count")).toInt(), 200);
-    EXPECT_EQ(current.value(QStringLiteral("operation_display_name")).toString(),
-              QStringLiteral("稀疏点云"));
+    EXPECT_EQ(current.value(QStringLiteral("operation_display_name")).toString(), QStringLiteral("稀疏点云"));
     EXPECT_EQ(current.value(QStringLiteral("files")).toObject().value(QStringLiteral("sparse_cloud_xyz")).toString(),
               secondPath);
     EXPECT_FALSE(QFileInfo::exists(firstPath));
@@ -8062,10 +8065,12 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     ASSERT_GT(end, start);
     const QString block = managerSource.mid(start, end - start);
 
-    EXPECT_TRUE(QRegularExpression(
-                    QStringLiteral(R"(void\s+maskGenerationProgressChanged\s*\(\s*const\s+QString\s*&\s*stage\s*,\s*int\s+done\s*,\s*int\s+total\s*\)\s*;)"))
-                    .match(managerHeader)
-                    .hasMatch());
+    EXPECT_TRUE(
+        QRegularExpression(
+            QStringLiteral(
+                R"(void\s+maskGenerationProgressChanged\s*\(\s*const\s+QString\s*&\s*stage\s*,\s*int\s+done\s*,\s*int\s+total\s*\)\s*;)"))
+            .match(managerHeader)
+            .hasMatch());
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
     EXPECT_TRUE(block.contains(QStringLiteral("emit self->progressChanged")));
@@ -9039,22 +9044,33 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
     ASSERT_FALSE(commandsHeader.isEmpty());
     ASSERT_FALSE(commandsSource.isEmpty());
 
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenStarted\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral(R"(void\s+projectOpenStarted\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
                     .match(managerHeader)
                     .hasMatch());
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenProgressChanged\s*\(\s*const\s+QString\s*&\s*message\s*,\s*int\s+percent\s*\)\s*;)"))
-                    .match(managerHeader)
-                    .hasMatch());
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+projectOpenFinished\s*\(\s*bool\s+success\s*,\s*const\s+QString\s*&\s*message\s*\)\s*;)"))
-                    .match(managerHeader)
-                    .hasMatch());
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(void\s+loadProjectResultsAsync\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
-                    .match(managerHeader)
-                    .hasMatch());
+    EXPECT_TRUE(
+        QRegularExpression(
+            QStringLiteral(
+                R"(void\s+projectOpenProgressChanged\s*\(\s*const\s+QString\s*&\s*message\s*,\s*int\s+percent\s*\)\s*;)"))
+            .match(managerHeader)
+            .hasMatch());
+    EXPECT_TRUE(
+        QRegularExpression(
+            QStringLiteral(
+                R"(void\s+projectOpenFinished\s*\(\s*bool\s+success\s*,\s*const\s+QString\s*&\s*message\s*\)\s*;)"))
+            .match(managerHeader)
+            .hasMatch());
+    EXPECT_TRUE(
+        QRegularExpression(
+            QStringLiteral(R"(void\s+loadProjectResultsAsync\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
+            .match(managerHeader)
+            .hasMatch());
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("bool _openInProgress")));
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectProjectByDialog\s*\(\s*QString\s*\*\s*selectedPath\s*\)\s*const\s*;)"))
-                    .match(commandsHeader)
-                    .hasMatch());
+    EXPECT_TRUE(
+        QRegularExpression(
+            QStringLiteral(R"(bool\s+selectProjectByDialog\s*\(\s*QString\s*\*\s*selectedPath\s*\)\s*const\s*;)"))
+            .match(commandsHeader)
+            .hasMatch());
 
     const int openStart = managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::openProjectFromPath"));
     const int saveStart =
@@ -9090,11 +9106,13 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
     ASSERT_FALSE(commandsHeader.isEmpty());
     ASSERT_FALSE(commandsSource.isEmpty());
 
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectImageFolder\s*\(\s*QString\s*\*\s*selectedFolder\s*\)\s*const\s*;)"))
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral(R"(bool\s+selectImageFolder\s*\(\s*QString\s*\*\s*selectedFolder\s*\)\s*const\s*;)"))
                     .match(commandsHeader)
                     .hasMatch())
         << "Folder selection should be separated from the potentially slow folder scan.";
-    EXPECT_TRUE(QRegularExpression(QStringLiteral(R"(bool\s+selectPhotos\s*\(\s*QStringList\s*\*\s*selectedFiles\s*\)\s*const\s*;)"))
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral(R"(bool\s+selectPhotos\s*\(\s*QStringList\s*\*\s*selectedFiles\s*\)\s*const\s*;)"))
                     .match(commandsHeader)
                     .hasMatch())
         << "File selection should be separated from slow image hashing and copying.";
@@ -9967,7 +9985,7 @@ TEST(MvsCancellationContractTest, BoundsOpenClAndCpuCancellationLatency)
 
 TEST(DepthPyramidDiagnosticsTest, IntermediateLevelPreviewsFlowToPhotoOverlayOnly)
 {
-    const QString generator = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readProjectSourceFile);
     const QString overlay = readProjectSourceFile(QStringLiteral("src/gui/views/DepthOverlayData.cpp"));
     const QString tree = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
     ASSERT_FALSE(generator.isEmpty());

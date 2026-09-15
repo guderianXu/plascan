@@ -16,7 +16,7 @@
 
 #include "DenseCloudBuilder.h"
 #include "DepthFrameUtils.h"
-#include "DepthMapGenerator.h"
+#include "../tasks/DepthMapTask.h"
 #include "StreamingDepthFusionService.h"
 #include "io/PathIO.h"
 #include "Logger.h"
@@ -710,7 +710,7 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                 return;
             }
 
-            auto *generator = new xjw::mvs::DepthMapGenerator(self);
+            auto* generator = new xjw::gui::tasks::DepthMapTask(self);
             xjw::mvs::DepthGenConfig config =
                 xjw::core::project::buildDepthGenConfig(
                     context->request,
@@ -753,9 +753,9 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
             self->_activeGenerator = generator;
 
             connect(generator,
-                    &xjw::mvs::DepthMapGenerator::progressChanged,
+                    &xjw::gui::tasks::DepthMapTask::progressChanged,
                     self,
-                    [self, context](const QString &stage, float ratio)
+                    [self, context](const QString& stage, float ratio)
                     {
                         if (self->_owner &&
                             self->_owner->isCurrentSession(context->session))
@@ -767,16 +767,13 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                         }
                     });
             connect(generator,
-                    &xjw::mvs::DepthMapGenerator::errorOccurred,
+                    &xjw::gui::tasks::DepthMapTask::errorOccurred,
                     self,
-                    [context](const QString &message)
-                    {
-                        context->depthError = message;
-                    });
+                    [context](const QString& message) { context->depthError = message; });
             connect(generator,
-                    &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved,
+                    &xjw::gui::tasks::DepthMapTask::depthMapArtifactSaved,
                     self,
-                    [self, context](const QJsonObject &artifact)
+                    [self, context](const QJsonObject& artifact)
                     {
                         if (!self->_owner ||
                             !self->_owner->isCurrentSession(context->session))
@@ -795,7 +792,7 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                         }
                     });
             connect(generator,
-                    &xjw::mvs::DepthMapGenerator::finished,
+                    &xjw::gui::tasks::DepthMapTask::finished,
                     self,
                     [self, generator, context](bool success)
                     {
@@ -1198,8 +1195,7 @@ void ProjectPointCloudWorkflowController::cancelActiveTask()
     {
         _cancelFlag->store(true, std::memory_order_relaxed);
     }
-    if (auto *generator = qobject_cast<xjw::mvs::DepthMapGenerator *>(
-            _activeGenerator.data()))
+    if (auto* generator = qobject_cast<xjw::gui::tasks::DepthMapTask*>(_activeGenerator.data()))
     {
         generator->requestCancel();
     }

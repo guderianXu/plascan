@@ -217,7 +217,16 @@ inference::TensorRtEngineBuildResult buildOnnxEngine(
     request.engineName = engineName;
     request.precision = precision;
     request.cudaDevice = cudaDevice;
-    request.fixedKeypointCount = fixedKeypointCount;
+    if (fixedKeypointCount > 0)
+    {
+        const std::int64_t count = fixedKeypointCount;
+        request.inputShapes = {{QStringLiteral("keypoints0"), {1, count, 2}},
+                               {QStringLiteral("keypoints1"), {1, count, 2}},
+                               {QStringLiteral("descriptors0"), {1, count, 256}},
+                               {QStringLiteral("descriptors1"), {1, count, 256}},
+                               {QStringLiteral("valid0"), {1, count}},
+                               {QStringLiteral("valid1"), {1, count}}};
+    }
     if (progressCallback)
     {
         request.progressCallback = [progressCallback, displayName](

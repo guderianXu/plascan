@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-09-12。
+行星表面摄影测量处理系统。最后更新: 2026-09-15。
 
 ## 顶层目录
 
@@ -110,11 +110,39 @@ common/
 - 项目格式需要保留的快照式展示字段由 `src/gui/project` 序列化适配层写入。核心工作流不生成中文操作名，
   也不提供无消费者的展示摘要。
 
+### MVS 数据与同步处理边界
+
+- `mvs_contracts` 是公共数据契约 target，提供 `DepthFrameResult.h`、
+  `DepthPyramidTypes.h` 和现有 MVS 类型；保留当前 QtCore 数据表示，不依赖生成器、
+  QtConcurrent、项目会话或任务调度器。
+- `mvs_depth_processing` 是独立静态库，负责置信度/几何证据过滤、局部深度离群与小连通域过滤、
+  像素域参数缩放、缺失原因和质量指标。它不启动后台任务、不访问项目、不写工件文件。
+- `DepthFrameUtils.cpp` 直接调用 `DepthPostprocessor`；`MvsStageSnapshot.cpp`
+  只消费数据契约，不包含 `DepthMapGenerator.h`。
+- `mvs_backend` 承担后端算法、深度读取和重放；`mvs_pipeline` 的 `MvsPipelineService`
+  同步调用 `pipeline/` 内影像准备、源计划、估计、恢复、一致性和工件发布阶段，不启动线程。
+- 旧 `DepthMapGenerator`、`mvs` target 及静态转发已删除。CLI 直接执行同步服务；
+  `gui/project/tasks/DepthMapTask` 承担 GUI 信号与 future 生命周期，运行期间拒绝修改配置，
+  析构取消并等待 worker。它不是核心算法 API 的兼容转发层。
+- `meshing_algorithms` 与 `model_workflow` 分离算法和业务编排；旧 `meshing` 链接别名已删除。
+  `mesh/workflow/` 拆分参数、输入准入、质量、纹理和成果发布；深度产品仍仅走 recovered_ooc。
+- `mesh/tsdf/` 拆出帧读取、布局、观测、积分、支持域恢复、等值面、清理、简化和最终质量检查。
+  阶段状态引用已有大数组，保持运算及失败顺序；旧不可达模型分支已删除，不作生产回退。
+- `task_runtime/WorkflowExecution.h` 提供纯 C++ 取消/进度/结果契约，MVS、模型和 TSDF 入口接入；
+  模型公开请求只保留 execution；TSDF options 的旧回调双接口尚未迁移。
+  这是协作取消，不提供暂停或 checkpoint 恢复保证。
+- MVS targets 不向消费者公开整个 `src/core` 包含路径。相机头文件通过 `camera` target 提供，
+  内部 recovered include 路径保持 PRIVATE。
+- `test_depth_frame_contract` 只链接数据契约，`test_depth_postprocessor` 只链接同步处理库；
+  `CoreBoundaryContractTest` 同时限制数据消费者重新依赖生成器及下层 target 反向依赖工作流。
+  已完成阶段、调用约束与验收方式见 [Core 渐进重构](CORE_REFACTORING.md)。
+
 ```
 core/
 ├── CMakeLists.txt              # 注册所有子模块
 │
 ├── task_runtime/               # Qt-free 任务状态机、依赖/资源队列、协作控制与版本化 journal
+│   ├── WorkflowExecution.h     # 同步业务流程的取消、归一化进度、成功/失败/取消结果
 │   ├── TaskTypes.h/cpp         # Task/Run/Attempt、能力、状态、进度、检查点、结果和事件契约
 │   ├── TaskControl.h/cpp       # 可被取消唤醒的协作式 pause/cancel token
 │   ├── TaskScheduler.h/cpp     # priority+FIFO、DAG、资源 lease、revision 命令与 executor 注册表
@@ -319,6 +347,13 @@ core/
 │
 ├── mvs/                        # Multi-View Stereo：recovered scene 深度生产、manifest 与流式融合
 │   ├── MvsTypes.h              # MVS 公共类型
+│   ├── DepthFrameResult.h      # 与生成器独立的深度帧数据、准入查询及像素存储释放契约
+│   ├── DepthPyramidTypes.h     # 金字塔逐层像素结果与轻量摘要，不依赖估计执行器
+│   ├── depth_processing/      # 独立同步处理库 mvs_depth_processing
+│   ├── MvsPipelineService.h   # 无 QObject 的同步流程入口 / mvs_pipeline
+│   ├── pipeline/             # 影像/源计划/估计/一致性/恢复/工件发布等私有阶段
+│   │   ├── DepthPostprocessor.h/cpp # 融合前置信度/几何证据过滤与阶段损失统计
+│   │   └── DepthNoiseFilters.cpp # 稀疏支撑软先验、局部离群及小连通域过滤
 │   ├── DenseCloudRefinementService.h/cpp # 流式 PLY 多轮细化与内存回退，供 CLI/工作流复用
 │   ├── StreamingDepthFusionService.h/cpp # 融合窗口、帧缓存、共识配置和分批聚合编排
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
@@ -357,7 +392,6 @@ core/
 │   ├── PatchMatchNoOpenCL.cpp   # 无 OpenCL 构建的稳定接口存根
 │   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker、文件名自然顺序与异构帧调度
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
-│   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
 │   ├── RecoveredDepthScene.h/cpp # 正式 SfM track/相机到 scene-wide recovered d4 深度生产与三层 voting 的适配
 │   ├── RecoveredModelInput.h/cpp # 三层 voting-after-components、Brown 相机、region 的原子持久化与 SHA-256 校验
 │   ├── recovered_depth/        # 内部区域过滤/track 选邻、PatchMatch/OOC 金字塔、Morton 树、变分融合；直接编译 .cu
@@ -454,7 +488,8 @@ core/
 │   ├── DepthMeshCompleteness.h/cpp # 深度观测到最终网格的逐帧召回率与完整性质量门
 │   ├── TriangleDistanceIndex.h/cpp # BVH 加速的精确点到三角形距离查询，供网格完整性评估使用
 │   ├── DepthRayMetric.h/cpp # camera-Z 深度、欧氏射线距离和世界像素足迹的统一换算
-│   ├── DepthTsdfSurfaceBuilder.h/cpp # raw depth/confidence/mask/camera 直接融合 TSDF、提取网格并安全减面
+│   ├── DepthTsdfSurfaceBuilder.h/cpp # TSDF 公共入口、控制桥接与质量策略
+│   ├── tsdf/                  # 读取/布局/观测/积分/支持恢复/提取/清理/简化/最终质量私有阶段
 │   ├── DepthTsdfCellSheetRecovery.h/cpp # 按面邻接、跨视图来源与已有表面锚点恢复连续零交叉单元片
 │   ├── DepthMeasuredSupportConnectivity.h/cpp # 不改 TSDF 值的实测 support 候选门控、切平面边界保护与归因统计
 │   ├── DepthImplicitFieldRegularizer.h/cpp # 等值面提取前的可见性保护、多尺度隐式场正则化与单体素裂缝恢复
@@ -474,7 +509,8 @@ core/
 │   ├── VisualHullFieldNoCUDA.cpp/VisualHullFieldNoOpenCL.cpp # 无 GPU 后端构建存根
 │   ├── VisualHullReconstructor.h/cpp # Visual Hull 体素场、拓扑闭运算和表面提取
 │   ├── ModelOutputPolicy.h/cpp    # 模型/纹理 run 隔离目录、所有权标记与未发布目录安全回收
-│   ├── ModelWorkflowService.h/cpp  # 模型工作流服务；保留 PLY 几何并可写 OBJ/MTL/相机纹理图集
+│   ├── ModelWorkflowService.h/cpp  # 公共请求/结果及总入口 / model_workflow
+│   ├── workflow/              # 参数、输入准入、质量/纹理/成果发布及独立入口；旧分支仅私有验证
 ├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
 │   ├── DemDomTypes.h           # DEM/DOM 类型
 │   ├── SmallBodyGlobalProducts.h # 小天体全球产品与无本地化文本的阶段/进度事件
@@ -790,6 +826,8 @@ gui/
 │   │   ├── ProjectTerrainRpcProducts.cpp             # RPC 立体 DEM/正射 DOM 异步执行、取消、质量成果与项目登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
+│   ├── tasks/
+│   │   └── DepthMapTask.h/cpp                       # GUI 独占的 MVS 异步、取消与 future 生命周期
 │   ├── services/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "WorkflowExecution.h"
+
 #include "ModelOutputPolicy.h"
 #include "SurfaceReconstructor.h"
 #include "TextureMapper.h"
@@ -12,116 +14,119 @@
 
 namespace xjw::mesh
 {
-struct DepthTsdfOptions;
+    struct DepthTsdfOptions;
 }
 
 namespace xjw::mesh::workflow
 {
 
-struct MeshBuildRequest
-{
-    QString pointCloudPath;
-    QString outputRoot;
-    xjw::mesh::ReconstructionConfig reconstruction;
-    bool exportObj = false;
-    xjw::mesh::TextureMappingConfig texture;
-    std::function<bool()> isCancelled;
-    std::function<void(const QString &, int)> progress;
-};
+    struct MeshBuildRequest
+    {
+        QString pointCloudPath;
+        QString outputRoot;
+        xjw::mesh::ReconstructionConfig reconstruction;
+        bool exportObj = false;
+        xjw::mesh::TextureMappingConfig texture;
+        xjw::task_runtime::WorkflowControl execution;
+    };
 
-struct DepthMapMeshBuildRequest
-{
-    QString depthMapSourcePath;
-    QString reusableDenseCloudPath;
-    QString sparseScaffoldPointCloudPath;
-    QString sparseScaffoldPointsPath;
-    QString outputRoot;
-    QJsonObject settings;
-    xjw::mesh::ReconstructionConfig reconstruction;
-    bool exportObj = false;
-    xjw::mesh::TextureMappingConfig texture;
-    std::function<bool()> isCancelled;
-    std::function<void(const QString &, int)> progress;
-};
+    struct DepthMapMeshBuildRequest
+    {
+        QString depthMapSourcePath;
+        QString reusableDenseCloudPath;
+        QString sparseScaffoldPointCloudPath;
+        QString sparseScaffoldPointsPath;
+        QString outputRoot;
+        QJsonObject settings;
+        xjw::mesh::ReconstructionConfig reconstruction;
+        bool exportObj = false;
+        xjw::mesh::TextureMappingConfig texture;
+        xjw::task_runtime::WorkflowControl execution;
+    };
 
-struct TextureBuildRequest
-{
-    QString meshPath;
-    QString outputDir;
-    QString textureRunId;
-    QString depthMapSourcePath;
-    xjw::mesh::TextureMappingConfig texture;
-    bool allowVertexColorFallback = false;
-    std::function<bool()> isCancelled;
-    std::function<void(const QString &, int)> progress;
-};
+    struct TextureBuildRequest
+    {
+        QString meshPath;
+        QString outputDir;
+        QString textureRunId;
+        QString depthMapSourcePath;
+        xjw::mesh::TextureMappingConfig texture;
+        bool allowVertexColorFallback = false;
+        xjw::task_runtime::WorkflowControl execution;
+    };
 
-struct ModelBuildRequest
-{
-    QString sourceData = QStringLiteral("point_cloud");
-    QString requestedSourcePath;
-    QString sourcePointCloudPath;
-    QString depthMapSourcePath;
-    QString sparseScaffoldPointCloudPath;
-    QString sparseScaffoldPointsPath;
-    QString outputRoot;
-    QJsonObject settings;
-    std::optional<ModelOutputPolicy> outputPolicy;
-    QString runId;
-    std::function<bool()> isCancelled;
-    std::function<void(const QString &, int)> progress;
-};
+    struct ModelBuildRequest
+    {
+        QString sourceData = QStringLiteral("point_cloud");
+        QString requestedSourcePath;
+        QString sourcePointCloudPath;
+        QString depthMapSourcePath;
+        QString sparseScaffoldPointCloudPath;
+        QString sparseScaffoldPointsPath;
+        QString outputRoot;
+        QJsonObject settings;
+        std::optional<ModelOutputPolicy> outputPolicy;
+        QString runId;
+        xjw::task_runtime::WorkflowControl execution;
+    };
 
-struct WorkflowResult
-{
-    bool ok = false;
-    QString errorMessage;
-    QJsonObject payload;
-};
+    struct WorkflowResult
+    {
+        bool ok = false;
+        QString errorMessage;
+        QJsonObject payload;
 
-struct PointCloudQualityReport
-{
-    qint64 pointCount = 0;
-    bool hasCount = false;
-    bool belowRecommended = false;
-};
+        xjw::task_runtime::WorkflowOutcome outcome() const
+        {
+            const auto status =
+                ok ? xjw::task_runtime::WorkflowStatus::Succeeded
+                   : (payload.value(QStringLiteral("cancelled")).toBool() ? xjw::task_runtime::WorkflowStatus::Cancelled
+                                                                          : xjw::task_runtime::WorkflowStatus::Failed);
+            return {status,
+                    ok ? xjw::task_runtime::WorkflowError{}
+                       : xjw::task_runtime::WorkflowError{
+                             "model_failed", errorMessage.toUtf8().toStdString(), "model", {}}};
+        }
+    };
 
-int meshResolutionFromSettings(const QJsonObject &settings);
-QString depthReconstructionModeFromSettings(const QJsonObject &settings);
-xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &settings,
-                                                         int requestedResolution);
-void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
-                                   xjw::mesh::DepthTsdfOptions *options,
-                                   int maximumReliableResolution = 0);
-bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
-                                               bool orbitalWorkspace);
-bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
-                                          bool enabled,
-                                          bool observationOnlySurface,
-                                          double aggregateProjectionRecall,
-                                          int boundaryEdgeCount,
-                                          int faceCount);
-int selectOrbitalTsdfRetryResolution(int currentResolution,
-                                     bool completenessAvailable,
-                                     double medianRecall,
-                                     double p10Recall,
-                                     double minimumMedianRecall,
-                                     double minimumP10Recall);
-xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
-xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
-                                                                   bool aerialTerrain,
-                                                                   bool preserveDetail);
-int holeFillPassesFromArea(double maxHoleArea);
-xjw::mesh::TextureMappingConfig defaultTextureConfig();
-xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &settings);
-PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
-                                                  qint64 recommendedMinimum = 200);
-float depthFrameTextureQualityWeight(float frameQualityWeight,
-                                     bool auxiliarySurfaceOnly) noexcept;
+    struct PointCloudQualityReport
+    {
+        qint64 pointCount = 0;
+        bool hasCount = false;
+        bool belowRecommended = false;
+    };
 
-WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request);
-WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request);
-WorkflowResult buildModel(const ModelBuildRequest &request);
-WorkflowResult buildTextureOnly(const TextureBuildRequest &request);
+    int meshResolutionFromSettings(const QJsonObject& settings);
+    QString depthReconstructionModeFromSettings(const QJsonObject& settings);
+    xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject& settings, int requestedResolution);
+    void applyOrbitalDepthTsdfDefaults(const QJsonObject& settings,
+                                       xjw::mesh::DepthTsdfOptions* options,
+                                       int maximumReliableResolution = 0);
+    bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject& settings, bool orbitalWorkspace);
+    bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
+                                              bool enabled,
+                                              bool observationOnlySurface,
+                                              double aggregateProjectionRecall,
+                                              int boundaryEdgeCount,
+                                              int faceCount);
+    int selectOrbitalTsdfRetryResolution(int currentResolution,
+                                         bool completenessAvailable,
+                                         double medianRecall,
+                                         double p10Recall,
+                                         double minimumMedianRecall,
+                                         double minimumP10Recall);
+    xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject& settings);
+    xjw::mesh::ReconstructionConfig
+    reconstructionConfigForDenseScene(int requestedResolution, bool aerialTerrain, bool preserveDetail);
+    int holeFillPassesFromArea(double maxHoleArea);
+    xjw::mesh::TextureMappingConfig defaultTextureConfig();
+    xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject& settings);
+    PointCloudQualityReport evaluatePointCloudQuality(const QString& pointCloudPath, qint64 recommendedMinimum = 200);
+    float depthFrameTextureQualityWeight(float frameQualityWeight, bool auxiliarySurfaceOnly) noexcept;
+
+    WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest& request);
+    WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest& request);
+    WorkflowResult buildModel(const ModelBuildRequest& request);
+    WorkflowResult buildTextureOnly(const TextureBuildRequest& request);
 
 } // namespace xjw::mesh::workflow

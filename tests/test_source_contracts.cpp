@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "CoreImplementationBundles.h"
 
 #include <QDir>
 #include <QFile>
@@ -32,6 +33,16 @@ namespace
     bool sourceFileExists(const QString& relativePath)
     {
         return QFileInfo::exists(QDir(repoRoot()).filePath(relativePath));
+    }
+
+    QString readMvsPipelineImplementation()
+    {
+        return xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    }
+
+    QString readModelWorkflowImplementation()
+    {
+        return xjw::tests::readModelWorkflowImplementation(readSourceFile);
     }
 
     QString readIncrementalSfmImplementation()
@@ -1026,7 +1037,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
 {
     const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString workflow = readModelWorkflowImplementation();
 
     expectContainsAll(dialog,
                       {
@@ -1060,7 +1071,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
 
 TEST(GuiAlgorithmAlignmentContractTest, CanonicalFaceDiagnosticsKeepModeTargetsAndActualOutputDistinct)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString workflow = readModelWorkflowImplementation();
     const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
     const QString contract = sectionBetween(workflow, "bool resolveModelGenerationContract", "QString sha256ForFile");
     const QString build_model =
@@ -1097,54 +1108,43 @@ TEST(GuiAlgorithmAlignmentContractTest, CanonicalFaceDiagnosticsKeepModeTargetsA
         });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, SparseScaffoldCompletionUpdatesEffectiveDiagnosticsAfterSuccess)
+TEST(GuiAlgorithmAlignmentContractTest, DepthProductsRejectLegacyScaffoldFallback)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
-    const QString scaffold_block = sectionBetween(
-        workflow, "if (sparse_scaffold_completion_requested)", "const bool direct_visibility_occupancy_output");
-
-    expectContainsAll(scaffold_block,
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/workflow/DepthModelWorkflow.cpp"));
+    expectContainsAll(workflow,
                       {
-                          "if (!sparse_scaffold_completion.ok)",
-                          "output_mesh = &sparse_scaffold_completion.mesh",
-                          R"("effective_observation_only_surface")] = false)",
-                          R"(QStringLiteral("effective_interpolation")] =)",
-                          R"(QStringLiteral("sparse_scaffold_completion"))",
+                          R"(mode != QStringLiteral("recovered_ooc"))",
+                          "请迁移项目设置",
+                          "return buildRecoveredDepthModel",
                       });
-    const int failure_guard = indexOfOrFail(scaffold_block, "if (!sparse_scaffold_completion.ok)");
-    const int selected_output = indexOfOrFail(scaffold_block, "output_mesh = &sparse_scaffold_completion.mesh");
-    const int interpolation_diagnostic =
-        indexOfOrFail(scaffold_block, R"(QStringLiteral("effective_interpolation")] =)");
-    EXPECT_LT(failure_guard, selected_output);
-    EXPECT_LT(selected_output, interpolation_diagnostic);
+    expectNotContainsAll(workflow,
+                         {
+                             "buildLegacyDepthModelForValidation",
+                             "sparse_scaffold_completion_requested",
+                             "SparseScaffoldSurfaceBuilder",
+                         });
+    EXPECT_LT(indexOfOrFail(workflow, R"(mode != QStringLiteral("recovered_ooc"))"),
+              indexOfOrFail(workflow, "return buildRecoveredDepthModel"));
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, FinalSelectedMeshIsColorizedBeforeItIsSavedOrTextured)
+TEST(GuiAlgorithmAlignmentContractTest, RecoveredModelIsBuiltBeforePublicationWithoutLegacyColorizer)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
-    const QString final_output_block =
-        sectionBetween(workflow,
-                       "if (options.calculateVertexColors && !output_mesh->hasVertexColors)",
-                       "if (result.ok && !tsdf.boundaryAttributionDebugMesh.empty())");
-
-    expectContainsAll(final_output_block,
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/workflow/RecoveredDepthModelStage.cpp"));
+    expectContainsAll(workflow,
                       {
-                          "vertexColorViewFromFrame",
-                          "MeshColorizer::colorize",
-                          "output_mesh, final_color_views, color_options",
-                          "color_options.allowVisibilityOnlyFallback",
-                          "orbital_sparse_scaffold_screened_poisson",
-                          "addFinalMeshColorStatistics",
-                          "saveMeshAndOptionalTexture(*output_mesh",
+                          "buildRecoveredModel(recovered_input",
+                          "saveMeshAndOptionalTexture(recovered.mesh",
+                          "mergePayload(recovered.diagnostics",
+                          "cancellationRequested(request.isCancelled)",
                       });
-    const int colorize = indexOfOrFail(final_output_block, "MeshColorizer::colorize");
-    const int save = indexOfOrFail(final_output_block, "saveMeshAndOptionalTexture(*output_mesh");
-    EXPECT_LT(colorize, save);
+    expectNotContainsAll(workflow, {"MeshColorizer::colorize", "sparse_scaffold_completion"});
+    EXPECT_LT(indexOfOrFail(workflow, "buildRecoveredModel(recovered_input"),
+              indexOfOrFail(workflow, "saveMeshAndOptionalTexture(recovered.mesh"));
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, TextureOnlyUsesTemporaryVertexColoredMeshWithoutRewritingOriginal)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+    const QString workflow = readModelWorkflowImplementation();
     const QString texture_block =
         sectionBetween(workflow, "WorkflowResult buildTextureOnly", "} // namespace xjw::mesh::workflow");
 
@@ -1164,74 +1164,36 @@ TEST(GuiAlgorithmAlignmentContractTest, TextureOnlyUsesTemporaryVertexColoredMes
                          });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, SparseScaffoldAssistedOrbitalModelBypassesOnlyTheDepthOnlyFrameMinimum)
+TEST(GuiAlgorithmAlignmentContractTest, RecoveredProductionRequiresCompletedPrimaryFrames)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    const QString policy = readSourceFile(QStringLiteral("src/gui/project/support/ProjectModelWorkflowPolicy.cpp"));
-
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/workflow/RecoveredDepthModelStage.cpp"));
     expectContainsAll(workflow,
                       {
-                          "sparse_scaffold_low_primary_bypass_applied",
-                          "loaded.primaryFrameCount >= 2",
-                          "sparse_scaffold_completion_enabled",
-                          "sparse_scaffold_pair_provided",
-                          "sparse_scaffold_observation_policy_active",
-                          "interpolationIsDisabled(effective_settings)",
-                          "!sparse_scaffold_low_primary_bypass_applied",
+                          "artifacts.isEmpty()",
+                          R"(artifact.status != QStringLiteral("completed"))",
+                          "!xjw::mvs::isPrimaryFusionFrame(artifact.role)",
+                          "return result",
+                          "buildRecoveredModel(recovered_input",
                       });
     expectNotContainsAll(workflow,
                          {
-                             "丝川",
-                             "Itokawa",
+                             "sparse_scaffold_low_primary_bypass_applied",
+                             "allow_sparse_scaffold_fallback",
                          });
-    expectContainsAll(manager,
-                      {
-                          "resolveSparseScaffoldSource",
-                          "allow_sparse_scaffold_fallback",
-                          "assessStoredDepthBatchCompatibility",
-                      });
-    expectContainsAll(policy,
-                      {
-                          "allow_orbital_sparse_scaffold_fallback",
-                          "primary_frame_count >= 2",
-                          "!sparse_scaffold_can_carry_global_shape",
-                      });
+    EXPECT_LT(indexOfOrFail(workflow, "artifacts.isEmpty()"),
+              indexOfOrFail(workflow, "buildRecoveredModel(recovered_input"));
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, CarrierSurfaceDenoisingRelaxesAreaOnlyWithVolumeAndTopologyGuards)
+TEST(GuiAlgorithmAlignmentContractTest, RecoveredProductionDoesNotApplyLegacyCarrierDenoising)
 {
-    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
-    const QString guard = sectionBetween(workflow,
-                                         "FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising",
-                                         "bool visibilityOccupancyDepthRefinementEnabled");
-    expectContainsAll(guard,
-                      {
-                          "bool allowCarrierAreaRelaxation",
-                          "meshAbsoluteOrientedVolume(*mesh)",
-                          "meshAbsoluteOrientedVolume(candidate)",
-                          "hasSameFaceIndexBuffer(*mesh, candidate)",
-                          "result.qualityBefore.closedTwoManifold",
-                          "result.qualityAfter.closedTwoManifold",
-                          "result.absoluteVolumeRatio >= 0.98",
-                          "result.absoluteVolumeRatio <= 1.02",
-                          "triangle_quality_not_worse",
-                          "normal_quality_not_worse",
-                          "normal_quality_improved",
-                          "carrier_area_relaxation_eligible ? 0.60 : 0.96",
-                      });
-
-    const QString call = sectionBetween(
-        workflow, "const bool final_surface_denoising_enabled", "if (options.enableDepthCompletenessDiagnostics");
-    expectContainsAll(call,
-                      {
-                          "output_mesh == &sparse_scaffold_completion.mesh",
-                          "direct_visibility_occupancy_output",
-                          "allow_carrier_area_relaxation",
-                          "final_surface_denoising_volume_before",
-                          "final_surface_denoising_volume_after",
-                          "final_surface_denoising_volume_ratio",
-                      });
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/workflow/RecoveredDepthModelStage.cpp"));
+    expectContainsAll(workflow, {"buildRecoveredModel", "&recovered", "saveMeshAndOptionalTexture"});
+    expectNotContainsAll(workflow,
+                         {
+                             "applyTopologyGuardedFinalSurfaceDenoising",
+                             "allow_carrier_area_relaxation",
+                             "direct_visibility_occupancy_output",
+                         });
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, ModelManagerUsesSharedModelWorkflowEntry)
@@ -1380,14 +1342,14 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountContr
 
 TEST(MvsSchedulerContractTest, RecoveredProductionUsesTrackRankedSceneSelection)
 {
-    const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString header = readSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
+    const QString generator = readMvsPipelineImplementation();
     const QString adapter = readSourceFile(QStringLiteral("src/core/mvs/RecoveredDepthScene.cpp"));
     const QString selector = readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/neighbor_selection.cpp"));
     const QString orchestrator =
         readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
     const QString run =
-        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
+        sectionBetween(generator, "void MvsPipelineService::runInBackgroundImpl()", "} // namespace xjw::mvs");
 
     expectContainsAll(header,
                       {
@@ -1464,10 +1426,11 @@ TEST(MvsSchedulerContractTest, RecoveredVotingUsesBoundedFileBackedBatches)
 
 TEST(MvsDepthArtifactContractTest, AuthoritativeTargetedRecoveryMaskIsCheckedBeforeRead)
 {
-    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString streamingConsistency = sectionBetween(source,
-                                                        "bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()",
-                                                        "bool DepthMapGenerator::saveDepthFrameArtifacts");
+    const QString source = readMvsPipelineImplementation();
+    const QString streamingConsistency =
+        sectionBetween(source,
+                       "bool MvsPipelineService::crossCheckDepthConsistencyStreaming()",
+                       "bool MvsPipelineService::saveDepthFrameArtifacts");
     const QString targetedRecoveryLoad = sectionBetween(
         streamingConsistency, "const QString targeted_recovered_path =", "const FramePinholeCamera reference_camera");
 
@@ -1484,15 +1447,15 @@ TEST(MvsDepthArtifactContractTest, AuthoritativeTargetedRecoveryMaskIsCheckedBef
 
 TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
 {
-    const QString source = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString source = readMvsPipelineImplementation();
     const QString saveBlock = sectionBetween(
-        source, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
+        source, "bool MvsPipelineService::saveDepthFrameArtifacts", "void MvsPipelineService::captureStageSnapshot");
     const QString photometricFailureBlock =
         sectionBetween(saveBlock, "if (saveRawDepth && !photometricSourceMaskSaved)", "bool geometrySourceMaskSaved");
     expectContainsAll(photometricFailureBlock,
                       {
                           "markManifestFrameFailed(frameIndex, message)",
-                          "emit errorOccurred(message)",
+                          "errorOccurred(message)",
                           "return false;",
                       });
     const QString geometrySourceContractBlock =
@@ -1538,7 +1501,7 @@ TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
                           "require_artifact(adaptiveGeometryEffectiveViewCountSaved",
                           "require_artifact(adaptiveGeometryConflictRatioSaved",
                           "markManifestFrameFailed(frameIndex, message)",
-                          "emit errorOccurred(message)",
+                          "errorOccurred(message)",
                       });
 
     const int failClosedGate = indexOfOrFail(saveBlock, "if (!missing_required_artifacts.empty())");
@@ -1548,12 +1511,12 @@ TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
     expectContainsAll(failClosedBlock,
                       {
                           "markManifestFrameFailed(frameIndex, message)",
-                          "emit errorOccurred(message)",
+                          "errorOccurred(message)",
                           "return false;",
                       });
     const int markCompleted = indexOfOrFail(saveBlock, "_workspaceManifest.markCompleted(record)");
-    const int emitArtifact = indexOfOrFail(saveBlock, "emit depthMapArtifactSaved(artifact)");
-    const int emitDepthSaved = indexOfOrFail(saveBlock, "emit depthMapSaved(");
+    const int emitArtifact = indexOfOrFail(saveBlock, "depthMapArtifactSaved(artifact)");
+    const int emitDepthSaved = indexOfOrFail(saveBlock, "depthMapSaved(");
     const int manifestPersist = indexOfOrFail(saveBlock, "persistWorkspaceManifest(&manifestError)");
     const QString publicationTail =
         sectionBetween(saveBlock, "MvsDepthFrameRecord record;", "return previewSaved && rawSaved;");
@@ -1563,7 +1526,7 @@ TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
                           "record.status = final_artifacts",
                           "_workspaceManifest.upsertFrame(record)",
                           "_workspaceManifest.markCompleted(record)",
-                          "emit depthMapArtifactSaved(artifact)",
+                          "depthMapArtifactSaved(artifact)",
                       });
     EXPECT_LT(indexOfOrFail(publicationTail, "if (final_artifacts)"),
               indexOfOrFail(publicationTail, "_workspaceManifest.markCompleted(record)"));
@@ -1576,10 +1539,10 @@ TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
 
 TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvidence)
 {
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString generator = readMvsPipelineImplementation();
     const QString adapter = readSourceFile(QStringLiteral("src/core/mvs/RecoveredDepthScene.cpp"));
     const QString run =
-        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
+        sectionBetween(generator, "void MvsPipelineService::runInBackgroundImpl()", "} // namespace xjw::mvs");
 
     expectContainsAll(adapter,
                       {
@@ -1608,13 +1571,13 @@ TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvide
                       });
 
     const QString artifactSaver = sectionBetween(
-        generator, "bool DepthMapGenerator::saveDepthFrameArtifacts", "void DepthMapGenerator::captureStageSnapshot");
+        generator, "bool MvsPipelineService::saveDepthFrameArtifacts", "void MvsPipelineService::captureStageSnapshot");
     expectContainsAll(artifactSaver,
                       {
                           "photometricSourceMaskSaved",
                           "markManifestFrameFailed(frameIndex, message)",
                           "_workspaceManifest.markCompleted(record)",
-                          "emit depthMapArtifactSaved(artifact)",
+                          "depthMapArtifactSaved(artifact)",
                       });
 }
 
@@ -1622,8 +1585,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
 {
     const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
     const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
-    const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString header = readSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
+    const QString scheduler = readMvsPipelineImplementation();
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
     const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
@@ -1672,8 +1635,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     expectNotContainsAll(supportBlock, {"patchMatchWorkSize(refImg, pmCfg)"});
 
     const QString projectedBlock = sectionBetween(scheduler,
-                                                  "DepthMapGenerator::collectProjectedSparseDepthSamples(",
-                                                  "cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples");
+                                                  "MvsPipelineService::collectProjectedSparseDepthSamples(",
+                                                  "cv::Mat MvsPipelineService::buildHintDepthFromProjectedSamples");
     expectContainsAll(scheduler, {"kMaxProjectedDepthQuantileSamples"});
     expectContainsAll(projectedBlock,
                       {
@@ -1710,8 +1673,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
                       });
 
     const QString hintBody = sectionBetween(scheduler,
-                                            "cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples",
-                                            "cv::Mat DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples");
+                                            "cv::Mat MvsPipelineService::buildHintDepthFromProjectedSamples",
+                                            "cv::Mat MvsPipelineService::buildSparseSeedDepthFromProjectedSamples");
     expectContainsAll(hintBody,
                       {
                           "cv::distanceTransform",
@@ -1799,9 +1762,9 @@ TEST(MvsSchedulerContractTest, FinalPyramidLevelKeepsConfiguredIterationBudget)
 
 TEST(MvsHeterogeneousSchedulingContractTest, RecoveredProductionIsStrictlyCudaOnly)
 {
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString generator = readMvsPipelineImplementation();
     const QString run =
-        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
+        sectionBetween(generator, "void MvsPipelineService::runInBackgroundImpl()", "} // namespace xjw::mvs");
 
     expectContainsAll(run,
                       {
@@ -1822,13 +1785,13 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredProductionIsStrictlyCudaOn
 TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloatingPointSemantics)
 {
     const QString cmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString generator = readMvsPipelineImplementation();
     const QString cudaSource =
         readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/recovered_cuda_source.cu"));
     const QString orchestrator =
         readSourceFile(QStringLiteral("src/core/mvs/recovered_depth/src/patchmatch_orchestrator.cpp"));
     const QString run =
-        sectionBetween(generator, "void DepthMapGenerator::runInBackgroundImpl()", "} // namespace mvs");
+        sectionBetween(generator, "void MvsPipelineService::runInBackgroundImpl()", "} // namespace xjw::mvs");
 
     expectContainsAll(cmake,
                       {
@@ -1852,7 +1815,7 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredCudaKeepsReferenceFloating
                       {
                           "for (RecoveredDepthFrame& recovered_frame : recovered_result.frames)",
                           "saveDepthFrameArtifacts(",
-                          "emit depthMapReady(_depthFrames",
+                          "depthMapReady(_depthFrames",
                       });
     expectNotContainsAll(run,
                          {
@@ -1939,13 +1902,14 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredUsesReferenceParallelHotPa
 
 TEST(MvsAdaptivePatchMatchContractTest, AuxiliaryEvidenceCrossesEveryAdaptiveBackendBranch)
 {
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString adaptive_helper =
-        sectionBetween(generator, "bool estimatePatchMatchWithAdaptiveCuda(", "float sourceGeometryReliabilityWeight");
+    const QString generator = readMvsPipelineImplementation();
+    const QString adaptive_helper = readSourceFile(QStringLiteral("src/core/mvs/pipeline/FrameBackend.cpp"));
+    const QString adaptive_declarations =
+        readSourceFile(QStringLiteral("src/core/mvs/pipeline/MvsPipelineInternals.h"));
     const QString adaptive_backend =
         sectionBetween(generator, "class AdaptivePatchMatchBackend final", "} // namespace");
 
-    expectContainsAll(adaptive_helper,
+    expectContainsAll(adaptive_declarations,
                       {
                           "const PatchMatchAuxiliaryInput* auxiliaryInput = nullptr",
                           "PatchMatchAuxiliaryOutput* auxiliaryOutput = nullptr",
@@ -2049,7 +2013,7 @@ TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCor
         readSourceFile(QStringLiteral("src/gui/project/manager/ProjectPointCloudWorkflowController.cpp"));
     expectContainsAll(pointCloudController,
                       {
-                          "xjw::mvs::DepthMapGenerator",
+                          "xjw::gui::tasks::DepthMapTask",
                           "xjw::mvs::fuseDepthMapsStreaming",
                           "xjw::gui::tasks::runGuardedWithOutcome",
                       });

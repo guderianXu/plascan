@@ -11,10 +11,10 @@ if(TARGET aerial_triangulation AND TARGET plascan_cli_photogrammetry_common)
     )
 endif()
 
-if(TARGET meshing)
+if(TARGET model_workflow)
     add_plascan_cli(mesh_reconstruct_cli
         SOURCE cli_mesh_reconstruct.cpp
-        LIBRARIES meshing plapoint::plapoint plascan_common_io Qt6::Core Qt6::Gui
+        LIBRARIES model_workflow plapoint::plapoint plascan_common_io Qt6::Core Qt6::Gui
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/mesh
@@ -22,7 +22,7 @@ if(TARGET meshing)
 
     add_plascan_cli(texture_map_cli
         SOURCE cli_texture_map.cpp
-        LIBRARIES meshing plapoint::plapoint plascan_common_io Qt6::Core Qt6::Gui
+        LIBRARIES model_workflow plapoint::plapoint plascan_common_io Qt6::Core Qt6::Gui
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/mesh
@@ -44,9 +44,9 @@ set(workflow_cli_base_targets
     image_matching
     matchphototask
     sfm
-    mvs
+    mvs_pipeline
     project_workflows
-    meshing
+    model_workflow
     aerial_triangulation
     plascan_cli_photogrammetry_common
 )
@@ -76,9 +76,9 @@ function(add_reconstruction_workflow_cli name)
             plascan_cli_photogrammetry_common
             plascan_common_project
             sfm
-            mvs
+            mvs_pipeline
             project_workflows
-            meshing
+            model_workflow
             ${ARGN}
             image_matching
             matchphototask
@@ -116,11 +116,11 @@ if(workflow_cli_available)
     endif()
 endif()
 
-if(TARGET mvs)
+if(TARGET mvs_pipeline)
     add_plascan_cli(mvs_depth_reprocess_cli
         SOURCE cli_mvs_depth_reprocess.cpp
         LIBRARIES
-            mvs
+            mvs_pipeline
             project_workflows
             camera
             Qt6::Core

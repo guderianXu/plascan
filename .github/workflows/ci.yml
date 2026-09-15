@@ -86,6 +86,7 @@ jobs:
             ninja-build \
             pkg-config \
             python3 \
+            python3-dev \
             python3-venv \
             unzip \
             vulkan-tools \
@@ -93,21 +94,33 @@ jobs:
             xauth \
             '^libxcb.*-dev'
 
+      - name: Install Python test dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python3 -m pip install --disable-pip-version-check numpy pillow scipy rasterio trimesh
+          echo "${GITHUB_WORKSPACE}/.venv/bin" >> "${GITHUB_PATH}"
+
       - name: Build pinned OpenCV 5
         run: |
           test "$(git -C 3rdparty/opencv rev-parse HEAD)" = "40738fb16ceddb5fb3fea747585f7ce6abb0605b"
           opencv_prefix="${RUNNER_TEMP}/opencv-5.0.0"
+          python_executable="${GITHUB_WORKSPACE}/.venv/bin/python3"
+          python_site="$("${python_executable}" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+          numpy_include="$("${python_executable}" -c 'import numpy; print(numpy.get_include())')"
           cmake -S 3rdparty/opencv -B "${RUNNER_TEMP}/opencv-5.0.0-build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${opencv_prefix}" \
-            -DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo \
+            -DBUILD_LIST=core,imgproc,imgcodecs,flann,dnn,features,geometry,stereo,python3 \
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_TESTS=OFF \
             -DBUILD_PERF_TESTS=OFF \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_opencv_apps=OFF \
             -DBUILD_opencv_python2=OFF \
-            -DBUILD_opencv_python3=OFF \
+            -DBUILD_opencv_python3=ON \
+            -DPYTHON3_EXECUTABLE="${python_executable}" \
+            -DPYTHON3_NUMPY_INCLUDE_DIRS="${numpy_include}" \
+            -DOPENCV_PYTHON3_INSTALL_PATH="${python_site}" \
             -DBUILD_opencv_world=OFF \
             -DWITH_CUDA=OFF \
             -DWITH_QT=OFF
@@ -115,6 +128,30 @@ jobs:
           cmake --install "${RUNNER_TEMP}/opencv-5.0.0-build"
           echo "CMAKE_PREFIX_PATH=${opencv_prefix}" >> "${GITHUB_ENV}"
           echo "LD_LIBRARY_PATH=${opencv_prefix}/lib:${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
+
+      - name: Verify Python test runtime
+        run: |
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          import cv2
+          import numpy as np
+          import PIL
+          import scipy
+          import rasterio
+          import trimesh
+
+          expected = Path(".venv").resolve()
+          if Path(sys.prefix).resolve() != expected:
+              raise SystemExit(f"CTest runtime mismatch: {sys.executable}; expected {expected}")
+          if cv2.__version__ != "5.0.0":
+              raise SystemExit(f"Expected pinned OpenCV 5.0.0, got {cv2.__version__}")
+          for suffix in (".png", ".tiff"):
+              ok, encoded = cv2.imencode(suffix, np.zeros((8, 8), dtype=np.uint8))
+              if not ok or cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED) is None:
+                  raise SystemExit(f"OpenCV image codec unavailable: {suffix}")
+          print(f"Verified Python: {sys.executable}; OpenCV: {cv2.__version__}")
+          PY
 
       - name: Configure pinned vcpkg
         run: |
@@ -132,9 +169,6 @@ jobs:
           key: vcpkg-${{ runner.os }}-3c5d90a305ff00ca841f085a74a7ce74ee777dee-${{ hashFiles('vcpkg.json', 'cmake/vcpkg-overlays/**') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-3c5d90a305ff00ca841f085a74a7ce74ee777dee-
-
-      - name: Install Python test dependencies
-        run: python3 -m pip install --disable-pip-version-check numpy pillow scipy
 
       - name: Restore compiler cache
         uses: actions/cache@v4
@@ -163,6 +197,7 @@ jobs:
             --x-install-root="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
             --overlay-ports="${GITHUB_WORKSPACE}/cmake/vcpkg-overlays"
           cmake -S . -B build-headless -G Ninja \
+            -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python3" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic \
@@ -216,6 +251,7 @@ jobs:
         run: |
           set -o pipefail
           if ! cmake -S . -B build -G Ninja \
+            -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python3" \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \

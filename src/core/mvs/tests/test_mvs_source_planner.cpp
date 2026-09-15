@@ -1605,7 +1605,7 @@ TEST(MvsSourcePlanner,
     options.maxSources = 2;
     options.rejectAngleOutliers = true;
     options.maxTriangulationAngleDeg = 20.0f;
-    // DepthMapGenerator disables an unmeasured sequence fallback whenever an
+    // MvsPipelineService disables an unmeasured sequence fallback whenever an
     // explicit source-angle cap is enabled.
     options.allowSequenceFallback = false;
 

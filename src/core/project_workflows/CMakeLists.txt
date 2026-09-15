@@ -25,7 +25,7 @@ target_link_libraries(project_workflows
         Qt6::Core
         plascan_common_io
         plascan_common_project
-        mvs
+        mvs_pipeline
         qc
         sfm_postprocess
         terrain

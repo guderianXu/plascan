@@ -1,7 +1,29 @@
 cmake_minimum_required(VERSION 3.16)
-project(mvs LANGUAGES CXX)
+project(mvs_pipeline LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
+
+# Shared data and synchronous processing must not depend on the Qt task adapter.
+add_library(mvs_contracts INTERFACE)
+target_include_directories(mvs_contracts INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mvs_contracts INTERFACE camera plapoint::plapoint Qt6::Core ${OpenCV_LIBS})
+target_compile_features(mvs_contracts INTERFACE cxx_std_20)
+
+add_library(mvs_depth_processing STATIC
+    depth_processing/DepthNoiseFilters.cpp
+    depth_processing/DepthPostprocessor.cpp
+    depth_processing/DepthPostprocessor.h
+    DepthFrameQualityGate.cpp
+    DepthMissingReason.cpp
+    DepthPyramidPolicy.cpp
+    MvsQualityReport.cpp
+)
+set_target_properties(mvs_depth_processing PROPERTIES AUTOMOC OFF)
+target_link_libraries(mvs_depth_processing PUBLIC mvs_contracts PRIVATE plascan_common_log)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(mvs_depth_processing PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(mvs_depth_processing PRIVATE HAS_OPENMP)
+endif()
 
 # ── CUDA（可选）──────────────────────────────────────────────────────────────
 # CUDA 已在根 CMakeLists 中全局启用, 直接判断即可
@@ -30,7 +52,6 @@ set(MVS_CXX_SOURCES
     DepthCompletenessMetrics.cpp
     DepthGapTargetedRecovery.cpp
     DepthResidualReestimation.cpp
-    DepthMissingReason.cpp
     DepthMemoryPolicy.cpp
     DepthProvenance.cpp
     DepthConsistencyCache.cpp
@@ -47,8 +68,6 @@ set(MVS_CXX_SOURCES
     DepthPoseRefinementStage.cpp
     DepthMapFusion.cpp
     MvsStageSnapshot.cpp
-    DepthFrameQualityGate.cpp
-    DepthPyramidPolicy.cpp
     DepthPyramidEstimator.cpp
     DepthPyramidPropagation.cpp
     DepthFrameUtils.cpp
@@ -57,7 +76,6 @@ set(MVS_CXX_SOURCES
     LearnedDepthCandidateGate.cpp
     MvsSourcePlanner.cpp
     MvsVisibilityGraphBuilder.cpp
-    MvsQualityReport.cpp
     MvsSceneClassifier.cpp
     MvsImageCache.cpp
     MvsImageFrame.cpp
@@ -69,7 +87,6 @@ set(MVS_CXX_SOURCES
     PatchMatchEstimator.cpp
     PatchMatchHostUtils.cpp
     DenseCloudBuilder.cpp
-    DepthMapGenerator.cpp
     EpipolarRectifier.cpp
     SparseCloudPreprocessor.cpp
     DisparityTriangulator.cpp
@@ -92,6 +109,8 @@ set(MVS_CXX_SOURCES
 )
 
 set(MVS_HEADERS
+    DepthFrameResult.h
+    DepthPyramidTypes.h
     AdaptiveGeometryEvidencePolicy.h
     DenseCloudArtifactValidation.h
     DenseCloudRefinementService.h
@@ -137,7 +156,6 @@ set(MVS_HEADERS
     GpuDeviceLease.h
     LearnedDepthCandidateGate.h
     DenseCloudBuilder.h
-    DepthMapGenerator.h
     PatchMatchPhotometricCost.h
     PatchMatchHostUtils.h
     DensePointCloudCUDA.h
@@ -151,12 +169,9 @@ set(MVS_HEADERS
 )
 
 set(MVS_QOBJECT_HEADERS
-    DepthMapGenerator.h
 )
 
-qt6_wrap_cpp(MVS_MOC_SOURCES
-    ${MVS_QOBJECT_HEADERS}
-)
+
 
 if(MVS_HAS_CUDA)
     set(MVS_CUDA_SOURCES
@@ -185,26 +200,25 @@ else()
     )
 endif()
 
-add_library(mvs STATIC
+add_library(mvs_backend STATIC
     ${MVS_CXX_SOURCES}
     ${MVS_CUDA_SOURCES}
     ${MVS_HEADERS}
-    ${MVS_MOC_SOURCES}
 )
 
 if(MVS_HAS_CUDA)
-    set_target_properties(mvs PROPERTIES
+    set_target_properties(mvs_backend PROPERTIES
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
-    target_compile_definitions(mvs
+    target_compile_definitions(mvs_backend
         PUBLIC
             MVS_ENABLE_CUDA=1
         PRIVATE
             METMODEL_HAS_CUDA=1
     )
-    target_compile_options(mvs PRIVATE
+    target_compile_options(mvs_backend PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
     )
     set_source_files_properties(
@@ -217,23 +231,23 @@ if(MVS_HAS_CUDA)
     if(MSVC)
         # NVCC misdiagnoses Qt6 comparison conversion operators and exported
         # value members while parsing the host side of these CUDA units.
-        target_compile_options(mvs PRIVATE
+        target_compile_options(mvs_backend PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,1394>
         )
     endif()
 endif()
 
 if(MVS_HAS_OPENCL)
-    target_compile_definitions(mvs PUBLIC MVS_ENABLE_OPENCL=1)
-    target_link_libraries(mvs PRIVATE OpenCL::OpenCL)
+    target_compile_definitions(mvs_backend PUBLIC MVS_ENABLE_OPENCL=1)
+    target_link_libraries(mvs_backend PRIVATE OpenCL::OpenCL)
 endif()
 
-target_include_directories(mvs PUBLIC
+target_include_directories(mvs_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_SOURCE_DIR}/src/common
 )
-target_include_directories(mvs PRIVATE
+target_include_directories(mvs_backend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/recovered_depth/include
     ${CMAKE_CURRENT_SOURCE_DIR}/recovered_depth/src
 )
@@ -251,11 +265,13 @@ else()
 endif()
 
 if(GDAL_INCLUDE_DIRS)
-    target_include_directories(mvs PRIVATE ${GDAL_INCLUDE_DIRS})
+    target_include_directories(mvs_backend PRIVATE ${GDAL_INCLUDE_DIRS})
 endif()
 
-target_link_libraries(mvs
+target_link_libraries(mvs_backend
     PUBLIC
+        mvs_contracts
+        mvs_depth_processing
         camera
         plascan_common_log
         plascan_common_io
@@ -264,7 +280,6 @@ target_link_libraries(mvs
     PRIVATE
         plascan_common_concurrency
         plascan_common_string_utils
-        Qt6::Concurrent
         ${OpenCV_LIBS}
         ${PLASCAN_JPEG_TARGET}
         ${PLASCAN_OPENEXR_TARGET}
@@ -274,22 +289,78 @@ target_link_libraries(mvs
 )
 
 if(MVS_HAS_CUDA)
-    target_link_libraries(mvs PRIVATE CUDA::cudart CUDA::cuda_driver)
+    target_link_libraries(mvs_backend PRIVATE CUDA::cudart CUDA::cuda_driver)
 endif()
 
 if(OpenMP_CXX_FOUND)
-    target_compile_definitions(mvs PRIVATE HAS_OPENMP)
+    target_compile_definitions(mvs_backend PRIVATE HAS_OPENMP)
+endif()
+
+
+set_target_properties(mvs_backend PROPERTIES AUTOMOC OFF)
+add_library(mvs_pipeline STATIC
+    MvsPipelineService.h
+    pipeline/DepthEvidenceRules.cpp
+    pipeline/DepthConsistencyVoting.cpp
+    pipeline/DepthDiagnostics.cpp
+    pipeline/SourcePlanningUtils.cpp
+    pipeline/DepthResourcePolicy.cpp
+    pipeline/DepthArtifactIO.cpp
+    pipeline/FrameBackend.cpp
+    pipeline/FrameBackendBridge.cpp
+    pipeline/DepthPublicationContract.cpp
+    pipeline/ImageMasks.cpp
+    pipeline/MvsPipelineService.cpp
+    pipeline/SparseVisibility.cpp
+    pipeline/DepthWorkspace.cpp
+    pipeline/PreparedRasterPublisher.cpp
+    pipeline/SourcePlanning.cpp
+    pipeline/ImagePreparation.cpp
+    pipeline/SparseDepthRange.cpp
+    pipeline/SparseDepthHints.cpp
+    pipeline/SparseSupportPrior.cpp
+    pipeline/FrameEstimation.cpp
+    pipeline/FusionFrameAssembler.cpp
+    pipeline/DepthConsistency.cpp
+    pipeline/ExperimentalDepthStages.cpp
+    pipeline/DepthRecovery.cpp
+    pipeline/StreamingConsistency.cpp
+    pipeline/DepthArtifactPublisher.cpp
+    pipeline/MvsPipelineExecution.cpp
+)
+set_target_properties(mvs_pipeline PROPERTIES AUTOMOC OFF)
+target_link_libraries(mvs_pipeline PUBLIC mvs_backend task_runtime
+    PRIVATE plascan_common_concurrency plascan_common_string_utils)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(mvs_pipeline PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(mvs_pipeline PRIVATE HAS_OPENMP)
 endif()
 
 if(BUILD_TESTS)
     find_package(GTest QUIET)
     if(GTest_FOUND)
         include(GoogleTest)
+        add_executable(test_mvs_pipeline_service tests/test_mvs_pipeline_service.cpp)
+        set_target_properties(test_mvs_pipeline_service PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_mvs_pipeline_service PRIVATE mvs_pipeline GTest::gtest_main)
+        gtest_discover_tests(test_mvs_pipeline_service)
+        add_executable(test_depth_frame_contract tests/test_depth_frame_contract.cpp)
+        set_target_properties(test_depth_frame_contract PROPERTIES
+            AUTOMOC OFF RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+        target_link_libraries(test_depth_frame_contract PRIVATE mvs_contracts GTest::gtest_main)
+        gtest_discover_tests(test_depth_frame_contract)
+
+        add_executable(test_depth_postprocessor tests/test_depth_postprocessor.cpp)
+        set_target_properties(test_depth_postprocessor PROPERTIES
+            AUTOMOC OFF RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+        target_link_libraries(test_depth_postprocessor PRIVATE mvs_depth_processing GTest::gtest_main)
+        gtest_discover_tests(test_depth_postprocessor)
+
         add_executable(test_mvs_rectifier_unit
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_rectifier.cpp
         )
         target_link_libraries(test_mvs_rectifier_unit PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -303,7 +374,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_preprocessor.cpp
         )
         target_link_libraries(test_mvs_image_preprocessor PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -316,7 +387,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_metadata_probe.cpp
         )
         target_link_libraries(test_mvs_image_metadata_probe PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
             ${PLASCAN_GDAL_TARGET}
@@ -340,7 +411,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_image_cache PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -353,7 +424,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pyramid.cpp
         )
         target_link_libraries(test_mvs_depth_pyramid PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -369,7 +440,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_completeness PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -385,7 +456,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_layer_reliability PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             Qt6::Core
             ${OpenCV_LIBS}
@@ -402,7 +473,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_stage_snapshot PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             Qt6::Core
             ${OpenCV_LIBS}
@@ -421,7 +492,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_gap_targeted_recovery PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -437,7 +508,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_missing_reason PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -453,7 +524,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_provenance PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -469,7 +540,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_consistency_evidence PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -485,7 +556,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_adaptive_geometry_evidence_policy PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_mvs_adaptive_geometry_evidence_policy PRIVATE
@@ -500,7 +571,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_memory_policy PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_mvs_depth_memory_policy PRIVATE
@@ -515,7 +586,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_depth_pose_alignment PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             ${OpenCV_LIBS}
         )
@@ -531,7 +602,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_cross_view_hole_repair PRIVATE
-            mvs
+            mvs_pipeline
             camera
             ${OpenCV_LIBS}
             GTest::gtest_main
@@ -549,7 +620,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_mvs_types PRIVATE
-            mvs
+            mvs_pipeline
             camera
             ${OpenCV_LIBS}
             GTest::gtest_main
@@ -571,7 +642,7 @@ if(BUILD_TESTS)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         )
         target_link_libraries(test_depth_compute_scheduler PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_depth_compute_scheduler PRIVATE
@@ -595,7 +666,7 @@ if(BUILD_TESTS)
             )
         endif()
         target_link_libraries(test_mvs_pipeline PRIVATE
-            mvs
+            mvs_pipeline
             camera
             Qt6::Core
             ${OpenCV_LIBS}
@@ -612,7 +683,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_workspace_manifest.cpp
         )
         target_link_libraries(test_mvs_workspace_manifest PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             Qt6::Core
             ${OpenCV_LIBS}
@@ -626,7 +697,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_source_planner.cpp
         )
         target_link_libraries(test_mvs_source_planner PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             Qt6::Core
             ${OpenCV_LIBS}
@@ -640,7 +711,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_visibility_graph_builder.cpp
         )
         target_link_libraries(test_mvs_visibility_graph_builder PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_mvs_visibility_graph_builder PRIVATE
@@ -652,7 +723,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_dense_cloud_quality_filter.cpp
         )
         target_link_libraries(test_dense_cloud_quality_filter PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_dense_cloud_quality_filter PRIVATE
@@ -664,7 +735,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_dense_cloud_refinement.cpp
         )
         target_link_libraries(test_mvs_dense_cloud_refinement PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
             Qt6::Core
         )
@@ -677,7 +748,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_streaming_depth_fusion.cpp
         )
         target_link_libraries(test_mvs_streaming_depth_fusion PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_mvs_streaming_depth_fusion PRIVATE
@@ -700,7 +771,7 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_patchmatch_mask_aware.cpp
         )
         target_link_libraries(test_patchmatch_mask_aware PRIVATE
-            mvs
+            mvs_pipeline
             GTest::gtest_main
         )
         target_include_directories(test_patchmatch_mask_aware PRIVATE

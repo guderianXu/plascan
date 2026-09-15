@@ -1,4 +1,5 @@
 #include "CliTestSupport.h"
+#include "../../../../tests/CoreImplementationBundles.h"
 #include "PointCloudWorkflowConfig.h"
 
 // 这些测试只覆盖 GUI“工作流程”菜单对应的 CLI。
@@ -237,13 +238,10 @@ TEST(MvsDepthReprocessCliContractTest,
     });
 }
 
-TEST(MvsDepthReprocessCliContractTest,
-     SourceMaximumAngleCapCannotBeBypassedBySequenceFallback)
+TEST(MvsDepthReprocessCliContractTest, SourceMaximumAngleCapCannotBeBypassedBySequenceFallback)
 {
-    const QString generator = readSourceFile(
-        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString planner = readSourceFile(
-        QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    const QString planner = readSourceFile(QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
 
     expectContainsAll(generator, {
         "if (angle_cap_enabled)",
@@ -265,12 +263,9 @@ TEST(MvsDepthReprocessCliContractTest,
 TEST(MvsDepthReprocessCliContractTest,
      CompleteVisibilityPoolAndSoftRankingAreExplicitAndAudited)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = readSourceFile(
-        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString planner = readSourceFile(
-        QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    const QString planner = readSourceFile(QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
 
     expectContainsAll(source, {
         "--source-complete-visibility-pool",
@@ -399,10 +394,8 @@ TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticO
 TEST(MvsDepthReprocessCliContractTest,
      DepthLayerReliabilityAnchorGateIsExplicitAndDefaultOff)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = readSourceFile(
-        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
 
     expectContainsAll(source, {
         "--depth-layer-reliability-anchor-gate",
@@ -419,10 +412,8 @@ TEST(MvsDepthReprocessCliContractTest,
 TEST(MvsDepthReprocessCliContractTest,
      DepthLayerReliabilityCorrectionIsIndependentAndDefaultOff)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = readSourceFile(
-        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
 
     expectContainsAll(source, {
         "--depth-layer-reliability-guided-correction",
@@ -438,15 +429,13 @@ TEST(MvsDepthReprocessCliContractTest,
     });
 }
 
-TEST(MvsDepthReprocessCliContractTest,
-     StageSnapshotsAreSelectedBoundedAndConditionallyReported)
+TEST(MvsDepthReprocessCliContractTest, StageSnapshotsAreSelectedBoundedAndConditionallyReported)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = readSourceFile(
-        QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString production_generator = generator.mid(
-        generator.indexOf(QStringLiteral("void DepthMapGenerator::runInBackgroundImpl()")));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    const QString production_generator =
+        readSourceFile(QStringLiteral("src/core/mvs/pipeline/MvsPipelineExecution.cpp"));
+    EXPECT_TRUE(production_generator.contains(QStringLiteral("void MvsPipelineService::runInBackgroundImpl()")));
 
     expectContainsAll(source, {
         "--stage-snapshot-refs",
@@ -857,11 +846,9 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         + readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionCliOptions.cpp"));
     const QString workflow =
         readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
-    const QString config =
-        readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.cpp"));
-    const QString mvs =
-        readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h"))
-        + readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString config = readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.cpp"));
+    const QString mvs = readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h")) +
+                        xjw::tests::readMvsPipelineImplementation(readSourceFile);
     const QString gui_workflow =
         readSourceFile(QStringLiteral(
             "src/core/project_workflows/PointCloudInputPreparation.cpp"))
@@ -1251,38 +1238,39 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferen
 TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
 {
     const QString cmake = readSourceFile(QStringLiteral("src/cli/workflows/CMakeLists.txt"));
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
 
-    expectContainsAll(cmake, {
-        "mesh_reconstruct_cli",
-        "cli_mesh_reconstruct.cpp",
-        "meshing",
-    });
-    expectContainsAll(source, {
-        "--source-data",
-        "--depth-map-dir",
-        "--output-dir",
-        "--settings-json",
-        "--settings-key",
-        "xjw::mesh::workflow::ModelBuildRequest",
-        "xjw::mesh::workflow::buildModel",
-        "QStringLiteral(\"depth_maps\")",
-        "canonical v1 生成模型仅支持 --source-data depth_maps 或 rpc_height_plane_sweep",
-        "depth_maps 模式缺少 --depth-map-dir",
-        "reconstruction_mode",
-        "QStringLiteral(\"recovered_ooc\")",
-        "QStringLiteral(\"rpc_height_plane_sweep\")",
-        "rpcImagePaths",
-        "rpcHeightMinMeters",
-        "rpcHeightMaxMeters",
-    });
+    expectContainsAll(cmake,
+                      {
+                          "mesh_reconstruct_cli",
+                          "cli_mesh_reconstruct.cpp",
+                          "model_workflow",
+                      });
+    expectContainsAll(source,
+                      {
+                          "--source-data",
+                          "--depth-map-dir",
+                          "--output-dir",
+                          "--settings-json",
+                          "--settings-key",
+                          "xjw::mesh::workflow::ModelBuildRequest",
+                          "xjw::mesh::workflow::buildModel",
+                          "request.execution.progress",
+                          "QStringLiteral(\"depth_maps\")",
+                          "canonical v1 生成模型仅支持 --source-data depth_maps 或 rpc_height_plane_sweep",
+                          "depth_maps 模式缺少 --depth-map-dir",
+                          "reconstruction_mode",
+                          "QStringLiteral(\"recovered_ooc\")",
+                          "QStringLiteral(\"rpc_height_plane_sweep\")",
+                          "rpcImagePaths",
+                          "rpcHeightMinMeters",
+                          "rpcHeightMaxMeters",
+                      });
 }
 
 TEST(MeshReconstructCliGTest, CanonicalV1DefaultsAndRejectsLegacyModesInSource)
 {
-    const QString source = readSourceFile(
-        QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mesh_reconstruct.cpp"));
 
     expectContainsAll(source,
                       {

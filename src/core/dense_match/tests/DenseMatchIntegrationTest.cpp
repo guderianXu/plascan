@@ -41,7 +41,7 @@ TEST_F(DenseMatchIntegrationTest, BM_EndToEnd)
     cfg.subpixel = SubpixelMode::None;
     cfg.medianFilterSize = 0;
     cfg.supportIntensityThreshold = 0;
-    cfg.useCuda = false;
+    cfg.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(cfg);
     auto result = service.process(left, right);
     ASSERT_FALSE(result.disparity.empty());
@@ -64,7 +64,7 @@ TEST_F(DenseMatchIntegrationTest, SGM_EndToEnd)
     cfg.subpixel = SubpixelMode::None;
     cfg.medianFilterSize = 0;
     cfg.supportIntensityThreshold = 0;
-    cfg.useCuda = false;
+    cfg.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(cfg);
     auto result = service.process(left, right);
     ASSERT_FALSE(result.disparity.empty());
@@ -87,7 +87,7 @@ TEST_F(DenseMatchIntegrationTest, LeftRightCheckUsesReverseRangeAndOppositeSign)
     cfg.lrCheckThreshold = 0.1f;
     cfg.medianFilterSize = 0;
     cfg.supportIntensityThreshold = 0;
-    cfg.useCuda = false;
+    cfg.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(cfg);
 
     const DisparityResult result = service.process(left, right);
@@ -137,7 +137,7 @@ TEST_F(DenseMatchIntegrationTest, NegativeDisparitySurvivesValidation)
     cfg.corrKernelH = 7;
     cfg.medianFilterSize = 0;
     cfg.supportIntensityThreshold = 0;
-    cfg.useCuda = false;
+    cfg.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(cfg);
 
     const DisparityResult result = service.process(left, right);
@@ -209,7 +209,7 @@ TEST(DenseMatchFailureTest, ReportsSizeAndExtremeDisparityRangeWithoutAllocating
     config.algorithm = StereoAlgorithm::BlockMatch;
     config.minDisparity = std::numeric_limits<int>::min();
     config.maxDisparity = std::numeric_limits<int>::max();
-    config.useCuda = true;
+    config.computeBackend = DenseMatchComputeBackend::Automatic;
     config.enableLRCheck = false;
     config.medianFilterSize = 0;
     DenseMatchService service(config);
@@ -240,7 +240,7 @@ TEST(DenseMatchFailureTest, RejectsUnrepresentableReverseRange)
     config.lrCheckThreshold = 1.0f;
     config.medianFilterSize = 0;
     config.supportIntensityThreshold = 0;
-    config.useCuda = false;
+    config.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(config);
     const cv::Mat image(1, 1, CV_8UC1, cv::Scalar(1));
 
@@ -272,7 +272,7 @@ TEST_F(DenseMatchIntegrationTest, SaveAndReloadDisparity)
     cfg.costFunc  = CostFunction::AbsoluteDifference;
     cfg.subpixel = SubpixelMode::None;
     cfg.maxDisparity = 32;
-    cfg.useCuda = false;
+    cfg.computeBackend = DenseMatchComputeBackend::Cpu;
     DenseMatchService service(cfg);
     auto result = service.process(left, right);
 

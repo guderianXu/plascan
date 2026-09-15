@@ -121,10 +121,6 @@ namespace xjw::dense_match
 
     DenseMatchComputeBackend resolveDenseMatchComputeBackend(const DenseMatchConfig& config)
     {
-        if (config.computeBackend == DenseMatchComputeBackend::Automatic && !config.useCuda)
-        {
-            return DenseMatchComputeBackend::Cpu;
-        }
         return resolveDenseMatchComputeBackend(config.computeBackend, config.cudaDevice, config.openClDevice);
     }
 

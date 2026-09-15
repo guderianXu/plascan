@@ -111,6 +111,8 @@ set(GUI_SOURCES
 )
 
 set(GUI_PROJECT_SOURCES
+  project/tasks/DepthMapTask.cpp
+  project/tasks/DepthMapTask.h
   config/settings/FileDialogStateManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp

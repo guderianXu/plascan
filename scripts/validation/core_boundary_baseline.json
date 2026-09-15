@@ -25,12 +25,13 @@
         "matchphototask|PUBLIC|Qt6::Core": 1
       },
       "src/core/mesh/CMakeLists.txt": {
-        "meshing|PRIVATE|Qt6::Core": 1,
-        "meshing|PRIVATE|Qt6::Gui": 1
+        "meshing_algorithms|PRIVATE|Qt6::Core": 1,
+        "meshing_algorithms|PRIVATE|Qt6::Gui": 1,
+        "model_workflow|PUBLIC|Qt6::Core": 1
       },
       "src/core/mvs/CMakeLists.txt": {
-        "mvs|PRIVATE|Qt6::Concurrent": 1,
-        "mvs|PUBLIC|Qt6::Core": 1
+        "mvs_backend|PUBLIC|Qt6::Core": 1,
+        "mvs_contracts|INTERFACE|Qt6::Core": 1
       },
       "src/core/project_workflows/CMakeLists.txt": {
         "project_workflows|PUBLIC|Qt6::Core": 1
@@ -387,6 +388,23 @@
         "QJsonObject": 1,
         "QString": 1
       },
+      "src/core/mesh/tsdf/DepthTsdfInternals.h": {
+        "QFileInfo": 1,
+        "QJsonArray": 1,
+        "QSet": 1,
+        "QStringList": 1
+      },
+      "src/core/mesh/workflow/ModelWorkflowInternals.h": {
+        "QCryptographicHash": 1,
+        "QDir": 1,
+        "QFile": 1,
+        "QFileInfo": 1,
+        "QJsonArray": 1,
+        "QJsonDocument": 1,
+        "QSaveFile": 1,
+        "QScopeGuard": 1,
+        "QTextStream": 1
+      },
       "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
         "QJsonObject": 1
       },
@@ -401,6 +419,10 @@
       },
       "src/core/mvs/DepthFrameQualificationPolicy.h": {
         "QString": 1
+      },
+      "src/core/mvs/DepthFrameResult.h": {
+        "QJsonObject": 1,
+        "QSharedPointer": 1
       },
       "src/core/mvs/DepthFrameUtils.h": {
         "QJsonArray": 1,
@@ -418,14 +440,6 @@
       "src/core/mvs/DepthLayerReliability.h": {
         "QJsonObject": 1
       },
-      "src/core/mvs/DepthMapGenerator.h": {
-        "QFuture": 1,
-        "QJsonObject": 1,
-        "QMetaType": 1,
-        "QObject": 1,
-        "QSharedPointer": 1,
-        "QString": 1
-      },
       "src/core/mvs/DepthMissingReason.h": {
         "QJsonObject": 1
       },
@@ -437,6 +451,11 @@
       },
       "src/core/mvs/GpuDeviceLease.h": {
         "QLockFile": 1
+      },
+      "src/core/mvs/MvsPipelineService.h": {
+        "QJsonObject": 1,
+        "QSharedPointer": 1,
+        "QString": 1
       },
       "src/core/mvs/MvsQualityReport.h": {
         "QJsonObject": 1
@@ -465,6 +484,15 @@
       },
       "src/core/mvs/RecoveredModelInput.h": {
         "QString": 1
+      },
+      "src/core/mvs/pipeline/MvsPipelineInternals.h": {
+        "QDateTime": 1,
+        "QDir": 1,
+        "QFile": 1,
+        "QFileInfo": 1,
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QStringList": 1
       },
       "src/core/project_workflows/MvsSourcePairQualityLoader.h": {
         "QString": 1,
@@ -1016,8 +1044,8 @@
       },
       "src/core/mesh/ModelWorkflowService.h": {
         "QJsonObject": 10,
-        "QString": 26,
-        "QStringLiteral": 1,
+        "QString": 22,
+        "QStringLiteral": 2,
         "qint64": 2
       },
       "src/core/mesh/RecoveredModelBuilder.h": {
@@ -1052,6 +1080,21 @@
         "QJsonObject": 2,
         "QString": 1
       },
+      "src/core/mesh/tsdf/DepthTsdfInternals.h": {
+        "QString": 11,
+        "QVector": 12
+      },
+      "src/core/mesh/tsdf/DepthTsdfStages.h": {
+        "QString": 2,
+        "QVector": 17
+      },
+      "src/core/mesh/workflow/ModelWorkflowInternals.h": {
+        "QJsonArray": 3,
+        "QJsonObject": 14,
+        "QString": 23,
+        "QStringList": 1,
+        "QVector": 5
+      },
       "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
         "QJsonObject": 1
       },
@@ -1067,6 +1110,10 @@
       "src/core/mvs/DepthFrameQualificationPolicy.h": {
         "QString": 14,
         "QStringLiteral": 8
+      },
+      "src/core/mvs/DepthFrameResult.h": {
+        "QJsonObject": 8,
+        "QSharedPointer": 24
       },
       "src/core/mvs/DepthFrameUtils.h": {
         "QJsonArray": 1,
@@ -1085,16 +1132,6 @@
       "src/core/mvs/DepthLayerReliability.h": {
         "QJsonObject": 1
       },
-      "src/core/mvs/DepthMapGenerator.h": {
-        "QFuture": 1,
-        "QJsonObject": 10,
-        "QObject": 2,
-        "QSharedPointer": 25,
-        "QString": 15,
-        "Q_DECLARE_METATYPE": 3,
-        "Q_INVOKABLE": 1,
-        "Q_OBJECT": 1
-      },
       "src/core/mvs/DepthMissingReason.h": {
         "QJsonObject": 1
       },
@@ -1108,6 +1145,10 @@
       "src/core/mvs/GpuDeviceLease.h": {
         "QLockFile": 1,
         "QString": 2
+      },
+      "src/core/mvs/MvsPipelineService.h": {
+        "QJsonObject": 3,
+        "QString": 19
       },
       "src/core/mvs/MvsQualityReport.h": {
         "QJsonObject": 2
@@ -1137,6 +1178,16 @@
       },
       "src/core/mvs/RecoveredModelInput.h": {
         "QString": 2
+      },
+      "src/core/mvs/pipeline/DepthArtifactSaveQueue.h": {
+        "QSharedPointer": 1,
+        "QString": 6,
+        "QStringLiteral": 6
+      },
+      "src/core/mvs/pipeline/MvsPipelineInternals.h": {
+        "QJsonArray": 3,
+        "QJsonObject": 7,
+        "QString": 11
       },
       "src/core/project_workflows/MvsSourcePairQualityLoader.h": {
         "QString": 1,
@@ -1336,18 +1387,6 @@
       }
     },
     "runtime_qt_dependency": {
-      "src/core/mvs/DepthMapGenerator.cpp": {
-        "include:QtConcurrent/QtConcurrent": 1,
-        "symbol:QObject": 2,
-        "symbol:QtConcurrent": 1
-      },
-      "src/core/mvs/DepthMapGenerator.h": {
-        "include:QFuture": 1,
-        "include:QObject": 1,
-        "symbol:QFuture": 1,
-        "symbol:QObject": 2,
-        "symbol:Q_OBJECT": 1
-      },
       "src/core/project_workflows/ProjectResourceCleanup.cpp": {
         "symbol:QObject": 2
       }

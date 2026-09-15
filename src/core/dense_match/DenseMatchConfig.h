@@ -40,9 +40,6 @@ namespace xjw::dense_match
         // reported as an error instead of silently falling back to CPU.
         DenseMatchComputeBackend computeBackend = DenseMatchComputeBackend::Automatic;
 
-        // Legacy compatibility switch.  When computeBackend is Automatic, false
-        // forces CPU and true keeps automatic accelerator selection enabled.
-        bool useCuda = true;
         int cudaDevice = 0;
         int openClDevice = 0;
         int numThreads = 4;

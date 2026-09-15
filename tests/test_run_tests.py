@@ -98,6 +98,29 @@ class RunTestsTest(unittest.TestCase):
         )
         self.assertEqual(environment, original)
 
+    def test_windows_proj_database_comes_from_configured_vcpkg(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            database = root / "deps" / "custom-triplet" / "share" / "proj"
+            database.mkdir(parents=True)
+            (database / "proj.db").touch()
+            (root / "CMakeCache.txt").write_text(
+                "VCPKG_INSTALLED_DIR:PATH=deps\nVCPKG_TARGET_TRIPLET:STRING=custom-triplet\n",
+                encoding="utf-8",
+            )
+            environment = RUN_TESTS.build_test_environment(
+                ["--test-dir", str(root)], environment={}, platform_name="nt")
+            self.assertEqual(environment["PROJ_DATA"], str(database.resolve()))
+            for variable in ("PROJ_DATA", "PROJ_LIB"):
+                original = {variable: "explicit-database"}
+                environment = RUN_TESTS.build_test_environment(
+                    ["--test-dir", str(root)], environment=original, platform_name="nt")
+                self.assertEqual(environment, original)
+            (database / "proj.db").unlink()
+            environment = RUN_TESTS.build_test_environment(
+                ["--test-dir", str(root)], environment={}, platform_name="nt")
+            self.assertNotIn("PROJ_DATA", environment)
+
 
 if __name__ == "__main__":
     unittest.main()

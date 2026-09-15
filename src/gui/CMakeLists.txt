@@ -170,12 +170,12 @@ if(TARGET mask)
   target_link_libraries(gui_project PRIVATE mask)
 endif()
 
-if(TARGET mvs)
-  target_link_libraries(gui_project PRIVATE mvs)
+if(TARGET mvs_pipeline)
+  target_link_libraries(gui_project PRIVATE mvs_pipeline Qt6::Concurrent)
 endif()
 
-if(TARGET meshing)
-  target_link_libraries(gui_project PRIVATE meshing)
+if(TARGET model_workflow)
+  target_link_libraries(gui_project PRIVATE model_workflow)
 endif()
 
 if(TARGET aerial_triangulation)
@@ -201,7 +201,7 @@ if(PLASCAN_BUILD_GUI)
 # 链接Qt和其他库
 target_link_libraries(plascan_gui PRIVATE
   gui_runtime
-  mvs
+  mvs_pipeline
   plascan_common_log
   Qt6::Core
   Qt6::Gui

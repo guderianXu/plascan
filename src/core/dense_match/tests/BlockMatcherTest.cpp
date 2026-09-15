@@ -50,7 +50,7 @@ namespace
         config.maxDisparity = maxDisparity;
         config.corrKernelW = 7;
         config.corrKernelH = 7;
-        config.useCuda = false;
+        config.computeBackend = DenseMatchComputeBackend::Cpu;
         return config;
     }
 
@@ -208,7 +208,7 @@ TEST(BlockMatcherCudaParityTest, CpuAndCudaProduceSameDisparityAndValidity)
             cpuConfig.corrKernelW = 5;
             cpuConfig.corrKernelH = 3;
             DenseMatchConfig cudaConfig = cpuConfig;
-            cudaConfig.useCuda = true;
+            cudaConfig.computeBackend = DenseMatchComputeBackend::Automatic;
 
             const DisparityResult cpu = BlockMatcher(cpuConfig).compute(left, right);
             const DisparityResult cuda = BlockMatcher(cudaConfig).compute(left, right);

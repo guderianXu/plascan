@@ -26,7 +26,7 @@ namespace xjw::dense_match
     [[nodiscard]] DenseMatchComputeBackend
     resolveDenseMatchComputeBackend(DenseMatchComputeBackend requested, int cudaDevice = 0, int openClDevice = 0);
 
-    // Resolves the new enum while honoring the legacy useCuda=false CPU override.
+    // Resolves the configured backend and device selection.
     [[nodiscard]] DenseMatchComputeBackend resolveDenseMatchComputeBackend(const DenseMatchConfig& config);
 
     namespace detail

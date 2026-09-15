@@ -103,15 +103,14 @@ TEST(DenseMatchBackendTest, CpuIsAlwaysAvailableAndExplicitAcceleratorsAreStrict
                  std::runtime_error);
 }
 
-TEST(DenseMatchBackendTest, LegacyDisabledCudaForcesCpuOnlyForAutomaticMode)
+TEST(DenseMatchBackendTest, ExplicitCpuSelectionDoesNotUseAccelerators)
 {
     DenseMatchConfig config;
-    config.computeBackend = DenseMatchComputeBackend::Automatic;
-    config.useCuda = false;
+    config.computeBackend = DenseMatchComputeBackend::Cpu;
     EXPECT_EQ(resolveDenseMatchComputeBackend(config), DenseMatchComputeBackend::Cpu);
 
-    config.computeBackend = DenseMatchComputeBackend::Cpu;
-    config.useCuda = true;
+    config.cudaDevice = std::numeric_limits<int>::max();
+    config.openClDevice = std::numeric_limits<int>::max();
     EXPECT_EQ(resolveDenseMatchComputeBackend(config), DenseMatchComputeBackend::Cpu);
 }
 
@@ -210,7 +209,6 @@ TEST(DenseMatchBackendTest, ExplicitUnavailableDeviceDoesNotFallBackToCpu)
     config.algorithm = StereoAlgorithm::BlockMatch;
     config.computeBackend = DenseMatchComputeBackend::OpenCl;
     config.openClDevice = std::numeric_limits<int>::max();
-    config.useCuda = false;
     config.minDisparity = 0;
     config.maxDisparity = 1;
     config.corrKernelW = 1;
@@ -237,7 +235,6 @@ TEST(DenseMatchBackendTest, AutomaticUnavailableAcceleratorsFallBackToCpuAndRepo
     DenseMatchConfig config;
     config.algorithm = StereoAlgorithm::BlockMatch;
     config.computeBackend = DenseMatchComputeBackend::Automatic;
-    config.useCuda = true;
     config.cudaDevice = std::numeric_limits<int>::max();
     config.openClDevice = std::numeric_limits<int>::max();
     config.minDisparity = 0;
@@ -264,12 +261,11 @@ TEST(DenseMatchBackendTest, AutomaticUnavailableAcceleratorsFallBackToCpuAndRepo
     EXPECT_NE(report.fallbackReason.find("unavailable"), std::string::npos);
 }
 
-TEST(DenseMatchBackendTest, LegacyCpuOnlyAutomaticModeDoesNotClaimFallback)
+TEST(DenseMatchBackendTest, ExplicitCpuModeDoesNotClaimFallback)
 {
     DenseMatchConfig config;
     config.algorithm = StereoAlgorithm::BlockMatch;
-    config.computeBackend = DenseMatchComputeBackend::Automatic;
-    config.useCuda = false;
+    config.computeBackend = DenseMatchComputeBackend::Cpu;
     config.minDisparity = 0;
     config.maxDisparity = 1;
     config.corrKernelW = 1;

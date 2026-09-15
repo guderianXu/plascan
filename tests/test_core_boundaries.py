@@ -20,6 +20,111 @@ SPEC.loader.exec_module(BOUNDARIES)
 
 
 class CoreBoundaryTest(unittest.TestCase):
+    def test_refactoring_shims_cannot_return_to_core(self):
+        for relative_path in ("src/core/mvs/DepthMapGenerator.h",
+                              "src/core/mvs/DepthMapGenerator.cpp",
+                              "src/core/mesh/workflow/LegacyDepthModelStages.cpp"):
+            self.assertFalse((ROOT / relative_path).exists(), relative_path)
+        service = (ROOT / "src/core/mvs/MvsPipelineService.h").read_text(encoding="utf-8")
+        for wrapper in ("removeLocalDepthOutliers", "removeSmallDepthComponents",
+                        "postprocessFusionDepthMap", "applySparseSupportPrior"):
+            self.assertNotIn(wrapper + "(", service)
+        for relative_path in ("src/cli/workflows/cli_mvs_depth_reprocess.cpp",
+                              "src/cli/workflows/ReconstructionPipelineRunner.cpp"):
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn("DepthMapGenerator", source)
+            self.assertNotIn("QEventLoop", source)
+            self.assertIn(".execute().succeeded()", source)
+        dense_config = (ROOT / "src/core/dense_match/DenseMatchConfig.h").read_text(encoding="utf-8")
+        self.assertNotIn("useCuda", dense_config)
+        builder = (ROOT / "src/core/inference/tensorrt/TensorRtEngineBuilder.h").read_text(encoding="utf-8")
+        self.assertNotIn("fixedKeypointCount", builder)
+        model_request = (ROOT / "src/core/mesh/ModelWorkflowService.h").read_text(encoding="utf-8")
+        self.assertNotIn("std::function<bool()> isCancelled;", model_request)
+        self.assertNotIn("std::function<void(const QString&, int)> progress;", model_request)
+        self.assertEqual(4, model_request.count("WorkflowControl execution;"))
+
+    def test_synchronous_workflows_have_no_async_adapter_dependency(self):
+        dependencies = {}
+        for relative_path in ("src/core/mvs/CMakeLists.txt", "src/core/mesh/CMakeLists.txt"):
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            for command, body in BOUNDARIES._iter_cmake_commands(text):
+                tokens = BOUNDARIES._cmake_tokens(body)
+                if command == "target_link_libraries" and tokens:
+                    dependencies.setdefault(tokens[0], set()).update(tokens[1:])
+        self.assertNotIn("mvs", dependencies)
+        self.assertNotIn("meshing", dependencies)
+        self.assertIn("mvs_backend", dependencies["mvs_pipeline"])
+        self.assertIn("meshing_algorithms", dependencies["model_workflow"])
+        for target in ("mvs_backend", "mvs_pipeline", "meshing_algorithms", "model_workflow"):
+            with self.subTest(target=target):
+                self.assertFalse({"mvs", "meshing", "Qt6::Concurrent", "Qt6::Widgets"}
+                                 .intersection(dependencies[target]))
+        self.assertNotIn("model_workflow", dependencies["meshing_algorithms"])
+
+    def test_execution_contract_is_plain_cpp_and_services_do_not_start_threads(self):
+        contract = (ROOT / "src/core/task_runtime/WorkflowExecution.h").read_text(encoding="utf-8")
+        for include in BOUNDARIES._cpp_includes(contract):
+            self.assertFalse(include.startswith("Q"), include)
+        for relative_path in ("src/core/mvs/MvsPipelineService.h",
+                              "src/core/mvs/pipeline/MvsPipelineService.cpp"):
+            text = BOUNDARIES._sanitize_cpp((ROOT / relative_path).read_text(encoding="utf-8"), remove_literals=True)
+            for forbidden in ("QObject", "Q_OBJECT", "QFuture", "QtConcurrent"):
+                self.assertNotIn(forbidden, text)
+
+    def test_tsdf_surface_stage_order_and_nonowning_context_are_preserved(self):
+        source = (ROOT / "src/core/mesh/tsdf/TsdfSurface.cpp").read_text(encoding="utf-8")
+        stages = [source.index(name + "(") for name in
+                  ("extractTsdfIsoSurface", "cleanTsdfMesh", "simplifyTsdfMesh", "finalizeTsdfMesh")]
+        self.assertEqual(stages, sorted(stages))
+        header = (ROOT / "src/core/mesh/tsdf/DepthTsdfStages.h").read_text(encoding="utf-8")
+        self.assertIn("std::vector<float>& tsdf;", header)
+        self.assertIn("std::vector<float>& weight;", header)
+        self.assertNotIn("std::vector<float> tsdf;", header)
+        self.assertNotIn("std::vector<float> weight;", header)
+        production = (ROOT / "src/core/mesh/workflow/DepthModelWorkflow.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("buildLegacyDepthModelForValidation(", production)
+        self.assertIn("buildRecoveredDepthModel(", production)
+
+    def test_mvs_data_consumers_do_not_depend_on_qt_generator(self):
+        for relative_path in (
+            "src/core/mvs/DepthFrameResult.h",
+            "src/core/mvs/DepthPyramidTypes.h",
+            "src/core/mvs/DepthFrameUtils.cpp",
+            "src/core/mvs/MvsStageSnapshot.cpp",
+            "src/core/mvs/depth_processing/DepthPostprocessor.h",
+            "src/core/mvs/depth_processing/DepthPostprocessor.cpp",
+            "src/core/mvs/depth_processing/DepthNoiseFilters.cpp",
+        ):
+            with self.subTest(path=relative_path):
+                text = (ROOT / relative_path).read_text(encoding="utf-8")
+                sanitized = BOUNDARIES._sanitize_cpp(text, remove_literals=False)
+                self.assertNotIn("DepthMapGenerator", sanitized)
+                for include in BOUNDARIES._cpp_includes(sanitized):
+                    self.assertNotIn(
+                        include.split("/")[-1],
+                        {"QObject", "QFuture", "DepthPyramidEstimator.h"},
+                    )
+
+    def test_mvs_lower_targets_have_no_reverse_pipeline_dependency(self):
+        text = (ROOT / "src/core/mvs/CMakeLists.txt").read_text(encoding="utf-8")
+        lower_targets = {"mvs_contracts", "mvs_depth_processing"}
+        forbidden_dependencies = {
+            "mvs", "meshing", "project_workflows", "plascan_common_project",
+            "Qt6::Concurrent", "Qt6::Widgets",
+        }
+        found_targets = set()
+        for command, body in BOUNDARIES._iter_cmake_commands(text):
+            tokens = BOUNDARIES._cmake_tokens(body)
+            if command == "target_link_libraries" and tokens[0] in lower_targets:
+                found_targets.add(tokens[0])
+                self.assertFalse(forbidden_dependencies.intersection(tokens[1:]))
+            if command == "target_include_directories" and tokens[0] == "mvs":
+                for visibility, value in BOUNDARIES._target_scoped_values(tokens[1:]):
+                    if visibility in {"PUBLIC", "INTERFACE"}:
+                        self.assertNotEqual(value, "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        self.assertEqual(found_targets, lower_targets)
+
     def setUp(self):
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary_directory.name)

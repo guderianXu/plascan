@@ -17,7 +17,7 @@ target_include_directories(qc PUBLIC
 target_link_libraries(qc PUBLIC
     plapoint::plapoint
     camera
-    meshing
+    meshing_algorithms
     Qt6::Core
     ${OpenCV_LIBS}
 )
@@ -97,7 +97,7 @@ if(BUILD_TESTS)
 
     target_link_libraries(test_model_image_quality PRIVATE
         qc
-        meshing
+        model_workflow
         Qt6::Core
         GTest::gtest_main
     )
@@ -115,7 +115,7 @@ if(BUILD_TESTS)
 
     target_link_libraries(test_processing_baseline_manager PRIVATE
         qc
-        meshing
+        model_workflow
         Qt6::Core
         GTest::gtest_main
     )

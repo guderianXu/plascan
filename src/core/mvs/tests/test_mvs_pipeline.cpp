@@ -7,7 +7,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
-#include "DepthMapGenerator.h"
+#include "MvsPipelineService.h"
 #include "DepthPyramidEstimator.h"
 #include "DepthPyramidPropagation.h"
 #include "DenseCloudBuilder.h"
@@ -809,7 +809,7 @@ TEST(MvsSceneClassifierTest, SourceAngleExperimentCapOnlyTightensSceneMaximum)
     EXPECT_NE(default_hash, xjw::mvs::makeMvsDepthConfigHash(reliability_correction_config, 26));
 }
 
-TEST(DepthMapGeneratorTest, SourceAngleCapShortfallSafetyIsFailClosedAndIdempotent)
+TEST(MvsPipelineServiceTest, SourceAngleCapShortfallSafetyIsFailClosedAndIdempotent)
 {
     xjw::mvs::DepthFrameResult result;
     result.success = true;
@@ -1103,13 +1103,13 @@ TEST(DepthPyramidEstimatorTest, NativeFinalModeKeepsOddParentGridOnFineFallback)
     EXPECT_NE(result.errorMessage.find("coverage regression"), std::string::npos);
 }
 
-TEST(DepthMapGeneratorMaskTest, ConvertsProjectExclusionMaskToValidRegionMask)
+TEST(MvsPipelineServiceMaskTest, ConvertsProjectExclusionMaskToValidRegionMask)
 {
     cv::Mat project_mask(4, 4, CV_8U, cv::Scalar(255));
     project_mask(cv::Rect(1, 1, 2, 2)).setTo(cv::Scalar(0));
     project_mask.at<uint8_t>(2, 2) = 255;
 
-    const cv::Mat valid_mask = xjw::mvs::DepthMapGenerator::projectMaskToValidMask(project_mask, cv::Size(8, 8));
+    const cv::Mat valid_mask = xjw::mvs::MvsPipelineService::projectMaskToValidMask(project_mask, cv::Size(8, 8));
 
     ASSERT_EQ(valid_mask.type(), CV_8U);
     ASSERT_EQ(valid_mask.size(), cv::Size(8, 8));
@@ -2817,7 +2817,7 @@ TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
         }
     }
 
-    const cv::Mat mask = xjw::mvs::DepthMapGenerator::buildSparseSupportMask({view}, sparse, 0, W, H);
+    const cv::Mat mask = xjw::mvs::MvsPipelineService::buildSparseSupportMask({view}, sparse, 0, W, H);
 
     ASSERT_FALSE(mask.empty());
     EXPECT_GT(cv::countNonZero(mask(cv::Rect(35, 25, 50, 40))), 0);
@@ -2863,14 +2863,14 @@ TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
     sparse.points.push_back({0.0f, 0.0f, Z * 8.0f});
 
     const std::vector<xjw::mvs::ProjectedSparseDepthSample> samples =
-        xjw::mvs::DepthMapGenerator::collectProjectedSparseDepthSamples(
+        xjw::mvs::MvsPipelineService::collectProjectedSparseDepthSamples(
             sparse, view.camera.normalizedForPositiveDepth(), W, H, indices);
 
     EXPECT_EQ(samples.size(), indices.size() - 1)
         << "The depth outlier should be excluded once before building hint/support rasters.";
 
-    const cv::Mat hint = xjw::mvs::DepthMapGenerator::buildHintDepthFromProjectedSamples(0, W / 2, H / 2, samples);
-    const cv::Mat support = xjw::mvs::DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(0, W, H, samples);
+    const cv::Mat hint = xjw::mvs::MvsPipelineService::buildHintDepthFromProjectedSamples(0, W / 2, H / 2, samples);
+    const cv::Mat support = xjw::mvs::MvsPipelineService::buildSparseSupportMaskFromProjectedSamples(0, W, H, samples);
 
     ASSERT_FALSE(hint.empty());
     ASSERT_FALSE(support.empty());
@@ -2888,8 +2888,8 @@ TEST(MvsPipelineTest, SparseSeedDepthOverlayDoesNotPropagateAcrossFineHint)
     sample.depth = 10.0f;
     samples.push_back(sample);
 
-    const cv::Mat propagated = xjw::mvs::DepthMapGenerator::buildHintDepthFromProjectedSamples(0, 64, 64, samples);
-    const cv::Mat seedOnly = xjw::mvs::DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples(0, 64, 64, samples);
+    const cv::Mat propagated = xjw::mvs::MvsPipelineService::buildHintDepthFromProjectedSamples(0, 64, 64, samples);
+    const cv::Mat seedOnly = xjw::mvs::MvsPipelineService::buildSparseSeedDepthFromProjectedSamples(0, 64, 64, samples);
 
     ASSERT_FALSE(propagated.empty());
     ASSERT_FALSE(seedOnly.empty());
@@ -2937,7 +2937,7 @@ TEST(MvsPipelineTest, SparseSupportSpanStampMatchesMorphologicalDilation)
     samples.push_back(rejected_sample);
 
     const cv::Mat support =
-        xjw::mvs::DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(0, width, height, samples);
+        xjw::mvs::MvsPipelineService::buildSparseSupportMaskFromProjectedSamples(0, width, height, samples);
     ASSERT_FALSE(support.empty());
 
     cv::Mat expected;
@@ -2955,7 +2955,7 @@ TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)
 
     const int beforeValid = cv::countNonZero(depth > 0);
 
-    xjw::mvs::DepthMapGenerator::applySparseSupportPrior(depth, confidence, support, 0);
+    xjw::mvs::DepthPostprocessor::applySparseSupportPrior(depth, confidence, support, 0);
 
     EXPECT_EQ(cv::countNonZero(depth > 0), beforeValid) << "Sparse support must not hard-clip PatchMatch depth pixels.";
     EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 12.0f);
@@ -2972,7 +2972,7 @@ TEST(MvsPipelineTest, LocalDepthOutlierFilterRemovesIsolatedDepthSpike)
     cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
     depth.at<float>(3, 3) = 30.0f;
 
-    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
+    const int removed = xjw::mvs::DepthPostprocessor::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
 
     EXPECT_EQ(removed, 1);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
@@ -2993,7 +2993,7 @@ TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSmoothSlope)
     }
 
     const int beforeValid = cv::countNonZero(depth > 0);
-    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
+    const int removed = xjw::mvs::DepthPostprocessor::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
 
     EXPECT_EQ(removed, 0);
     EXPECT_EQ(cv::countNonZero(depth > 0), beforeValid);
@@ -3014,7 +3014,7 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     config.maxLocalDepthOutlierRemovalRatio = 0.50f;
 
     const xjw::mvs::DepthPostProcessStats stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
 
     EXPECT_EQ(stats.validBeforePostprocess, 49);
     EXPECT_EQ(stats.validAfterConfidenceFilter, 48);
@@ -3046,10 +3046,10 @@ TEST(MvsPipelineTest, NativeGridDisablesSubpixelThreeByThreeOutlierFootprint)
     config.maxLocalDepthOutlierRemovalRatio = 0.50f;
     config.enableSpeckleFilter = false;
 
-    const auto native_stats = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+    const auto native_stats = xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(
         native_depth, native_confidence, config, 0, 4, nullptr, nullptr, cv::Size(28, 28));
     const auto unscaled_stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(unscaled_depth, unscaled_confidence, config, 0, 4);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(unscaled_depth, unscaled_confidence, config, 0, 4);
 
     EXPECT_EQ(native_stats.localDepthOutlierRemoved, 0) << "A full-raster radius of one is subpixel on a ds4 grid.";
     EXPECT_FLOAT_EQ(native_depth.at<float>(3, 3), 30.0f);
@@ -3073,7 +3073,7 @@ TEST(MvsPipelineTest, NativeGridScalesSpeckleAreaByRasterToGridArea)
     config.minSpeckleComponentArea = 64;
     config.maxSpeckleRemovalRatio = 0.50f;
 
-    const auto stats = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+    const auto stats = xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(
         depth, confidence, config, 0, 4, nullptr, nullptr, cv::Size(40, 40));
 
     EXPECT_EQ(stats.smallComponentRemoved, 3);
@@ -3104,7 +3104,7 @@ TEST(MvsPipelineTest, FusionDepthPostprocessRetainsOnlyGeometrySupportedLowConfi
     config.enableSpeckleFilter = false;
 
     const xjw::mvs::DepthPostProcessStats stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4, nullptr, &evidence);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 0, 4, nullptr, &evidence);
 
     EXPECT_EQ(stats.lowConfidenceCandidateCount, 3);
     EXPECT_EQ(stats.geometrySupportedLowConfidenceRetained, 1);
@@ -3140,7 +3140,7 @@ TEST(MvsPipelineTest, FusionDepthPostprocessProtectsGeometrySupportedSilhouette)
     config.enableSpeckleFilter = false;
 
     const xjw::mvs::DepthPostProcessStats stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4, nullptr, &evidence);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 0, 4, nullptr, &evidence);
 
     EXPECT_EQ(stats.boundaryGeometryRetained, 16);
     EXPECT_FLOAT_EQ(depth.at<float>(2, 4), 10.0f);
@@ -3171,7 +3171,7 @@ TEST(MvsPipelineTest, NativeGridPreservesOneAuditedBoundaryShell)
     config.enableLocalDepthOutlierFilter = false;
     config.enableSpeckleFilter = false;
 
-    const auto stats = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+    const auto stats = xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(
         depth, confidence, config, 0, 4, nullptr, &evidence, cv::Size(36, 36));
 
     EXPECT_EQ(stats.boundaryGeometryRetained, 24) << "The native grid must retain the measured contour and one inward "
@@ -3186,7 +3186,7 @@ TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSupportedThinDepthLayer)
     cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
     depth(cv::Rect(3, 3, 2, 2)).setTo(20.0f);
 
-    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
+    const int removed = xjw::mvs::DepthPostprocessor::removeLocalDepthOutliers(depth, confidence, 3, 0.25f, 0.50f, 0);
 
     EXPECT_EQ(removed, 0);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 20.0f);
@@ -3234,7 +3234,7 @@ TEST(MvsPipelineTest, FusionDepthPostprocessRaisesThresholdForLowConfidenceFullC
     config.enableSpeckleFilter = false;
 
     const xjw::mvs::DepthPostProcessStats stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
 
     EXPECT_FLOAT_EQ(stats.effectiveConfidenceThreshold, 0.65f);
     EXPECT_EQ(stats.validAfterConfidenceFilter, 2);
@@ -3260,7 +3260,7 @@ TEST(MvsPipelineTest, ConfidenceCollapseKeepsStrictResultInsteadOfRestoringNoise
     config.enableSpeckleFilter = false;
 
     const xjw::mvs::DepthPostProcessStats stats =
-        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
+        xjw::mvs::DepthPostprocessor::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
 
     EXPECT_EQ(stats.validBeforePostprocess, 100);
     EXPECT_EQ(stats.validAfterConfidenceFilter, 3);
@@ -3312,7 +3312,7 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionEstimatesNormalsWhenNormalMapMiss
 TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)
 {
     cv::Mat gray(120, 200, CV_8U, cv::Scalar(122));
-    cv::Mat mask = xjw::mvs::DepthMapGenerator::buildContentMask(gray);
+    cv::Mat mask = xjw::mvs::MvsPipelineService::buildContentMask(gray);
 
     EXPECT_TRUE(mask.empty())
         << "Nearly full-content aerial frames should skip the content mask instead of filtering no pixels";
@@ -3323,7 +3323,7 @@ TEST(MvsPipelineTest, ContentMaskKeepsRealBlackBorderMask)
     cv::Mat gray(120, 200, CV_8U, cv::Scalar(0));
     gray(cv::Rect(35, 25, 130, 70)) = cv::Scalar(125);
 
-    cv::Mat mask = xjw::mvs::DepthMapGenerator::buildContentMask(gray);
+    cv::Mat mask = xjw::mvs::MvsPipelineService::buildContentMask(gray);
 
     ASSERT_FALSE(mask.empty());
     EXPECT_EQ(mask.at<uint8_t>(5, 5), 0);
@@ -3347,7 +3347,7 @@ TEST(MvsPipelineTest, OrbitalProjectMaskRefinementCarvesInteriorOpeningAndProtec
     bool refined = false;
     float retained_ratio = 0.0f;
     const cv::Mat result =
-        xjw::mvs::DepthMapGenerator::refineOrbitalProjectValidMask(gray, project_mask, &refined, &retained_ratio);
+        xjw::mvs::MvsPipelineService::refineOrbitalProjectValidMask(gray, project_mask, &refined, &retained_ratio);
 
     ASSERT_TRUE(refined);
     EXPECT_EQ(result.at<uint8_t>(60, 90), 0);
@@ -3367,7 +3367,7 @@ TEST(MvsPipelineTest, OrbitalProjectMaskRefinementKeepsMaskOnBrightBackground)
     cv::rectangle(project_mask, cv::Rect(25, 20, 130, 80), cv::Scalar(255), cv::FILLED);
 
     bool refined = true;
-    const cv::Mat result = xjw::mvs::DepthMapGenerator::refineOrbitalProjectValidMask(gray, project_mask, &refined);
+    const cv::Mat result = xjw::mvs::MvsPipelineService::refineOrbitalProjectValidMask(gray, project_mask, &refined);
 
     EXPECT_FALSE(refined);
     EXPECT_EQ(cv::countNonZero(result != project_mask), 0);
@@ -3378,13 +3378,13 @@ TEST(MvsPipelineTest, CudaRetryDownsampleIncreasesUntilGpuFriendlyScale)
     xjw::mvs::PatchMatchConfig cfg;
     cfg.downsampleFactor = 2;
 
-    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    cfg = xjw::mvs::MvsPipelineService::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
     EXPECT_EQ(cfg.downsampleFactor, 3);
 
-    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    cfg = xjw::mvs::MvsPipelineService::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
     EXPECT_EQ(cfg.downsampleFactor, 4);
 
-    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    cfg = xjw::mvs::MvsPipelineService::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
     EXPECT_EQ(cfg.downsampleFactor, 6);
 }
 

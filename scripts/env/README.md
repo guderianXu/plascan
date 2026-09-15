@@ -34,6 +34,11 @@ Use `--dry-run` to print the clone/bootstrap/install commands without running th
 
 ## Python Runtime
 
+The standalone `run_tests.py --test-dir <build-tree>` entry binds Windows build-tree DLLs and Qt plugins.
+If `PROJ_DATA`/`PROJ_LIB` is not explicitly set, it also locates an existing `proj.db` through that build's
+`CMakeCache.txt` vcpkg installation directory and triplet. This matches the environment supplied by
+`configure_with_env.py` without requiring machine-specific paths in commands.
+
 The installed GUI checks for Python on startup. If no runtime is available, it can download a signed Python installer
 from python.org and create a per-user managed runtime without administrator privileges. The same workflow remains available
 from `Help > Update Python Environment...`; users may dismiss the startup prompt and suppress future reminders. CPack installs

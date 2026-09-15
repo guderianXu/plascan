@@ -6,12 +6,12 @@ if(TARGET dense_match)
     )
 endif()
 
-if(TARGET mvs)
+if(TARGET mvs_pipeline)
     set(mvs_cli_include_dirs
         ${CMAKE_SOURCE_DIR}/src/core/mvs
         ${CMAKE_SOURCE_DIR}/src/core/camera
     )
-    set(mvs_cli_libraries mvs camera plascan_common_io Qt6::Core)
+    set(mvs_cli_libraries mvs_pipeline camera plascan_common_io Qt6::Core)
 
     add_plascan_cli(rectify_cli
         SOURCE cli_epipolar_rectify.cpp
@@ -25,7 +25,7 @@ if(TARGET mvs)
     )
     add_plascan_cli(dense_cloud_refine_cli
         SOURCE cli_dense_cloud_refine.cpp
-        LIBRARIES mvs
+        LIBRARIES mvs_pipeline
         INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/src/core/mvs
     )
 endif()

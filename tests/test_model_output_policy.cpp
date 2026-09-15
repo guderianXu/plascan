@@ -422,14 +422,10 @@ TEST(ModelOutputPolicyTest, LegacyPointCloudIsRejectedBeforeCancellationOrPublic
         {QStringLiteral("method"), QStringLiteral("Height Grid")},
         {QStringLiteral("meshResolution"), 64}
     };
-    request.isCancelled = [&cancelRequested]()
-    {
-        return cancelRequested.load(std::memory_order_relaxed);
-    };
-    request.progress = [&cancelRequested](const QString &, int)
-    {
-        cancelRequested.store(true, std::memory_order_relaxed);
-    };
+    request.execution.cancellationCheck = [&cancelRequested]()
+    { return cancelRequested.load(std::memory_order_relaxed); };
+    request.execution.progress = [&cancelRequested](const xjw::task_runtime::WorkflowProgress&)
+    { cancelRequested.store(true, std::memory_order_relaxed); };
 
     const auto result = xjw::mesh::workflow::buildModel(request);
     EXPECT_FALSE(result.ok);

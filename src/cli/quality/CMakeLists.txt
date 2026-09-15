@@ -1,9 +1,9 @@
-if(TARGET qc AND TARGET meshing AND TARGET camera AND TARGET plascan_cli_photogrammetry_common)
+if(TARGET qc AND TARGET meshing_algorithms AND TARGET camera AND TARGET plascan_cli_photogrammetry_common)
     add_plascan_cli(model_quality_cli
         SOURCE cli_model_quality.cpp
         LIBRARIES
             qc
-            meshing
+            meshing_algorithms
             plascan_cli_photogrammetry_common
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common

@@ -35,13 +35,13 @@ foreach(shader_spec IN ITEMS
         VERBATIM)
     list(APPEND recovered_shader_outputs "${shader_output}")
 endforeach()
-qt_add_resources(meshing recovered_vertex_color
+qt_add_resources(meshing_algorithms recovered_vertex_color
     PREFIX "/plascan/recovered_vertex_color"
     BASE "${CMAKE_CURRENT_BINARY_DIR}"
     FILES ${recovered_shader_outputs})
-target_sources(meshing PRIVATE vertex_color_vulkan.cpp RecoveredModelColorizer.cpp)
-target_link_libraries(meshing PRIVATE Vulkan::Vulkan CUDA::cudart)
-target_compile_definitions(meshing PRIVATE PLASCAN_RECOVERED_VERTEX_COLOR_VULKAN=1)
+target_sources(meshing_algorithms PRIVATE vertex_color_vulkan.cpp RecoveredModelColorizer.cpp)
+target_link_libraries(meshing_algorithms PRIVATE Vulkan::Vulkan CUDA::cudart)
+target_compile_definitions(meshing_algorithms PRIVATE PLASCAN_RECOVERED_VERTEX_COLOR_VULKAN=1)
 if(MSVC)
     set_property(SOURCE vertex_color_vulkan.cpp APPEND PROPERTY COMPILE_OPTIONS /fp:strict)
 else()
