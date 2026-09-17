@@ -248,7 +248,7 @@ namespace xjw::mesh
                 connectivity.rejectedBoundaryComponentCount;
             if (connectivity.recoveredSampleCount > 0)
             {
-                if (options.isCancelled && options.isCancelled())
+                if (options.execution.isCancelled())
                 {
                     supported = measured_support_baseline;
                     result.errorMessage = QStringLiteral("Measured-support topology transaction cancelled before "
@@ -264,7 +264,7 @@ namespace xjw::mesh
                                                 options.enableMc33IsoSurfaceExtraction,
                                                 options.mc33RequireSupportedSignChange,
                                                 options.enableConsistentIsoSurfaceExtraction,
-                                                options.isCancelled);
+                                                [control = options.execution]() { return control.isCancelled(); });
                 if (!baseline_extraction.ok)
                 {
                     supported = measured_support_baseline;
@@ -273,7 +273,7 @@ namespace xjw::mesh
                                               .arg(baseline_extraction.errorMessage);
                     return false;
                 }
-                if (options.isCancelled && options.isCancelled())
+                if (options.execution.isCancelled())
                 {
                     supported = measured_support_baseline;
                     result.errorMessage = QStringLiteral("Measured-support topology transaction cancelled after "
@@ -289,7 +289,7 @@ namespace xjw::mesh
                                                 options.enableMc33IsoSurfaceExtraction,
                                                 options.mc33RequireSupportedSignChange,
                                                 options.enableConsistentIsoSurfaceExtraction,
-                                                options.isCancelled);
+                                                [control = options.execution]() { return control.isCancelled(); });
                 if (!candidate_extraction.ok)
                 {
                     supported = measured_support_baseline;
@@ -298,7 +298,7 @@ namespace xjw::mesh
                                               .arg(candidate_extraction.errorMessage);
                     return false;
                 }
-                if (options.isCancelled && options.isCancelled())
+                if (options.execution.isCancelled())
                 {
                     supported = measured_support_baseline;
                     result.errorMessage = QStringLiteral("Measured-support topology transaction cancelled after "
@@ -680,9 +680,10 @@ namespace xjw::mesh
             }
             if (options.enableGlobalImplicitRegularization)
             {
-                if (options.progress)
+                if (options.execution.progress)
                 {
-                    options.progress(QStringLiteral("正在进行多尺度隐式场正则化..."), 73);
+                    options.execution.reportProgress(
+                        (QStringLiteral("正在进行多尺度隐式场正则化...")).toUtf8().toStdString(), (73) / 100.0);
                 }
                 DepthImplicitFieldRegularizationOptions regularization_options;
                 regularization_options.coarseToFineLevels = options.implicitRegularizationLevels;
@@ -705,7 +706,7 @@ namespace xjw::mesh
                         regularization_options,
                         &tsdf,
                         &supported,
-                        options.isCancelled);
+                        [control = options.execution]() { return control.isCancelled(); });
                 result.statistics.implicitRegularizationBridgeCandidateCount = regularization.bridgeCandidateCount;
                 result.statistics.implicitRegularizationRecoveredSampleCount = regularization.recoveredSampleCount;
                 result.statistics.implicitRegularizationUpdateOperationCount = regularization.updateOperationCount;
@@ -721,9 +722,10 @@ namespace xjw::mesh
             }
             if (options.enableAdaptiveTgvRegularization)
             {
-                if (options.progress)
+                if (options.execution.progress)
                 {
-                    options.progress(QStringLiteral("正在构建 2:1 平衡可见性八叉树..."), 72);
+                    options.execution.reportProgress(
+                        (QStringLiteral("正在构建 2:1 平衡可见性八叉树...")).toUtf8().toStdString(), (72) / 100.0);
                 }
 
                 std::vector<std::uint8_t> active(supported.size(), 0);
@@ -819,7 +821,7 @@ namespace xjw::mesh
                     result.errorMessage = QStringLiteral("自适应 TGV 八叉树没有可求解节点");
                     return false;
                 }
-                if (options.isCancelled && options.isCancelled())
+                if (options.execution.isCancelled())
                 {
                     result.errorMessage = QStringLiteral("自适应 TGV 八叉树构建已取消");
                     return false;
@@ -838,16 +840,19 @@ namespace xjw::mesh
                 const SparseTgvStatistics tgv = SparseTgvSolver::solve(
                     tgv_options,
                     &octree,
-                    options.isCancelled,
+                    [control = options.execution]() { return control.isCancelled(); },
                     [&](int iteration, int maximum_iterations)
                     {
-                        if (options.progress &&
+                        if (options.execution.progress &&
                             (iteration == 1 || iteration % 5 == 0 || iteration == maximum_iterations))
                         {
-                            options.progress(QStringLiteral("正在进行稀疏 TGV 全局优化（%1/%2）...")
-                                                 .arg(iteration)
-                                                 .arg(maximum_iterations),
-                                             73 + iteration * 3 / std::max(1, maximum_iterations));
+                            options.execution.reportProgress((QStringLiteral("正在进行稀疏 TGV 全局优化（%1/%2）...")
+                                                                  .arg(iteration)
+                                                                  .arg(maximum_iterations))
+                                                                 .toUtf8()
+                                                                 .toStdString(),
+                                                             (73 + iteration * 3 / std::max(1, maximum_iterations)) /
+                                                                 100.0);
                         }
                     });
                 result.statistics.adaptiveTgvIterationCount = tgv.iterationCount;
@@ -966,17 +971,18 @@ namespace xjw::mesh
 
         if (use_visual_hull_completion)
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(QStringLiteral("正在构建轮廓约束的局部有符号距离先验..."), 74);
+                options.execution.reportProgress(
+                    (QStringLiteral("正在构建轮廓约束的局部有符号距离先验...")).toUtf8().toStdString(), (74) / 100.0);
             }
             const std::vector<std::uint8_t> occupied =
                 buildVisualHullOccupancy(result.layout,
                                          retained_frames,
                                          options.visualHullCompletionMinimumVisibleViews,
                                          options.visualHullCompletionAllowedSilhouetteViolations,
-                                         options.isCancelled);
-            if (options.isCancelled && options.isCancelled())
+                                         [control = options.execution]() { return control.isCancelled(); });
+            if (options.execution.isCancelled())
             {
                 result.errorMessage = QStringLiteral("TSDF 轮廓距离先验构建已取消");
                 return false;
@@ -1056,9 +1062,10 @@ namespace xjw::mesh
 
         if (options.enableVisibilityOccupancyCompletion)
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(QStringLiteral("正在求解可见性约束的全局空实占据场..."), 74);
+                options.execution.reportProgress(
+                    (QStringLiteral("正在求解可见性约束的全局空实占据场...")).toUtf8().toStdString(), (74) / 100.0);
             }
             std::vector<VisibilityOccupancyFrameView> occupancy_frames;
             occupancy_frames.reserve(static_cast<std::size_t>(frames.size()));
@@ -1137,7 +1144,7 @@ namespace xjw::mesh
                 std::clamp(options.visibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect, 1, 16);
             occupancy_options.buildSignedDistanceSamples = false;
             occupancy_options.workerCount = workerCount;
-            occupancy_options.isCancelled = options.isCancelled;
+            occupancy_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             const float minimum_full_fraction =
                 std::clamp(options.visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction, 0.0f, 0.25f);
             VisibilityOccupancyResult occupancy;
@@ -1390,9 +1397,10 @@ namespace xjw::mesh
                 zero_crossings.fullyUnsupportedObservedCellCount;
         }
 
-        if (options.progress)
+        if (options.execution.progress)
         {
-            options.progress(QStringLiteral("正在提取 TSDF 零等值面..."), 75);
+            options.execution.reportProgress((QStringLiteral("正在提取 TSDF 零等值面...")).toUtf8().toStdString(),
+                                             (75) / 100.0);
         }
 
         return true;

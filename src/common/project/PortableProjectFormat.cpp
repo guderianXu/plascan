@@ -1,7 +1,11 @@
 #include "PortableProjectFormat.h"
+#include "ProjectPackageLayout.h"
 
+#include <QDir>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QSet>
+#include <QStringList>
 #include <QUuid>
 
 namespace xjw::common::project
@@ -327,6 +331,93 @@ QJsonObject PortableProjectFormat::createChunkDocument(
         {QString::fromLatin1(ProjectConfigSection), projectConfig},
         {QString::fromLatin1(ResourceIndexSection), resourceIndex}
     };
+}
+
+bool PortableProjectFormat::validateCurrentImages(const QJsonObject& projectFiles,
+                                                  const QString& projectPath,
+                                                  QString* errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (!projectFiles.value(QStringLiteral("images")).isArray())
+    {
+        setError(errorMessage, QStringLiteral("project_files.images 必须为数组"));
+        return false;
+    }
+    QSet<QUuid> used_ids;
+    const QString shared_root =
+        QDir::fromNativeSeparators(ProjectPackageLayout::sharedImagesDirectory(projectPath)) + QLatin1Char('/');
+    const auto images = projectFiles.value(QStringLiteral("images")).toArray();
+    for (qsizetype index = 0; index < images.size(); ++index)
+    {
+        const auto image = images[index].toObject();
+        const QUuid image_id(image.value(QStringLiteral("image_uuid")).toString());
+        if (!images[index].isObject() || image_id.isNull() || used_ids.contains(image_id))
+        {
+            setError(errorMessage,
+                     QStringLiteral("images[%1].image_uuid 缺失、无效或重复；不再迁移旧影像身份，请重新导入数据。")
+                         .arg(index));
+            return false;
+        }
+        const QString path =
+            QDir::fromNativeSeparators(QDir::cleanPath(image.value(QStringLiteral("path")).toString()));
+        const bool packaged = image.value(QStringLiteral("type")).toString() == QStringLiteral("packaged");
+        if (image.value(QStringLiteral("path")).toString().trimmed().isEmpty() ||
+            image.value(QStringLiteral("type")).toString() == QStringLiteral("shared") ||
+            (!packaged && (path.startsWith(shared_root, Qt::CaseInsensitive) ||
+                           entryPathFromResourceUri(image.value(QStringLiteral("path")).toString())
+                               .startsWith(QStringLiteral("shared/images/")))))
+        {
+            setError(
+                errorMessage,
+                QStringLiteral("images[%1].path 无效或使用旧 shared image store；请重新登记外部源影像。").arg(index));
+            return false;
+        }
+        used_ids.insert(image_id);
+    }
+    return true;
+}
+
+bool PortableProjectFormat::validateCurrentResults(const QJsonObject& projectResults, QString* errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    for (auto it = projectResults.constBegin(); it != projectResults.constEnd(); ++it)
+    {
+        if (!it.value().isArray())
+        {
+            continue;
+        }
+        for (const auto& value : it.value().toArray())
+        {
+            const auto record = value.toObject();
+            QStringList aliases{QStringLiteral("dem_tif"), QStringLiteral("dom_png")};
+            if (it.key() == QStringLiteral("dem_results"))
+            {
+                aliases.append({QStringLiteral("depth_png"), QStringLiteral("depth_preview_png")});
+            }
+            for (const auto& alias : aliases)
+            {
+                if (record.contains(alias))
+                {
+                    setError(errorMessage,
+                             QStringLiteral("%1 包含已删除的旧字段 %2；请重新生成成果，不再读取字段别名。")
+                                 .arg(it.key(), alias));
+                    return false;
+                }
+            }
+            if (record.value(QStringLiteral("result_type")).toString() == QStringLiteral("legacy_preview"))
+            {
+                setError(errorMessage, QStringLiteral("不再支持旧 legacy_preview 成果，请重新生成深度或 DEM。"));
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 QJsonObject PortableProjectFormat::normalizeProjectResults(

@@ -25,7 +25,6 @@ namespace
         int threads = 32;
         int iterations = 8;
         int repetitions = 1;
-        int maxDenseSchurCameras = 200;
         bool refinePose = false;
         bool isolatedBackend = false;
         bool referenceOnlineSchur = false;
@@ -129,11 +128,7 @@ namespace
     }
     bool parseBackend(const std::string& name, xjw::BABackend* backend)
     {
-        if (name == "legacy_cpu")
-        {
-            *backend = xjw::BABackend::PlaMatrixCpu;
-        }
-        else if (name == "plamatrix_cpu")
+        if (name == "plamatrix_cpu")
         {
             *backend = xjw::BABackend::PlaMatrixCpu;
         }
@@ -242,10 +237,8 @@ namespace
             options.maxIterations = settings.iterations;
             options.refineCameraPose = settings.refinePose;
             options.enablePointFilter = false;
-            options.maxDenseSchurCameras = settings.maxDenseSchurCameras;
             options.allowBackendFallback = !settings.isolatedBackend;
             options.enableBackendQualityGate = !settings.isolatedBackend;
-            options.compareAutoBackendWithLegacy = !settings.isolatedBackend;
             options.logIterationProgress = !settings.isolatedBackend;
             options.useReferenceOnlineSchur = settings.referenceOnlineSchur;
             if (settings.refinePose)
@@ -341,7 +334,7 @@ namespace
         std::cout << "用法:\n"
                   << "  " << program
                   << " [camera_count track_count views_per_track iterations threads refine_pose backends"
-                     " max_dense_schur_cameras reference_online_schur]\n"
+                     " reference_online_schur]\n"
                   << "  " << program << " --dataset-json PATH --camera-list PATH [选项]\n\n"
                   << "真实数据选项:\n"
                   << "  --backend NAME[,NAME...]              默认 plamatrix_cpu\n"
@@ -350,8 +343,7 @@ namespace
                   << "  --repetitions N                       默认 1；第 1 轮标记为冷启动\n"
                   << "  --refine-pose                         联合优化相机位姿\n"
                   << "  --reference-online-schur              使用参考在线点 Schur 装配与回代\n"
-                  << "  --camera-model fixed|full|adaptive    默认 fixed；控制共享内参自标定模型\n"
-                  << "  --max-dense-schur-cameras N           默认 200\n";
+                  << "  --camera-model fixed|full|adaptive    默认 fixed；控制共享内参自标定模型\n";
     }
 
     RealDatasetOptions parseRealOptions(int argc, char** argv)
@@ -401,10 +393,6 @@ namespace
                 {
                     throw std::runtime_error("--camera-model 必须是 fixed、full 或 adaptive");
                 }
-            }
-            else if (option == "--max-dense-schur-cameras")
-            {
-                options.settings.maxDenseSchurCameras = parseInteger(value(), option, 0);
             }
             else if (option == "--refine-pose")
             {
@@ -472,7 +460,6 @@ int main(int argc, char** argv)
                       << ",refine_pose=" << (options.settings.refinePose ? "true" : "false")
                       << ",reference_online_schur=" << (options.settings.referenceOnlineSchur ? "true" : "false")
                       << ",camera_model=" << options.settings.cameraModel
-                      << ",max_dense_schur_cameras=" << options.settings.maxDenseSchurCameras
                       << ",repetitions=" << options.settings.repetitions
                       << ",load_seconds=" << options.settings.loadSeconds << "\n";
             runRequestedBackends(options.backends, dataset, options.settings);
@@ -487,8 +474,19 @@ int main(int argc, char** argv)
         settings.threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
         settings.refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
         const std::string backends = argc > 7 ? argv[7] : "plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto";
-        settings.maxDenseSchurCameras = argc > 8 ? std::max(0, std::atoi(argv[8])) : settings.maxDenseSchurCameras;
-        settings.referenceOnlineSchur = argc > 9 ? std::atoi(argv[9]) != 0 : false;
+        if (argc > 9)
+        {
+            throw std::runtime_error("合成模式参数过多；不再接受旧 dense Schur 阈值位置参数");
+        }
+        if (argc > 8)
+        {
+            const std::string reference_online_schur = argv[8];
+            if (reference_online_schur != "0" && reference_online_schur != "1")
+            {
+                throw std::runtime_error("reference_online_schur 必须是 0 或 1");
+            }
+            settings.referenceOnlineSchur = reference_online_schur == "1";
+        }
 
         const auto started = std::chrono::steady_clock::now();
         xjw::ba_benchmark::BenchmarkDataset dataset;
@@ -504,9 +502,7 @@ int main(int argc, char** argv)
                   << ",iterations=" << settings.iterations << ",threads=" << settings.threads
                   << ",refine_pose=" << (settings.refinePose ? "true" : "false")
                   << ",reference_online_schur=" << (settings.referenceOnlineSchur ? "true" : "false")
-                  << ",camera_model=" << settings.cameraModel
-                  << ",max_dense_schur_cameras=" << settings.maxDenseSchurCameras
-                  << ",load_seconds=" << settings.loadSeconds << "\n";
+                  << ",camera_model=" << settings.cameraModel << ",load_seconds=" << settings.loadSeconds << "\n";
         runRequestedBackends(backends, dataset, settings);
         return 0;
     }

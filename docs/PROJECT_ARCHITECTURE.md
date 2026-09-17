@@ -67,14 +67,14 @@ common/
 │   ├── ProjectMetadata.h/cpp # 项目 JSON、影像 token 与资源路径解析
 │   ├── ProjectChunkIndex.h/cpp # Chunk UUID、数字目录映射与只增不复用编号
 │   ├── ProjectPackageLayout.h/cpp # 4.0.0 分体工程描述符严格解析
-│   ├── PortableProjectFormat.h/cpp # 资源清单和项目 URI
+│   ├── PortableProjectFormat.h/cpp # 资源清单、项目 URI 与旧影像/成果字段拒绝校验
 │   ├── PlascanArchive.h/cpp # ZIP 归档封装、安全条目名和流式读写
 │   ├── ProjectChunkStore.h/cpp # Chunk 索引、数字目录、格式门禁及持久化
 │   ├── ProjectResourceStore.h/cpp # Chunk 资源导入、索引、校验和解析
 │   ├── ProjectWorkspaceStore.h/cpp # 工程 URI 与当前 Chunk 路径互转
 │   ├── ProjectSession.h/cpp # GUI/CLI 共用的无界面 4.0 工程会话
 │   ├── ProjectLock.h/cpp # GUI/CLI 跨进程工程独占写锁
-│   ├── ProjectSharedImageStore.h/cpp # 跨 Chunk 内容寻址共享影像库
+│   ├── ProjectSharedImageStore.h/cpp # 便携包跨 Chunk 内容寻址影像存储；不再注册旧 shared 输入
 │   ├── ProjectArchivePath.cpp # 归档条目与目标根目录安全校验
 │   ├── ProjectMatchCatalog.h/cpp # image_match_results 逐影像分片索引与像对汇总
 │   ├── SparseResultQuality.h/cpp # 稀疏结果类型和质量门控元数据
@@ -129,7 +129,7 @@ common/
 - `mesh/tsdf/` 拆出帧读取、布局、观测、积分、支持域恢复、等值面、清理、简化和最终质量检查。
   阶段状态引用已有大数组，保持运算及失败顺序；旧不可达模型分支已删除，不作生产回退。
 - `task_runtime/WorkflowExecution.h` 提供纯 C++ 取消/进度/结果契约，MVS、模型和 TSDF 入口接入；
-  模型公开请求只保留 execution；TSDF options 的旧回调双接口尚未迁移。
+  模型公开请求与 TSDF options 只保留 execution；不再合并旧取消/进度回调。
   这是协作取消，不提供暂停或 checkpoint 恢复保证。
 - MVS targets 不向消费者公开整个 `src/core` 包含路径。相机头文件通过 `camera` target 提供，
   内部 recovered include 路径保持 PRIVATE。
@@ -488,7 +488,7 @@ core/
 │   ├── DepthMeshCompleteness.h/cpp # 深度观测到最终网格的逐帧召回率与完整性质量门
 │   ├── TriangleDistanceIndex.h/cpp # BVH 加速的精确点到三角形距离查询，供网格完整性评估使用
 │   ├── DepthRayMetric.h/cpp # camera-Z 深度、欧氏射线距离和世界像素足迹的统一换算
-│   ├── DepthTsdfSurfaceBuilder.h/cpp # TSDF 公共入口、控制桥接与质量策略
+│   ├── DepthTsdfSurfaceBuilder.h/cpp # TSDF 公共入口、唯一 execution 控制与质量策略
 │   ├── tsdf/                  # 读取/布局/观测/积分/支持恢复/提取/清理/简化/最终质量私有阶段
 │   ├── DepthTsdfCellSheetRecovery.h/cpp # 按面邻接、跨视图来源与已有表面锚点恢复连续零交叉单元片
 │   ├── DepthMeasuredSupportConnectivity.h/cpp # 不改 TSDF 值的实测 support 候选门控、切平面边界保护与归因统计
@@ -629,7 +629,7 @@ image measure 类型。ISIS `LidarData` 缺失的目标/frame/传感器模型/ra
 filename/stem 回退。当前一个 shot 只允许一台同期相机；ISIS 多 `simultaneousImages` 共享同一落点的完整行为
 尚未实现。像点协方差当前只接受可精确转成核心标量权重的 `sigma^2 I`；各向异性或相关矩阵明确拒绝。
 `ephemeris_time_s` 只保留到报告，尚无 SPICE/逐行时变轨迹求值。Auto 模式的 PlaMatrix range 候选失败或被质量
-门控拒绝时直接失败，禁止回退到不支持测距约束的 Legacy。行星激光 dry-run 仍执行数据、传感器模型、
+门控拒绝时直接失败，禁止忽略测距约束。行星激光 dry-run 仍执行数据、传感器模型、
 坐标系和别名预校验；初始落点与杆臂修正后的发射点重合时也会在求解前拒绝。
 
 LRO NAC / LOLA 推扫数据不经过上述静态适配器，而使用独立
@@ -693,8 +693,9 @@ inaccurate、weak 过滤只把点移入 inactive 表并保留 point ID/二维绑
 `IncrementalSfm::run()` 生命周期内按影像 ID 保存的首次有效标定参考。
 
 `bundle_adjust` 由 PlaMatrix 在同一非线性问题中联合优化相机、三维点、分组完整 Brown 内参和物方约束。
-旧 Legacy CPU 实现已删除，兼容枚举统一映射到参考 PlaMatrix CPU。所有后端统一返回状态、可用性、取消、回退原因和耗时，
-正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
+旧 CPU 实现、LegacyCpu 枚举、legacy_cpu 名称及无效旧选项已删除；配置与 CLI 不再映射旧名称。
+所有当前后端统一返回状态、可用性、取消、回退原因和耗时，
+正常 Auto 路径只有未通过状态或质量门控时才回退当前 PlaMatrix CPU，不额外运行 CPU 对照求解。
 `plamatrix_cpu`、`plamatrix_cuda` 和 `plamatrix_opencl` 是正式联合 BA 路径：PlaScan
 负责完整 Brown-Conrady 投影、关键点尺度白化、解析相机/点/内参雅可比、物方约束、gauge、取消与统一质量复核。
 三后端统一使用尺度白化普通最小二乘、参考点/旋转局部参数化、定长基线规范、零阻尼起步和 Armijo 回溯。
@@ -714,7 +715,7 @@ CSR 转换、Cholesky、三角求解、残差检查和点块回代，以便把�
 三个后端使用同一问题与测试数据并报告实际设备；Auto 对联合问题按 CUDA 128 相机/30000 观测、
 OpenCL 160/50000 的常规门槛，以及 120 相机以上分别 150000/200000 观测的高密度门槛选择后端，
 GPU 失败只回退 PlaMatrix CPU。完整 Brown 共享内参和 GCP/LiDAR/比例尺/姿态/激光测距约束均有跨 PlaMatrix 后端一致性回归。
-行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止 Legacy CPU 静默忽略
+行星激光 range shot 的生产实现使用 PlaMatrix；后端能力表和输入校验阻止不支持的配置静默忽略
 该约束。结果单独返回参与求解的 shot 数、优化前后 range RMS 和逐 shot 落点/残差，不污染普通影像
 重投影 RMS、track 过滤计数或有效 track 比例。
 

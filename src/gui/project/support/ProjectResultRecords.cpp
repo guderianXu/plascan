@@ -87,7 +87,7 @@ QJsonObject makeDemResultRecord(const QString &createdAt,
     rec[QStringLiteral("created_at")] = createdAt;
     rec[QStringLiteral("output_dir")] = outputDir;
     rec[QStringLiteral("source_sparse_cloud")] = sourceSparseCloud;
-    rec[QStringLiteral("dem_tif")] = demTif;
+    rec[QStringLiteral("dem_path")] = demTif;
     rec[QStringLiteral("dem_type")] = demType;
     rec[QStringLiteral("dem_resolution")] = demResolution;
     if (!tSrs.isEmpty()) {

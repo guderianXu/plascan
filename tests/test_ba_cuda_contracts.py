@@ -82,7 +82,10 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn('opts.baOpt.backend = xjw::BABackend::Auto;', project_manager)
         self.assertIn('opts.baOpt.minPlaMatrixCudaObservations', project_manager)
         self.assertIn('opts.baOpt.minPlaMatrixOpenClObservations', project_manager)
-        self.assertIn('ba_auto_backend_policy_version', project_manager)
+        self.assertNotIn('kLegacyMinPlaMatrixGpuCameras', project_manager)
+        self.assertNotIn('kLegacyMinPlaMatrixGpuObservations', project_manager)
+        self.assertNotIn('legacy_cpu', project_manager)
+        self.assertIn('ProjectConfigManager::validateBundleAdjustSettings', project_manager)
         self.assertIn('opts.baOpt.maxInitialTrackRms', project_manager)
         self.assertIn('opts.baOpt.enableBackendQualityGate', project_manager)
 

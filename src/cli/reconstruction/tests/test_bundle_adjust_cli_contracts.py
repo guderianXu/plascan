@@ -24,7 +24,6 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
             "--ba-quality-gate",
             "--ba-max-rms-growth",
             "--ba-min-valid-track-ratio",
-            "--ba-compare-legacy",
         ):
             self.assertIn(option, source)
 
@@ -33,6 +32,16 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
         )
         self.assertNotIn("QString toQString(", source)
         self.assertIn("baOptions.backend", source)
+
+    def test_removed_solver_alias_and_options_are_rejected(self):
+        source = (ROOT / "src/cli/reconstruction/cli_bundle_adjust.cpp").read_text(encoding="utf-8")
+        for option in ("legacy_cpu", "--ba-compare-legacy", "--no-ba-compare-legacy",
+                       "--max-point-iterations", "--max-camera-iterations", "--huber-delta",
+                       "--damping", "--finite-diff-eps", "--step-tolerance", "--ba-max-dense-schur-cameras"):
+            self.assertNotIn(option, source)
+        benchmark = (ROOT / "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("legacy_cpu", benchmark)
+        self.assertNotIn("--max-dense-schur-cameras", benchmark)
 
     def test_default_output_uses_current_chunk_bundle_adjust_directory(self):
         source = (ROOT / "src/cli/reconstruction/cli_bundle_adjust.cpp").read_text(

@@ -100,7 +100,7 @@ namespace
         for (int index = demResults.size() - 1; index >= 0; --index)
         {
             const QJsonObject record = demResults.at(index).toObject();
-            const QString recordDemPath = record.value(QStringLiteral("dem_tif")).toString();
+            const QString recordDemPath = record.value(QStringLiteral("dem_path")).toString();
             if (recordDemPath.isEmpty())
             {
                 continue;
@@ -455,8 +455,8 @@ namespace xjw
             output[QStringLiteral("subpixel_bilinear_splat")] = options.useSubPixelBilinearSplat;
             output[QStringLiteral("grid_min_x")] = demGrid.minX;
             output[QStringLiteral("grid_min_y")] = demGrid.minY;
-            output[QStringLiteral("depth_png")] = depthPng;
-            output[QStringLiteral("dem_tif")] = demTif;
+            output[QStringLiteral("preview_path")] = depthPng;
+            output[QStringLiteral("dem_path")] = demTif;
             appendQualityArtifacts(&output, qualityArtifacts);
             output[QStringLiteral("dense_cloud_xyz")] = generateDenseCloud ? denseXyz : QString();
             output[QStringLiteral("dense_point_count")] = densePointCount;
@@ -905,9 +905,9 @@ namespace xjw
             output[QStringLiteral("grid_height")] = demGrid.height;
             output[QStringLiteral("cell_size_x")] = demGrid.stepX;
             output[QStringLiteral("cell_size_y")] = demGrid.stepY;
-            output[QStringLiteral("dem_tif")] = demTif;
-            output[QStringLiteral("depth_png")] = depthPng;
-            output[QStringLiteral("dom_png")] = hasTexture ? domPng : QString();
+            output[QStringLiteral("dem_path")] = demTif;
+            output[QStringLiteral("preview_path")] = depthPng;
+            output[QStringLiteral("dom_path")] = hasTexture ? domPng : QString();
             output[QStringLiteral("has_texture")] = hasTexture;
             *result = output;
         }
@@ -1053,9 +1053,9 @@ namespace xjw
             output[QStringLiteral("grid_height")] = demGrid.height;
             output[QStringLiteral("cell_size_x")] = demGrid.stepX;
             output[QStringLiteral("cell_size_y")] = demGrid.stepY;
-            output[QStringLiteral("dem_tif")] = demTif;
-            output[QStringLiteral("depth_png")] = depthPng;
-            output[QStringLiteral("dom_png")] = hasAnyTexture ? domPng : QString();
+            output[QStringLiteral("dem_path")] = demTif;
+            output[QStringLiteral("preview_path")] = depthPng;
+            output[QStringLiteral("dom_path")] = hasAnyTexture ? domPng : QString();
             output[QStringLiteral("has_texture")] = hasAnyTexture;
             *result = output;
         }
@@ -1446,8 +1446,8 @@ namespace xjw
         {
             QJsonObject output;
             output[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-            output[QStringLiteral("dem_tif")] = demTif;
-            output[QStringLiteral("depth_png")] = depthPng;
+            output[QStringLiteral("dem_path")] = demTif;
+            output[QStringLiteral("preview_path")] = depthPng;
             appendQualityArtifacts(&output, qualityArtifacts);
             if (!plyPath.isEmpty())
             {

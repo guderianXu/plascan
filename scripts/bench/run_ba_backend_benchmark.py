@@ -174,10 +174,7 @@ def main() -> int:
     parser.add_argument("--cases", default="medium", help="逗号分隔: small,medium,large")
     parser.add_argument(
         "--backends",
-        default=(
-            "legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,"
-            "auto"
-        ),
+        default="plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto",
     )
     parser.add_argument("--repeat", default=3, type=int)
     parser.add_argument("--iterations", default=8, type=int)

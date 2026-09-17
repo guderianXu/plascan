@@ -64,9 +64,4 @@ namespace xjw::task_runtime
         }
     };
 
-    inline std::function<bool()> combineWorkflowCancellation(std::function<bool()> legacy, WorkflowControl control)
-    {
-        return [legacy = std::move(legacy), control = std::move(control)]()
-        { return control.isCancelled() || (legacy && legacy()); };
-    }
 } // namespace xjw::task_runtime

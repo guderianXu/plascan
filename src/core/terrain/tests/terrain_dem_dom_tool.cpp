@@ -224,7 +224,7 @@ int main(int argc, char **argv)
         const QString domPath = outputDir + QStringLiteral("/products/dom.png");
         QJsonObject domResult;
         if (!xjw::TerrainPipeline::generateOrthoProduct(images,
-                                                        demResult.value(QStringLiteral("dem_tif")).toString(),
+                                                        demResult.value(QStringLiteral("dem_path")).toString(),
                                                         domPath,
                                                         demResolution,
                                                         projectMeta,
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
         const double domResolution = demResolution > 0.0 ? demResolution : 0.0;
         QJsonObject domResult;
         if (!xjw::TerrainPipeline::generateOrthoProduct(images,
-                                                        demResult.value(QStringLiteral("dem_tif")).toString(),
+                                                        demResult.value(QStringLiteral("dem_path")).toString(),
                                                         domPath,
                                                         domResolution,
                                                         &domResult,

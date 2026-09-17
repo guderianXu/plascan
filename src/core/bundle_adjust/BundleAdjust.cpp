@@ -1,8 +1,7 @@
 // ============================================================
 // 文件：BundleAdjust.cpp
 // 功能：统一束平差后端选择、质量门控与参考 CPU 回退。
-// CPU 求解统一委托给 PlaMatrix 联合 Schur BA；LegacyCpu 仅保留为
-// 工程文件和 CLI 的兼容枚举，不再包含独立的旧交替优化实现。
+// CPU/CUDA/OpenCL 共用 PlaMatrix 联合 Schur BA，不保留旧求解器入口。
 // ============================================================
 
 #include "BundleAdjustSolver.h"
@@ -118,40 +117,6 @@ namespace xjw
             return false;
         }
 
-        bool legacyIsBetterThanCandidate(const BAResult& candidate,
-                                         const BAResult& legacy,
-                                         const BAOptions& options,
-                                         std::string* message)
-        {
-            if (!options.enableBackendQualityGate || !options.compareAutoBackendWithLegacy || legacy.totalTracks <= 0 ||
-                legacy.optimizedTracks <= 0 || !std::isfinite(legacy.meanRmsAfter))
-            {
-                return false;
-            }
-
-            const double maxGrowth = std::max(1.0, options.maxAcceptedRmsGrowth);
-            if (std::isfinite(candidate.meanRmsAfter) && candidate.meanRmsAfter > legacy.meanRmsAfter * maxGrowth)
-            {
-                if (message)
-                {
-                    *message = "质量门控拒绝: 候选后端 RMS 明显差于参考 CPU BA";
-                }
-                return true;
-            }
-
-            if (candidate.validTrackRatio + 1e-12 < legacy.validTrackRatio &&
-                candidate.validTrackRatio < std::max(0.0, options.minAcceptedValidTrackRatio))
-            {
-                if (message)
-                {
-                    *message = "质量门控拒绝: 候选后端有效 track 比例低于参考 CPU BA";
-                }
-                return true;
-            }
-
-            return false;
-        }
-
     } // namespace
 
     const char* BundleAdjust::backendName(BABackend backend)
@@ -160,8 +125,6 @@ namespace xjw
         {
         case BABackend::Auto:
             return "auto";
-        case BABackend::LegacyCpu:
-            return "legacy_cpu";
         case BABackend::PlaMatrixCpu:
             return "plamatrix_cpu";
         case BABackend::PlaMatrixCuda:
@@ -202,8 +165,6 @@ namespace xjw
         {
         case BABackend::Auto:
             return {true, true, true, true, true, true, true, true};
-        case BABackend::LegacyCpu:
-            return {true, true, true, true, true, true, true, true};
         case BABackend::PlaMatrixCpu:
         case BABackend::PlaMatrixCuda:
         case BABackend::PlaMatrixOpenCl:
@@ -217,8 +178,6 @@ namespace xjw
         switch (backend)
         {
         case BABackend::Auto:
-            return true;
-        case BABackend::LegacyCpu:
             return true;
         case BABackend::PlaMatrixCpu:
             return true;
@@ -344,24 +303,6 @@ namespace xjw
             return result;
         }
         const BAOptions& options = normalizedOptions;
-        const std::string cpuFallbackUnsupportedReason;
-
-        auto runLegacy = [&](const std::string& fallbackMessage)
-        {
-            BAOptions cpuOptions = options;
-            cpuOptions.backend = BABackend::PlaMatrixCpu;
-            cpuOptions.allowBackendFallback = false;
-            BAResult result = detail::optimizePointsWithPlaMatrix(cameras, tracks, cpuOptions);
-            result.requestedBackend = options.backend;
-            result.usedBackend = BABackend::PlaMatrixCpu;
-            result.usedGpu = false;
-            result.backendFallback = true;
-            result.backendMessage = fallbackMessage + "；旧 CPU 名称已映射到参考 CPU 联合 BA；" + result.backendMessage;
-            result.backendSelectionReason = fallbackMessage;
-            updateDerivedResultStats(result);
-            return result;
-        };
-
         auto runPlaMatrixCpu = [&](const std::string& fallbackMessage)
         {
             BAOptions cpuOptions = options;
@@ -388,35 +329,18 @@ namespace xjw
             }
             const std::string selectedName = backendName(selectedOptions.backend);
 
-            if (selectedOptions.backend == BABackend::LegacyCpu)
-            {
-                BAResult result = runPlaMatrixCpu("自动 CPU 已统一为参考联合 BA: " + decision.reason);
-                result.requestedBackend = BABackend::Auto;
-                return result;
-            }
-
             BAResult candidate = optimizePoints(cameras, tracks, selectedOptions);
             candidate.requestedBackend = BABackend::Auto;
             updateDerivedResultStats(candidate);
 
-            std::string qualityMessage;
-            bool rejectCandidate = resultFailsQualityGate(candidate, options, &qualityMessage);
-            BAResult legacy;
-            bool comparedWithLegacy = false;
-            if (!rejectCandidate && options.enableBackendQualityGate && options.compareAutoBackendWithLegacy &&
-                cpuFallbackUnsupportedReason.empty())
+            if (candidate.solveStatus == BASolveStatus::Cancelled)
             {
-                BAOptions legacyOptions = options;
-                legacyOptions.backend = BABackend::PlaMatrixCpu;
-                legacy = detail::optimizePointsWithPlaMatrix(cameras, tracks, legacyOptions);
-                legacy.requestedBackend = BABackend::Auto;
-                legacy.usedBackend = BABackend::PlaMatrixCpu;
-                legacy.usedGpu = false;
-                updateDerivedResultStats(legacy);
-                comparedWithLegacy = true;
-                rejectCandidate = legacyIsBetterThanCandidate(candidate, legacy, options, &qualityMessage);
+                candidate.backendSelectionReason = "自动选择 " + selectedName + ": BA 已取消，不运行回退求解";
+                return candidate;
             }
 
+            std::string qualityMessage;
+            const bool rejectCandidate = resultFailsQualityGate(candidate, options, &qualityMessage);
             if (rejectCandidate)
             {
                 if (selectedOptions.backend == BABackend::PlaMatrixCpu)
@@ -434,52 +358,26 @@ namespace xjw
                     candidate.backendMessage = candidate.backendSelectionReason + "；" + qualityMessage;
                     return candidate;
                 }
-                if (!cpuFallbackUnsupportedReason.empty())
-                {
-                    candidate.qualityGateRejected = true;
-                    candidate.qualityGateMessage = qualityMessage;
-                    candidate.solutionUsable = false;
-                    if (candidate.solveStatus == BASolveStatus::Success ||
-                        candidate.solveStatus == BASolveStatus::NoConvergence)
-                    {
-                        candidate.solveStatus = BASolveStatus::NumericalFailure;
-                    }
-                    candidate.backendFallback = false;
-                    candidate.backendSelectionReason = "自动候选 " + selectedName + " 被质量门控拒绝；" +
-                                                       cpuFallbackUnsupportedReason + "，没有兼容的 CPU 回退";
-                    candidate.backendMessage = candidate.backendSelectionReason + "；" + qualityMessage;
-                    return candidate;
-                }
-                if (legacy.totalTracks <= 0)
-                {
-                    BAOptions legacyOptions = options;
-                    legacyOptions.backend = BABackend::PlaMatrixCpu;
-                    legacy = detail::optimizePointsWithPlaMatrix(cameras, tracks, legacyOptions);
-                    legacy.requestedBackend = BABackend::Auto;
-                    legacy.usedBackend = BABackend::PlaMatrixCpu;
-                    legacy.usedGpu = false;
-                    updateDerivedResultStats(legacy);
-                }
-                legacy.setupSeconds += candidate.setupSeconds;
-                legacy.solveSeconds += candidate.solveSeconds;
-                legacy.postprocessSeconds += candidate.postprocessSeconds;
-                legacy.totalSeconds += candidate.totalSeconds;
-                legacy.backendFallback = true;
-                legacy.qualityGateRejected = true;
-                legacy.qualityGateMessage = qualityMessage;
-                legacy.backendSelectionReason = "自动候选 " + selectedName + " 被质量门控拒绝，回退参考 CPU BA";
-                legacy.backendMessage = legacy.backendSelectionReason + "；" + qualityMessage;
-                return legacy;
+                BAOptions fallbackOptions = options;
+                fallbackOptions.backend = BABackend::PlaMatrixCpu;
+                fallbackOptions.allowBackendFallback = false;
+                BAResult fallback = detail::optimizePointsWithPlaMatrix(cameras, tracks, fallbackOptions);
+                fallback.requestedBackend = BABackend::Auto;
+                fallback.usedBackend = BABackend::PlaMatrixCpu;
+                updateDerivedResultStats(fallback);
+                fallback.setupSeconds += candidate.setupSeconds;
+                fallback.solveSeconds += candidate.solveSeconds;
+                fallback.postprocessSeconds += candidate.postprocessSeconds;
+                fallback.totalSeconds += candidate.totalSeconds;
+                fallback.backendFallback = true;
+                fallback.qualityGateRejected = true;
+                fallback.qualityGateMessage = qualityMessage;
+                fallback.backendSelectionReason = "自动候选 " + selectedName + " 被质量门控拒绝，回退参考 CPU BA";
+                fallback.backendMessage = fallback.backendSelectionReason + "；" + qualityMessage;
+                return fallback;
             }
 
             candidate.backendSelectionReason = "自动选择 " + selectedName + ": 通过 BA 质量门控";
-            if (comparedWithLegacy)
-            {
-                candidate.setupSeconds += legacy.setupSeconds;
-                candidate.solveSeconds += legacy.solveSeconds;
-                candidate.postprocessSeconds += legacy.postprocessSeconds;
-                candidate.totalSeconds += legacy.totalSeconds;
-            }
             if (!candidate.backendMessage.empty())
             {
                 candidate.backendMessage = candidate.backendSelectionReason + "；" + candidate.backendMessage;
@@ -489,11 +387,6 @@ namespace xjw
                 candidate.backendMessage = candidate.backendSelectionReason;
             }
             return candidate;
-        }
-
-        if (options.backend == BABackend::LegacyCpu)
-        {
-            return runLegacy("legacy_cpu 兼容请求");
         }
 
         const bool isPlaMatrixBackend = options.backend == BABackend::PlaMatrixCpu ||

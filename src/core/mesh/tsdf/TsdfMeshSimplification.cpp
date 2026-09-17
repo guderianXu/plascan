@@ -71,7 +71,7 @@ namespace xjw::mesh::tsdf_detail
                 options.topologySafeSmoothingMaximumDisplacementVoxels *
                 std::max({result.layout.voxelSize[0], result.layout.voxelSize[1], result.layout.voxelSize[2]});
             simplify_options.smoothingFeatureAngleDegrees = options.topologySafeSmoothingFeatureAngleDegrees;
-            simplify_options.isCancelled = options.isCancelled;
+            simplify_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             simplify_options.progress = [&reportProgress](int pass, int face_count)
             {
                 reportProgress(
@@ -155,7 +155,7 @@ namespace xjw::mesh::tsdf_detail
             simplify_options.maximumNormalDeviationDegrees = options.simplificationMaximumNormalDeviationDegrees;
             simplify_options.minimumSharpEdgeEndpointDegree = options.simplificationMinimumSharpEdgeEndpointDegree;
             simplify_options.simplifySimpleOpenBoundaries = options.simplifySimpleOpenBoundaries;
-            simplify_options.isCancelled = options.isCancelled;
+            simplify_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             simplify_options.progress = [&reportProgress](int pass, int face_count)
             {
                 reportProgress(
@@ -294,7 +294,7 @@ namespace xjw::mesh::tsdf_detail
                 polish_options.minimumSharpEdgeEndpointDegree =
                     std::max(options.simplificationMinimumSharpEdgeEndpointDegree, 4);
                 polish_options.simplifySimpleOpenBoundaries = true;
-                polish_options.isCancelled = options.isCancelled;
+                polish_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
                 polish_options.progress = [&reportProgress](int pass, int face_count)
                 {
                     reportProgress(QStringLiteral("正在抛光后备网格（第 %1 轮，%2 面）...").arg(pass).arg(face_count),
@@ -517,7 +517,7 @@ namespace xjw::mesh::tsdf_detail
                     post_fill_options.minimumSharpEdgeEndpointDegree =
                         options.simplificationMinimumSharpEdgeEndpointDegree;
                     post_fill_options.simplifySimpleOpenBoundaries = true;
-                    post_fill_options.isCancelled = options.isCancelled;
+                    post_fill_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
                     post_fill_options.progress = [&reportProgress](int pass, int face_count)
                     {
                         reportProgress(
@@ -687,7 +687,7 @@ namespace xjw::mesh::tsdf_detail
             optimization_options.isotropicLongEdgeRatio = options.triangleQualityIsotropicLongEdgeRatio;
             optimization_options.isotropicMaximumFaceGrowthRatio =
                 options.triangleQualityIsotropicMaximumFaceGrowthRatio;
-            optimization_options.isCancelled = options.isCancelled;
+            optimization_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             const MeshTriangleOptimizationStatistics optimization =
                 optimizeTriangleQuality(&candidate, optimization_options);
             const MeshTopologyQualityStatistics quality_after =
@@ -882,7 +882,7 @@ namespace xjw::mesh::tsdf_detail
             relaxation_options.tangentialMaximumDisplacementEdgeRatio =
                 std::min(0.10f, options.triangleQualityTangentialMaximumDisplacementEdgeRatio);
             relaxation_options.enableIsotropicRemeshing = false;
-            relaxation_options.isCancelled = options.isCancelled;
+            relaxation_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             const MeshTriangleOptimizationStatistics relaxation =
                 optimizeTriangleQuality(&candidate, relaxation_options);
             result.statistics.postSimplificationTangentialRelaxedVertexCount = relaxation.tangentialRelaxedVertexCount;

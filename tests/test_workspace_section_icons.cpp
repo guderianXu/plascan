@@ -135,9 +135,8 @@ TEST(WorkspaceSectionIconsTest, VisibleSectionsUseDistinctSemanticIcons)
             {QStringLiteral("face_count"), 12}
         }
     };
-    meta[QStringLiteral("dem_results")] = QJsonArray{
-        QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("/tmp/dem.tif")}}
-    };
+    meta[QStringLiteral("dem_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("/tmp/dem.tif")}}};
     meta[QStringLiteral("ortho_results")] = QJsonArray{
         QJsonObject{{QStringLiteral("output_path"), QStringLiteral("/tmp/ortho.tif")}}
     };

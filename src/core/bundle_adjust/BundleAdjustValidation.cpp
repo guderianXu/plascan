@@ -377,17 +377,9 @@ namespace xjw::detail
 
         // 第一阶段只验证后端通用的数值域和数组契约。这里提前拒绝可以避免不同后端
         // 对 NaN、负迭代次数或标定分组越界产生不一致行为。
-        if (requestedOptions.maxIterations <= 0 || requestedOptions.maxPointIterations <= 0 ||
-            requestedOptions.maxCameraIterations <= 0)
+        if (requestedOptions.maxIterations <= 0)
         {
             return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 迭代次数必须大于 0");
-        }
-        if (!std::isfinite(requestedOptions.huberDelta) || !std::isfinite(requestedOptions.finiteDiffEps) ||
-            !std::isfinite(requestedOptions.damping) || !std::isfinite(requestedOptions.stepTolerance) ||
-            requestedOptions.finiteDiffEps <= 0.0 || requestedOptions.damping < 0.0 ||
-            requestedOptions.stepTolerance < 0.0)
-        {
-            return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 鲁棒核、有限差分或收敛参数非法");
         }
         const auto parameterEnabled = [&](BAIntrinsicParameter parameter)
         { return sharedIntrinsicParameterEnabled(requestedOptions, parameter); };
@@ -488,10 +480,6 @@ namespace xjw::detail
                         [](const int groupId) { return groupId < 0; }))
         {
             return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 相机标定分组 ID 不能为负数");
-        }
-        if (requestedOptions.maxDenseSchurCameras <= 0)
-        {
-            return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: 稠密 Schur 相机阈值必须为正数");
         }
         if (!std::isfinite(requestedOptions.referenceArmijoCoefficient) ||
             requestedOptions.referenceArmijoCoefficient <= 0.0 || requestedOptions.referenceArmijoCoefficient >= 1.0 ||

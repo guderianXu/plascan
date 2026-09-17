@@ -81,6 +81,16 @@ TEST(TsdfWorkflowExecutionContract, InvalidInputProducesFailureNotCancellation)
     EXPECT_FALSE(result.errorMessage.isEmpty());
 }
 
+TEST(TsdfWorkflowExecutionContract, TaskCancellationStopsWithoutSharedFlagOrProgress)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    options.execution.cancellationCheck = [] { return true; };
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build({}, options);
+    EXPECT_EQ(result.outcome().status, WorkflowStatus::Cancelled);
+    EXPECT_TRUE(result.mesh.empty());
+    EXPECT_EQ(result.layout.sampleCount, 0);
+}
+
 TEST(ModelWorkflowExecutionContract, SuccessDoesNotExposeStaleErrors)
 {
     xjw::mesh::workflow::WorkflowResult result;

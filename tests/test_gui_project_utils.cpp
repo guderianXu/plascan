@@ -1469,7 +1469,7 @@ TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
     meta[QStringLiteral("model_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("model_ply"), QStringLiteral("mesh.ply")}}};
     meta[QStringLiteral("dem_results")] =
-        QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("dem.tif")}}};
+        QJsonArray{QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("dem.tif")}}};
     meta[QStringLiteral("ortho_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("output_path"), QStringLiteral("dom.tif")}}};
     meta[QStringLiteral("reference_datasets")] =
@@ -4527,14 +4527,14 @@ TEST(CodeStyleTest, TerrainProductManifestUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_records")));
 }
 
-TEST(CodeStyleTest, TerrainProductManifestDocumentsGuiAliasesAsStableCompatibilityFields)
+TEST(CodeStyleTest, TerrainProductManifestDoesNotWriteOrReadGuiAliases)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/terrain/TerrainProductManifest.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("GUI compatibility aliases")));
-    EXPECT_FALSE(source.contains(QStringLiteral("legacy GUI field names during the transition")))
-        << "DEM/DOM alias fields are still consumed by GUI/project metadata; document them as compatibility aliases.";
+    EXPECT_FALSE(source.contains(QStringLiteral("GUI compatibility aliases")));
+    EXPECT_FALSE(source.contains(QStringLiteral("jsonString(object, QStringLiteral(\"dem_tif\"))")));
+    EXPECT_FALSE(source.contains(QStringLiteral("insertIfNotEmpty(&object, QStringLiteral(\"dem_tif\"),")));
 }
 
 TEST(CodeStyleTest, DomGeneratorSourceKeepsLinesWithinStyleLimit)
@@ -7167,7 +7167,7 @@ TEST(TiePointResultServiceTest, ReplaceInvalidatesAllDerivedReconstructionResult
     metadata[QStringLiteral("model_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("old_model.ply")}}};
     metadata[QStringLiteral("dem_results")] =
-        QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("old_dem.tif")}}};
+        QJsonArray{QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("old_dem.tif")}}};
     metadata[QStringLiteral("ortho_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("ortho_tif"), QStringLiteral("old_ortho.tif")}}};
     projectData.updateMetadata(metadata, false);
@@ -9142,7 +9142,7 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
     EXPECT_TRUE(managerSource.contains(QStringLiteral("parseRpcCameraRaster(")));
     EXPECT_FALSE(addBlock.contains(QStringLiteral("importImagesToSharedStore(")));
     EXPECT_FALSE(addBlock.contains(QStringLiteral("prepareImport(")));
-    EXPECT_FALSE(managerSource.contains(QStringLiteral("addImagesFromSharedStore(batch.projectImagePaths")));
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("addValidatedExternalImages(batch.projectImagePaths")));
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_projectData->addImages(scan.imagePaths")))
         << "The GUI thread must not hash and copy every image.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
@@ -13596,8 +13596,8 @@ TEST(DataTreeWidgetTest, DemSectionShowsQualityRasterProducts)
     DataTreeWidget tree;
 
     QJsonObject demRecord;
-    demRecord[QStringLiteral("dem_tif")] = QStringLiteral("/tmp/terrain/products/dem.tif");
-    demRecord[QStringLiteral("depth_preview_png")] = QStringLiteral("/tmp/terrain/products/depth_map.png");
+    demRecord[QStringLiteral("dem_path")] = QStringLiteral("/tmp/terrain/products/dem.tif");
+    demRecord[QStringLiteral("preview_path")] = QStringLiteral("/tmp/terrain/products/depth_map.png");
     demRecord[QStringLiteral("error_path")] = QStringLiteral("/tmp/terrain/products/dem_error.tif");
     demRecord[QStringLiteral("count_path")] = QStringLiteral("/tmp/terrain/products/dem_count.tif");
     demRecord[QStringLiteral("confidence_path")] = QStringLiteral("/tmp/terrain/products/dem_confidence.tif");
@@ -15428,7 +15428,7 @@ TEST(SelectionPropertiesWidgetTest, ShowsDemAndDomPixelResolution)
 
     const QJsonObject metadata{
         {QStringLiteral("dem_results"),
-         QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), dem_path}, {QStringLiteral("dem_resolution"), 0.5}}}},
+         QJsonArray{QJsonObject{{QStringLiteral("dem_path"), dem_path}, {QStringLiteral("dem_resolution"), 0.5}}}},
         {QStringLiteral("ortho_results"),
          QJsonArray{QJsonObject{{QStringLiteral("output_path"), dom_path}, {QStringLiteral("dem_path"), dem_path}}}}};
 

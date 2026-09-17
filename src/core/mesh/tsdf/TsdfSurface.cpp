@@ -45,14 +45,14 @@ namespace xjw::mesh
         { return std::chrono::duration_cast<std::chrono::milliseconds>(PostprocessClock::now() - start).count(); };
         const auto reportProgress = [&options](const QString& stage, int percent)
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(stage, percent);
+                options.execution.reportProgress((stage).toUtf8().toStdString(), (percent) / 100.0);
             }
         };
         const auto postprocessCancelled = [&options, &result]()
         {
-            if (!options.isCancelled || !options.isCancelled())
+            if (!options.execution.isCancelled())
             {
                 return false;
             }

@@ -152,8 +152,6 @@ TEST(BundleAdjustPlaMatrixConstraintParityTest, GcpLidarScalePoseAndLaserRangeRe
     options.laserRangeConstraints.push_back(makeLaserShot(truth_cameras, laser_truth));
     options.enablePointFilter = false;
     options.maxIterations = 50;
-    options.damping = 1e-3;
-    options.stepTolerance = 1e-9;
     options.allowBackendFallback = false;
 
     auto plamatrix_options = options;

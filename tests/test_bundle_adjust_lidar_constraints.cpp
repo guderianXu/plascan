@@ -56,7 +56,6 @@ TEST(BundleAdjustLidarConstraintTest, LaserPlaneConstraintReducesPointToPlaneDis
     options.laserPlaneWeight = 1.0;
     options.laserHuberDeltaMeters = 10.0;
     options.maxIterations = 4;
-    options.maxPointIterations = 12;
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
 
@@ -106,7 +105,6 @@ TEST(BundleAdjustControlPointConstraintTest, SoftPointConstraintReducesControlPo
     options.enableControlPointConstraints = true;
     options.controlPointHuberDeltaMeters = 10.0;
     options.maxIterations = 4;
-    options.maxPointIterations = 12;
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints({makeCamera(), makeCamera()}, {track}, options);
 
@@ -171,7 +169,6 @@ TEST(BundleAdjustScaleBarConstraintTest, SoftScaleBarConstraintReducesEndpointDi
     options.scaleBarHuberDeltaMeters = 10.0;
     options.scaleBarConstraints.push_back(scaleBar);
     options.maxIterations = 8;
-    options.maxPointIterations = 20;
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints({makeCamera(), makeCamera()},
                                                                    {left, right},

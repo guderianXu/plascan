@@ -464,7 +464,7 @@ def generate_dataset(config: DatasetConfig) -> dict[str, Any]:
                     "minimum_elevation_m": float(dem.min()), "maximum_elevation_m": float(dem.max()),
                     "detail_layers": config.detail_layers},
         "cameras": camera_records,
-        "ground_truth": {"dem_npy": "ground_truth/dem.npy", "dem_tif": "ground_truth/dem.tif",
+        "ground_truth": {"dem_npy": "ground_truth/dem.npy", "dem_path": "ground_truth/dem.tif",
                          "dom": "ground_truth/dom.tif", "mesh": "ground_truth/terrain.ply",
                          "dem_shape": [config.dem_height, config.dem_width],
                          "dem_pixel_size_m": [config.terrain_width_m / config.dem_width, config.terrain_height_m / config.dem_height],

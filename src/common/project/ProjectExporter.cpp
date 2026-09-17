@@ -143,7 +143,7 @@ namespace xjw::common::project
                         return false;
                     }
                     image[QStringLiteral("path")] = PortableProjectFormat::resourceUriForEntry(entry);
-                    image[QStringLiteral("type")] = QStringLiteral("shared");
+                    image[QStringLiteral("type")] = QStringLiteral("packaged");
                     images[index] = image;
                     changed = true;
                 }

@@ -114,23 +114,72 @@ TEST(ProjectConfigManagerTest, DefaultsToFramePinholeCameraModel)
               QStringLiteral("frame_pinhole"));
 }
 
-TEST(ProjectConfigManagerTest, SuppliesFramePinholeDefaultToLegacyConfig)
+TEST(ProjectConfigManagerTest, RejectsLegacyConfigWithoutDefaults)
 {
     ProjectConfigManager config;
-    config.setData(ProjectConfigManager::mergeWithDefaults(QJsonObject{}));
+    config.setData(QJsonObject{});
 
-    ASSERT_TRUE(config.cameraModelPolicy().has_value());
-    EXPECT_EQ(config.cameraModelPolicy().value(),
-              ProjectCameraModelPolicy::FramePinhole);
+    EXPECT_FALSE(config.cameraModelPolicy().has_value());
+    QString error;
+    EXPECT_FALSE(ProjectConfigManager::validateCurrentConfig(QJsonObject{}, &error));
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(ProjectConfigManagerTest, RejectsRemovedBundleAdjustSettingsWithoutMutatingConfig)
+{
+    for (const auto* key : {"max_point_iterations",
+                            "max_camera_iterations",
+                            "huber_delta",
+                            "finite_diff_eps",
+                            "damping",
+                            "step_tolerance",
+                            "ba_max_dense_schur_cameras",
+                            "ba_compare_auto_backend_with_legacy",
+                            "ba_backend"})
+    {
+        auto config = ProjectConfigManager::defaultConfig();
+        auto workflow = config.value(QStringLiteral("workflow")).toObject();
+        QJsonObject settings;
+        settings[QString::fromLatin1(key)] = QStringLiteral("legacy_cpu");
+        workflow[QStringLiteral("bundle_adjust")] = settings;
+        config[QStringLiteral("workflow")] = workflow;
+        const auto original = config;
+        QString error;
+        EXPECT_FALSE(ProjectConfigManager::validateCurrentConfig(config, &error)) << key;
+        EXPECT_TRUE(error.contains(QString::fromLatin1(key))) << error.toStdString();
+        EXPECT_EQ(config, original);
+    }
+}
+
+TEST(ProjectConfigManagerTest, AcceptsCurrentBundleAdjustBackendsAndRejectsUnknownNames)
+{
+    QString error = QStringLiteral("stale");
+    EXPECT_TRUE(ProjectConfigManager::validateBundleAdjustSettings({}, &error));
+    EXPECT_TRUE(error.isEmpty());
+    for (const auto* backend : {"auto", "plamatrix_cpu", "plamatrix_cuda", "plamatrix_opencl"})
+    {
+        const QJsonObject settings{{QStringLiteral("ba_backend"), QString::fromLatin1(backend)},
+                                   {QStringLiteral("max_iterations"), 20}};
+        EXPECT_TRUE(ProjectConfigManager::validateBundleAdjustSettings(settings, &error)) << backend;
+    }
+    for (const QJsonValue backend : {QJsonValue(QStringLiteral("unknown")),
+                                     QJsonValue(QStringLiteral("")),
+                                     QJsonValue(123),
+                                     QJsonValue(QJsonValue::Null)})
+    {
+        EXPECT_FALSE(ProjectConfigManager::validateBundleAdjustSettings(
+            QJsonObject{{QStringLiteral("ba_backend"), backend}}, &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("ba_backend")));
+    }
 }
 
 TEST(ProjectConfigManagerTest, PreservesExplicitLineScanCameraModel)
 {
-    const QJsonObject input{
-        {QStringLiteral("camera_model_policy"),
-         QStringLiteral("isis_usgscsm_linescan")}};
+    QJsonObject input = ProjectConfigManager::defaultConfig();
+    input[QStringLiteral("camera_model_policy")] = QStringLiteral("isis_usgscsm_linescan");
     ProjectConfigManager config;
-    config.setData(ProjectConfigManager::mergeWithDefaults(input));
+    ASSERT_TRUE(ProjectConfigManager::validateCurrentConfig(input));
+    config.setData(input);
 
     ASSERT_TRUE(config.cameraModelPolicy().has_value());
     EXPECT_EQ(config.cameraModelPolicy().value(),

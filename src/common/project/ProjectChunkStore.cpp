@@ -1,4 +1,5 @@
 #include "project/ProjectChunkStore.h"
+#include "project/ProjectConfigManager.h"
 
 #include "project/PlascanArchive.h"
 #include "project/ProjectPackageLayout.h"
@@ -262,13 +263,23 @@ bool ProjectChunkStore::createChunk(
                      .arg(directory));
         return false;
     }
+    QJsonObject config = projectConfig;
+    if (config.isEmpty())
+    {
+        // Defaults belong to creation, never to loading an existing Chunk.
+        QJsonObject root;
+        if (!loadProjectDocument(&root, errorMessage))
+        {
+            QDir(directory).removeRecursively();
+            return false;
+        }
+        config = ProjectConfigManager::defaultConfig();
+        config[QStringLiteral("project_id")] = root.value(QStringLiteral("project_id"));
+        config[QStringLiteral("schema_version")] = 2;
+        config[QStringLiteral("version")] = QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion);
+    }
     const QJsonObject document =
-        PortableProjectFormat::createChunkDocument(
-            chunk,
-            projectFiles,
-            projectResults,
-            projectConfig,
-            resourceIndex);
+        PortableProjectFormat::createChunkDocument(chunk, projectFiles, projectResults, config, resourceIndex);
     const QString archivePath = ProjectPackageLayout::chunkArchivePath(
         _projectPath, chunk.directory);
     QString archiveError;

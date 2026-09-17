@@ -301,17 +301,6 @@ namespace
         return QJsonObject{{QStringLiteral("schema_version"), 1}, {QStringLiteral("display_settings"), manager.data()}};
     }
 
-    QJsonObject normalizedProjectUiState(const QJsonObject& state)
-    {
-        QJsonObject normalized = state;
-        ProjectUiConfigManager manager;
-        manager.setData(ProjectUiConfigManager::defaultUiSettings());
-        manager.applyPatch(state.value(QStringLiteral("display_settings")).toObject());
-        normalized[QStringLiteral("schema_version")] = 1;
-        normalized[QStringLiteral("display_settings")] = manager.data();
-        return normalized;
-    }
-
     QString normalizedProjectResourcePath(const QString& projectRoot, const QString& path)
     {
         const QString cleanPath = QDir::cleanPath(path.trimmed());
@@ -350,39 +339,6 @@ namespace
         return doc.isObject() ? doc.object() : QJsonObject();
     }
 
-    bool ensureImageUuids(QJsonObject* core)
-    {
-        if (!core)
-        {
-            return false;
-        }
-
-        QJsonArray images = core->value(QStringLiteral("images")).toArray();
-        QSet<QString> used_ids;
-        bool changed = false;
-        for (int index = 0; index < images.size(); ++index)
-        {
-            QJsonObject image = images[index].toObject();
-            QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-            if (image_id.isEmpty() || used_ids.contains(image_id))
-            {
-                do
-                {
-                    image_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                } while (used_ids.contains(image_id));
-                image[QStringLiteral("image_uuid")] = image_id;
-                images[index] = image;
-                changed = true;
-            }
-            used_ids.insert(image_id);
-        }
-
-        if (changed)
-        {
-            (*core)[QStringLiteral("images")] = images;
-        }
-        return changed;
-    }
 
     bool jsonArrayContains(const QJsonArray& array, const QJsonValue& needle)
     {
@@ -975,6 +931,24 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
         chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectConfigSection)).toObject();
     snapshot.uiState =
         projectDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectUiStateSection)).toObject();
+    const QString projectId = projectDocument.value(QStringLiteral("project_id")).toString();
+    if (snapshot.configMeta.value(QStringLiteral("project_id")).toString() != projectId ||
+        snapshot.configMeta.value(QStringLiteral("schema_version")).toInt() != 2 ||
+        snapshot.configMeta.value(QStringLiteral("version")).toString() !=
+            QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion))
+    {
+        snapshot.errorMessage = QStringLiteral("归档项目配置身份或版本无效；不再自动升级旧配置。");
+        return snapshot;
+    }
+    if (!PortableProjectFormat::validateCurrentImages(
+            snapshot.filesMeta, snapshot.projectPath, &snapshot.errorMessage) ||
+        !ProjectConfigManager::validateCurrentConfig(snapshot.configMeta, &snapshot.errorMessage) ||
+        !PortableProjectFormat::validateCurrentResults(
+            chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject(),
+            &snapshot.errorMessage))
+    {
+        return snapshot;
+    }
 
     const QJsonObject runtimeFiles = readJsonObjectFile(ProjectIO::tempFilesPath(snapshot.projectPath));
     if (!runtimeFiles.isEmpty())
@@ -1000,26 +974,31 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
         snapshot.errorMessage = QStringLiteral("Chunk doc.json 的 project_files 无效");
         return snapshot;
     }
-    snapshot.configMeta = ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
-    if (!snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
+    if (!PortableProjectFormat::validateCurrentImages(
+            snapshot.filesMeta, snapshot.projectPath, &snapshot.errorMessage) ||
+        !ProjectConfigManager::validateCurrentConfig(snapshot.configMeta, &snapshot.errorMessage))
+    {
+        return snapshot;
+    }
+    if (snapshot.uiState.value(QStringLiteral("schema_version")).toInt() != 1 ||
+        !snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
     {
         snapshot.errorMessage = QStringLiteral("项目 doc.json 的 ui_state 无效");
         return snapshot;
     }
-    snapshot.uiState = normalizedProjectUiState(snapshot.uiState);
 
     if (!workspace.materializeMetadata(&snapshot.filesMeta, &snapshot.errorMessage))
     {
         return snapshot;
     }
 
-    const QString projectId = projectDocument.value(QStringLiteral("project_id")).toString();
-    if (!projectId.isEmpty())
+    if (projectId.isEmpty() || snapshot.configMeta.value(QStringLiteral("project_id")).toString() != projectId ||
+        snapshot.configMeta.value(QStringLiteral("schema_version")).toInt() != 2 ||
+        snapshot.configMeta.value(QStringLiteral("version")).toString() !=
+            QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion))
     {
-        snapshot.configMeta[QStringLiteral("version")] =
-            QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion);
-        snapshot.configMeta[QStringLiteral("schema_version")] = 2;
-        snapshot.configMeta[QStringLiteral("project_id")] = projectId;
+        snapshot.errorMessage = QStringLiteral("project_config 的项目身份或版本无效；不再自动升级旧配置。");
+        return snapshot;
     }
 
     snapshot.success = true;
@@ -1053,6 +1032,10 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString& pl
     snapshot.resultsMeta = readJsonObjectFile(ProjectIO::tempResultsPath(snapshot.projectPath));
     if (!snapshot.resultsMeta.isEmpty())
     {
+        if (!PortableProjectFormat::validateCurrentResults(snapshot.resultsMeta, &snapshot.errorMessage))
+        {
+            return snapshot;
+        }
         if (!workspace.materializeMetadata(&snapshot.resultsMeta, &snapshot.errorMessage))
         {
             return snapshot;
@@ -1076,6 +1059,10 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString& pl
 
     snapshot.resultsMeta =
         chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
+    if (!PortableProjectFormat::validateCurrentResults(snapshot.resultsMeta, &snapshot.errorMessage))
+    {
+        return snapshot;
+    }
     if (!workspace.materializeMetadata(&snapshot.resultsMeta, &snapshot.errorMessage))
     {
         snapshot.success = false;
@@ -1110,6 +1097,21 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot& snapshot, Q
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("项目路径为空");
+        }
+        return false;
+    }
+
+    if (!PortableProjectFormat::validateCurrentImages(snapshot.filesMeta, snapshot.projectPath, errorMsg) ||
+        !ProjectConfigManager::validateCurrentConfig(snapshot.configMeta, errorMsg))
+    {
+        return false;
+    }
+    if (snapshot.uiState.value(QStringLiteral("schema_version")).toInt() != 1 ||
+        !snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("项目视图状态无效；不再补全旧视图配置。");
         }
         return false;
     }
@@ -1197,26 +1199,9 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot& snapshot, Q
     _temporarySavePending = false;
     _isDirty = false;
 
-    const QJsonObject filesMeta =
-        snapshot.filesMeta.isEmpty() ? ProjectFilesManager::defaultFiles() : snapshot.filesMeta;
-    _filesManager.setCoreData(filesMeta);
-
-    QJsonObject core = _filesManager.coreData();
-    const bool assignedImageUuids = ensureImageUuids(&core);
-    if (assignedImageUuids)
-    {
-        _filesManager.setCoreData(core);
-        // Missing UUIDs are a compatibility migration performed while loading,
-        // not a user edit. Persist the stable identities in the background
-        // without making an untouched project appear modified.
-        scheduleArchiveSync(true, false, true);
-    }
-
-    const QJsonObject configMeta = snapshot.configMeta.isEmpty()
-                                       ? ProjectConfigManager::defaultConfig()
-                                       : ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
-    updateConfig(configMeta, false);
-    _projectUiState = snapshot.uiState.isEmpty() ? defaultProjectUiState() : normalizedProjectUiState(snapshot.uiState);
+    _filesManager.setCoreData(snapshot.filesMeta);
+    updateConfig(snapshot.configMeta, false);
+    _projectUiState = snapshot.uiState;
 
     emit dirtyStateChanged(_isDirty);
     emit projectOpened(_projectPath);
@@ -1259,6 +1244,10 @@ bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot& snapshot, Q
         return true;
     }
 
+    if (!PortableProjectFormat::validateCurrentResults(snapshot.resultsMeta, errorMsg))
+    {
+        return false;
+    }
     _resultsLoaded = true;
     _filesManager.setResultsData(snapshot.hasResults ? snapshot.resultsMeta : QJsonObject());
     emitCurrentMetadataChanged();
@@ -2136,12 +2125,6 @@ void ProjectData::updateMetadata(const QJsonObject& meta, bool markDirty)
         _filesManager.setResultsData(results);
     }
 
-    QJsonObject normalized_core = _filesManager.coreData();
-    if (ensureImageUuids(&normalized_core))
-    {
-        _filesManager.setCoreData(normalized_core);
-    }
-
     if (hasResults)
     {
         _resultsLoaded = true;
@@ -2180,6 +2163,12 @@ bool ProjectData::ensureResultsLoaded() const
             if (!doc.isNull() && doc.isObject())
             {
                 QJsonObject results = doc.object();
+                QString validationError;
+                if (!PortableProjectFormat::validateCurrentResults(results, &validationError))
+                {
+                    LOG_WARN(validationError);
+                    return false;
+                }
                 ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
                 QString materializeError;
                 if (!workspace.materializeMetadata(&results, &materializeError))
@@ -2205,6 +2194,11 @@ bool ProjectData::ensureResultsLoaded() const
         return false;
     }
     QJsonObject results = document.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
+    if (!PortableProjectFormat::validateCurrentResults(results, &err))
+    {
+        LOG_WARN(err);
+        return false;
+    }
     ProjectWorkspaceStore workspace(_projectPath, _activeChunkDirectory);
     QString materializeError;
     if (!workspace.materializeMetadata(&results, &materializeError))
@@ -2248,7 +2242,7 @@ void ProjectData::setCameraModelPolicy(ProjectCameraModelPolicy policy)
 
 void ProjectData::updateProjectUiState(const QJsonObject& state, bool markDirty)
 {
-    _projectUiState = state.isEmpty() ? defaultProjectUiState() : normalizedProjectUiState(state);
+    _projectUiState = state.isEmpty() ? defaultProjectUiState() : state;
     if (markDirty)
     {
         markDirtyIfRequested(true);
@@ -2258,69 +2252,72 @@ void ProjectData::updateProjectUiState(const QJsonObject& state, bool markDirty)
 
 bool ProjectData::loadTemporaryMetadata()
 {
+    struct RecoverySection
+    {
+        QString path;
+        QJsonObject data;
+        bool present = false;
+    };
+    RecoverySection files{tempFilesPath()};
+    RecoverySection results{tempResultsPath()};
+    RecoverySection config{tempConfigPath()};
+    RecoverySection ui{tempUiStatePath()};
     bool loaded = false;
-
-    // 尝试从 .plascan_tmp/project_files.json 恢复核心数据
-    QString filesPath = tempFilesPath();
-    if (!filesPath.isEmpty() && QFile::exists(filesPath))
+    for (RecoverySection* section : {&files, &results, &config, &ui})
     {
-        QFile file(filesPath);
-        if (file.open(QIODevice::ReadOnly))
+        if (section->path.isEmpty() || !QFile::exists(section->path))
         {
-            QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-            if (!doc.isNull() && doc.isObject())
-            {
-                _filesManager.setCoreData(doc.object());
-                loaded = true;
-            }
+            continue;
         }
+        QFile file(section->path);
+        if (!file.open(QIODevice::ReadOnly))
+        {
+            LOG_WARN(QStringLiteral("无法恢复临时元数据 %1: %2").arg(section->path, file.errorString()));
+            return false;
+        }
+        const auto document = parseJsonOrCompressedJson(file.readAll());
+        if (!document.isObject())
+        {
+            LOG_WARN(QStringLiteral("临时元数据不是有效 JSON 对象: %1").arg(section->path));
+            return false;
+        }
+        section->data = document.object();
+        section->present = true;
+        loaded = true;
     }
 
-    // 尝试从 .plascan_tmp/project_results.json 恢复结果数据
-    // （新版以 qCompress 压缩写入；通过首字节区分压缩/明文 JSON）
-    QString resultsPath = tempResultsPath();
-    if (!resultsPath.isEmpty() && QFile::exists(resultsPath))
+    QString error;
+    if ((files.present && !PortableProjectFormat::validateCurrentImages(files.data, _projectPath, &error)) ||
+        (results.present && !PortableProjectFormat::validateCurrentResults(results.data, &error)) ||
+        (config.present && !ProjectConfigManager::validateCurrentConfig(config.data, &error)) ||
+        (config.present && (config.data.value(QStringLiteral("project_id")) !=
+                                _configManager.data().value(QStringLiteral("project_id")) ||
+                            config.data.value(QStringLiteral("schema_version")).toInt() != 2 ||
+                            config.data.value(QStringLiteral("version")).toString() !=
+                                QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion))) ||
+        (ui.present && (ui.data.value(QStringLiteral("schema_version")).toInt() != 1 ||
+                        !ui.data.value(QStringLiteral("display_settings")).isObject())))
     {
-        QFile file(resultsPath);
-        if (file.open(QIODevice::ReadOnly))
-        {
-            const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
-            if (!doc.isNull() && doc.isObject())
-            {
-                _filesManager.setResultsData(doc.object());
-                _resultsLoaded = true;
-                loaded = true;
-            }
-        }
+        LOG_WARN(QStringLiteral("拒绝恢复旧或无效临时元数据: %1").arg(error));
+        return false;
     }
-
-    // 尝试从 .plascan_tmp/project_config.json 恢复配置数据
-    QString configPath = tempConfigPath();
-    if (!configPath.isEmpty() && QFile::exists(configPath))
+    if (files.present)
     {
-        QFile file(configPath);
-        if (file.open(QIODevice::ReadOnly))
-        {
-            QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-            if (!doc.isNull() && doc.isObject())
-            {
-                updateConfig(ProjectConfigManager::mergeWithDefaults(doc.object()), false);
-                loaded = true;
-            }
-        }
+        _filesManager.setCoreData(files.data);
     }
-
-    const QString uiStatePath = tempUiStatePath();
-    if (!uiStatePath.isEmpty() && QFile::exists(uiStatePath))
+    if (results.present)
     {
-        const QJsonObject state = readJsonObjectFile(uiStatePath);
-        if (!state.isEmpty())
-        {
-            updateProjectUiState(state, false);
-            loaded = true;
-        }
+        _filesManager.setResultsData(results.data);
+        _resultsLoaded = true;
     }
-
+    if (config.present)
+    {
+        updateConfig(config.data, false);
+    }
+    if (ui.present)
+    {
+        updateProjectUiState(ui.data, false);
+    }
     return loaded;
 }
 
@@ -2591,12 +2588,12 @@ bool ProjectData::addImages(const QStringList& imagePaths, QString* errorMsg)
         externalPaths.append(absPath);
     }
 
-    return addImagesFromSharedStore(externalPaths, skipped, errorMsg);
+    return addValidatedExternalImages(externalPaths, skipped, errorMsg);
 }
 
-bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
-                                           int previouslySkipped,
-                                           QString* errorMsg)
+bool ProjectData::addValidatedExternalImages(const QStringList& projectImagePaths,
+                                             int previouslySkipped,
+                                             QString* errorMsg)
 {
     if (_projectPath.isEmpty())
     {
@@ -2620,7 +2617,6 @@ bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
     }
 
     int skipped = std::max(0, previouslySkipped);
-    QStringList publishedPaths;
     const QString sharedImagesRoot = QDir::fromNativeSeparators(
         QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath)));
     for (const QString& projectImagePath : projectImagePaths)
@@ -2634,7 +2630,6 @@ bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
         if (existingPaths.contains(cleanPath))
         {
             ++skipped;
-            ProjectSharedImageStore(_projectPath).releaseReservations({cleanPath});
             continue;
         }
         if (!QFileInfo(cleanPath).isFile())
@@ -2651,21 +2646,18 @@ bool ProjectData::addImagesFromSharedStore(const QStringList& projectImagePaths,
         const bool isSharedImage = comparablePath.startsWith(sharedImagesRoot + QLatin1Char('/'), Qt::CaseInsensitive);
         if (isSharedImage)
         {
-            publishedPaths.append(cleanPath);
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("不再接收旧共享源影像，请从原始目录重新导入: %1").arg(cleanPath);
+            }
+            return false;
         }
         QJsonObject image;
         image["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
         image["path"] = cleanPath;
-        image["type"] = isSharedImage ? "shared" : "external";
+        image["type"] = "external";
         image["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
         images.append(image);
-    }
-
-    ProjectSharedImageStore sharedImageStore(_projectPath);
-    if (!publishedPaths.isEmpty() && !sharedImageStore.publishReferences(publishedPaths, errorMsg))
-    {
-        sharedImageStore.releaseReservations(projectImagePaths);
-        return false;
     }
 
     if (skipped > 0 && errorMsg)
@@ -3292,7 +3284,7 @@ void ProjectData::saveUiSettings(const QJsonObject& settings)
     manager.setData(state.value(QStringLiteral("display_settings")).toObject());
     manager.applyPatch(settings);
     state[QStringLiteral("display_settings")] = manager.data();
-    if (normalizedProjectUiState(state) == normalizedProjectUiState(_projectUiState))
+    if (state == _projectUiState)
     {
         return;
     }

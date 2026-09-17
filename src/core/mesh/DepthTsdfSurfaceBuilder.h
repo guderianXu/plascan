@@ -366,8 +366,6 @@ namespace xjw::mesh
         float maximumSimplificationBoundaryEdgeGrowthRatio = 0.10f;
         int workerCount = 0;
         std::uint64_t availableMemoryBytes = 0;
-        std::function<bool()> isCancelled;
-        std::function<void(const QString&, int)> progress;
         std::function<void(const QString&, const TriMesh&)> stageSnapshot;
         xjw::task_runtime::WorkflowControl execution;
     };

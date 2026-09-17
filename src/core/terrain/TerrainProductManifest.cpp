@@ -74,10 +74,10 @@ QJsonObject TerrainProductRecord::toJson() const
     object.insert(QStringLiteral("grid_width"), gridWidth);
     object.insert(QStringLiteral("grid_height"), gridHeight);
 
-    // GUI compatibility aliases consumed by project metadata views and older project archives.
-    insertIfNotEmpty(&object, QStringLiteral("dem_tif"), demPath);
-    insertIfNotEmpty(&object, QStringLiteral("dom_png"), domPath);
-    insertIfNotEmpty(&object, QStringLiteral("depth_png"), previewPath);
+    object.remove(QStringLiteral("dem_tif"));
+    object.remove(QStringLiteral("dom_png"));
+    object.remove(QStringLiteral("depth_png"));
+    object.remove(QStringLiteral("depth_preview_png"));
     return object;
 }
 
@@ -102,18 +102,6 @@ TerrainProductRecord TerrainProductRecord::fromJson(const QJsonObject &object)
     record.gridWidth = object.value(QStringLiteral("grid_width")).toInt(0);
     record.gridHeight = object.value(QStringLiteral("grid_height")).toInt(0);
 
-    if (record.demPath.isEmpty())
-    {
-        record.demPath = jsonString(object, QStringLiteral("dem_tif"));
-    }
-    if (record.domPath.isEmpty())
-    {
-        record.domPath = jsonString(object, QStringLiteral("dom_png"));
-    }
-    if (record.previewPath.isEmpty())
-    {
-        record.previewPath = jsonString(object, QStringLiteral("depth_png"));
-    }
     return record;
 }
 
@@ -142,11 +130,33 @@ bool TerrainProductManifest::load(const QString &path, QString *errorMsg)
         return false;
     }
 
-    const QJsonArray records = document.object().value(QStringLiteral("products")).toArray();
+    const QJsonObject root = document.object();
+    if (root.value(QStringLiteral("schema")).toString() != QStringLiteral("plascan.terrain.products.v1") ||
+        !root.value(QStringLiteral("products")).isArray())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("地形成果清单格式无效: %1").arg(path);
+        }
+        return false;
+    }
+    const QJsonArray records = root.value(QStringLiteral("products")).toArray();
     _records.reserve(records.size());
     for (const QJsonValue &value : records)
     {
-        if (value.isObject())
+        const QJsonObject object = value.toObject();
+        if (!value.isObject() || object.contains(QStringLiteral("dem_tif")) ||
+            object.contains(QStringLiteral("dom_png")) || object.contains(QStringLiteral("depth_png")) ||
+            object.contains(QStringLiteral("depth_preview_png")))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("地形成果包含旧字段别名或无效记录，请重新生成成果: %1").arg(path);
+            }
+            clear();
+            return false;
+        }
+        else
         {
             _records.push_back(TerrainProductRecord::fromJson(value.toObject()));
         }

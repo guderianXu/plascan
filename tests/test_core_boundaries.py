@@ -44,6 +44,33 @@ class CoreBoundaryTest(unittest.TestCase):
         self.assertNotIn("std::function<void(const QString&, int)> progress;", model_request)
         self.assertEqual(4, model_request.count("WorkflowControl execution;"))
 
+    def test_removed_ba_solver_aliases_and_options_cannot_return(self):
+        types = (ROOT / "src/core/bundle_adjust/BundleAdjustTypes.h").read_text(encoding="utf-8")
+        self.assertNotIn("LegacyCpu", types)
+        options = (ROOT / "src/core/bundle_adjust/BundleAdjustOptions.h").read_text(encoding="utf-8")
+        for field in ("maxPointIterations", "maxCameraIterations", "huberDelta", "finiteDiffEps",
+                      "damping", "stepTolerance", "maxDenseSchurCameras", "compareAutoBackendWithLegacy",
+                      "kLegacyMinPlaMatrixGpuCameras", "kLegacyMinPlaMatrixGpuObservations"):
+            self.assertNotIn(field, BOUNDARIES._sanitize_cpp(options, remove_literals=True))
+        for path in ("src/cli/reconstruction/cli_bundle_adjust.cpp",
+                     "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp",
+                     "scripts/bench/run_ba_backend_benchmark.py"):
+            self.assertNotIn("legacy_cpu", (ROOT / path).read_text(encoding="utf-8"), path)
+        driver = (ROOT / "src/core/bundle_adjust/BundleAdjust.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("comparedWithLegacy", driver)
+        self.assertNotIn("runLegacy", driver)
+
+    def test_tsdf_only_accepts_the_shared_execution_control(self):
+        header = (ROOT / "src/core/mesh/DepthTsdfSurfaceBuilder.h").read_text(encoding="utf-8")
+        self.assertIn("WorkflowControl execution;", header)
+        self.assertNotIn("std::function<bool()> isCancelled;", header)
+        self.assertNotIn("std::function<void(const QString&, int)> progress;", header)
+        control = (ROOT / "src/core/task_runtime/WorkflowExecution.h").read_text(encoding="utf-8")
+        self.assertNotIn("combineWorkflowCancellation", control)
+        entry = (ROOT / "src/core/mesh/DepthTsdfSurfaceBuilder.cpp").read_text(encoding="utf-8")
+        self.assertIn("options.execution.isCancelled()", entry)
+        self.assertNotIn("options.isCancelled", entry)
+
     def test_synchronous_workflows_have_no_async_adapter_dependency(self):
         dependencies = {}
         for relative_path in ("src/core/mvs/CMakeLists.txt", "src/core/mesh/CMakeLists.txt"):

@@ -649,7 +649,7 @@ namespace
         block.coreImageIds = {0, 1};
         block.overlapImageIds = {2};
         BAOptions options;
-        options.backend = BABackend::LegacyCpu;
+        options.backend = BABackend::PlaMatrixCpu;
         options.refineCameraPose = true;
         options.maxIterations = 2;
         const hierarchical_ba_detail::BlockOutcome outcome =
@@ -1057,8 +1057,6 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     opts.filterMaxReprojError = 5.0;
     opts.filterMinTriAngle = 0.1;
     opts.baOptions.maxIterations = 6;
-    opts.baOptions.maxPointIterations = 6;
-    opts.baOptions.maxCameraIterations = 6;
     opts.baOptions.filterMaxReprojError = 5.0;
 
     const std::vector<FramePinholeCamera> trueCameras = {
@@ -1574,36 +1572,6 @@ TEST_F(BAFilterTest, SingleCamera)
     EXPECT_EQ(result.totalTracks, 1);
 }
 
-// 6. Huber 损失参数敏感性
-TEST_F(BAFilterTest, HuberDeltaSensitivity)
-{
-    auto scene = buildScene(40, 8, 789);
-
-    // 小 huber delta → 更鲁棒
-    BAOptions optsSmall;
-    optsSmall.huberDelta = 1.0;
-    optsSmall.enablePointFilter = true;
-    optsSmall.filterMaxReprojError = 2.5;
-    optsSmall.maxIterations = 5;
-    auto resultSmall = BundleAdjust::optimizePoints(scene.cameras, scene.tracks, optsSmall);
-
-    // 大 huber delta → 更不鲁棒（接近 L²）
-    BAOptions optsLarge;
-    optsLarge.huberDelta = 50.0;
-    optsLarge.enablePointFilter = true;
-    optsLarge.filterMaxReprojError = 2.5;
-    optsLarge.maxIterations = 5;
-    auto resultLarge = BundleAdjust::optimizePoints(scene.cameras, scene.tracks, optsLarge);
-
-    // 两者都不应崩溃
-    EXPECT_GT(resultSmall.totalTracks, 0);
-    EXPECT_GT(resultLarge.totalTracks, 0);
-
-    // 小 huber delta 应该更好地处理离群点
-    EXPECT_LE(resultSmall.meanRmsAfter, resultLarge.meanRmsAfter * 2.0 + 0.5)
-        << "Smaller Huber delta should provide comparable or better RMS with outliers";
-}
-
 TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
 {
     const std::vector<FramePinholeCamera> cameras = {
@@ -1632,9 +1600,7 @@ TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
     BAOptions options;
     options.refineCameraPose = false;
     options.enablePointFilter = false;
-    options.huberDelta = 1000.0;
     options.maxIterations = 8;
-    options.maxPointIterations = 20;
 
     const BAResult equalResult = BundleAdjust::optimizePoints(cameras, {equalWeightTrack}, options);
     const BAResult weightedResult = BundleAdjust::optimizePoints(cameras, {weightedTrack}, options);

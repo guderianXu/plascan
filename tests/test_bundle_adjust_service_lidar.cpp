@@ -318,7 +318,6 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     options.baOpt.scaleBarHuberDeltaMeters = 10.0;
     options.baOpt.scaleBarConstraints.push_back(constraint);
     options.baOpt.maxIterations = 8;
-    options.baOpt.maxPointIterations = 20;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 

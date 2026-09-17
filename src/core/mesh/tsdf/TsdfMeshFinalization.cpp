@@ -212,9 +212,10 @@ namespace xjw::mesh::tsdf_detail
             options.enableDepthCompletenessDiagnostics && !completeness_topology_safe;
         if (options.enableDepthCompletenessDiagnostics && completeness_topology_safe)
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(QStringLiteral("正在检查各视角模型完整性..."), 99);
+                options.execution.reportProgress((QStringLiteral("正在检查各视角模型完整性...")).toUtf8().toStdString(),
+                                                 (99) / 100.0);
             }
             DepthMeshCompletenessOptions completeness_options;
             completeness_options.maximumDepthSamplesPerFrame = options.depthCompletenessMaximumSamplesPerFrame;
@@ -310,9 +311,11 @@ namespace xjw::mesh::tsdf_detail
                 return false;
             }
         }
-        else if (result.statistics.depthCompletenessSkippedUnsafeTopology && options.progress)
+        else if (result.statistics.depthCompletenessSkippedUnsafeTopology && options.execution.progress)
         {
-            options.progress(QStringLiteral("模型拓扑未通过安全前置检查，跳过深度完整性索引构建"), 99);
+            options.execution.reportProgress(
+                (QStringLiteral("模型拓扑未通过安全前置检查，跳过深度完整性索引构建")).toUtf8().toStdString(),
+                (99) / 100.0);
         }
         if (options.visibilityOccupancyCellBoundaryExtraction && !native_carrier_field.empty())
         {
@@ -344,9 +347,10 @@ namespace xjw::mesh::tsdf_detail
 
         result.ok = true;
         result.errorMessage.clear();
-        if (options.progress)
+        if (options.execution.progress)
         {
-            options.progress(QStringLiteral("TSDF 表面重建完成"), 100);
+            options.execution.reportProgress((QStringLiteral("TSDF 表面重建完成")).toUtf8().toStdString(),
+                                             (100) / 100.0);
         }
         return true;
     }

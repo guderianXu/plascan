@@ -69,7 +69,7 @@ namespace xjw::mesh::tsdf_detail
             if (result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction)
             {
                 VisibilityOccupancyBoundaryOptions extraction_options;
-                extraction_options.isCancelled = options.isCancelled;
+                extraction_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
                 VisibilityOccupancyBoundaryResult extraction =
                     VisibilityOccupancyBoundaryExtractor::extract(native_carrier_bounds_min,
                                                                   native_carrier_bounds_max,
@@ -117,7 +117,7 @@ namespace xjw::mesh::tsdf_detail
                 Mc33IsoSurfaceOptions extraction_options;
                 extraction_options.isoLevel = 0.0f;
                 extraction_options.requireSupportedSignChange = options.mc33RequireSupportedSignChange;
-                extraction_options.isCancelled = options.isCancelled;
+                extraction_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
                 Mc33IsoSurfaceResult extraction = Mc33IsoSurfaceExtractor::extract(extraction_bounds_min,
                                                                                    extraction_bounds_max,
                                                                                    extraction_cells,
@@ -139,7 +139,7 @@ namespace xjw::mesh::tsdf_detail
             {
                 ConsistentIsoSurfaceOptions extraction_options;
                 extraction_options.isoLevel = 0.0f;
-                extraction_options.isCancelled = options.isCancelled;
+                extraction_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
                 ConsistentIsoSurfaceResult extraction = ConsistentIsoSurfaceExtractor::extract(extraction_bounds_min,
                                                                                                extraction_bounds_max,
                                                                                                extraction_cells,
@@ -221,7 +221,7 @@ namespace xjw::mesh::tsdf_detail
                                                 options.enableMc33IsoSurfaceExtraction,
                                                 options.mc33RequireSupportedSignChange,
                                                 options.enableConsistentIsoSurfaceExtraction,
-                                                options.isCancelled);
+                                                [control = options.execution]() { return control.isCancelled(); });
                 if (!baseline_extraction.ok || baseline_extraction.mesh.empty())
                 {
                     result.errorMessage = QStringLiteral("TSDF visual-hull topology guard could not extract the "

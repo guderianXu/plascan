@@ -298,10 +298,7 @@ TEST(BundleAdjustPlaMatrixBackendTest, SolvesFixedIntrinsicsJointProblem)
     base_options.fixedCameraIndices = {0, 1};
     base_options.gaugePolicy = xjw::BAGaugePolicy::RequireExplicitGauge;
     base_options.enablePointFilter = false;
-    base_options.huberDelta = 3.0;
     base_options.maxIterations = 40;
-    base_options.stepTolerance = 1e-9;
-    base_options.maxDenseSchurCameras = 1;
     base_options.allowBackendFallback = false;
     xjw::BAOptions plamatrix_options = base_options;
     plamatrix_options.backend = xjw::BABackend::PlaMatrixCpu;

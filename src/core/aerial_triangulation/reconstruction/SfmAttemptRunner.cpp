@@ -239,7 +239,6 @@ namespace xjw::aerial_triangulation
                 options->baOptions.enableBackendQualityGate = true;
                 options->baOptions.maxAcceptedRmsGrowth = 1.25;
                 options->baOptions.minAcceptedValidTrackRatio = 0.60;
-                options->baOptions.compareAutoBackendWithLegacy = false;
                 options->baOptions.allowBackendFallback = true;
             }
 

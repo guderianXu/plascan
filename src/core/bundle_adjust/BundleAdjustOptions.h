@@ -25,13 +25,9 @@ namespace xjw
         static constexpr int kDefaultMinPlaMatrixDenseCameras = 120;
         static constexpr int kDefaultMinPlaMatrixCudaDenseObservations = 150000;
         static constexpr int kDefaultMinPlaMatrixOpenClDenseObservations = 200000;
-        static constexpr int kLegacyMinPlaMatrixGpuCameras = 24;
-        static constexpr int kLegacyMinPlaMatrixGpuObservations = 30000;
 
         BABackend backend = BABackend::PlaMatrixCpu; ///< CPU 默认使用参考兼容的联合 Schur BA
         int maxIterations = 20;      ///< 联合非线性求解最大迭代数；参考 SfM 按阶段覆盖为 20 或 10
-        int maxPointIterations = 12; ///< 每轮内点位置优化的最大迭代次数
-        int maxCameraIterations = 10; ///< 每轮内相机位姿优化的最大迭代次数
         bool refineCameraPose = true; ///< 是否同时优化相机位姿（false 则仅优化三维点）
 
         // ── 内参自标定 ────────────────────────────────────────────────────────
@@ -93,10 +89,6 @@ namespace xjw
         /// 更新求解初值，同时继续相对同一参考设置焦距/宽高比范围、主点偏移和弱先验；
         /// Brown-Conrady 畸变硬边界仍是绝对范围。
         std::vector<FramePinholeCamera> sharedIntrinsicReferenceCameras;
-        double huberDelta = 3.0;     ///< 兼容字段；统一参考 BA 的影像残差固定使用普通最小二乘
-        double finiteDiffEps = 1e-6; ///< 有限差分步长（中央差分: ±eps），用于近似雅可比
-        double damping = 1e-3;       ///< 旧 LM 工程字段；参考 BA 固定从零阻尼开始
-        double stepTolerance = 1e-8; ///< 旧 LM 工程字段；参考 BA 固定使用 1e-6 RMS 更新阈值
 
         // ── 参考 BA 数值策略 ──────────────────────────────────────────────────
         /// PlaMatrix CPU/CUDA/OpenCL 统一使用“对齐照片”兼容策略：尺度白化、
@@ -195,23 +187,18 @@ namespace xjw
         /// 联合问题装配前允许的初始 track 重投影 RMS 上限（像素）；<=0 表示关闭。
         /// 该门控仅剔除会让联合试探步进入硬正深度惩罚的 gross outlier。
         double maxInitialTrackRms = 100.0;
-        /// 旧 CPU 自动切换阈值；保留工程兼容，参考 CPU 固定使用直接 Cholesky。
-        int maxDenseSchurCameras = 200;
         /// CUDA/OpenCL Schur PCG 的连续相机块 cluster-Jacobi 大小；1 使用 block-Jacobi。
         int plaMatrixPreconditionerClusterSize = 1;
         /// 请求加速后端不可用或求解失败时是否允许回退到语义等价的 CPU 后端。
         bool allowBackendFallback = true;
         /// Auto 后端是否启用质量门控；显式指定后端时不自动替用户回退质量。
         bool enableBackendQualityGate = true;
-        /// Auto 候选后端允许的最大 RMS 增长倍率；超过则回退 legacy。
+        /// Auto 候选后端允许的最大 RMS 增长倍率；超过则尝试当前 PlaMatrix CPU 后端。
         double maxAcceptedRmsGrowth = 1.25;
-        /// Auto 候选后端最少有效 track 比例；低于该比例则回退 legacy。
+        /// Auto 候选后端最少有效 track 比例；低于该比例则尝试当前 PlaMatrix CPU 后端。
         double minAcceptedValidTrackRatio = 0.60;
         /// LiDAR/GCP/比例尺等物方约束允许的最大 RMS 增长倍率。
         double maxAcceptedConstraintRmsGrowth = 1.25;
-        /// Auto 候选为加速后端时是否额外运行一次 legacy 对照。
-        /// 默认关闭，避免每轮 BA 执行两套完整求解；基准测试或诊断时可显式开启。
-        bool compareAutoBackendWithLegacy = false;
 
         // ── 任务控制 ──────────────────────────────────────────────────────────
         /// 外部取消标志；GUI/CLI 长任务可在外层迭代边界中止 BA。

@@ -166,7 +166,7 @@ def write_terrain_fixture(root: Path) -> tuple[Path, Path]:
             "dense": {"refined_point_cloud": str(dense)},
             "model": {"model_ply": str(truth / "terrain.ply")},
             "terrain": {
-                "dem": {"dem_tif": str(candidate_dem)},
+                "dem": {"dem_path": str(candidate_dem)},
                 "dom": {"output_path": str(dom)},
             },
             "timings": {"total_elapsed_ms": 100.0},

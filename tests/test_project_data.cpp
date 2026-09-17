@@ -746,58 +746,30 @@ TEST(ProjectDataTest, WorkspaceOnlySettingsAreIndexedInSplitProject)
               QStringLiteral("high"));
 }
 
-TEST(ProjectDataTest, EmbeddedUiConfigDoesNotOverrideProjectUiState)
+TEST(ProjectDataTest, RejectsEmbeddedOldUiConfigWithoutRewritingProject)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-
     const QString projectPath = tempProjectPath(dir);
     {
         ProjectData created;
         ASSERT_TRUE(created.createProject(projectPath, QStringLiteral("strict-ui-separation")));
         created.closeProject();
     }
-
     QString error;
-    {
-        PlascanArchive archive(defaultChunkArchivePath(projectPath), PlascanArchivePathType::DirectArchive);
-        ASSERT_TRUE(archive.isValid());
-        QJsonObject workflowConfig{
-            {QStringLiteral("project_name"), QStringLiteral("strict-ui")},
-            {QStringLiteral("ui"),
-             QJsonObject{{QStringLiteral("show_interest_points"), false},
-                         {QStringLiteral("feature_display"), QJsonObject{{QStringLiteral("pointSize"), 5}}}}}};
-        QJsonObject document = QJsonDocument::fromJson(archive.readEntry(QStringLiteral("doc.json"))).object();
-        document[QString::fromLatin1(PortableProjectFormat::ProjectConfigSection)] = workflowConfig;
-        ASSERT_TRUE(archive.writeEntry(
-            QStringLiteral("doc.json"), QJsonDocument(document).toJson(QJsonDocument::Compact), &error))
-            << qPrintable(error);
-    }
-
+    QJsonObject oldConfig = chunkSection(projectPath, PortableProjectFormat::ProjectConfigSection);
+    oldConfig[QStringLiteral("ui")] = QJsonObject{{QStringLiteral("show_interest_points"), false}};
+    ProjectChunkStore store(projectPath);
+    ASSERT_TRUE(store.writeChunkSections(
+        1, {{QString::fromLatin1(PortableProjectFormat::ProjectConfigSection), oldConfig}}, &error))
+        << qPrintable(error);
     ProjectData project;
-    ASSERT_TRUE(project.openProject(projectPath, &error)) << qPrintable(error);
-    EXPECT_TRUE(project.loadUiSettings().value(QStringLiteral("show_interest_points")).toBool());
-    EXPECT_EQ(project.loadUiSettings()
-                  .value(QStringLiteral("feature_display"))
-                  .toObject()
-                  .value(QStringLiteral("pointSize"))
-                  .toInt(),
-              1);
-    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
-
-    const QJsonObject savedConfig = chunkSection(projectPath, PortableProjectFormat::ProjectConfigSection);
-    EXPECT_FALSE(savedConfig.contains(QStringLiteral("ui")));
-    const QJsonObject savedUi = projectDocument(projectPath)
-                                    .value(QString::fromLatin1(PortableProjectFormat::ProjectUiStateSection))
-                                    .toObject()
-                                    .value(QStringLiteral("display_settings"))
-                                    .toObject();
-    EXPECT_TRUE(savedUi.value(QStringLiteral("show_interest_points")).toBool());
-    EXPECT_EQ(savedUi.value(QStringLiteral("feature_display")).toObject().value(QStringLiteral("pointSize")).toInt(),
-              1);
+    EXPECT_FALSE(project.openProject(projectPath, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("ui"))) << qPrintable(error);
+    EXPECT_EQ(chunkSection(projectPath, PortableProjectFormat::ProjectConfigSection), oldConfig);
 }
 
-TEST(ProjectDataTest, CommitsPreparedSharedImagesWithoutRepeatingImageIo)
+TEST(ProjectDataTest, CommitsValidatedExternalImagesAndSkipsDuplicates)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -806,17 +778,16 @@ TEST(ProjectDataTest, CommitsPreparedSharedImagesWithoutRepeatingImageIo)
     ProjectData project;
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("prepared-images")));
 
-    const QString preparedImage =
-        QDir(ProjectPackageLayout::sharedImagesDirectory(projectPath)).filePath(QStringLiteral("hash/prepared.png"));
+    const QString preparedImage = QDir(dir.path()).filePath(QStringLiteral("prepared.png"));
     writeTestFile(preparedImage, QByteArray("already-copied-image"));
 
     QString message;
-    ASSERT_TRUE(project.addImagesFromSharedStore({preparedImage, preparedImage}, 3, &message));
+    ASSERT_TRUE(project.addValidatedExternalImages({preparedImage, preparedImage}, 3, &message));
     EXPECT_EQ(project.getAllImages(), QStringList{QDir::cleanPath(preparedImage)});
     EXPECT_EQ(message, QStringLiteral("已跳过 4 张重复图片"));
 
     const QJsonObject entry = project.coreFilesMeta().value(QStringLiteral("images")).toArray().first().toObject();
-    EXPECT_EQ(entry.value(QStringLiteral("type")).toString(), QStringLiteral("shared"));
+    EXPECT_EQ(entry.value(QStringLiteral("type")).toString(), QStringLiteral("external"));
     EXPECT_FALSE(entry.value(QStringLiteral("image_uuid")).toString().isEmpty());
 }
 
@@ -935,7 +906,10 @@ TEST(ProjectDataTest, SharedImageLeaseSurvivesOldSnapshotAndGcNeedsTwoGeneration
     EXPECT_FALSE(competingProcessLock.tryLock(0)) << "active reservation 必须跨进程持有共享影像同步锁";
 
     QString error;
-    ASSERT_TRUE(project.addImagesFromSharedStore({imported.materializedPath}, 0, &error)) << qPrintable(error);
+    EXPECT_FALSE(project.addValidatedExternalImages({imported.materializedPath}, 0, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("旧共享")));
+    EXPECT_TRUE(project.getAllImages().isEmpty());
+    ProjectSharedImageStore(projectPath).releaseReservations({imported.materializedPath});
     ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
     ASSERT_TRUE(QFileInfo(imported.materializedPath).isFile());
     QLockFile afterCommitLock(sharedImageLockPath);
@@ -943,8 +917,6 @@ TEST(ProjectDataTest, SharedImageLeaseSurvivesOldSnapshotAndGcNeedsTwoGeneration
     ASSERT_TRUE(afterCommitLock.tryLock(0)) << "包含 URI 的归档提交后应释放跨进程 lease";
     afterCommitLock.unlock();
 
-    ASSERT_TRUE(project.removeResource(imported.materializedPath));
-    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
     EXPECT_TRUE(QFileInfo(imported.materializedPath).isFile()) << "第一个未引用代次只能写入 tombstone";
 
     // 同一个 Chunk id+revision token 反复 GC 不构成新的已提交代次。
@@ -1742,7 +1714,7 @@ TEST(ProjectDataTest, AssignsStableUuidToImportedImages)
     EXPECT_EQ(reopenedImages[0].toObject().value(QStringLiteral("image_uuid")).toString(), firstId);
 }
 
-TEST(ProjectDataTest, OpeningLegacyImagesAssignsUuidWithoutDirtyingProject)
+TEST(ProjectDataTest, OpeningLegacyImagesRejectsMissingUuidWithoutRewritingArchive)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -1772,11 +1744,38 @@ TEST(ProjectDataTest, OpeningLegacyImagesAssignsUuidWithoutDirtyingProject)
         << qPrintable(error);
 
     ProjectData reopened;
-    ASSERT_TRUE(reopened.openProject(projectPath, &error)) << qPrintable(error);
-    EXPECT_FALSE(reopened.isDirty());
-    const QJsonArray migratedImages = reopened.coreFilesMeta().value(QStringLiteral("images")).toArray();
-    ASSERT_EQ(migratedImages.size(), 1);
-    EXPECT_FALSE(migratedImages[0].toObject().value(QStringLiteral("image_uuid")).toString().isEmpty());
+    EXPECT_FALSE(reopened.openProject(projectPath, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("image_uuid"))) << qPrintable(error);
+    EXPECT_EQ(chunkSection(projectPath, PortableProjectFormat::ProjectFilesSection), legacyCore);
+}
+
+TEST(ProjectDataTest, RejectsInvalidInjectedSnapshotsWithoutClosingActiveProject)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("snapshot-validation")));
+    QString error;
+    auto snapshot = ProjectData::loadProjectOpenSnapshot(projectPath);
+    ASSERT_TRUE(snapshot.success) << qPrintable(snapshot.errorMessage);
+    const auto validConfig = snapshot.configMeta;
+    for (const auto& field : {"camera_model_policy", "workflow"})
+    {
+        snapshot.configMeta = validConfig;
+        snapshot.configMeta.remove(QString::fromLatin1(field));
+        EXPECT_FALSE(project.openProjectFromSnapshot(snapshot, &error));
+        EXPECT_FALSE(error.isEmpty());
+        EXPECT_EQ(project.currentProjectPath(), projectPath);
+    }
+    auto results = ProjectData::loadProjectResultsSnapshot(projectPath);
+    ASSERT_TRUE(results.success) << qPrintable(results.errorMessage);
+    results.hasResults = true;
+    results.resultsMeta =
+        QJsonObject{{QStringLiteral("dem_results"),
+                     QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("old.tif")}}}}};
+    EXPECT_FALSE(project.applyResultsSnapshot(results, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("dem_tif"))) << qPrintable(error);
 }
 
 TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSolution)
@@ -1849,7 +1848,7 @@ TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
     meta[QStringLiteral("model_results")] =
         singleRecord(QStringLiteral("model"), QStringLiteral("model_ply"), QStringLiteral("/tmp/model.ply"));
     meta[QStringLiteral("dem_results")] =
-        singleRecord(QStringLiteral("dem"), QStringLiteral("dem_tif"), QStringLiteral("/tmp/dem.tif"));
+        singleRecord(QStringLiteral("dem"), QStringLiteral("dem_path"), QStringLiteral("/tmp/dem.tif"));
     meta[QStringLiteral("ortho_results")] =
         singleRecord(QStringLiteral("ortho"), QStringLiteral("output_path"), QStringLiteral("/tmp/ortho.tif"));
 
@@ -1883,7 +1882,7 @@ TEST(ProjectDataTest, UpdateMetadataPersistsResultsWithoutPriorFullMetadataLoad)
 
     QJsonObject meta = project.coreFilesMeta();
     meta[QStringLiteral("dem_results")] =
-        singleRecord(QStringLiteral("dem"), QStringLiteral("dem_tif"), QStringLiteral("/tmp/dem_from_update.tif"));
+        singleRecord(QStringLiteral("dem"), QStringLiteral("dem_path"), QStringLiteral("/tmp/dem_from_update.tif"));
 
     project.updateMetadata(meta, true);
     QString error;
@@ -1911,7 +1910,7 @@ TEST(ProjectDataTest, FullMetadataMutationPreservesLazilyArchivedModelAndOtherRe
             QJsonArray{QJsonObject{{QStringLiteral("model_run_id"), QStringLiteral("existing-model")},
                                    {QStringLiteral("model_ply"), QStringLiteral("/tmp/existing-model.ply")}}};
         metadata[QStringLiteral("dem_results")] = singleRecord(
-            QStringLiteral("existing-dem"), QStringLiteral("dem_tif"), QStringLiteral("/tmp/existing-dem.tif"));
+            QStringLiteral("existing-dem"), QStringLiteral("dem_path"), QStringLiteral("/tmp/existing-dem.tif"));
         project.updateMetadata(metadata, true);
         QString error;
         ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);

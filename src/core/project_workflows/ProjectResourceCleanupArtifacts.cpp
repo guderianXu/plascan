@@ -431,7 +431,7 @@ QString cleanupPrimaryPath(const QString &section,
     }
     else if (section == QStringLiteral("DEM"))
     {
-        path = record.value(QStringLiteral("dem_tif")).toString();
+        path = record.value(QStringLiteral("dem_path")).toString();
     }
     else if (section == QStringLiteral("正射影像"))
     {
@@ -539,10 +539,7 @@ CleanupRecordArtifacts collectCleanupRecordArtifacts(
     else if (section == QStringLiteral("DEM"))
     {
         appendUniqueCleanupPath(
-            &artifacts.files,
-            normalizedCleanupPath(
-                projectRoot,
-                record.value(QStringLiteral("dem_tif")).toString()));
+            &artifacts.files, normalizedCleanupPath(projectRoot, record.value(QStringLiteral("dem_path")).toString()));
         collectDirectoryCandidate(&artifacts,
                                   record,
                                   projectRoot,

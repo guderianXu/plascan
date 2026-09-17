@@ -5,11 +5,55 @@
 #include <QDir>
 #include <QJsonArray>
 #include <QTemporaryDir>
+#include <QUuid>
 
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
 using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectResourceRef;
+
+TEST(PortableProjectFormatTest, RejectsMissingDuplicateAndSharedImageIdentity)
+{
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QJsonObject image{{QStringLiteral("image_uuid"), id},
+                      {QStringLiteral("path"), QStringLiteral("/dataset/frame.tif")},
+                      {QStringLiteral("type"), QStringLiteral("external")}};
+    const auto validate = [](const QJsonArray& images)
+    {
+        return PortableProjectFormat::validateCurrentImages(QJsonObject{{QStringLiteral("images"), images}},
+                                                            QStringLiteral("/project/test.plascan"));
+    };
+    EXPECT_TRUE(validate(QJsonArray{image}));
+    EXPECT_FALSE(validate(QJsonArray{image, image}));
+    image[QStringLiteral("image_uuid")] = QStringLiteral("not-a-uuid");
+    EXPECT_FALSE(validate(QJsonArray{image}));
+    image.remove(QStringLiteral("image_uuid"));
+    EXPECT_FALSE(validate(QJsonArray{image}));
+    image[QStringLiteral("image_uuid")] = id;
+    image[QStringLiteral("type")] = QStringLiteral("shared");
+    EXPECT_FALSE(validate(QJsonArray{image}));
+    image[QStringLiteral("type")] = QStringLiteral("external");
+    image[QStringLiteral("path")] = QStringLiteral("plascan:///shared/images/hash/frame.tif");
+    EXPECT_FALSE(validate(QJsonArray{image}));
+    image[QStringLiteral("type")] = QStringLiteral("packaged");
+    EXPECT_TRUE(validate(QJsonArray{image}));
+}
+
+TEST(PortableProjectFormatTest, RejectsTerrainAliasesButKeepsMvsDepthArtifact)
+{
+    const auto validate = [](const QString& key, const QJsonObject& record)
+    { return PortableProjectFormat::validateCurrentResults(QJsonObject{{key, QJsonArray{record}}}); };
+    for (const auto& alias : {"dem_tif", "dom_png", "depth_png", "depth_preview_png"})
+    {
+        EXPECT_FALSE(validate(QStringLiteral("dem_results"),
+                              QJsonObject{{QString::fromLatin1(alias), QStringLiteral("old.tif")}}));
+    }
+    EXPECT_TRUE(validate(QStringLiteral("dem_results"),
+                         QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("dem.tif")},
+                                     {QStringLiteral("preview_path"), QStringLiteral("preview.png")}}));
+    EXPECT_TRUE(validate(QStringLiteral("depth_results"),
+                         QJsonObject{{QStringLiteral("depth_png"), QStringLiteral("depth.png")}}));
+}
 
 TEST(PortableProjectFormatTest, CreatesLayeredProjectAndChunkDocuments)
 {

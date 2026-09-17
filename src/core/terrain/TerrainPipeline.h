@@ -100,8 +100,9 @@ public:
      * DOM：三角光栅化 + 重心坐标 UV 插值，采样 MTL 引用的 PNG 纹理。
      *
      * 输出 result 键：
-     *   dem_tif, depth_png, dom_png (无纹理时为空), has_texture,
-     *   grid_width, grid_height, source_obj, created_at
+     *   dem_path, preview_path, dom_path (无纹理时为空), has_texture,
+     *   grid_width, grid_height,
+     * source_obj, created_at
      */
     static bool generateFromObjMtl(const QString &objPath,
                                    const QString &outputDir,
@@ -117,7 +118,7 @@ public:
      * 适用于摄影测量分块重建的多瓦片结果。
      *
      * 输出 result 键：
-     *   dem_tif, depth_png, dom_png, tile_count,
+     *   dem_path, preview_path, dom_path, tile_count,
      *   grid_width, grid_height, source_dir, created_at
      */
     static bool generateFromObjMtlDir(const QString &dirPath,

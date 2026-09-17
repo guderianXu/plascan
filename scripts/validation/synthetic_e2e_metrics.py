@@ -458,14 +458,14 @@ def pipeline_artifacts(report_path: Path, pipeline: dict[str, Any]) -> dict[str,
                 ("model", "mesh_ply"),
             ),
         ),
-        "dem": resolve_artifact(report_path, nested_value(pipeline, ("terrain", "dem", "dem_tif"))),
+        "dem": resolve_artifact(report_path, nested_value(pipeline, ("terrain", "dem", "dem_path"))),
         "dom": resolve_artifact(
             report_path,
             nested_value(
                 pipeline,
                 ("terrain", "dom", "output_path"),
                 ("terrain", "dom", "dom_tif"),
-                ("terrain", "dom", "dom_png"),
+                ("terrain", "dom", "dom_path"),
             ),
         ),
     }

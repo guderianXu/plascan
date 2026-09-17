@@ -4,9 +4,53 @@
 
 #include <QDir>
 #include <QTemporaryDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonArray>
 
 using xjw::TerrainProductManifest;
 using xjw::TerrainProductRecord;
+
+TEST(TerrainProductManifest, RejectsOldAliasesAndInvalidSchemaWithoutPartialRecords)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = QDir(directory.path()).filePath(QStringLiteral("products.json"));
+    for (const auto& alias : {"dem_tif", "dom_png", "depth_png", "depth_preview_png"})
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QJsonObject root{{QStringLiteral("schema"), QStringLiteral("plascan.terrain.products.v1")},
+                               {QStringLiteral("products"),
+                                QJsonArray{QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("valid.tif")}},
+                                           QJsonObject{{QString::fromLatin1(alias), QStringLiteral("old.tif")}}}}};
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+        TerrainProductManifest manifest;
+        QString error;
+        EXPECT_FALSE(manifest.load(path, &error));
+        EXPECT_FALSE(error.isEmpty());
+        EXPECT_TRUE(manifest.records().isEmpty());
+    }
+    for (const QJsonObject& root :
+         {QJsonObject{{QStringLiteral("schema"), QStringLiteral("legacy")}, {QStringLiteral("products"), QJsonArray{}}},
+          QJsonObject{{QStringLiteral("schema"), QStringLiteral("plascan.terrain.products.v1")},
+                      {QStringLiteral("products"), QJsonArray{42}}}})
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+        TerrainProductManifest manifest;
+        EXPECT_FALSE(manifest.load(path));
+        EXPECT_TRUE(manifest.records().isEmpty());
+    }
+    TerrainProductRecord record;
+    record.demPath = QStringLiteral("dem.tif");
+    record.extra = QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("old.tif")}};
+    EXPECT_FALSE(record.toJson().contains(QStringLiteral("dem_tif")));
+    EXPECT_EQ(record.toJson().value(QStringLiteral("dem_path")).toString(), record.demPath);
+}
 
 namespace
 {

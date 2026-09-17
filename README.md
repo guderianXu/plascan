@@ -17,6 +17,11 @@
 
 ## 快速开始
 
+已有工程不再自动迁移或补字段：缺失/重复影像 UUID、旧配置和地形成果别名会被拒绝。
+请新建工程重新导入原始影像并生成成果；新便携导出包使用 packaged 影像类型。
+地形成果统一使用 dem_path、dom_path、preview_path，详见
+[兼容层清理记录](docs/COMPATIBILITY_CLEANUP.md)。
+
 ### 依赖
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
@@ -567,10 +572,9 @@ GCP/LiDAR/比例尺/位姿/相机平面/激光测距约束。GPU 不可用或求
 PlaMatrix 初始/最终代价、线性化/目标遍历次数、Armijo 接受/拒绝步数、线性求解器、设备名、PCG 迭代、
 Schur 数值装配位置与耗时、混合精度实际使用状态、
 质量门控和回退原因。Auto 后端会优先保证 RMS 和有效
-track 比例；CUDA 候选若比 legacy 明显变差，
-会自动回退而不是强行使用 GPU。
-旧工程仍可传 `--ba-backend legacy_cpu`，但该名称会映射到参考 PlaMatrix CPU，不再执行旧算法；
-联合 BA 可传 `--ba-backend plamatrix_cpu`、
+track 比例；候选未通过状态或质量门控时才回退到当前 PlaMatrix CPU，不额外运行对照 BA。
+旧 `legacy_cpu` 后端名及无效旧求解参数已删除，不再兼容读取。
+联合 BA 可传 `--ba-backend auto`、`--ba-backend plamatrix_cpu`、
 `--ba-backend plamatrix_cuda` 或 `--ba-backend plamatrix_opencl`。
 `--ba-plamatrix-device` 指定 PlaMatrix CUDA/OpenCL 设备索引；OpenCL 进程级选择仍由
 `PLAMATRIX_OPENCL_DEVICE_INDEX` 初始化，二者不一致时明确报错。
@@ -590,7 +594,7 @@ python scripts/bench/run_ba_backend_benchmark.py \
   --out build/ba_benchmarks/ba_backend_benchmark.csv \
   --summary-json build/ba_benchmarks/ba_backend_benchmark.json \
   --cases small,medium,large \
-  --backends legacy_cpu,plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto \
+  --backends plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto \
   --repeat 3 \
   --iterations 8 \
   --threads 32
@@ -598,7 +602,7 @@ python scripts/bench/run_ba_backend_benchmark.py \
 
 也可以直接重放正式 SfM 输出的真实 BA 拓扑。`--dataset-json` 读取
 `sfm_sparse_points.json` 中的三维点和像点观测，`--camera-list` 按顺序加载对应 TSAI 相机；
-真实模式会关闭后端回退、质量门控对照和迭代日志，避免把第二次求解混入计时：
+真实模式会关闭后端回退、质量门控和迭代日志，独立测量指定后端：
 
 ```powershell
 build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
@@ -608,7 +612,7 @@ build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
 ```
 
 参考 PlaMatrix 三后端共享零阻尼起步和 Armijo 回溯；CPU 使用可复用块图最小度符号分析的原生稀疏 Schur Cholesky，CUDA/OpenCL
-仅使用设备 Schur-PCG。旧 `--max-dense-schur-cameras` 保留读取兼容但不再改变正式 BA。输出同时保留
+仅使用设备 Schur-PCG。旧 `--max-dense-schur-cameras` 参数已删除。输出同时保留
 `seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器、PlaMatrix
 接受/拒绝步、代价统计和 RMS。
 

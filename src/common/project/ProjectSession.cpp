@@ -1,6 +1,7 @@
 #include "project/ProjectSession.h"
 
 #include "project/PlascanArchive.h"
+#include "project/ProjectConfigManager.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectChunkStore.h"
 #include "project/ProjectPackageLayout.h"
@@ -107,13 +108,18 @@ namespace xjw::common::project
             cleanup();
             return false;
         }
-        QJsonObject config{
+        QJsonObject config = ProjectConfigManager::defaultConfig();
+        const QJsonObject identity{
             {QStringLiteral("project_name"),
              projectName.trimmed().isEmpty() ? QFileInfo(absolutePath).completeBaseName() : projectName.trimmed()},
             {QStringLiteral("created_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
             {QStringLiteral("version"), QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion)},
             {QStringLiteral("schema_version"), 2},
             {QStringLiteral("project_id"), projectId}};
+        for (auto it = identity.constBegin(); it != identity.constEnd(); ++it)
+        {
+            config.insert(it.key(), it.value());
+        }
         const QJsonObject projectDocument =
             PortableProjectFormat::createProjectDocument(projectId, index, defaultUiState());
         const QJsonObject chunkDocument =
@@ -328,6 +334,10 @@ namespace xjw::common::project
             return false;
         }
 
+        if (!PortableProjectFormat::validateCurrentImages(_projectFiles, _projectPath, errorMessage))
+        {
+            return false;
+        }
         QJsonArray merged = _projectFiles.value(QStringLiteral("images")).toArray();
         QMap<QString, int> existingByPath;
         QSet<QString> usedIds;
@@ -335,15 +345,6 @@ namespace xjw::common::project
         {
             QJsonObject image = merged.at(index).toObject();
             QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-            if (imageId.isEmpty() || usedIds.contains(imageId))
-            {
-                do
-                {
-                    imageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                } while (usedIds.contains(imageId));
-                image[QStringLiteral("image_uuid")] = imageId;
-                merged[index] = image;
-            }
             usedIds.insert(imageId);
             existingByPath.insert(normalizedImagePath(image.value(QStringLiteral("path")).toString()), index);
         }
@@ -397,6 +398,11 @@ namespace xjw::common::project
             merged.append(incoming);
         }
 
+        const QJsonObject candidate{{QStringLiteral("images"), merged}};
+        if (!PortableProjectFormat::validateCurrentImages(candidate, _projectPath, errorMessage))
+        {
+            return false;
+        }
         _projectFiles[QStringLiteral("images")] = merged;
         return true;
     }
@@ -514,6 +520,20 @@ namespace xjw::common::project
         QJsonObject portableFiles = _projectFiles;
         QJsonObject portableResults = _projectResults;
         QJsonObject resourceIndex;
+        if (!PortableProjectFormat::validateCurrentImages(_projectFiles, _projectPath, errorMessage) ||
+            !PortableProjectFormat::validateCurrentResults(_projectResults, errorMessage) ||
+            !ProjectConfigManager::validateCurrentConfig(_projectConfig, errorMessage))
+        {
+            return false;
+        }
+        if (_projectConfig.value(QStringLiteral("project_id")).toString() != _projectId ||
+            _projectConfig.value(QStringLiteral("schema_version")).toInt() != 2 ||
+            _projectConfig.value(QStringLiteral("version")).toString() !=
+                QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion))
+        {
+            setError(errorMessage, QStringLiteral("项目配置身份或版本无效；不再自动升级旧配置。"));
+            return false;
+        }
         ProjectWorkspaceStore workspace(_projectPath, _activeChunk.directory);
         if (!workspace.prepareSplitMetadata(&portableFiles, &portableResults, &resourceIndex, errorMessage))
         {
@@ -565,7 +585,20 @@ namespace xjw::common::project
             chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectResultsSection)).toObject();
         _projectConfig =
             chunkDocument.value(QString::fromLatin1(PortableProjectFormat::ProjectConfigSection)).toObject();
-
+        if (_projectConfig.value(QStringLiteral("project_id")).toString() != _projectId ||
+            _projectConfig.value(QStringLiteral("schema_version")).toInt() != 2 ||
+            _projectConfig.value(QStringLiteral("version")).toString() !=
+                QString::fromLatin1(PortableProjectFormat::CurrentFormatVersion))
+        {
+            setError(errorMessage, QStringLiteral("项目配置身份或版本无效；不再自动升级旧配置。"));
+            return false;
+        }
+        if (!PortableProjectFormat::validateCurrentImages(_projectFiles, _projectPath, errorMessage) ||
+            !PortableProjectFormat::validateCurrentResults(_projectResults, errorMessage) ||
+            !ProjectConfigManager::validateCurrentConfig(_projectConfig, errorMessage))
+        {
+            return false;
+        }
         ProjectWorkspaceStore workspace(_projectPath, _activeChunk.directory);
         if (!workspace.initializeRuntime(&_activeChunkRoot, errorMessage))
         {

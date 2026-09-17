@@ -72,10 +72,6 @@ bool isMvsDepthResult(const QJsonObject &record)
     {
         return true;
     }
-    if (kind == QStringLiteral("legacy_preview"))
-    {
-        return false;
-    }
     return !record.value(QStringLiteral("raw_depth_path")).toString().isEmpty()
         || !record.value(QStringLiteral("ref_image")).toString().isEmpty()
         || !record.value(QStringLiteral("depth_png")).toString().isEmpty();

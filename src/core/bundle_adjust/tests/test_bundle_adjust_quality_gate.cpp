@@ -6,8 +6,10 @@
 #include "FramePinholeCamera.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace
@@ -68,6 +70,26 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesReferenceCpu)
     EXPECT_EQ(xjw::BundleAdjust::selectBackendForProblem(stats, options), xjw::BABackend::PlaMatrixCpu);
 }
 
+TEST(BundleAdjustQualityGateTest, AutoCancellationDoesNotRunFallbackOrRejectQuality)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-1.0, 0.0, 0.0), makeCamera(1.0, 0.0, 0.0)};
+    const auto track = makeTrack(cameras, {{0.0, 0.0, 5.0}}, {{0.1, 0.0, 5.5}});
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.cancelFlag = std::make_shared<std::atomic<bool>>(true);
+
+    const auto result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Cancelled);
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_FALSE(result.backendFallback);
+    EXPECT_FALSE(result.qualityGateRejected);
+    EXPECT_EQ(result.refinedCameras.size(), cameras.size());
+    ASSERT_EQ(result.points.size(), 1u);
+    EXPECT_EQ(result.points.front().point, track.initialPoint);
+}
+
 TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
@@ -119,12 +141,9 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFa
     options.fixedCameraIndices = {0};
     options.enablePointFilter = false;
     options.maxIterations = 1;
-    options.maxPointIterations = 1;
-    options.maxCameraIterations = 1;
     options.minPlaMatrixCudaCameras = 9999;
     options.minPlaMatrixDenseCameras = 9999;
     options.enableBackendQualityGate = true;
-    options.compareAutoBackendWithLegacy = true;
     options.maxAcceptedRmsGrowth = 1e-12;
     options.minAcceptedValidTrackRatio = 1.01;
 
@@ -139,7 +158,7 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFa
     EXPECT_NE(result.qualityGateMessage.find("质量门控"), std::string::npos);
 }
 
-TEST(BundleAdjustConvergenceTest, ExactLegacyProblemStopsAfterMinimumConvergenceRounds)
+TEST(BundleAdjustConvergenceTest, ExactReferenceCpuProblemStopsAfterMinimumConvergenceRounds)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
@@ -158,7 +177,7 @@ TEST(BundleAdjustConvergenceTest, ExactLegacyProblemStopsAfterMinimumConvergence
 
     int reportedIterations = 0;
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.enablePointFilter = false;
     options.maxIterations = 20;
@@ -222,7 +241,7 @@ TEST(BundleAdjustQualityGateTest, JointBaWithoutGaugeConstraintIsRejected)
     const xjw::BATrack track = makeTrack(cameras, point, point);
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = true;
     options.gaugePolicy = xjw::BAGaugePolicy::RequireExplicitGauge;
     options.enablePointFilter = false;
@@ -245,7 +264,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintRegressionIsRejected)
     EXPECT_TRUE(message.empty());
 }
 
-TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
+TEST(BundleAdjustValidationTest, RejectsNonPositiveArmijoCoefficient)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
@@ -254,16 +273,16 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
     const std::array<double, 3> point{{0.0, 0.0, 5.0}};
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
-    options.finiteDiffEps = 0.0;
 
+    options.referenceArmijoCoefficient = 0.0;
     const xjw::BAResult result =
         xjw::BundleAdjust::optimizePoints(cameras, {makeTrack(cameras, point, point)}, options);
 
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
-    EXPECT_NE(result.backendMessage.find("有限差分"), std::string::npos);
+    EXPECT_NE(result.backendMessage.find("Armijo"), std::string::npos);
 }
 
 TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
@@ -291,7 +310,7 @@ TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
     EXPECT_NE(validation.message.find("越界"), std::string::npos);
 }
 
-TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks)
+TEST(BundleAdjustFixedTrackTest, ReferenceCpuKeepsFixedPointWhileOptimizingOtherTracks)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
@@ -306,7 +325,7 @@ TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks
     };
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.fixedTrackIndices = {0};
     options.enablePointFilter = false;
@@ -319,7 +338,7 @@ TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks
     EXPECT_NE(result.points[1].point, free_initial);
 }
 
-TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
+TEST(BundleAdjustValidationTest, RespectsIntrinsicMaskOverRefinementSwitches)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
@@ -461,7 +480,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSi
     rejectedTrack.controlPointConstraints.push_back({{{0.0, 0.0, -8.0}}, 1.0, 1.0, 0});
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.enableControlPointConstraints = true;
     options.enablePointFilter = false;

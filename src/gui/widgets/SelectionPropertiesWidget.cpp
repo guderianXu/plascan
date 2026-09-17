@@ -76,10 +76,10 @@ namespace
                                    QStringLiteral("model_ply"),
                                    QStringLiteral("mesh_ply"),
                                    QStringLiteral("dense_cloud_xyz"),
-                                   QStringLiteral("dem_tif"),
                                    QStringLiteral("output_path"),
                                    QStringLiteral("dom_path"),
                                    QStringLiteral("ortho_tif"),
+                                   QStringLiteral("dem_path"),
                                    QStringLiteral("path")})
         {
             const QString path = record.value(key).toString().trimmed();

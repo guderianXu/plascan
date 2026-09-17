@@ -147,7 +147,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
 
     const int denseCount = countObjectsWithPath(denseResults, {"dense_cloud_xyz", "source_sparse_cloud"});
     const int modelCount = displayableMeshResultCount(modelResults) + _transientModels.size();
-    const int demCount = countObjectsWithPath(demResults, {"dem_tif", "dem_path"});
+    const int demCount = countObjectsWithPath(demResults, {"dem_path"});
     const int orthoCount = countObjectsWithPath(orthoResults, {"output_path"});
     const int reportCount = countObjectsWithPath(reportResults, {"path", "json_path", "report_path"});
     const int referenceCount = countObjectsWithPath(referenceDatasets, {"path", "file_path", "dem_path",
@@ -480,16 +480,13 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     for (const QJsonValue &v : demResults) {
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
-        QString path = obj.value(QStringLiteral("dem_tif")).toString();
-        if (path.isEmpty()) path = obj.value(QStringLiteral("dem_path")).toString();
+        const QString path = obj.value(QStringLiteral("dem_path")).toString();
         if (path.isEmpty()) continue;
         QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
         const QString typ = obj.value(QStringLiteral("dem_type")).toString();
         if (!typ.isEmpty()) name = QStringLiteral("%1  [%2]").arg(name, typ);
         appendItemRow(dem, name, path, QStringLiteral("generated"));
-        QString previewPath = obj.value(QStringLiteral("depth_preview_png")).toString();
-        if (previewPath.isEmpty()) previewPath = obj.value(QStringLiteral("preview_path")).toString();
-        if (previewPath.isEmpty()) previewPath = obj.value(QStringLiteral("depth_png")).toString();
+        const QString previewPath = obj.value(QStringLiteral("preview_path")).toString();
         if (!previewPath.isEmpty())
         {
             QString previewName = QFileInfo(previewPath).fileName().isEmpty()

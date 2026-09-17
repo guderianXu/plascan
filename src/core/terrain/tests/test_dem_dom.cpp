@@ -322,8 +322,8 @@ TEST_F(TerrainDemDomTest, TerrainPipelineWritesDemProductsFromObj)
                                                      &error))
         << error.toStdString();
 
-    EXPECT_TRUE(fs::exists(result.value(QStringLiteral("dem_tif")).toString().toStdString()));
-    EXPECT_TRUE(fs::exists(result.value(QStringLiteral("depth_png")).toString().toStdString()));
+    EXPECT_TRUE(fs::exists(result.value(QStringLiteral("dem_path")).toString().toStdString()));
+    EXPECT_TRUE(fs::exists(result.value(QStringLiteral("preview_path")).toString().toStdString()));
     EXPECT_TRUE(fs::exists(result.value(QStringLiteral("dense_cloud_xyz")).toString().toStdString()));
     EXPECT_GE(result.value(QStringLiteral("face_count")).toInt(), 0);
 }
@@ -575,7 +575,7 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDomFromDemAndImages)
     QJsonObject domResult;
     ASSERT_TRUE(TerrainPipeline::generateOrthoProduct(
         QStringList{QString::fromStdString(imageA.string()), QString::fromStdString(imageB.string())},
-        demResult.value(QStringLiteral("dem_tif")).toString(),
+        demResult.value(QStringLiteral("dem_path")).toString(),
         QString::fromStdString(domPath.string()),
         0.5,
         &domResult,
@@ -744,8 +744,8 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDemDomFromSingleObjMtl)
         << error.toStdString();
 
     // DEM 输出文件必须存在
-    const std::string demTif  = result.value(QStringLiteral("dem_tif")).toString().toStdString();
-    const std::string depthPng = result.value(QStringLiteral("depth_png")).toString().toStdString();
+    const std::string demTif = result.value(QStringLiteral("dem_path")).toString().toStdString();
+    const std::string depthPng = result.value(QStringLiteral("preview_path")).toString().toStdString();
     EXPECT_TRUE(fs::exists(demTif))  << "dem_tif not found: " << demTif;
     EXPECT_TRUE(fs::exists(depthPng)) << "depth_png not found: " << depthPng;
 
@@ -753,7 +753,7 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDemDomFromSingleObjMtl)
     const bool hasTexture = result.value(QStringLiteral("has_texture")).toBool();
     if (hasTexture)
     {
-        const std::string domPng = result.value(QStringLiteral("dom_png")).toString().toStdString();
+        const std::string domPng = result.value(QStringLiteral("dom_path")).toString().toStdString();
         EXPECT_TRUE(fs::exists(domPng)) << "dom_png not found: " << domPng;
     }
 
@@ -779,12 +779,12 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDemDomFromDirectory)
 
     EXPECT_EQ(result.value(QStringLiteral("tile_count")).toInt(), kTiles);
 
-    const std::string demTif  = result.value(QStringLiteral("dem_tif")).toString().toStdString();
-    const std::string depthPng = result.value(QStringLiteral("depth_png")).toString().toStdString();
+    const std::string demTif = result.value(QStringLiteral("dem_path")).toString().toStdString();
+    const std::string depthPng = result.value(QStringLiteral("preview_path")).toString().toStdString();
     EXPECT_TRUE(fs::exists(demTif))  << "dem_tif not found: " << demTif;
     EXPECT_TRUE(fs::exists(depthPng)) << "depth_png not found: " << depthPng;
 
-    const std::string domPng = result.value(QStringLiteral("dom_png")).toString().toStdString();
+    const std::string domPng = result.value(QStringLiteral("dom_path")).toString().toStdString();
     EXPECT_TRUE(fs::exists(domPng)) << "dom_png not found: " << domPng;
 }
 

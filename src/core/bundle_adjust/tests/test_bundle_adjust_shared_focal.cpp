@@ -126,7 +126,7 @@ TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInit
     ASSERT_GE(tracks.size(), 20u);
 
     xjw::BAOptions fixedOptions;
-    fixedOptions.backend = xjw::BABackend::LegacyCpu;
+    fixedOptions.backend = xjw::BABackend::PlaMatrixCpu;
     fixedOptions.refineCameraPose = false;
     fixedOptions.enablePointFilter = false;
     fixedOptions.enableControlPointConstraints = true;
@@ -567,7 +567,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
     EXPECT_EQ(result.selfCalibrationStagesRun, 1);
 }
 
-TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
+TEST(BundleAdjustSharedFocalTest, ReferenceCpuRespectsDisabledFocalParameterMask)
 {
     const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
@@ -583,7 +583,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
     };
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.useSharedIntrinsicParameterMask = true;
@@ -606,7 +606,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
+TEST(BundleAdjustSharedFocalTest, ReferenceCpuProjectsWarmStartIntoStableFocalBounds)
 {
     const std::vector<xjw::FramePinholeCamera> referenceCameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
@@ -621,7 +621,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
     }
 
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.refineCameraPose = false;
     options.refineSharedFocalLength = true;
     options.sharedIntrinsicReferenceCameras = referenceCameras;
@@ -645,7 +645,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, LegacyNameMapsToReferenceCpuWithMultipleCalibrationGroups)
+TEST(BundleAdjustSharedFocalTest, ReferenceCpuSupportsMultipleCalibrationGroups)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
@@ -654,7 +654,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyNameMapsToReferenceCpuWithMultipleCalibr
         makeCamera(0.0, 2.0, 0.0, 1200.0),
     };
     xjw::BAOptions options;
-    options.backend = xjw::BABackend::LegacyCpu;
+    options.backend = xjw::BABackend::PlaMatrixCpu;
     options.allowBackendFallback = false;
     options.refineSharedFocalLength = true;
     options.cameraCalibrationGroupIds = {0, 0, 1, 1};
@@ -664,10 +664,11 @@ TEST(BundleAdjustSharedFocalTest, LegacyNameMapsToReferenceCpuWithMultipleCalibr
     EXPECT_TRUE(result.solutionUsable) << result.backendMessage;
     EXPECT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu);
     EXPECT_EQ(result.refinedCalibrationGroupCount, 2);
-    EXPECT_NE(result.backendMessage.find("旧 CPU 名称已映射"), std::string::npos);
+    EXPECT_EQ(result.requestedBackend, xjw::BABackend::PlaMatrixCpu);
+    EXPECT_FALSE(result.backendFallback);
 }
 
-TEST(BundleAdjustSharedFocalTest, AutoDoesNotQualityFallbackMultipleGroupsToLegacy)
+TEST(BundleAdjustSharedFocalTest, AutoRejectsMultipleGroupsWithoutAlternateCpuFallback)
 {
     if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
     {
@@ -698,7 +699,7 @@ TEST(BundleAdjustSharedFocalTest, AutoDoesNotQualityFallbackMultipleGroupsToLega
     EXPECT_NE(result.backendMessage.find("没有其它 CPU 回退"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest, AutoDoesNotQualityFallbackFocalPriorToLegacy)
+TEST(BundleAdjustSharedFocalTest, AutoRejectsFocalPriorWithoutAlternateCpuFallback)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),

@@ -11,13 +11,11 @@ namespace xjw
     /**
      * @brief BA 求解后端。
      *
-     * LegacyCpu 仅保留为旧工程/CLI 的兼容枚举，运行时映射到 PlaMatrixCpu；
      * PlaMatrixCpu/Cuda/OpenCl 共用参考联合 BA，只切换约化 Schur 的线性代数后端。
      */
     enum class BABackend
     {
         Auto,
-        LegacyCpu,
         PlaMatrixCpu,
         PlaMatrixCuda,
         PlaMatrixOpenCl,

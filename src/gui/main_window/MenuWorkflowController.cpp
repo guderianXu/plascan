@@ -1718,7 +1718,7 @@ void MenuWorkflowController::openMapProjectDialog()
                 continue;
             }
             const QString candidate = xjw::common::project::ProjectIO::resolveProjectResourcePath(
-                projectPath, record.value(QStringLiteral("dem_tif")).toString());
+                projectPath, record.value(QStringLiteral("dem_path")).toString());
             const QFileInfo candidateInfo(candidate);
             if (candidate.isEmpty() || !candidateInfo.exists() || !candidateInfo.isFile())
             {

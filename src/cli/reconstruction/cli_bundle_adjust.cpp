@@ -54,10 +54,6 @@ namespace
         {
             return xjw::BABackend::Auto;
         }
-        if (value == QLatin1String("legacy_cpu"))
-        {
-            return xjw::BABackend::PlaMatrixCpu;
-        }
         if (value == QLatin1String("plamatrix_cpu"))
         {
             return xjw::BABackend::PlaMatrixCpu;
@@ -509,8 +505,6 @@ int main(int argc, char* argv[])
     int minMatches = 15;
     int threads = 4;
     int maxIterations = 20;
-    int maxPointIterations = 12;
-    int maxCameraIterations = 10;
     int chunkSize = 20000;
     int baPlaMatrixDevice = 0;
     int baMinCudaCameras = xjw::BAOptions::kDefaultMinPlaMatrixCudaCameras;
@@ -521,11 +515,6 @@ int main(int argc, char* argv[])
     int baMinCudaDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixCudaDenseObservations;
     int baMinOpenClDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixOpenClDenseObservations;
     double baMaxInitialTrackRms = 100.0;
-    int baMaxDenseSchurCameras = 200;
-    double huberDelta = 3.0;
-    double damping = 1e-3;
-    double finiteDiffEps = 1e-6;
-    double stepTolerance = 1e-8;
     double baMaxAcceptedRmsGrowth = 1.25;
     double baMinAcceptedValidTrackRatio = 0.60;
     double baMaxConstraintRmsGrowth = 1.25;
@@ -542,7 +531,6 @@ int main(int argc, char* argv[])
     bool planetaryLaserAllowUnmappedMeasuredImages = false;
     bool baBackendFallback = true;
     bool baEnableQualityGate = true;
-    bool baCompareAutoWithLegacy = true;
 
     double laserMaxDistance = 0.05;
     double laserVoxelSize = 0.0;
@@ -563,13 +551,7 @@ int main(int argc, char* argv[])
     app.add_option("--min-matches", minMatches, "构建 BA tracks 时单对匹配最少点数");
     app.add_option("--threads", threads, "线程数记录字段");
     app.add_option("--max-iterations", maxIterations, "BA 全局最大迭代次数");
-    app.add_option("--max-point-iterations", maxPointIterations, "单点优化最大迭代次数");
-    app.add_option("--max-camera-iterations", maxCameraIterations, "相机位姿优化最大迭代次数");
     app.add_option("--chunk-size", chunkSize, "BA 分块大小");
-    app.add_option("--huber-delta", huberDelta, "兼容字段；参考 BA 的影像残差固定使用普通最小二乘");
-    app.add_option("--damping", damping, "兼容字段；参考 BA 固定从零阻尼开始");
-    app.add_option("--finite-diff-eps", finiteDiffEps, "有限差分步长");
-    app.add_option("--step-tolerance", stepTolerance, "兼容字段；参考 BA 固定使用 1e-6 RMS 更新阈值");
     app.add_option("--ba-backend",
                    baBackendRaw,
                    "BA 求解后端: auto / plamatrix_cpu / plamatrix_cuda / "
@@ -590,7 +572,6 @@ int main(int argc, char* argv[])
     app.add_option("--ba-max-initial-track-rms",
                    baMaxInitialTrackRms,
                    "联合 BA 装配前初始 track RMS 粗差上限（像素），0 表示关闭");
-    app.add_option("--ba-max-dense-schur-cameras", baMaxDenseSchurCameras, "兼容字段；参考 CPU 固定使用 dense Schur");
     app.add_flag("--ba-backend-fallback{true},--no-ba-backend-fallback{false}",
                  baBackendFallback,
                  "请求的 BA 后端不可用时是否允许回退到可用后端");
@@ -602,9 +583,6 @@ int main(int argc, char* argv[])
         "--ba-max-constraint-rms-growth", baMaxConstraintRmsGrowth, "Auto BA 物方约束允许的最大 RMS 增长倍率");
     app.add_option(
         "--ba-min-valid-track-ratio", baMinAcceptedValidTrackRatio, "Auto BA 候选后端允许的最小有效 track 比例");
-    app.add_flag("--ba-compare-legacy{true},--no-ba-compare-legacy{false}",
-                 baCompareAutoWithLegacy,
-                 "兼容选项：Auto BA 选择加速后端时是否运行参考 CPU 对照用于质量门控");
     app.add_flag("--refine-pose{true},--no-refine-pose{false}", refinePose, "是否优化相机姿态");
     app.add_flag("--dry-run", dryRun, "仅检查输入并统计 tracks，不执行优化");
     app.add_flag("--force", force, "允许使用非空输出目录");
@@ -830,13 +808,7 @@ int main(int argc, char* argv[])
 
     xjw::BAOptions baOptions;
     baOptions.maxIterations = maxIterations;
-    baOptions.maxPointIterations = maxPointIterations;
-    baOptions.maxCameraIterations = maxCameraIterations;
     Q_UNUSED(chunkSize);
-    baOptions.huberDelta = huberDelta;
-    baOptions.damping = damping;
-    baOptions.finiteDiffEps = finiteDiffEps;
-    baOptions.stepTolerance = stepTolerance;
     baOptions.refineCameraPose = refinePose;
     baOptions.numThreads = threads;
     baOptions.backend = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
@@ -849,13 +821,11 @@ int main(int argc, char* argv[])
     baOptions.minPlaMatrixCudaDenseObservations = std::max(1, baMinCudaDenseObservations);
     baOptions.minPlaMatrixOpenClDenseObservations = std::max(1, baMinOpenClDenseObservations);
     baOptions.maxInitialTrackRms = std::max(0.0, baMaxInitialTrackRms);
-    baOptions.maxDenseSchurCameras = std::max(1, baMaxDenseSchurCameras);
     baOptions.allowBackendFallback = baBackendFallback;
     baOptions.enableBackendQualityGate = baEnableQualityGate;
     baOptions.maxAcceptedRmsGrowth = std::max(0.0, baMaxAcceptedRmsGrowth);
     baOptions.minAcceptedValidTrackRatio = std::max(0.0, baMinAcceptedValidTrackRatio);
     baOptions.maxAcceptedConstraintRmsGrowth = std::max(1.0, baMaxConstraintRmsGrowth);
-    baOptions.compareAutoBackendWithLegacy = baCompareAutoWithLegacy;
     if (baInput.surveyControlTrackCount > 0)
     {
         baOptions.enableControlPointConstraints = true;

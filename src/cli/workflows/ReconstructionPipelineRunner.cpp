@@ -1120,7 +1120,7 @@ QJsonObject mvsDepthConfigToJson(const xjw::mvs::DepthGenConfig &config)
 
 QString domOutputPath(const QJsonObject &dom)
 {
-    QString path = dom.value(QStringLiteral("dom_png")).toString();
+    QString path = dom.value(QStringLiteral("dom_path")).toString();
     if (path.isEmpty())
     {
         path = dom.value(QStringLiteral("output_path")).toString();
@@ -2284,7 +2284,7 @@ xjw::cli::ReconstructionCliOptions options;
             QJsonObject domResult;
             const QString domPath = QDir(terrainDir).filePath(QStringLiteral("products/dom.png"));
             if (!xjw::TerrainPipeline::generateOrthoProduct(registeredImagePaths,
-                                                            demResult.value(QStringLiteral("dem_tif")).toString(),
+                                                            demResult.value(QStringLiteral("dem_path")).toString(),
                                                             domPath,
                                                             demResolution,
                                                             projectMeta,
@@ -2311,8 +2311,7 @@ xjw::cli::ReconstructionCliOptions options;
 #ifndef PLASCAN_THREE_D_ONLY
     const QJsonObject terrain = report.value(QStringLiteral("terrain")).toObject();
     const QString demPath =
-        terrain.value(QStringLiteral("dem")).toObject()
-            .value(QStringLiteral("dem_tif")).toString();
+        terrain.value(QStringLiteral("dem")).toObject().value(QStringLiteral("dem_path")).toString();
     const QString domPath = domOutputPath(terrain.value(QStringLiteral("dom")).toObject());
 #endif
     const QJsonObject model = report.value(QStringLiteral("model")).toObject();
@@ -2373,13 +2372,10 @@ xjw::cli::ReconstructionCliOptions options;
         QJsonObject demRecord =
             terrain.value(QStringLiteral("dem")).toObject();
         demRecord[QStringLiteral("created_at")] = resultCreatedAt;
-        demRecord[QStringLiteral("dem_tif")] = demPath;
+        demRecord[QStringLiteral("dem_path")] = demPath;
         demRecord[QStringLiteral("source_sparse_cloud")] =
             sfmResult.sparseCloudPath;
-        projectSession.upsertResultByPath(
-            QStringLiteral("dem_results"),
-            QStringLiteral("dem_tif"),
-            demRecord);
+        projectSession.upsertResultByPath(QStringLiteral("dem_results"), QStringLiteral("dem_path"), demRecord);
     }
     if (!domPath.isEmpty())
     {

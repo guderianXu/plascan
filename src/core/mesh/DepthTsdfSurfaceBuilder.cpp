@@ -235,22 +235,9 @@ namespace xjw::mesh
     DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame>& frames,
                                                    const DepthTsdfOptions& requested)
     {
-        DepthTsdfOptions options = requested;
-        const auto control = options.execution;
-        if (control.cancellation || control.progress)
-        {
-            options.isCancelled = task_runtime::combineWorkflowCancellation(options.isCancelled, control);
-            const auto legacy = options.progress;
-            options.progress = [control, legacy](const QString& stage, int percent)
-            {
-                control.reportProgress(stage.toUtf8().toStdString(), percent / 100.0);
-                if (legacy)
-                    legacy(stage, percent);
-            };
-            options.execution = {};
-        }
+        const DepthTsdfOptions& options = requested;
         DepthTsdfResult result;
-        if (options.isCancelled && options.isCancelled())
+        if (options.execution.isCancelled())
         {
             result.cancelled = true;
             result.errorMessage = QStringLiteral("TSDF reconstruction cancelled");
@@ -264,7 +251,7 @@ namespace xjw::mesh
         {
             result.errorMessage = QStringLiteral("TSDF reconstruction failed: %1").arg(QString::fromUtf8(error.what()));
         }
-        if (!result.ok && options.isCancelled && options.isCancelled())
+        if (!result.ok && options.execution.isCancelled())
             result.cancelled = true;
         return result;
     }

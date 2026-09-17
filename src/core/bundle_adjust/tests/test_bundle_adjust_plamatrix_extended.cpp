@@ -112,11 +112,8 @@ namespace
         options.sharedRadialK3PriorSigma = 5.0;
         options.sharedTangentialP1PriorSigma = 5.0;
         options.sharedTangentialP2PriorSigma = 5.0;
-        options.huberDelta = 0.0;
         options.enablePointFilter = false;
         options.maxIterations = 60;
-        options.damping = 1e-4;
-        options.stepTolerance = 1e-10;
         options.allowBackendFallback = false;
         return options;
     }
@@ -239,7 +236,7 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, FullBrownRefinementUsesSingleRefe
     EXPECT_NEAR(result.refinedCameras.front().distortion().tangentialP1, 0.0008, 5e-4);
 }
 
-TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceOnlineSchurMatchesFullBrownLegacyPath)
+TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceOnlineSchurMatchesFullBrownGeneralSchurPath)
 {
     const std::vector<xjw::FramePinholeCamera> truth_cameras{makeCalibrationCamera(-3.0, 0.0, true),
                                                              makeCalibrationCamera(3.0, 0.0, true),
@@ -255,24 +252,24 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceOnlineSchurMatchesFullBr
         track.controlPointConstraints.clear();
     }
 
-    auto legacy_options = makeFullBrownOptions();
-    legacy_options.backend = xjw::BABackend::PlaMatrixCpu;
-    legacy_options.enableControlPointConstraints = false;
-    legacy_options.maxIterations = 20;
-    const auto legacy = xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, legacy_options);
+    auto general_options = makeFullBrownOptions();
+    general_options.backend = xjw::BABackend::PlaMatrixCpu;
+    general_options.enableControlPointConstraints = false;
+    general_options.maxIterations = 20;
+    const auto general = xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, general_options);
 
-    auto reference_options = legacy_options;
+    auto reference_options = general_options;
     reference_options.useReferenceOnlineSchur = true;
     const auto reference = xjw::BundleAdjust::optimizePoints(initial_cameras, tracks, reference_options);
 
-    ASSERT_TRUE(legacy.solutionUsable) << legacy.backendMessage;
+    ASSERT_TRUE(general.solutionUsable) << general.backendMessage;
     ASSERT_TRUE(reference.solutionUsable) << reference.backendMessage;
     EXPECT_TRUE(reference.plaMatrixReferenceOnlineSchurUsed);
-    EXPECT_NEAR(reference.plaMatrixFinalCost, legacy.plaMatrixFinalCost, 1.0e-4);
-    EXPECT_NEAR(reference.meanRmsAfter, legacy.meanRmsAfter, 1.0e-5);
-    EXPECT_NEAR(reference.refinedCameras.front().focalX(), legacy.refinedCameras.front().focalX(), 1.0e-3);
+    EXPECT_NEAR(reference.plaMatrixFinalCost, general.plaMatrixFinalCost, 1.0e-4);
+    EXPECT_NEAR(reference.meanRmsAfter, general.meanRmsAfter, 1.0e-5);
+    EXPECT_NEAR(reference.refinedCameras.front().focalX(), general.refinedCameras.front().focalX(), 1.0e-3);
     EXPECT_NEAR(reference.refinedCameras.front().distortion().radialK1,
-                legacy.refinedCameras.front().distortion().radialK1,
+                general.refinedCameras.front().distortion().radialK1,
                 1.0e-5);
 }
 

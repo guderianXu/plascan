@@ -2142,6 +2142,13 @@ void ProjectManager::startBundleAdjustAsync(
         return;
     }
 
+    QString settingsError;
+    if (!ProjectConfigManager::validateBundleAdjustSettings(extraSettings, &settingsError))
+    {
+        QMessageBox::warning(_parent, QStringLiteral("光束法平差"), settingsError);
+        return;
+    }
+
     // 新一轮运行会替代尚未处理的旧预览，避免失败或取消后误提交旧结果。
     discardBundleAdjustPreview();
 
@@ -2162,25 +2169,13 @@ void ProjectManager::startBundleAdjustAsync(
     opts.dryRun = dryRun;
     opts.threads = threads;
     opts.baOpt.maxIterations = qBound(3, extraSettings.value(QStringLiteral("max_iterations")).toInt(20), 200);
-    opts.baOpt.maxPointIterations =
-        qBound(1, extraSettings.value(QStringLiteral("max_point_iterations")).toInt(12), 100);
-    opts.baOpt.maxCameraIterations =
-        qBound(1, extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(10), 100);
     opts.baOpt.refineCameraPose = extraSettings.value(QStringLiteral("refine_camera_pose")).toBool(true);
-    opts.baOpt.huberDelta = extraSettings.value(QStringLiteral("huber_delta")).toDouble(3.0);
-    opts.baOpt.finiteDiffEps = extraSettings.value(QStringLiteral("finite_diff_eps")).toDouble(1e-6);
-    opts.baOpt.damping = extraSettings.value(QStringLiteral("damping")).toDouble(1e-3);
-    opts.baOpt.stepTolerance = extraSettings.value(QStringLiteral("step_tolerance")).toDouble(1e-8);
     opts.baOpt.numThreads = threads;
     const QString baBackendName =
         extraSettings.value(QStringLiteral("ba_backend")).toString(QStringLiteral("auto")).trimmed().toLower();
     if (baBackendName == QLatin1String("auto"))
     {
         opts.baOpt.backend = xjw::BABackend::Auto;
-    }
-    else if (baBackendName == QLatin1String("legacy_cpu"))
-    {
-        opts.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
     }
     else if (baBackendName == QLatin1String("plamatrix_cpu"))
     {
@@ -2196,60 +2191,33 @@ void ProjectManager::startBundleAdjustAsync(
     }
     else
     {
-        opts.baOpt.backend = xjw::BABackend::Auto;
+        QMessageBox::warning(
+            _parent, QStringLiteral("光束法平差"), QStringLiteral("不支持 BA 后端：%1").arg(baBackendName));
+        return;
     }
     opts.baOpt.plaMatrixDevice = qMax(0, extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
-    const int auto_backend_policy_version =
-        extraSettings.value(QStringLiteral("ba_auto_backend_policy_version")).toInt(1);
-    const int default_cuda_cameras = auto_backend_policy_version >= xjw::BAOptions::kAutoBackendPolicyVersion
-                                         ? xjw::BAOptions::kDefaultMinPlaMatrixCudaCameras
-                                         : xjw::BAOptions::kLegacyMinPlaMatrixGpuCameras;
-    const int default_cuda_observations = auto_backend_policy_version >= xjw::BAOptions::kAutoBackendPolicyVersion
-                                              ? xjw::BAOptions::kDefaultMinPlaMatrixCudaObservations
-                                              : xjw::BAOptions::kLegacyMinPlaMatrixGpuObservations;
-    const int saved_cuda_cameras =
-        extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(default_cuda_cameras);
-    const int saved_cuda_observations =
-        extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(default_cuda_observations);
-    if (auto_backend_policy_version >= xjw::BAOptions::kAutoBackendPolicyVersion)
-    {
-        opts.baOpt.minPlaMatrixCudaCameras = qMax(1, saved_cuda_cameras);
-        opts.baOpt.minPlaMatrixCudaObservations = qMax(1, saved_cuda_observations);
-        opts.baOpt.minPlaMatrixOpenClCameras = qMax(
-            1,
-            extraSettings.value(QStringLiteral("ba_min_opencl_cameras")).toInt(opts.baOpt.minPlaMatrixOpenClCameras));
-        opts.baOpt.minPlaMatrixOpenClObservations =
-            qMax(1,
-                 extraSettings.value(QStringLiteral("ba_min_opencl_observations"))
-                     .toInt(opts.baOpt.minPlaMatrixOpenClObservations));
-        opts.baOpt.minPlaMatrixDenseCameras = qMax(
-            1, extraSettings.value(QStringLiteral("ba_min_dense_cameras")).toInt(opts.baOpt.minPlaMatrixDenseCameras));
-        opts.baOpt.minPlaMatrixCudaDenseObservations =
-            qMax(1,
-                 extraSettings.value(QStringLiteral("ba_min_cuda_dense_observations"))
-                     .toInt(opts.baOpt.minPlaMatrixCudaDenseObservations));
-        opts.baOpt.minPlaMatrixOpenClDenseObservations =
-            qMax(1,
-                 extraSettings.value(QStringLiteral("ba_min_opencl_dense_observations"))
-                     .toInt(opts.baOpt.minPlaMatrixOpenClDenseObservations));
-    }
-    else if (saved_cuda_cameras != xjw::BAOptions::kLegacyMinPlaMatrixGpuCameras ||
-             saved_cuda_observations != xjw::BAOptions::kLegacyMinPlaMatrixGpuObservations)
-    {
-        // 第一版把这两个值作为 CUDA/OpenCL 共用门槛。非默认值视为用户自定义并保持原来的全局控制语义；
-        // 旧默认 24/30000 则留在当前第二版默认值，不再导致小问题过早进入 GPU。
-        opts.baOpt.minPlaMatrixCudaCameras = qMax(1, saved_cuda_cameras);
-        opts.baOpt.minPlaMatrixCudaObservations = qMax(1, saved_cuda_observations);
-        opts.baOpt.minPlaMatrixOpenClCameras = qMax(1, saved_cuda_cameras);
-        opts.baOpt.minPlaMatrixOpenClObservations = qMax(1, saved_cuda_observations);
-        opts.baOpt.minPlaMatrixDenseCameras = qMax(1, saved_cuda_cameras);
-        opts.baOpt.minPlaMatrixCudaDenseObservations = qMax(1, saved_cuda_observations);
-        opts.baOpt.minPlaMatrixOpenClDenseObservations = qMax(1, saved_cuda_observations);
-    }
+    opts.baOpt.minPlaMatrixCudaCameras =
+        qMax(1, extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(opts.baOpt.minPlaMatrixCudaCameras));
+    opts.baOpt.minPlaMatrixCudaObservations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(opts.baOpt.minPlaMatrixCudaObservations));
+    opts.baOpt.minPlaMatrixOpenClCameras = qMax(
+        1, extraSettings.value(QStringLiteral("ba_min_opencl_cameras")).toInt(opts.baOpt.minPlaMatrixOpenClCameras));
+    opts.baOpt.minPlaMatrixOpenClObservations = qMax(1,
+                                                     extraSettings.value(QStringLiteral("ba_min_opencl_observations"))
+                                                         .toInt(opts.baOpt.minPlaMatrixOpenClObservations));
+    opts.baOpt.minPlaMatrixDenseCameras =
+        qMax(1, extraSettings.value(QStringLiteral("ba_min_dense_cameras")).toInt(opts.baOpt.minPlaMatrixDenseCameras));
+    opts.baOpt.minPlaMatrixCudaDenseObservations =
+        qMax(1,
+             extraSettings.value(QStringLiteral("ba_min_cuda_dense_observations"))
+                 .toInt(opts.baOpt.minPlaMatrixCudaDenseObservations));
+    opts.baOpt.minPlaMatrixOpenClDenseObservations =
+        qMax(1,
+             extraSettings.value(QStringLiteral("ba_min_opencl_dense_observations"))
+                 .toInt(opts.baOpt.minPlaMatrixOpenClDenseObservations));
     opts.baOpt.maxInitialTrackRms = qMax(
         0.0, extraSettings.value(QStringLiteral("ba_max_initial_track_rms")).toDouble(opts.baOpt.maxInitialTrackRms));
-    opts.baOpt.maxDenseSchurCameras = qMax(
-        1, extraSettings.value(QStringLiteral("ba_max_dense_schur_cameras")).toInt(opts.baOpt.maxDenseSchurCameras));
     opts.baOpt.allowBackendFallback = extraSettings.value(QStringLiteral("ba_allow_backend_fallback")).toBool(true);
     opts.baOpt.maxAcceptedConstraintRmsGrowth =
         qMax(1.0,
@@ -2264,8 +2232,6 @@ void ProjectManager::startBundleAdjustAsync(
         qMax(0.0,
              extraSettings.value(QStringLiteral("ba_min_accepted_valid_track_ratio"))
                  .toDouble(opts.baOpt.minAcceptedValidTrackRatio));
-    opts.baOpt.compareAutoBackendWithLegacy =
-        extraSettings.value(QStringLiteral("ba_compare_auto_backend_with_legacy")).toBool(true);
     opts.baOpt.enablePointFilter = true;
     opts.baOpt.filterMaxReprojError = extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(2.5);
     opts.baOpt.filterSigmaFactor = extraSettings.value(QStringLiteral("filter_sigma_factor")).toDouble(3.0);

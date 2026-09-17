@@ -34,7 +34,6 @@ AerialTriangulationWorkflow
 
 | 后端 | 三维点 | 相机位姿 | 共享焦距 | 控制约束 | Auto 用途 |
 |------|--------|----------|----------|----------|-----------|
-| `legacy_cpu` 兼容名 | 映射到 PlaMatrix CPU | 映射到 PlaMatrix CPU | 完整 Brown 分组共享内参 | 全部支持 | 仅用于读取旧工程/CLI 参数 |
 | PlaMatrix CPU/CUDA/OpenCL | 支持 | 支持 | 完整 Brown 分组共享内参 | GCP/LiDAR/比例尺/姿态/激光测距 | 联合 BA 正式后端，按规模自动选择 |
 
 三个 PlaMatrix 后端共用解析 Brown-Conrady 相机、点和
@@ -63,7 +62,7 @@ CUDA/OpenCL 在设备端装配 Schur CSR 数值并显式报告该路径，设备
   150000/200000 观测进入 CUDA/OpenCL。CUDA 仍优先于 OpenCL，显式后端不受这些门槛限制。
 - 层级 BA 的独立块固定使用 PlaMatrix CPU 并发，避免多个并行块争抢同一 GPU 上下文。
 - CUDA 选择依据是完整 setup + solve 墙钟时间和质量门控，不只比较线性求解器内部耗时；小问题不会强制迁移到 GPU。
-- `ba_backend_benchmark` 用于比较同一参考驱动的 CPU、CUDA 和 OpenCL 线性后端；`legacy_cpu` 仅是 CPU 别名；
+- `ba_backend_benchmark` 用于比较同一参考驱动的 CPU、CUDA 和 OpenCL 线性后端；不接受旧 `legacy_cpu` 别名；
   `aerial_geometry_benchmark` 负责测量空三外围几何阶段，避免把低收益 kernel 接入默认流程。
 - PlaMatrix CPU/CUDA/OpenCL 的同数据数值与耗时对比见
   `docs/benchmarks/2026-08-19-plamatrix-ba-backend-parity.md`；CPU 原生稀疏直接解验证见
@@ -109,7 +108,7 @@ trial 后恢复初始基线半径；固定 9 维块中未启用的坐标由 PlaM
 证据不足时保持 `fixed`；调用方已有的逐参数掩码始终作为不可越过的上限。
 多轮重三角化继承上一轮数值初值，但焦距/宽高比/主点边界始终相对稳定的
 `sharedIntrinsicReferenceCameras`，不会逐轮复合放大。`IncrementalSfm::run()` 按影像 ID 保存首次有效参考，
-并持续携带参考 BA 真正提交的内参掩码。`legacy_cpu` 请求直接映射到相同联合求解器，不再存在另一套焦距路径。
+并持续携带参考 BA 真正提交的内参掩码。所有当前后端使用同一联合求解器，不再存在另一套焦距路径。
 MetaShape 用户手册只公开了按数据条件自适应选择相机参数的工作流概念，未披露内部评分、矩阵构造或阈值。
 PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为独立设计，不主张与 MetaShape 内部实现等价。
 
@@ -122,7 +121,7 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 - 单目 SfM 的全局 7 自由度规范由 `SfmBundleAdjustCoordinator` 和
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
 - `fixedTrackIndices` 使轨迹的三维点参数块保持常量，但不删除其对相机的重投影残差；
-  PlaMatrix 和 Legacy 后端语义一致。
+  PlaMatrix CPU/CUDA/OpenCL 后端语义一致。
 - CPU/CUDA/OpenCL 影像重投影都使用关键点尺度白化后的普通最小二乘。
 - 所有后端统一执行正深度检查、结果统计和质量门控；参考 SfM 外层负责动态 `3σ` 点过滤。
 - 后端选择和求解规划只统计有限像点、正权重且形成双相机轨迹的有效观测；零权重、负权重和

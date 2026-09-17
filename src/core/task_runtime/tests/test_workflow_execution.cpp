@@ -21,20 +21,19 @@ TEST(WorkflowExecutionContract, ProgressClampsInvalidAndOutOfRangeRatios)
     EXPECT_EQ(values, (std::vector<double>{0.0, 1.0, 0.0}));
 }
 
-TEST(WorkflowExecutionContract, LegacyAndSharedCancellationAreCombined)
+TEST(WorkflowExecutionContract, SharedFlagAndTaskCancellationUseOneControl)
 {
     WorkflowControl control;
     control.cancellation = std::make_shared<std::atomic_bool>(false);
-    bool legacy = false;
-    auto check = combineWorkflowCancellation([&]() { return legacy; }, control);
-    EXPECT_FALSE(check());
-    legacy = true;
-    EXPECT_TRUE(check());
-    legacy = false;
+    bool task_cancelled = false;
+    control.cancellationCheck = [&]() { return task_cancelled; };
+    EXPECT_FALSE(control.isCancelled());
+    task_cancelled = true;
+    EXPECT_TRUE(control.isCancelled());
+    task_cancelled = false;
     control.cancellation->store(true);
-    EXPECT_TRUE(check());
+    EXPECT_TRUE(control.isCancelled());
     EXPECT_FALSE(WorkflowControl{}.isCancelled());
-    EXPECT_FALSE(combineWorkflowCancellation({}, {})());
 }
 
 TEST(WorkflowExecutionContract, SuccessIsExplicitAndErrorsKeepLocation)

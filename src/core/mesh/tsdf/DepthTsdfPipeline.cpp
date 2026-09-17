@@ -69,20 +69,22 @@ namespace xjw::mesh
                     excluded_ref_indices.push_back(frames[index].refIndex);
                 }
             }
-            if (options.progress && options.enableAuxiliaryBridgeOnlyIntegration)
+            if (options.execution.progress && options.enableAuxiliaryBridgeOnlyIntegration)
             {
                 QStringList bridge_refs;
                 for (const int ref_index : bridge_selection.selectedAuxiliaryRefIndices)
                 {
                     bridge_refs.push_back(QString::number(ref_index));
                 }
-                options.progress(bridge_selection.connected
-                                     ? QStringLiteral("实测桥接选择：主来源图=%1 个分量，桥接帧=[%2]")
-                                           .arg(bridge_selection.primaryComponentCount)
-                                           .arg(bridge_refs.join(QStringLiteral(",")))
-                                     : QStringLiteral("实测桥接关闭：主来源图=%1 个分量，合格验证帧无法连通")
-                                           .arg(bridge_selection.primaryComponentCount),
-                                 3);
+                options.execution.reportProgress(
+                    (bridge_selection.connected ? QStringLiteral("实测桥接选择：主来源图=%1 个分量，桥接帧=[%2]")
+                                                      .arg(bridge_selection.primaryComponentCount)
+                                                      .arg(bridge_refs.join(QStringLiteral(",")))
+                                                : QStringLiteral("实测桥接关闭：主来源图=%1 个分量，合格验证帧无法连通")
+                                                      .arg(bridge_selection.primaryComponentCount))
+                        .toUtf8()
+                        .toStdString(),
+                    (3) / 100.0);
             }
 
             if (geometry_frames.size() < options.minimumInputFrames)
@@ -635,9 +637,10 @@ namespace xjw::mesh
                 }
             }
         }
-        if (options.progress)
+        if (options.execution.progress)
         {
-            options.progress(QStringLiteral("正在融合置信度加权 TSDF..."), 5);
+            options.execution.reportProgress((QStringLiteral("正在融合置信度加权 TSDF...")).toUtf8().toStdString(),
+                                             (5) / 100.0);
         }
 
         std::vector<float> tsdf;
@@ -760,9 +763,10 @@ namespace xjw::mesh
         DepthTsdfNarrowBandActivation narrow_band_activation;
         if (options.enableNarrowBandActivation)
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(QStringLiteral("正在激活有效深度附近的 TSDF 窄带..."), 4);
+                options.execution.reportProgress(
+                    (QStringLiteral("正在激活有效深度附近的 TSDF 窄带...")).toUtf8().toStdString(), (4) / 100.0);
             }
             std::vector<DepthTsdfNarrowBandFrameView> activation_frames;
             activation_frames.reserve(static_cast<std::size_t>(frames.size()));
@@ -797,7 +801,7 @@ namespace xjw::mesh
             activation_options.truncationDistance = truncation;
             activation_options.rayStepVoxels = std::clamp(options.narrowBandActivationRayStepVoxels, 0.25f, 4.0f);
             activation_options.haloBlocks = std::clamp(options.narrowBandActivationHaloBlocks, 0, 3);
-            activation_options.isCancelled = options.isCancelled;
+            activation_options.isCancelled = [control = options.execution]() { return control.isCancelled(); };
             if (!narrow_band_activation.build(result.layout, activation_frames, activation_options))
             {
                 result.errorMessage = narrow_band_activation.wasCancelled()
@@ -820,9 +824,10 @@ namespace xjw::mesh
         std::vector<std::uint8_t> primary_bridge_reach;
         if (!primarySurfaceObservation.empty())
         {
-            if (options.progress)
+            if (options.execution.progress)
             {
-                options.progress(QStringLiteral("正在约束实测桥接到主观测表面邻域..."), 5);
+                options.execution.reportProgress(
+                    (QStringLiteral("正在约束实测桥接到主观测表面邻域...")).toUtf8().toStdString(), (5) / 100.0);
             }
             std::atomic_bool bridge_prepass_cancelled{false};
             const int prepass_z_samples = result.layout.cells[2] + 1;
@@ -831,8 +836,7 @@ namespace xjw::mesh
 #endif
             for (int z = 0; z < prepass_z_samples; ++z)
             {
-                if (bridge_prepass_cancelled.load(std::memory_order_relaxed) ||
-                    (options.isCancelled && options.isCancelled()))
+                if (bridge_prepass_cancelled.load(std::memory_order_relaxed) || (options.execution.isCancelled()))
                 {
                     bridge_prepass_cancelled.store(true, std::memory_order_relaxed);
                     continue;

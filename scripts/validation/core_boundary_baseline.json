@@ -1022,7 +1022,7 @@
       "src/core/mesh/DepthTsdfSurfaceBuilder.h": {
         "QJsonArray": 3,
         "QJsonObject": 2,
-        "QString": 11,
+        "QString": 10,
         "QVector": 18
       },
       "src/core/mesh/MeshAcquisitionGapReport.h": {

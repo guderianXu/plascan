@@ -524,22 +524,14 @@ namespace xjw
                 optObj[QStringLiteral("ba_min_opencl_dense_observations")] =
                     baOptions.minPlaMatrixOpenClDenseObservations;
                 optObj[QStringLiteral("ba_max_initial_track_rms")] = baOptions.maxInitialTrackRms;
-                optObj[QStringLiteral("ba_max_dense_schur_cameras")] = baOptions.maxDenseSchurCameras;
                 optObj[QStringLiteral("ba_allow_backend_fallback")] = baOptions.allowBackendFallback;
                 optObj[QStringLiteral("ba_enable_backend_quality_gate")] = baOptions.enableBackendQualityGate;
                 optObj[QStringLiteral("ba_max_accepted_rms_growth")] = baOptions.maxAcceptedRmsGrowth;
                 optObj[QStringLiteral("ba_min_accepted_valid_track_ratio")] = baOptions.minAcceptedValidTrackRatio;
                 optObj[QStringLiteral("ba_max_accepted_constraint_rms_growth")] =
                     baOptions.maxAcceptedConstraintRmsGrowth;
-                optObj[QStringLiteral("ba_compare_auto_backend_with_legacy")] = baOptions.compareAutoBackendWithLegacy;
                 optObj[QStringLiteral("max_iterations")] = opts.baOpt.maxIterations;
-                optObj[QStringLiteral("max_point_iterations")] = opts.baOpt.maxPointIterations;
-                optObj[QStringLiteral("max_camera_iterations")] = opts.baOpt.maxCameraIterations;
                 optObj[QStringLiteral("refine_camera_pose")] = opts.baOpt.refineCameraPose;
-                optObj[QStringLiteral("huber_delta")] = opts.baOpt.huberDelta;
-                optObj[QStringLiteral("finite_diff_eps")] = opts.baOpt.finiteDiffEps;
-                optObj[QStringLiteral("damping")] = opts.baOpt.damping;
-                optObj[QStringLiteral("step_tolerance")] = opts.baOpt.stepTolerance;
                 optObj[QStringLiteral("enable_laser_constraints")] = opts.enableLaserConstraints;
                 optObj[QStringLiteral("laser_constraint_cloud_path")] = opts.laserConstraintCloudPath;
                 optObj[QStringLiteral("laser_association_max_distance_m")] = opts.laserAssociationMaxDistanceMeters;

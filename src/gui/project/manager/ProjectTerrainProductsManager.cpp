@@ -471,25 +471,20 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
 
             QJsonObject meta = self->_projectData->metadata();
             const QJsonObject terrainResult = terrainRun.payload;
-            QJsonObject demResult = makeDemResultRecord(
-                terrainResult.value(QStringLiteral("created_at")).toString(),
-                outDir,
-                QString(),
-                terrainResult.value(QStringLiteral("dem_tif")).toString(),
-                demType,
-                demResolution,
-                QString(),
-                QStringList());
+            QJsonObject demResult = makeDemResultRecord(terrainResult.value(QStringLiteral("created_at")).toString(),
+                                                        outDir,
+                                                        QString(),
+                                                        terrainResult.value(QStringLiteral("dem_path")).toString(),
+                                                        demType,
+                                                        demResolution,
+                                                        QString(),
+                                                        QStringList());
             demResult[QStringLiteral("source_point_cloud")] = pointCloudPath;
             demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
-            demResult[QStringLiteral("depth_preview_png")] =
-                terrainResult.value(QStringLiteral("depth_png")).toString();
+            demResult[QStringLiteral("preview_path")] = terrainResult.value(QStringLiteral("preview_path")).toString();
             demResult[QStringLiteral("relative_z_offset")] =
                 terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-            upsertMetaArrayRecordByPath(&meta,
-                                        QStringLiteral("dem_results"),
-                                        QStringLiteral("dem_tif"),
-                                        demResult);
+            upsertMetaArrayRecordByPath(&meta, QStringLiteral("dem_results"), QStringLiteral("dem_path"), demResult);
 
             persistProjectMeta(self->_projectData, meta, true);
             self->_owner->refreshReconstructionQualityReport();
@@ -500,8 +495,8 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
                 self->_parentWidget,
                 QStringLiteral("创建相对 DEM"),
                 QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
-                    .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
-                    .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
+                    .arg(terrainResult.value(QStringLiteral("dem_path")).toString())
+                    .arg(terrainResult.value(QStringLiteral("preview_path")).toString())
                     .arg(pointCloudPath)
                     .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
         });
@@ -921,12 +916,12 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
 
             const bool records_saved =
                 manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_tif"), radial_record, true)
-                && manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_tif"), elevation_record, true)
-                && manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("ortho_results"), QStringLiteral("output_path"), dom_record, true)
-                && manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), radial_record, true) &&
+                manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), elevation_record, true) &&
+                manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("ortho_results"), QStringLiteral("output_path"), dom_record, true) &&
+                manager->_projectData->upsertResultRecordByPath(
                     QStringLiteral("report_results"), QStringLiteral("path"), report_record, true);
             if (!records_saved)
             {
@@ -1035,8 +1030,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                 {
                     continue;
                 }
-                const QString candidate = resolveProjectPath(
-                    record.value(QStringLiteral("dem_tif")).toString());
+                const QString candidate = resolveProjectPath(record.value(QStringLiteral("dem_path")).toString());
                 if (!candidate.isEmpty() && QFileInfo::exists(candidate))
                 {
                     resolvedDem = candidate;
@@ -1055,8 +1049,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         for (int index = demArr.size() - 1; index >= 0; --index)
         {
             const QJsonObject record = demArr.at(index).toObject();
-            const QString candidate = resolveProjectPath(
-                record.value(QStringLiteral("dem_tif")).toString());
+            const QString candidate = resolveProjectPath(record.value(QStringLiteral("dem_path")).toString());
             if (pathsReferToSameLocation(candidate, resolvedDem))
             {
                 matchedDemRecord = record;
@@ -1215,11 +1208,10 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         {
             continue;
         }
-        const QString demPath =
-            resolveProjectPath(record.value(QStringLiteral("dem_tif")).toString());
+        const QString demPath = resolveProjectPath(record.value(QStringLiteral("dem_path")).toString());
         if (!demPath.isEmpty())
         {
-            record[QStringLiteral("dem_tif")] = demPath;
+            record[QStringLiteral("dem_path")] = demPath;
         }
         runtimeDemResults.append(record);
     }

@@ -129,7 +129,7 @@ namespace xjw::mesh
 #endif
         for (int z = 0; z < zSamples; ++z)
         {
-            if (cancelled.load(std::memory_order_relaxed) || (options.isCancelled && options.isCancelled()))
+            if (cancelled.load(std::memory_order_relaxed) || (options.execution.isCancelled()))
             {
                 cancelled.store(true, std::memory_order_relaxed);
                 continue;
@@ -458,14 +458,16 @@ namespace xjw::mesh
             }
             const int completed = completed_z_slices.fetch_add(1, std::memory_order_relaxed) + 1;
             const int progress_percent = 5 + completed * 65 / std::max(1, zSamples);
-            if (options.progress)
+            if (options.execution.progress)
             {
                 const std::lock_guard<std::mutex> progress_lock(progress_callback_mutex);
                 const int previous_progress = last_progress_percent.load(std::memory_order_relaxed);
                 if (progress_percent >= previous_progress + 5)
                 {
                     last_progress_percent.store(progress_percent, std::memory_order_relaxed);
-                    options.progress(QStringLiteral("正在融合置信度加权 TSDF..."), progress_percent);
+                    options.execution.reportProgress(
+                        (QStringLiteral("正在融合置信度加权 TSDF...")).toUtf8().toStdString(),
+                        (progress_percent) / 100.0);
                 }
             }
         }

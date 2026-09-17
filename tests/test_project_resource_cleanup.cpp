@@ -95,10 +95,7 @@ QJsonObject demRecord(const QString &demPath,
                       const QString &outputDirectory,
                       const QString &runId = {})
 {
-    QJsonObject record{
-        {QStringLiteral("dem_tif"), demPath},
-        {QStringLiteral("output_dir"), outputDirectory}
-    };
+    QJsonObject record{{QStringLiteral("dem_path"), demPath}, {QStringLiteral("output_dir"), outputDirectory}};
     if (!runId.isEmpty())
     {
         record[QStringLiteral("run_id")] = runId;
@@ -856,9 +853,7 @@ TEST(ProjectResourceCleanupTest,
     const QJsonArray records = projectData.metadata().value(
         QStringLiteral("dem_results")).toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject().value(
-                  QStringLiteral("dem_tif")).toString(),
-              retainedPath);
+    EXPECT_EQ(records.first().toObject().value(QStringLiteral("dem_path")).toString(), retainedPath);
 }
 
 TEST(ProjectResourceCleanupTest,
@@ -1114,9 +1109,7 @@ TEST(ProjectResourceCleanupTest,
     const QJsonArray records = reopened.metadata().value(
         QStringLiteral("dem_results")).toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject().value(
-                  QStringLiteral("dem_tif")).toString(),
-              artifactPath);
+    EXPECT_EQ(records.first().toObject().value(QStringLiteral("dem_path")).toString(), artifactPath);
 }
 
 TEST(ProjectResourceCleanupTest,
@@ -1177,9 +1170,7 @@ TEST(ProjectResourceCleanupTest,
     const QJsonArray records = reopened.metadata().value(
         QStringLiteral("dem_results")).toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject().value(
-                  QStringLiteral("dem_tif")).toString(),
-              retainedPath);
+    EXPECT_EQ(records.first().toObject().value(QStringLiteral("dem_path")).toString(), retainedPath);
 }
 
 TEST(ProjectResourceCleanupTest,
@@ -1251,9 +1242,7 @@ TEST(ProjectResourceCleanupTest,
     const QJsonArray records = reopened.metadata().value(
         QStringLiteral("dem_results")).toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject().value(
-                  QStringLiteral("dem_tif")).toString(),
-              artifactPath);
+    EXPECT_EQ(records.first().toObject().value(QStringLiteral("dem_path")).toString(), artifactPath);
 }
 
 TEST(ProjectResourceCleanupTest,

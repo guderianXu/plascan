@@ -12,8 +12,7 @@
  * 设计原则：
  *   - 本类拥有底层 QJsonObject 数据，子管理器作为"视图"操作特定段落。
  *   - 对外提供语义化的相机模型和 workflowSettings 访问接口，隐藏内部 JSON 键名。
- *   - defaultConfig() + mergeWithDefaults() 保证新建项目或旧版配置文件
- *     升级时所有字段均具备合理默认值。
+ *   - defaultConfig() 仅用于新建项目；加载配置通过 validateCurrentConfig 校验，不补齐旧字段。
  */
 
 #include <QJsonObject>
@@ -41,8 +40,7 @@ QString projectCameraModelPolicyToken(ProjectCameraModelPolicy policy);
 /**
  * @brief 解析项目配置中的相机模型 token。
  *
- * 缺失或空 token 按旧项目兼容规则解释为面阵针孔模型；未知的非空
- * token 返回 std::nullopt，防止项目被静默按错误模型处理。
+ * 缺失、空或未知 token 返回 std::nullopt，不默认解释为面阵针孔模型。
  */
 std::optional<ProjectCameraModelPolicy> parseProjectCameraModelPolicy(
     const QString &token);
@@ -54,14 +52,14 @@ std::optional<ProjectCameraModelPolicy> parseProjectCameraModelPolicy(
  * 典型用法：
  * @code
  *   ProjectConfigManager cfg;
- *   cfg.setData(ProjectConfigManager::mergeWithDefaults(loadedJson));
+ *   if (ProjectConfigManager::validateCurrentConfig(loadedJson)) cfg.setData(loadedJson);
  *   auto matching = cfg.workflowSettings("ipmatch");
  * @endcode
  */
 class ProjectConfigManager
 {
 public:
-    /** @brief 默认构造，内部 JSON 对象为空，需通过 setData 或 mergeWithDefaults 初始化。 */
+    /** @brief 默认构造，内部 JSON 对象为空，需通过 setData 初始化。 */
     ProjectConfigManager() = default;
 
     /**
@@ -77,7 +75,6 @@ public:
     void setData(const QJsonObject &data)
     {
         _config = data;
-        _config.remove(QStringLiteral("ui"));
     }
 
     /**
@@ -90,16 +87,11 @@ public:
      */
     static QJsonObject defaultConfig();
 
-    /**
-     * @brief 将外部输入与默认配置深度合并，补全缺失字段。
-     *
-     * 策略：以 defaultConfig() 为基础，将 input 中的值覆盖到对应位置；
-     * 若 input 中某子对象缺少某键，则保留默认值，防止旧版配置文件升级后丢字段。
-     *
-     * @param input 从磁盘加载的原始 JSON 对象（可能缺少部分键）。
-     * @return      合并后包含所有键的完整配置对象。
-     */
-    static QJsonObject mergeWithDefaults(const QJsonObject &input);
+    /** @brief 校验当前完整配置；拒绝缺字段、旧 ui 字段及无效模型策略，不修改输入。 */
+    static bool validateCurrentConfig(const QJsonObject& input, QString* errorMessage = nullptr);
+
+    /** @brief 校验 BA 工作流设置；拒绝已删除求解器名称和无效旧参数，不迁移输入。 */
+    static bool validateBundleAdjustSettings(const QJsonObject& input, QString* errorMessage = nullptr);
 
     /**
      * @brief 获取当前项目的相机模型策略。

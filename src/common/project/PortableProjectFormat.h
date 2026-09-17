@@ -84,6 +84,9 @@ public:
         const QJsonObject &resourceIndex);
     static QJsonObject normalizeProjectResults(
         const QJsonObject &projectResults);
+    static bool
+    validateCurrentImages(const QJsonObject& projectFiles, const QString& projectPath, QString* errorMessage = nullptr);
+    static bool validateCurrentResults(const QJsonObject& projectResults, QString* errorMessage = nullptr);
     static bool isCurrentChunkDocument(
         const QJsonObject &document,
         const ProjectChunkRecord *expectedChunk = nullptr,

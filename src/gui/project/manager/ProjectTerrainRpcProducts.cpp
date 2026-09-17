@@ -227,7 +227,7 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
                 run.payload.value(QStringLiteral("median_reprojection_error_px"));
             record[QStringLiteral("rpc_result")] = run.payload;
             if (!manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_tif"), record, true))
+                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), record, true))
             {
                 emit manager->demPipelineFinished(false, QStringLiteral("RPC DEM 已生成，但项目成果记录保存失败。"));
                 return;

@@ -5325,10 +5325,11 @@ TEST(DepthTsdfSurfaceBuilderTest, BuildsFiniteSurfaceFromConfidenceWeightedPlane
     std::vector<int> progress_percentages;
     std::vector<QString> progress_stages;
     std::vector<QString> snapshot_stages;
-    options.progress = [&reported_integration_progress,
-                        &progress_percentages,
-                        &progress_stages](const QString &stage, int percent)
+    options.execution.progress = [&reported_integration_progress, &progress_percentages, &progress_stages](
+                                     const xjw::task_runtime::WorkflowProgress& progress)
     {
+        const QString stage = QString::fromUtf8(progress.stage.data(), static_cast<qsizetype>(progress.stage.size()));
+        const int percent = static_cast<int>(std::lround(progress.ratio * 100.0));
         progress_percentages.push_back(percent);
         progress_stages.push_back(stage);
         if (percent > 5 && percent < 75)
@@ -6359,13 +6360,10 @@ TEST(DepthTsdfSurfaceBuilderTest, CancelsDuringPostIntegrationCleanup)
     options.calculateVertexColors = false;
     options.availableMemoryBytes = 512ull * 1024ull * 1024ull;
     std::atomic_bool cancelled{false};
-    options.isCancelled = [&cancelled]()
+    options.execution.cancellationCheck = [&cancelled]() { return cancelled.load(std::memory_order_relaxed); };
+    options.execution.progress = [&cancelled](const xjw::task_runtime::WorkflowProgress& progress)
     {
-        return cancelled.load(std::memory_order_relaxed);
-    };
-    options.progress = [&cancelled](const QString &, int percent)
-    {
-        if (percent >= 82)
+        if (progress.ratio >= 0.82)
         {
             cancelled.store(true, std::memory_order_relaxed);
         }
