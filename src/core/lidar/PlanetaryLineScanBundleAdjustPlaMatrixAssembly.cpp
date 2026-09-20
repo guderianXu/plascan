@@ -23,7 +23,7 @@ namespace plamatrix_linescan
 namespace
 {
 
-using Vector3 = PlanetaryLineScanCamera::Vector3;
+using Vector3 = std::array<double, 3>;
 
 bool linearizeImageObservation(
     const PlanetaryLineScanBaWorkingSet &workingSet,
@@ -35,7 +35,7 @@ bool linearizeImageObservation(
 {
     const auto &camera = workingSet.cameraParameters[observation.cameraIndex];
     const auto &point = workingSet.tiePoints[observation.pointIndex];
-    const auto &model = *workingSet.cameraModels[observation.cameraIndex];
+    const auto& model = *workingSet.cameraInstances[observation.cameraIndex];
     if (!evaluateLineScanImageObservation(
             model, observation, camera.data(), point.data(),
             options.imageSigmaPixels, residual))
@@ -146,7 +146,7 @@ double evaluateImageRange(const PlanetaryLineScanBaWorkingSet &workingSet,
         const auto &observation = workingSet.imageObservations[index];
         double residual[2]{};
         if (!evaluateLineScanImageObservation(
-                *workingSet.cameraModels[observation.cameraIndex], observation,
+                *workingSet.cameraInstances[observation.cameraIndex], observation,
                 workingSet.cameraParameters[observation.cameraIndex].data(),
                 workingSet.tiePoints[observation.pointIndex].data(),
                 options.imageSigmaPixels, residual))

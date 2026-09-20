@@ -112,15 +112,114 @@ namespace
         EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/Camera.h")));
         EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/Camera.cpp")));
 
-        const QString frameCameraHeader = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
-        expectContainsAll(frameCameraHeader,
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/FramePinholeCamera.h")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/FramePinholeCamera.cpp")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/FramePinholeCameraModel.cpp")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/CameraModel.h")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/CameraModel.cpp")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/PlanetaryLineScanCamera.h")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/PlanetaryLineScanCamera.cpp")));
+        const QString numericHeader =
+            readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
+        expectContainsAll(numericHeader,
                           {
-                              "class FramePinholeCamera final : public CameraModel",
-                              "struct Intrinsics",
-                              "struct Distortion",
+                              "class FramePinholeNumericState final",
                               "struct Pose",
+                              "projectWorldPointWithDepth",
+                              "rayForPixel",
                           });
-        EXPECT_FALSE(frameCameraHeader.contains(QStringLiteral("using Camera =")));
+        EXPECT_FALSE(numericHeader.contains(QStringLiteral("using FramePinholeNumericState =")));
+    }
+
+    TEST(CameraModelContractTest, CameraDomainLivesUnderSingleDirectory)
+    {
+        for (const QString& oldDirectory : {QStringLiteral("src/core/camera_core"),
+                                            QStringLiteral("src/core/camera_models"),
+                                            QStringLiteral("src/core/camera_project"),
+                                            QStringLiteral("src/core/camera_reference")})
+        {
+            EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(oldDirectory)));
+        }
+        for (const QString& directory : {QStringLiteral("src/core/camera/core"),
+                                         QStringLiteral("src/core/camera/models"),
+                                         QStringLiteral("src/core/camera/project"),
+                                         QStringLiteral("src/core/camera/reference")})
+        {
+            EXPECT_TRUE(QFileInfo(QDir(repoRoot()).filePath(directory)).isDir());
+        }
+
+        const QString coreBuild = readSourceFile(QStringLiteral("src/core/CMakeLists.txt"));
+        const QString cameraBuild = readSourceFile(QStringLiteral("src/core/camera/CMakeLists.txt"));
+        EXPECT_TRUE(coreBuild.contains(QStringLiteral("plascan_core_add_optional_module(camera \"Camera\")")));
+        EXPECT_FALSE(coreBuild.contains(QStringLiteral("plascan_core_add_optional_module(camera_core")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(core)")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(models/frame_pinhole)")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(project)")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(reference)")));
+    }
+
+    TEST(CameraModelContractTest, GuiNumericCameraLookupUsesCanonicalRuntimeResolver)
+    {
+        const QString source = readSourceFile(QStringLiteral("src/gui/project/services/ProjectSession.cpp"));
+        const int start = source.indexOf(QStringLiteral("ProjectSession::pinholeNumericStatesByImageId"));
+        ASSERT_GE(start, 0);
+        const int end = source.indexOf(QStringLiteral("ProjectSession::getPinholeNumericStatesForImages"), start);
+        ASSERT_GT(end, start);
+        const QString getter = source.mid(start, end - start);
+
+        EXPECT_TRUE(getter.contains(QStringLiteral("runtime.framePinholeStatesForImages")));
+        EXPECT_FALSE(getter.contains(QStringLiteral("runtime.instances.forImage")));
+        EXPECT_FALSE(getter.contains(QStringLiteral("makeFramePinholeNumericState")));
+    }
+
+    TEST(CameraModelContractTest, OverlapGeometryUsesValidatedNumericRayState)
+    {
+        const QString header = readSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));
+        const QString source = readSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.cpp"));
+        const QString analyzer = readSourceFile(QStringLiteral("src/core/overlap/OverlapAnalyzer.cpp"));
+
+        EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(header.contains(QStringLiteral("FramePinholeCamera")));
+        EXPECT_TRUE(source.contains(QStringLiteral("rayForPixel")));
+        EXPECT_TRUE(source.contains(QStringLiteral("validateNumericalState")));
+        EXPECT_TRUE(analyzer.contains(QStringLiteral("rayForPixel")));
+        EXPECT_FALSE(analyzer.contains(QStringLiteral("uAxisSign")));
+        EXPECT_FALSE(analyzer.contains(QStringLiteral("rayCam")));
+        EXPECT_FALSE(analyzer.contains(QStringLiteral("radius = 1.0")));
+    }
+
+    TEST(CameraModelContractTest, MeshAndQualityGeometryUseNumericCameraState)
+    {
+        const QString sources = readSourceFile(QStringLiteral("src/core/mesh/DepthMapMeshBuilder.h")) +
+                                readSourceFile(QStringLiteral("src/core/mesh/DepthRayMetric.h")) +
+                                readSourceFile(QStringLiteral("src/core/mesh/DepthTsdfSurfaceBuilder.h")) +
+                                readSourceFile(QStringLiteral("src/core/mesh/MeshColorizer.h")) +
+                                readSourceFile(QStringLiteral("src/core/mesh/VisualHullReconstructor.h")) +
+                                readSourceFile(QStringLiteral("src/core/qc/ModelImageQualityTypes.h")) +
+                                readSourceFile(QStringLiteral("src/core/qc/ModelMeshRenderer.h"));
+        const QString depthFrames = readSourceFile(QStringLiteral("src/core/mesh/DepthMapMeshBuilder.cpp"));
+
+        EXPECT_TRUE(sources.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(sources.contains(QStringLiteral("FramePinholeCamera")));
+        EXPECT_FALSE(depthFrames.contains(QStringLiteral("attachLegacyReportCameras")));
+        EXPECT_FALSE(depthFrames.contains(QStringLiteral("loadFromFile")));
+    }
+
+    TEST(CameraModelContractTest, TerrainGeometryUsesCanonicalNumericCameraState)
+    {
+        const QString sources = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjector.h")) +
+                                readSourceFile(QStringLiteral("src/core/terrain/DemGenerator.h")) +
+                                readSourceFile(QStringLiteral("src/core/terrain/TerrainPipeline.h")) +
+                                readSourceFile(QStringLiteral("src/core/terrain/DemGeneratorFromDepth.cpp"));
+        const QString orthoInput = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjectorGrid.cpp"));
+
+        EXPECT_TRUE(sources.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(sources.contains(QStringLiteral("FramePinholeCamera")));
+        EXPECT_TRUE(orthoInput.contains(QStringLiteral("CameraProjectRuntime::load")));
+        EXPECT_TRUE(orthoInput.contains(QStringLiteral("CameraOperation::OrthoProjection")));
+        EXPECT_TRUE(orthoInput.contains(QStringLiteral("framePinholeStatesForImages")));
+        EXPECT_FALSE(orthoInput.contains(QStringLiteral("decodeFramePinholeCamera")));
+        EXPECT_FALSE(orthoInput.contains(QStringLiteral("fileName()")));
     }
 
     TEST(GuiStyleContractTest, WorkspaceTreeUsesApplicationColorsInsteadOfSystemPalette)
@@ -1001,7 +1100,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
 
     const QString meshBlock = sectionBetween(manager,
                                              "ProjectModelManager::startMeshReconstructionAsync",
-                                             "void ProjectModelManager::startTextureMappingAsync");
+                                             "bool ProjectModelManager::startTextureMappingAsync");
     expectContainsAll(meshBlock,
                       {
                           "resolveModelSourceForMeshing",
@@ -1201,7 +1300,7 @@ TEST(GuiAlgorithmAlignmentContractTest, ModelManagerUsesSharedModelWorkflowEntry
     const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
     const QString mesh_block = sectionBetween(manager,
                                               "ProjectModelManager::startMeshReconstructionAsync",
-                                              "void ProjectModelManager::startTextureMappingAsync");
+                                              "bool ProjectModelManager::startTextureMappingAsync");
 
     expectContainsAll(mesh_block,
                       {
@@ -1220,31 +1319,40 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
 {
     const QString controller =
         readSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
-    const QString project_manager_header = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
     const QString project_manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString task_orchestrator_header =
+        readSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.h"));
+    const QString task_orchestrator =
+        readSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.cpp"));
 
     expectContainsAll(controller,
                       {
-                          "_projectManager->startCreatePointCloudAsync(settings)",
-                          "_projectManager->startGenerateModelAsync(settings)",
+                          "_tasks->startCreatePointCloudAsync(settings)",
+                          "_tasks->startGenerateModelAsync(settings)",
                       });
-    expectContainsAll(project_manager_header,
+    expectContainsAll(task_orchestrator_header,
                       {
                           "void startCreatePointCloudAsync(const QJsonObject& settings)",
                           "void startGenerateModelAsync(const QJsonObject& settings)",
                       });
 
     const QString generate_block =
-        sectionBetween(project_manager,
-                       "void ProjectManager::startGenerateModelAsync(const QJsonObject& settings)",
-                       "void ProjectManager::startMeshReconstructionAsync");
+        sectionBetween(task_orchestrator,
+                       "void ProjectTaskOrchestrator::startGenerateModelAsync(const QJsonObject& settings)",
+                       "void ProjectTaskOrchestrator::startCreatePointCloudAsync");
     expectContainsAll(generate_block,
                       {
-                          "_pointCloudWorkflowController->startDepthMapsOnlyAsync(depth_settings)",
-                          "_modelManager->startMeshReconstructionAsync(settings)",
+                          "startAutomaticModelDepth(settings)",
                           R"(settings.value(QStringLiteral("force_depth_recompute")))",
                           R"(settings.value(QStringLiteral("reuseDepthMaps")))",
                           "prepare_depth_maps",
+                      });
+    const QString automatic_depth_block = sectionBetween(task_orchestrator,
+                                                         "bool ProjectTaskOrchestrator::startAutomaticModelDepth",
+                                                         "void ProjectTaskOrchestrator::startAutomaticModelBuild");
+    expectContainsAll(automatic_depth_block,
+                      {
+                          "_pointCloudWorkflow->startDepthMapsOnlyAsync(depth_settings, shared_context)",
                       });
     expectNotContainsAll(project_manager,
                          {
@@ -1253,12 +1361,13 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
                              "ProjectTaskDispatcher",
                          });
 
-    const QString mesh_block = sectionBetween(project_manager,
-                                              "void ProjectManager::startMeshReconstructionAsync",
-                                              "void ProjectManager::startTextureMappingAsync");
-    expectContainsAll(mesh_block,
+    EXPECT_FALSE(project_manager.contains(QStringLiteral("startMeshReconstructionAsync")));
+    const QString orchestrator_mesh_block = sectionBetween(task_orchestrator,
+                                                           "void ProjectTaskOrchestrator::startMeshReconstructionAsync",
+                                                           "void ProjectTaskOrchestrator::startTextureMappingAsync");
+    expectContainsAll(orchestrator_mesh_block,
                       {
-                          "_modelManager->startMeshReconstructionAsync(settings)",
+                          "_modelManager->startMeshReconstructionAsync(settings, start_context)",
                       });
 }
 
@@ -1280,26 +1389,22 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogOffersAutomaticDepthM
 
 TEST(GuiAlgorithmAlignmentContractTest, AutomaticModelDepthPreparationUsesSingleStatusTask)
 {
-    const QString header = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString source = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.cpp"));
 
-    expectContainsAll(header,
-                      {
-                          "_automaticModelDepthPreparationActive",
-                      });
+    // Keep this contract at the workflow boundary.  Automatic depth generation
+    // temporarily routes the point-cloud task into the model progress channel
+    // and must restore the normal point-cloud status path when it finishes.
     expectContainsAll(source,
                       {
-                          "if (_automaticModelDepthPreparationActive)",
-                          R"(emit meshProgressChanged()",
-                          R"(emit pointCloudProgressChanged(stage, percent))",
-                          R"(_automaticModelDepthPreparationActive = true)",
-                          R"(_automaticModelDepthPreparationActive = false)",
+                          "void ProjectTaskOrchestrator::startGenerateModelAsync",
+                          "startDepthMapsOnlyAsync",
+                          "startMeshReconstructionAsync",
+                          "emit meshProgressChanged(QStringLiteral(\"",
+                          "std::clamp(percent * 3 / 5, 0, 59)",
                       });
-    expectNotContainsAll(source,
-                         {
-                             R"(this, &ProjectManager::pointCloudProgressChanged)",
-                             R"(this, &ProjectManager::pointCloudProgressFinished)",
-                         });
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectPointCloudWorkflowController::pointCloudProgressChanged")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectPointCloudWorkflowController::pointCloudProgressFinished")));
+    EXPECT_TRUE(source.contains(QStringLiteral("context.cancelFlag")));
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesCanonicalFaceCountControls)
@@ -1351,13 +1456,13 @@ TEST(MvsSchedulerContractTest, RecoveredProductionUsesTrackRankedSceneSelection)
     const QString run =
         sectionBetween(generator, "void MvsPipelineService::runInBackgroundImpl()", "} // namespace xjw::mvs");
 
-    expectContainsAll(header,
-                      {
-                          "FrameMvsCache",
-                          "prepareFrameCaches",
-                          "_visibilityBits",
-                          "sourceSharedPointIndices",
-                      });
+    expectNotContainsAll(header,
+                         {
+                             "FrameMvsCache",
+                             "prepareFrameCaches",
+                             "_visibilityBits",
+                             "computeDepthForView",
+                         });
     expectContainsAll(run,
                       {
                           "_effectiveDepthFilterMode = DepthFilterMode::Mild",
@@ -1422,27 +1527,6 @@ TEST(MvsSchedulerContractTest, RecoveredVotingUsesBoundedFileBackedBatches)
                           "plan_recovered_patchmatch_store_batches(",
                           "for (const auto& voting_batch : voting_batches)",
                       });
-}
-
-TEST(MvsDepthArtifactContractTest, AuthoritativeTargetedRecoveryMaskIsCheckedBeforeRead)
-{
-    const QString source = readMvsPipelineImplementation();
-    const QString streamingConsistency =
-        sectionBetween(source,
-                       "bool MvsPipelineService::crossCheckDepthConsistencyStreaming()",
-                       "bool MvsPipelineService::saveDepthFrameArtifacts");
-    const QString targetedRecoveryLoad = sectionBetween(
-        streamingConsistency, "const QString targeted_recovered_path =", "const FramePinholeCamera reference_camera");
-
-    expectContainsAll(targetedRecoveryLoad,
-                      {
-                          "targetedGapRecoveredMaskExpected",
-                          "if (!QFileInfo::exists(targeted_recovered_path))",
-                          "else if (QFileInfo::exists(targeted_recovered_path))",
-                          "xjw::common::io::readImage(",
-                      });
-    EXPECT_LT(indexOfOrFail(targetedRecoveryLoad, "if (!QFileInfo::exists(targeted_recovered_path))"),
-              indexOfOrFail(targetedRecoveryLoad, "xjw::common::io::readImage("));
 }
 
 TEST(MvsDepthArtifactContractTest, RequiredArtifactsFailClosedBeforePublication)
@@ -1581,59 +1665,23 @@ TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvide
                       });
 }
 
-TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
+TEST(MvsSchedulerContractTest, StandaloneSparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
-    const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
-    const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
+    const QString cameraHeader =
+        readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
+    const QString cameraSource =
+        readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
     const QString scheduler = readMvsPipelineImplementation();
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
     const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
 
-    expectContainsAll(scheduler,
-                      {
-                          "estimateDepthRangeFromVisiblePoints",
-                          "buildHintDepthFromVisiblePoints",
-                          "buildSparseSupportMaskFromVisiblePoints",
-                          "const std::vector<size_t> visibleSparsePointIndices",
-                          "visibleSparsePointIndices)",
-                          "patchMatchWorkSize",
-                          "collectProjectedSparseDepthSamples",
-                          "buildHintDepthFromProjectedSamples",
-                          "makeDepthPyramidConfig",
-                          "pyramid_sparse_hints",
-                          "const cv::Size hint_size =",
-                          "patchMatchWorkSize(workRefImg",
-                          "hint_size.width",
-                          "hint_size.height",
-                          "workRefSparseSamples",
-                          "buildHintDepthFromProjectedSamples(refIdx",
-                          "buildSparseSupportMaskFromProjectedSamples(refIdx",
-                      });
     expectContainsAll(header,
                       {
                           "ProjectedSparseDepthSample",
                           "buildSparseSeedDepthFromProjectedSamples",
                       });
-    expectNotContainsAll(
-        scheduler,
-        {
-            "cv::Mat hintDepth = buildHintDepthFromVisiblePoints(refIdx, W, H, visibleSparsePointIndices);",
-            "buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam",
-            "buildHintDepthForCamera(refIdx,\n                                                         fineHintCam",
-        });
-
-    const QString supportBlock = sectionBetween(
-        scheduler, "const std::vector<ProjectedSparseDepthSample> workRefSparseSamples", "timing.hintMs = elapsedMs");
-    expectContainsAll(supportBlock,
-                      {
-                          "support_mask_config",
-                          "pyramid_config.levels[pyramid_config.activeLevelCount - 1].patchMatch",
-                          "const cv::Size supportMaskSize = patchMatchWorkSize(refImg, support_mask_config);",
-                      });
-    expectNotContainsAll(supportBlock, {"patchMatchWorkSize(refImg, pmCfg)"});
-
     const QString projectedBlock = sectionBetween(scheduler,
                                                   "MvsPipelineService::collectProjectedSparseDepthSamples(",
                                                   "cv::Mat MvsPipelineService::buildHintDepthFromProjectedSamples");
@@ -1658,9 +1706,9 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     expectContainsAll(cameraHeader, {"projectWorldPointWithDepth"});
     expectContainsAll(cameraSource,
                       {
-                          "FramePinholeCamera::projectWorldPointWithDepth",
-                          "worldToCameraFromCameraToWorldPose(world, camera_point)",
-                          "applyTsaiDistortion(",
+                          "FramePinholeNumericState::projectWorldPointWithDepth",
+                          "worldToCamera(world, camera)",
+                          "applyDistortion(x, y, &xd, &yd)",
                       });
     expectNotContainsAll(cameraSource, {"return projectWorldPoint(world, pixel)"});
 
@@ -1771,7 +1819,7 @@ TEST(MvsHeterogeneousSchedulingContractTest, RecoveredProductionIsStrictlyCudaOn
                           "configuredBackend == PatchMatchBackend::Cpu ||",
                           "configuredBackend == PatchMatchBackend::OpenCl",
                           "仅支持 CUDA；CPU/OpenCL 不会回退到旧 PatchMatch",
-                          "const bool probeOpenCl = false",
+                          "_config.patchMatch.backend = PatchMatchBackend::Cuda",
                           "recovered 多视深度需要可用 CUDA 设备；未执行旧算法回退",
                           "runRecoveredDepthScene(",
                       });
@@ -2017,6 +2065,18 @@ TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCor
                           "xjw::mvs::fuseDepthMapsStreaming",
                           "xjw::gui::tasks::runGuardedWithOutcome",
                       });
+    const QString dense_publication =
+        sectionBetween(pointCloudController, "const QJsonObject processing =", "manager->finishTask(true);");
+    expectContainsAll(dense_publication,
+                      {
+                          "bool published = false",
+                          "published = manager->_session->replaceResultRecordWithLatest",
+                          "published = manager->_session->upsertResultRecordByPath",
+                          "if (!published)",
+                          "manager->failTask",
+                      });
+    EXPECT_LT(dense_publication.indexOf(QStringLiteral("if (!published)")),
+              dense_publication.indexOf(QStringLiteral("emit manager->pointCloudResultReady")));
     expectNotContainsAll(pointCloudController,
                          {
                              "PatchMatchCPU",
@@ -2106,6 +2166,9 @@ TEST(GuiArchitectureContractTest, AsyncTasksExposeSharedCancellationVocabulary)
     const QString runner = readSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
     const QString maskController =
         readSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
+    const QString maskHeader =
+        readSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.h"));
+    const QString orchestrator = readSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.cpp"));
 
     expectContainsAll(runner,
                       {
@@ -2116,10 +2179,22 @@ TEST(GuiArchitectureContractTest, AsyncTasksExposeSharedCancellationVocabulary)
                       });
     expectContainsAll(maskController,
                       {
-                          "_cancellation.reset()",
-                          "cancellation.isCancellationRequested()",
-                          "_cancellation.requestCancellation()",
+                          "context.cancelFlag->load",
+                          "target.stagingPath",
+                          "publishImageMaskRecords",
+                          "QSaveFile output(destinationPath)",
+                          "copyFileAtomically(artifact.stagingPath, artifact.finalPath, &publish_error)",
                       });
+    expectContainsAll(orchestrator,
+                      {
+                          "MaskCancelReason::User",
+                          "MaskCancelReason::SessionChanged",
+                          "MaskCancelReason::Destroying",
+                          "_maskContext.cancelFlag->store",
+                      });
+    EXPECT_FALSE(maskHeader.contains(QStringLiteral("ProjectData")));
+    EXPECT_FALSE(maskController.contains(QStringLiteral("QMessageBox")));
+    EXPECT_FALSE(maskController.contains(QStringLiteral("GenerateMaskDialog")));
 }
 
 TEST(GuiArchitectureContractTest, ProjectPersistenceAndWorkflowAlgorithmsLiveOutsideGui)

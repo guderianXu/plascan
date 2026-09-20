@@ -23,6 +23,7 @@ add_library(bundle_adjust STATIC
 target_include_directories(bundle_adjust PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
+    ${CMAKE_SOURCE_DIR}/src/core
 )
 
 target_include_directories(bundle_adjust PRIVATE
@@ -32,6 +33,7 @@ target_include_directories(bundle_adjust PRIVATE
 target_link_libraries(bundle_adjust
     PUBLIC
         camera
+        camera_models_frame_pinhole
     PRIVATE
         plascan_common_log
         plamatrix::plamatrix

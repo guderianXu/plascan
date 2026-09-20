@@ -1,6 +1,6 @@
 #include "CameraReferenceCsvExporter.h"
 
-#include "model/CameraReferenceSet.h"
+#include "camera/reference/model/CameraReferenceSet.h"
 
 #include <QSaveFile>
 #include <QStringConverter>

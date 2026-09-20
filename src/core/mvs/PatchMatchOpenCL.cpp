@@ -818,9 +818,10 @@ namespace xjw
                 return binary.isContinuous() ? binary : binary.clone();
             }
 
-            std::vector<float> sourceCameraData(const FramePinholeCamera& reference,
-                                                const std::vector<FramePinholeCamera>& sources,
-                                                int downsampleFactor)
+            std::vector<float>
+            sourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
+                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& sources,
+                             int downsampleFactor)
             {
                 std::vector<float> result(sources.size() * 16, 0.0f);
                 for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
@@ -967,22 +968,23 @@ namespace xjw
             g_openClRuntimes.clear();
         }
 
-        bool PatchMatchDepthEstimator::estimateOpenCL(const cv::Mat& refGray,
-                                                      const std::vector<cv::Mat>& srcGrays,
-                                                      const FramePinholeCamera& refCam,
-                                                      const std::vector<FramePinholeCamera>& srcCams,
-                                                      float zNear,
-                                                      float zFar,
-                                                      const PatchMatchConfig& config,
-                                                      cv::Mat& depthOut,
-                                                      cv::Mat* confOut,
-                                                      std::string* errorMsg,
-                                                      const cv::Mat* hintDepth,
-                                                      const cv::Mat* hintRadius,
-                                                      const cv::Mat* refValidMask,
-                                                      const std::vector<cv::Mat>* srcValidMasks,
-                                                      const PatchMatchAuxiliaryInput* auxiliaryInput,
-                                                      PatchMatchAuxiliaryOutput* auxiliaryOutput)
+        bool PatchMatchDepthEstimator::estimateOpenCL(
+            const cv::Mat& refGray,
+            const std::vector<cv::Mat>& srcGrays,
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+            float zNear,
+            float zFar,
+            const PatchMatchConfig& config,
+            cv::Mat& depthOut,
+            cv::Mat* confOut,
+            std::string* errorMsg,
+            const cv::Mat* hintDepth,
+            const cv::Mat* hintRadius,
+            const cv::Mat* refValidMask,
+            const std::vector<cv::Mat>* srcValidMasks,
+            const PatchMatchAuxiliaryInput* auxiliaryInput,
+            PatchMatchAuxiliaryOutput* auxiliaryOutput)
         {
             (void)auxiliaryInput;
             const auto estimate_start = std::chrono::steady_clock::now();
@@ -1171,7 +1173,8 @@ namespace xjw
             const int source_mask_flag = has_source_masks ? 1 : 0;
             const int hint_flag = has_hint ? 1 : 0;
             const int hint_radius_flag = has_hint_radius ? 1 : 0;
-            const FramePinholeCamera::Intrinsics reference_intrinsics = refCam.intrinsics();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics reference_intrinsics =
+                refCam.intrinsics();
             const float scale = 1.0f / static_cast<float>(downsample_factor);
             const float inv_fx = 1.0f / (static_cast<float>(reference_intrinsics.focalX) * scale);
             const float inv_fy = 1.0f / (static_cast<float>(reference_intrinsics.focalY) * scale);

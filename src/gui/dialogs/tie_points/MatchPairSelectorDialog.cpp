@@ -8,7 +8,7 @@
 #include "tie_points/MatchViewerDialog.h"
 #include "preparation/MatchResultCatalog.h"
 #include "ImageMatchFile.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectSession.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
@@ -205,9 +205,9 @@ QString variantsTooltip(const QVector<xjw::aerial_triangulation::MatchVariant> &
 } // namespace
 
 // 构造函数：初始化对话框，构建界面，加载项目影像列表
-MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager, QWidget *parent)
+MatchPairSelectorDialog::MatchPairSelectorDialog(xjw::gui::project::ProjectSession *session, QWidget *parent)
     : QDialog(parent)
-    , _projectManager(projectManager)
+    , _session(session)
     , _selectedMatchIndex(-1)   // -1 表示初始无选中行
 {
     setWindowTitle(tr("匹配查看器"));
@@ -222,10 +222,10 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
     _refreshTimer->setInterval(300);
     connect(_refreshTimer, &QTimer::timeout, this, &MatchPairSelectorDialog::onRefresh);
 
-    if (_projectManager) {
-        connect(_projectManager, &ProjectManager::projectMetadataChanged,
+    if (_session) {
+        connect(_session, &xjw::gui::project::ProjectSession::metadataChanged,
                 this, &MatchPairSelectorDialog::scheduleRefresh);
-        connect(_projectManager, &ProjectManager::matchPairReady,
+        connect(_session, &xjw::gui::project::ProjectSession::matchPairReady,
                 this, [this](const QString &, const QString &, const QString &, int) {
                     scheduleRefresh();
                 });
@@ -363,14 +363,14 @@ void MatchPairSelectorDialog::loadProjectImages()
     _imageComboBox->clear();
     _currentImage.clear();
 
-    if (!_projectManager) {
+    if (!_session) {
         _scanProgressBar->setVisible(false);
         _statusLabel->setText(tr("错误：未找到项目管理器"));
         return;
     }
     
     // 获取项目中的所有图像
-    _allImages = _projectManager->getAllImages();
+    _allImages = _session->allImages();
     
     if (_allImages.isEmpty()) {
         _matchTable->setRowCount(0);
@@ -622,18 +622,18 @@ void MatchPairSelectorDialog::setMatchControlsBusy(bool busy)
 MatchPairSelectorDialog::MatchDataSnapshot MatchPairSelectorDialog::makeSnapshot() const
 {
     MatchDataSnapshot snapshot;
-    if (!_projectManager)
+    if (!_session)
     {
         return snapshot;
     }
 
-    snapshot.projectPath = _projectManager->currentProjectPath();
+    snapshot.projectPath = _session->projectPath();
     if (!snapshot.projectPath.isEmpty())
     {
         snapshot.matchDir = xjw::common::project::ProjectIO::imageMatchOutputDir(snapshot.projectPath);
     }
-    snapshot.allImages = _allImages.isEmpty() ? _projectManager->getAllImages() : _allImages;
-    snapshot.meta = _projectManager->currentMeta();
+    snapshot.allImages = _allImages.isEmpty() ? _session->allImages() : _allImages;
+    snapshot.meta = _session->metadata();
     return snapshot;
 }
 
@@ -774,8 +774,7 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
         return;
     }
 
-    const QStringList current_project_images =
-        _projectManager ? _projectManager->getAllImages() : QStringList();
+    const QStringList current_project_images = _session ? _session->allImages() : QStringList();
     if (xjw::common::project::resolveProjectImagePathFromToken(imagePath,
                                                                current_project_images)
             .isEmpty())
@@ -1219,8 +1218,8 @@ void MatchPairSelectorDialog::onViewDetailedMatch()
     viewer->setAttribute(Qt::WA_DeleteOnClose);
 
     // 传递项目路径以启用项目级记忆化
-    if (_projectManager) {
-        viewer->setProjectPath(_projectManager->currentProjectPath());
+    if (_session) {
+        viewer->setProjectPath(_session->projectPath());
     }
     QVector<MatchViewerDialog::MatchPairOption> pair_options;
     pair_options.reserve(_currentMatches.size());

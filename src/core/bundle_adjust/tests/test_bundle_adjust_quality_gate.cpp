@@ -3,7 +3,7 @@
 #include "BundleAdjustSolver.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <atomic>
@@ -15,15 +15,18 @@
 namespace
 {
 
-    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double cx, double cy, double cz)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
         camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{cx, cy, cz}});
         return camera;
     }
 
-    bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& point, double* u, double* v)
+    bool projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                      const std::array<double, 3>& point,
+                      double* u,
+                      double* v)
     {
         const double world[3] = {point[0], point[1], point[2]};
         double pixel[2] = {0.0, 0.0};
@@ -36,7 +39,7 @@ namespace
         return true;
     }
 
-    xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera>& cameras,
+    xjw::BATrack makeTrack(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
                            const std::array<double, 3>& truth,
                            const std::array<double, 3>& initial)
     {
@@ -72,7 +75,8 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesReferenceCpu)
 
 TEST(BundleAdjustQualityGateTest, AutoCancellationDoesNotRunFallbackOrRejectQuality)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(-1.0, 0.0, 0.0), makeCamera(1.0, 0.0, 0.0)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(-1.0, 0.0, 0.0),
+                                                                                           makeCamera(1.0, 0.0, 0.0)};
     const auto track = makeTrack(cameras, {{0.0, 0.0, 5.0}}, {{0.1, 0.0, 5.5}});
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
@@ -92,7 +96,7 @@ TEST(BundleAdjustQualityGateTest, AutoCancellationDoesNotRunFallbackOrRejectQual
 
 TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -118,7 +122,7 @@ TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
 
 TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFails)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-5.0, 0.0, 0.0),
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(5.0, 0.0, 0.0),
@@ -160,7 +164,7 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsPlaMatrixCandidateWhenQualityGateFa
 
 TEST(BundleAdjustConvergenceTest, ExactReferenceCpuProblemStopsAfterMinimumConvergenceRounds)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -204,7 +208,7 @@ TEST(BundleAdjustQualityGateTest, AdaptiveFilterUsesAbsoluteFloorAndMedianScale)
 
 TEST(BundleAdjustQualityGateTest, FinalizerRejectsTrackBehindAnyObservationCamera)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -233,7 +237,7 @@ TEST(BundleAdjustQualityGateTest, FinalizerRejectsTrackBehindAnyObservationCamer
 
 TEST(BundleAdjustQualityGateTest, JointBaWithoutGaugeConstraintIsRejected)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -266,7 +270,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintRegressionIsRejected)
 
 TEST(BundleAdjustValidationTest, RejectsNonPositiveArmijoCoefficient)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -287,7 +291,7 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveArmijoCoefficient)
 
 TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -312,7 +316,7 @@ TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
 
 TEST(BundleAdjustFixedTrackTest, ReferenceCpuKeepsFixedPointWhileOptimizingOtherTracks)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -340,7 +344,7 @@ TEST(BundleAdjustFixedTrackTest, ReferenceCpuKeepsFixedPointWhileOptimizingOther
 
 TEST(BundleAdjustValidationTest, RespectsIntrinsicMaskOverRefinementSwitches)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -361,7 +365,7 @@ TEST(BundleAdjustValidationTest, RespectsIntrinsicMaskOverRefinementSwitches)
 
 TEST(BundleAdjustValidationTest, AcceptsTrustedFixedFocalRadialK1Only)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -384,7 +388,7 @@ TEST(BundleAdjustValidationTest, AcceptsTrustedFixedFocalRadialK1Only)
 
 TEST(BundleAdjustValidationTest, RejectsUntrustedFixedFocalRadialK1Only)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -407,7 +411,7 @@ TEST(BundleAdjustValidationTest, RejectsUntrustedFixedFocalRadialK1Only)
 
 TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -428,7 +432,7 @@ TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
 
 TEST(BundleAdjustValidationTest, RejectsMismatchedCalibrationGroupsWhenIntrinsicsAreFixed)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -448,7 +452,7 @@ TEST(BundleAdjustValidationTest, RejectsMismatchedCalibrationGroupsWhenIntrinsic
 
 TEST(BundleAdjustValidationTest, RejectsMismatchedStableReferencesWhenIntrinsicsAreFixed)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -468,7 +472,7 @@ TEST(BundleAdjustValidationTest, RejectsMismatchedStableReferencesWhenIntrinsics
 
 TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSides)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -499,7 +503,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSi
 
 TEST(BundleAdjustValidationTest, LaserPlanesDoNotBypassAutoGaugeAnchors)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -523,7 +527,7 @@ TEST(BundleAdjustValidationTest, LaserPlanesDoNotBypassAutoGaugeAnchors)
 
 TEST(BundleAdjustValidationTest, SinglePosePriorDoesNotClaimAbsoluteScale)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -547,7 +551,7 @@ TEST(BundleAdjustValidationTest, SinglePosePriorDoesNotClaimAbsoluteScale)
 
 TEST(BundleAdjustValidationTest, SingleControlPointStillRequiresRigidCameraAnchor)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };

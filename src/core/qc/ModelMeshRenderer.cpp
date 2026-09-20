@@ -15,7 +15,7 @@ namespace
 {
 
 constexpr int kTileSize = 32;
-// Keep clipped vertices safely beyond FramePinholeCamera's projection singularity.
+// Keep clipped vertices safely beyond the frame-pinhole projection singularity.
 constexpr double kNearPlaneDepth = 1.0e-6;
 
 struct ClippedVertex
@@ -119,10 +119,10 @@ bool intersectNearPlane(const ClippedVertex &start,
     });
 }
 
-int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh &mesh,
-                                const xjw::mesh::Triangle &face,
-                                const xjw::FramePinholeCamera &camera,
-                                std::array<ClippedVertex, 4> *polygon)
+int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh& mesh,
+                                const xjw::mesh::Triangle& face,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                std::array<ClippedVertex, 4>* polygon)
 {
     if (!polygon)
     {
@@ -182,10 +182,10 @@ int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh &mesh,
     return clipped_vertex_count;
 }
 
-bool projectTriangle(const std::array<ClippedVertex, 3> &source_vertices,
-                     const xjw::FramePinholeCamera &camera,
-                     const cv::Size &image_size,
-                     ProjectedTriangle *projected)
+bool projectTriangle(const std::array<ClippedVertex, 3>& source_vertices,
+                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                     const cv::Size& image_size,
+                     ProjectedTriangle* projected)
 {
     if (!projected)
     {
@@ -274,10 +274,9 @@ std::uint8_t colorByte(double value)
 
 } // namespace
 
-ModelRenderResult ModelMeshRenderer::render(
-    const xjw::mesh::TriMesh &mesh,
-    const xjw::FramePinholeCamera &camera,
-    const cv::Size &imageSize) const
+ModelRenderResult ModelMeshRenderer::render(const xjw::mesh::TriMesh& mesh,
+                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                            const cv::Size& imageSize) const
 {
     ModelRenderResult result;
     const auto start = std::chrono::steady_clock::now();
@@ -286,9 +285,11 @@ ModelRenderResult ModelMeshRenderer::render(
         result.error = QStringLiteral("模型没有可渲染三角面");
         return result;
     }
-    if (!camera.isValid())
+    std::string camera_error;
+    if (!camera.validateNumericalState(&camera_error))
     {
-        result.error = QStringLiteral("相机模型无效");
+        result.error = QStringLiteral("数值相机状态无效: %1")
+                           .arg(QString::fromStdString(camera_error));
         return result;
     }
     if (imageSize.width <= 0 || imageSize.height <= 0)

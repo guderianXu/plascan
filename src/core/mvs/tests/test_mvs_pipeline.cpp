@@ -24,7 +24,7 @@
 #include "MvsQualityReport.h"
 #include "PatchMatchPhotometricCost.h"
 #include "SparseCloudPreprocessor.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
@@ -85,10 +85,10 @@ namespace
         return dst;
     }
 
-    xjw::FramePinholeCamera
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
     makeMvsCamera(double fu, double fv, double cu, double cv, const double Rwc[9], const double C[3])
     {
-        xjw::FramePinholeCamera cam;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
         std::array<double, 9> R{Rwc[0], Rwc[1], Rwc[2], Rwc[3], Rwc[4], Rwc[5], Rwc[6], Rwc[7], Rwc[8]};
         std::array<double, 3> Cv{C[0], C[1], C[2]};
         cam.setIntrinsics(fu, fv, cu, cv);
@@ -410,15 +410,16 @@ TEST(DepthPyramidPolicyTest, ScalesCameraToOddNativeDepthGridWithPixelCenterConv
 {
     const double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     const double center[3] = {0.0, 0.0, 0.0};
-    xjw::FramePinholeCamera raster_camera =
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState raster_camera =
         makeMvsCamera(3536.75872, 3533.741148, 3217.170232, 2125.808664, identity, center);
-    raster_camera.setImageSize(xjw::CameraImageSize{6221, 4146});
+    raster_camera.setImageSize(xjw::camera_core::ImageSize{6221, 4146});
 
     const cv::Size raster_size(6221, 4146);
     const cv::Size grid_size = xjw::mvs::depthPyramidWorkingSize(raster_size.width, raster_size.height, 4);
     ASSERT_EQ(grid_size, cv::Size(1555, 1036));
 
-    const xjw::FramePinholeCamera grid_camera = xjw::mvs::cameraForDepthGrid(raster_camera, raster_size, grid_size);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState grid_camera =
+        xjw::mvs::cameraForDepthGrid(raster_camera, raster_size, grid_size);
     const double scale_x = static_cast<double>(grid_size.width) / raster_size.width;
     const double scale_y = static_cast<double>(grid_size.height) / raster_size.height;
     EXPECT_DOUBLE_EQ(grid_camera.focalX(), raster_camera.focalX() * scale_x);
@@ -1152,7 +1153,7 @@ TEST(EpipolarRectifierTest, UnrectifiesRightReferenceWithRightHomography)
     pair.H1inv = pair.H1.inv();
     pair.H2inv = pair.H2.inv();
     pair.refIsRight = true;
-    xjw::FramePinholeCamera reference_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera;
     reference_camera.setIntrinsics(1.0, 1.0, 0.0, 0.0);
     reference_camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
     pair.rectCamRight = reference_camera;
@@ -1533,7 +1534,7 @@ TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantization
     frames[0].depthMap.at<float>(4, 4) = 8.0f;
     frames[0].cameraModel = makeMvsCamera(20.0, 20.0, 4.0, 4.0, identity, center);
     frames[0].sourceCamera = frames[0].cameraModel;
-    frames[0].sourceCamera.setImageSize(xjw::CameraImageSize{width, height});
+    frames[0].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
     frames[0].imgW = width;
     frames[0].imgH = height;
     frames[0].sourceImageIndices = {1};
@@ -1541,7 +1542,7 @@ TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantization
     frames[1].depthMap = cv::Mat(height, width, CV_32F, cv::Scalar(8.0f));
     frames[1].cameraModel = makeMvsCamera(20.0, 20.0, 4.4, 4.0, identity, center);
     frames[1].sourceCamera = frames[1].cameraModel;
-    frames[1].sourceCamera.setImageSize(xjw::CameraImageSize{width * 4, height * 4});
+    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width * 4, height * 4});
     frames[1].imgW = width;
     frames[1].imgH = height;
 
@@ -1561,7 +1562,7 @@ TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantization
     EXPECT_EQ(native_points.size(), 1u)
         << "Nearest-neighbor reprojection must retain sub-half-pixel quantization residuals on a reduced grid.";
 
-    frames[1].sourceCamera.setImageSize(xjw::CameraImageSize{width, height});
+    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
     xjw::mvs::DepthMapFusion full_grid_fusion(config);
     std::vector<xjw::mvs::FusedPoint> full_grid_points;
     ASSERT_TRUE(full_grid_fusion.fuse(frames, full_grid_points, nullptr, &error)) << error;
@@ -1587,8 +1588,8 @@ TEST(MvsPipelineTest, FusionLocalGradientUsesEachFrameGridScale)
         frame.imgW = width;
         frame.imgH = height;
     }
-    frames[0].sourceCamera.setImageSize(xjw::CameraImageSize{width, height});
-    frames[1].sourceCamera.setImageSize(xjw::CameraImageSize{width * 4, height * 4});
+    frames[0].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
+    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width * 4, height * 4});
     frames[0].sourceImageIndices = {1};
 
     xjw::mvs::StereoFusionConfig config;
@@ -1607,7 +1608,7 @@ TEST(MvsPipelineTest, FusionLocalGradientUsesEachFrameGridScale)
     ASSERT_TRUE(native_fusion.fuse(frames, native_points, nullptr, &error)) << error;
     EXPECT_EQ(native_points.size(), 1u) << "The one-full-raster-pixel gradient radius is subpixel on the ds4 target.";
 
-    frames[1].sourceCamera.setImageSize(xjw::CameraImageSize{width, height});
+    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
     xjw::mvs::DepthMapFusion full_grid_fusion(config);
     std::vector<xjw::mvs::FusedPoint> full_grid_points;
     ASSERT_TRUE(full_grid_fusion.fuse(frames, full_grid_points, nullptr, &error)) << error;
@@ -2150,8 +2151,10 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.05, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, reference_center);
-    const xjw::FramePinholeCamera source_camera = makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, source_center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
+        makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, reference_center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
+        makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, source_center);
 
     const cv::Point2f reference_pixel(4.0f, 4.0f);
     constexpr float reference_depth = 10.0f;
@@ -2200,9 +2203,10 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintIncludesEpipolarTriangulat
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
         makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::FramePinholeCamera source_camera = makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
+        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
     cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     source_depth.at<float>(20, 10) = 10.0f;
 
@@ -2222,9 +2226,10 @@ TEST(DepthGeometryConsistencyTest, ReusedReferenceWorldPreservesConsistencyResul
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.25, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
         makeMvsCamera(120.0, 120.0, 16.0, 16.0, identity, reference_center);
-    const xjw::FramePinholeCamera source_camera = makeMvsCamera(120.0, 120.0, 16.0, 16.0, identity, source_center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
+        makeMvsCamera(120.0, 120.0, 16.0, 16.0, identity, source_center);
     const cv::Point2f reference_pixel(16.0f, 16.0f);
     constexpr float reference_depth = 12.0f;
     const double pixel[2] = {reference_pixel.x, reference_pixel.y};
@@ -2264,10 +2269,10 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintFallsBackForDegenerateEpip
 {
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
         makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
 
-    const xjw::FramePinholeCamera coincident_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState coincident_camera =
         makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
     cv::Mat coincident_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     coincident_depth.at<float>(20, 20) = 10.0f;
@@ -2277,7 +2282,7 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintFallsBackForDegenerateEpip
     EXPECT_NEAR(coincident.jointWorldPixelFootprint, 0.1f, 1.0e-6f);
 
     constexpr double collinear_center[3] = {0.0, 0.0, 1.0};
-    const xjw::FramePinholeCamera collinear_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState collinear_camera =
         makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, collinear_center);
     cv::Mat collinear_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     collinear_depth.at<float>(20, 20) = 9.0f;
@@ -2292,9 +2297,10 @@ TEST(DepthGeometryConsistencyTest, MissingSourceDepthRemainsUnverifiableWithCont
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
         makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::FramePinholeCamera source_camera = makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
+        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
     const cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
 
     const auto result = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -3493,7 +3499,8 @@ TEST(DenseCloudBackendTest, AutoMatchesCpuAndReportsActualBackend)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {1.0, -2.0, 3.0};
-    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
     cv::Mat color(4, 4, CV_8UC3);
     for (int row = 0; row < color.rows; ++row)
@@ -3538,7 +3545,8 @@ TEST(DenseCloudBackendTest, ExplicitInvalidAcceleratorDoesNotFallBack)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
 
     for (const xjw::mvs::DenseCloudComputeBackend backend :
@@ -3564,7 +3572,8 @@ TEST(DenseCloudBackendTest, AutoFallsBackToCpuWhenAcceleratorsAreUnavailable)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
 
     xjw::mvs::DenseCloudOptions options;
@@ -3589,7 +3598,8 @@ TEST(DenseCloudBackendTest, EmptyInputIsSuccessfulNoOpForExplicitBackend)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
 
     xjw::mvs::DenseCloudOptions options;
     options.computeBackend = xjw::mvs::DenseCloudComputeBackend::Cuda;
@@ -3625,7 +3635,8 @@ TEST_P(DenseCloudAcceleratorParityTest, MatchesCpuWithSubsamplingColorAndAabb)
 
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {1.0, -2.0, 3.0};
-    const xjw::FramePinholeCamera camera = makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
     cv::Mat depth(6, 6, CV_32FC1, cv::Scalar(2.0f));
     depth.at<float>(0, 0) = 0.0f;
     cv::Mat mask(6, 6, CV_8UC1, cv::Scalar(255));

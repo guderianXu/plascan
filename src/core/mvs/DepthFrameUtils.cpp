@@ -6,16 +6,13 @@
 #include "io/PathIO.h"
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <optional>
 
@@ -27,22 +24,6 @@ namespace xjw::core::project
 
     namespace
     {
-
-        constexpr std::array<char, 16> kFastDepthMatMagic{
-            'P', 'L', 'A', 'S', 'D', 'E', 'P', 'T', 'H', 'M', 'A', 'T', '0', '1', '\0', '\0'};
-
-        struct FastDepthMatHeader
-        {
-            char magic[16] = {};
-            qint32 rows = 0;
-            qint32 cols = 0;
-            qint32 type = 0;
-            quint32 reserved = 0; // Former ABI padding; readers ignore legacy non-zero bytes.
-            quint64 dataBytes = 0;
-        };
-
-        static_assert(sizeof(FastDepthMatHeader) == 40,
-                      "Fast depth matrix header layout must remain backward compatible");
 
         QString firstExistingPath(const QStringList& paths)
         {
@@ -227,58 +208,6 @@ namespace xjw::core::project
             cv::Mat resized;
             cv::resize(*matrix, resized, targetSize, 0.0, 0.0, cv::INTER_NEAREST);
             *matrix = std::move(resized);
-        }
-
-        xjw::common::OperationResult loadFastDepthMatStorage(const QString& path, cv::Mat* matrix)
-        {
-            if (!matrix)
-            {
-                return {false, QStringLiteral("内部错误：矩阵输出参数无效")};
-            }
-
-            QFile file(path);
-            if (!file.open(QIODevice::ReadOnly))
-            {
-                return {false, QStringLiteral("无法读取二进制深度文件：%1").arg(path)};
-            }
-
-            FastDepthMatHeader header;
-            if (file.read(reinterpret_cast<char*>(&header), sizeof(header)) != static_cast<qint64>(sizeof(header)))
-            {
-                return {false, QStringLiteral("二进制深度文件头不完整：%1").arg(path)};
-            }
-
-            if (std::memcmp(header.magic, kFastDepthMatMagic.data(), kFastDepthMatMagic.size()) != 0)
-            {
-                return {false, QStringLiteral("二进制深度文件标识无效：%1").arg(path)};
-            }
-            if (header.rows <= 0 || header.cols <= 0 || header.dataBytes == 0)
-            {
-                return {false, QStringLiteral("二进制深度文件尺寸无效：%1").arg(path)};
-            }
-
-            const size_t elemSize = CV_ELEM_SIZE(header.type);
-            if (elemSize == 0)
-            {
-                return {false, QStringLiteral("二进制深度文件类型无效：%1").arg(path)};
-            }
-
-            const quint64 expectedBytes =
-                static_cast<quint64>(header.rows) * static_cast<quint64>(header.cols) * static_cast<quint64>(elemSize);
-            if (header.dataBytes != expectedBytes)
-            {
-                return {false, QStringLiteral("二进制深度文件大小不匹配：%1").arg(path)};
-            }
-
-            cv::Mat loaded(header.rows, header.cols, header.type);
-            if (file.read(reinterpret_cast<char*>(loaded.data), static_cast<qint64>(header.dataBytes)) !=
-                static_cast<qint64>(header.dataBytes))
-            {
-                return {false, QStringLiteral("二进制深度文件数据不完整：%1").arg(path)};
-            }
-
-            *matrix = std::move(loaded);
-            return {true, QString()};
         }
 
         int frameIndexFromPath(const QString& path)
@@ -486,46 +415,6 @@ namespace xjw::core::project
         return info.dir().filePath(info.completeBaseName() + QStringLiteral("_adaptive_geometry_conflict_ratio.bin"));
     }
 
-    xjw::common::OperationResult loadDepthMatStorage(const QString& path, cv::Mat* matrix)
-    {
-        if (!path.endsWith(QStringLiteral(".bin"), Qt::CaseInsensitive))
-        {
-            return {false, QStringLiteral("不支持的深度矩阵格式：%1").arg(path)};
-        }
-        return loadFastDepthMatStorage(path, matrix);
-    }
-
-    xjw::common::OperationResult writeDepthMatStorage(const QString& path, const cv::Mat& matrix)
-    {
-        if (matrix.empty())
-        {
-            return {false, QStringLiteral("矩阵为空，无法写入二进制深度文件：%1").arg(path)};
-        }
-
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        {
-            return {false, QStringLiteral("无法写入二进制深度文件：%1").arg(path)};
-        }
-
-        const cv::Mat contiguous = matrix.isContinuous() ? matrix : matrix.clone();
-        FastDepthMatHeader header;
-        std::memcpy(header.magic, kFastDepthMatMagic.data(), kFastDepthMatMagic.size());
-        header.rows = contiguous.rows;
-        header.cols = contiguous.cols;
-        header.type = contiguous.type();
-        header.dataBytes = static_cast<quint64>(contiguous.total() * contiguous.elemSize());
-
-        if (file.write(reinterpret_cast<const char*>(&header), sizeof(header)) != static_cast<qint64>(sizeof(header)) ||
-            file.write(reinterpret_cast<const char*>(contiguous.data), static_cast<qint64>(header.dataBytes)) !=
-                static_cast<qint64>(header.dataBytes))
-        {
-            return {false, QStringLiteral("写入二进制深度文件失败：%1").arg(path)};
-        }
-
-        return {true, QString()};
-    }
-
     bool depthFrameArtifactsExist(const QString& pngPath, bool requireConfidence)
     {
         if (pngPath.trimmed().isEmpty() || !QFileInfo::exists(pngPath))
@@ -576,10 +465,10 @@ namespace xjw::core::project
 
         if (frame.algorithmRevision >= xjw::mvs::kMvsPreparedRasterProvenanceRevision)
         {
-            xjw::FramePinholeCamera prepared_camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
             if (frame.preparedImage.trimmed().isEmpty() || !QFileInfo::exists(frame.preparedImage) ||
                 frame.preparedValidMaskPath.trimmed().isEmpty() || !QFileInfo::exists(frame.preparedValidMaskPath) ||
-                !xjw::mvs::cameraFromMvsWorkspaceJson(frame.preparedCameraModel, &prepared_camera))
+                !xjw::mvs::cameraFromMvsWorkspaceJson(frame.preparedCameraModel, &prepared_camera, true))
             {
                 return false;
             }
@@ -761,11 +650,12 @@ namespace xjw::core::project
         return true;
     }
 
-    FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord& stored,
-                                                  const xjw::FramePinholeCamera& camera,
-                                                  const xjw::mvs::FusionConfig& fusionConfig,
-                                                  int viewCount,
-                                                  int fusionMaxImageDim)
+    FusionFrameBuildResult
+    buildStoredFusionFrame(const StoredDepthFrameRecord& stored,
+                           const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                           const xjw::mvs::FusionConfig& fusionConfig,
+                           int viewCount,
+                           int fusionMaxImageDim)
     {
         FusionFrameBuildResult result;
         const auto total_start = std::chrono::steady_clock::now();
@@ -780,21 +670,28 @@ namespace xjw::core::project
                                                                QStringLiteral("raster_width"),
                                                                QStringLiteral("raster_height"),
                                                                &declared_raster_size);
-        const std::optional<xjw::CameraImageSize> current_camera_size = camera.imageSize();
+        const std::optional<xjw::camera_core::ImageSize> current_camera_size = camera.imageSize();
         result.frame.geometrySupportPrevalidated =
             stored.pixelDomainDiagnostics.value(QStringLiteral("producer")).toString() ==
             QStringLiteral("recovered_scene_d4");
         result.frame.sourceCamera = camera;
         result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
-        xjw::FramePinholeCamera prepared_camera;
-        if (!stored.preparedImage.trimmed().isEmpty() && QFileInfo::exists(stored.preparedImage) &&
-            xjw::mvs::cameraFromMvsWorkspaceJson(stored.preparedCameraModel, &prepared_camera))
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
+        const bool hasPreparedRaster = !stored.preparedImage.trimmed().isEmpty();
+        if (hasPreparedRaster)
         {
+            if (!QFileInfo::exists(stored.preparedImage) ||
+                !xjw::mvs::cameraFromMvsWorkspaceJson(stored.preparedCameraModel, &prepared_camera, true))
+            {
+                result.status = {false,
+                                 QStringLiteral("缓存深度帧的 prepared raster 或相机 identity/frame 无效")};
+                return result;
+            }
             result.frame.sourceCamera = prepared_camera;
             if (has_declared_raster_size)
             {
                 result.frame.sourceCamera.setImageSize(
-                    xjw::CameraImageSize{declared_raster_size.width, declared_raster_size.height});
+                    xjw::camera_core::ImageSize{declared_raster_size.width, declared_raster_size.height});
             }
             else if (current_camera_size.has_value())
             {
@@ -805,11 +702,34 @@ namespace xjw::core::project
             }
             result.frame.imagePath = xjw::common::io::toUtf8Path(stored.preparedImage);
         }
-        xjw::FramePinholeCamera stored_camera;
-        const bool has_stored_camera = xjw::mvs::cameraFromMvsWorkspaceJson(stored.cameraModel, &stored_camera);
-        result.frame.cameraModel =
-            has_stored_camera ? stored_camera.normalizedForPositiveDepth() : camera.normalizedForPositiveDepth();
-        result.frame.cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState stored_camera;
+        const bool has_stored_camera =
+            xjw::mvs::cameraFromMvsWorkspaceJson(stored.cameraModel, &stored_camera, true);
+        if (!has_stored_camera)
+        {
+            result.status = {false,
+                             QStringLiteral("缓存深度帧缺少完整的面阵针孔 identity/frame")};
+            return result;
+        }
+        if (!camera.hasBoundIdentity() || camera.imageId() != stored_camera.imageId() ||
+            camera.instanceId() != stored_camera.instanceId() || camera.worldFrame() != stored_camera.worldFrame())
+        {
+            result.status = {false,
+                             QStringLiteral("缓存深度帧相机与当前 canonical 相机 identity/frame 不一致")};
+            return result;
+        }
+        if (hasPreparedRaster &&
+            (prepared_camera.imageId() != stored_camera.imageId() ||
+             prepared_camera.instanceId() != stored_camera.instanceId() ||
+             prepared_camera.worldFrame() != stored_camera.worldFrame()))
+        {
+            result.status = {false,
+                             QStringLiteral("缓存深度帧 prepared 相机与主相机 identity/frame 不一致")};
+            return result;
+        }
+        result.frame.cameraModel = stored_camera.normalizedForPositiveDepth();
+        result.frame.cameraModel.setDistortion(
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
         result.frame.imgW = stored.gridWidth;
         result.frame.imgH = stored.gridHeight;
         const QString rawDepthPath = resolveExistingRawDepthPath(stored.depthPng, stored.rawDepthPath);
@@ -831,7 +751,7 @@ namespace xjw::core::project
         if (stored.effectiveNativeFinalDepthGrid)
         {
             result.frame.sourceCamera.setImageSize(
-                xjw::CameraImageSize{validated_native_raster_size.width, validated_native_raster_size.height});
+                xjw::camera_core::ImageSize{validated_native_raster_size.width, validated_native_raster_size.height});
         }
 
         int camera_grid_width = 0;
@@ -854,7 +774,7 @@ namespace xjw::core::project
                 static_cast<double>(result.frame.depthMap.rows) / static_cast<double>(camera_grid_height));
         }
         result.frame.cameraModel.setImageSize(
-            xjw::CameraImageSize{result.frame.depthMap.cols, result.frame.depthMap.rows});
+            xjw::camera_core::ImageSize{result.frame.depthMap.cols, result.frame.depthMap.rows});
 
         const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng, stored.rawConfidencePath);
         if (!rawConfidencePath.isEmpty())

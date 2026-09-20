@@ -8,7 +8,12 @@
 #include "MatchingStage.h"
 #include "MatchPhotosMaskSupport.h"
 #include "PlaMatchHctPairPreselector.h"
+#include "ProjectCameraIO.h"
 #include "ReferencePoseEpipolarGeometry.h"
+#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
+#include "camera/models/frame_pinhole/FramePinholeInstance.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "plamatch_hct/PlaMatchHctAlgorithm.h"
 
 #include <gtest/gtest.h>
@@ -34,12 +39,51 @@
 namespace
 {
 
-    xjw::FramePinholeCamera makeGuidedTestCamera(double centerX)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeGuidedTestCamera(
+        double centerX, const std::string& imageId = "guided-image", const std::string& frame = "world")
     {
-        xjw::FramePinholeCamera camera;
-        camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {centerX, 0.0, 0.0});
-        return camera;
+        using namespace xjw::camera_models::frame_pinhole;
+        const auto definition =
+            FramePinholeDefinition::create(xjw::camera_core::CameraDefinitionId("guided-definition-" + imageId),
+                                           Intrinsics{1000.0, 1000.0, 500.0, 400.0, 1.0, 1, 1},
+                                           Distortion{},
+                                           PixelConvention::PixelCenter,
+                                           xjw::coordinate_system::CoordinateFrameId(frame));
+        const auto pose = xjw::camera_core::Pose::create(xjw::coordinate_system::CoordinateFrameId(frame),
+                                                         {centerX, 0.0, 0.0},
+                                                         {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+        const auto instance =
+            FramePinholeInstance::create(xjw::camera_core::CameraInstanceId("guided-instance-" + imageId),
+                                         xjw::camera_core::ImageId(imageId),
+                                         definition,
+                                         {1000, 800},
+                                         pose);
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
+        std::string error;
+        EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &state, &error))
+            << error;
+        return state;
+    }
+
+    xjw::camera_reference::ReferenceCameraGeometry
+    makeGuidedTestGeometry(double centerX, const std::string& imageId, const std::string& frame = "world")
+    {
+        std::string error;
+        auto geometry = xjw::camera_reference::ReferenceCameraGeometry::create(
+            makeGuidedTestCamera(centerX, imageId, frame), &error);
+        EXPECT_TRUE(geometry.has_value()) << error;
+        return std::move(*geometry);
+    }
+
+    std::vector<xjw::camera_core::ImageId> imageIdsFor(const QStringList& images)
+    {
+        std::vector<xjw::camera_core::ImageId> ids;
+        ids.reserve(static_cast<std::size_t>(images.size()));
+        for (const QString& image : images)
+        {
+            ids.emplace_back(image.toStdString());
+        }
+        return ids;
     }
 
 } // namespace
@@ -72,8 +116,17 @@ TEST(PlaMatchHctPairPreselectorTest, ReusesCoarsePayloadAndKeepsIdenticalPair)
     xjw::matchphotos::PairSelectionResult output;
     xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
     QString error;
-    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
-        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     imageIdsFor(images),
+                                                                     {},
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
         << qPrintable(error);
     ASSERT_EQ(output.candidates.size(), 1U);
     EXPECT_EQ(output.candidates.front().pair.indexA, 0);
@@ -121,8 +174,17 @@ TEST(PlaMatchHctPairPreselectorTest, ReusesFloatingPointDescriptorsWithoutExtrac
     xjw::matchphotos::PairSelectionResult output;
     xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
     QString error;
-    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
-        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     imageIdsFor(images),
+                                                                     {},
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
         << qPrintable(error);
     EXPECT_TRUE(stats.usedDescriptorAdapter);
     EXPECT_GT(stats.genericSelectedCount, 0);
@@ -163,8 +225,17 @@ TEST(PlaMatchHctPairPreselectorTest, MatchesReferenceModeFallbackSemantics)
     QString error;
 
     options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Source;
-    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
-        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     imageIdsFor(images),
+                                                                     {},
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
         << qPrintable(error);
     EXPECT_TRUE(stats.usedReferenceIndexFallback);
     EXPECT_FALSE(stats.usedAllPairsFallback);
@@ -172,21 +243,31 @@ TEST(PlaMatchHctPairPreselectorTest, MatchesReferenceModeFallbackSemantics)
     EXPECT_EQ(output.candidates.size(), 2U);
 
     options.pairPolicy.maxPairs = 1;
-    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
-        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     imageIdsFor(images),
+                                                                     {},
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
         << qPrintable(error);
     EXPECT_EQ(output.candidates.size(), 1U);
     EXPECT_TRUE(output.restrictPairs);
     options.pairPolicy.maxPairs = 0;
 
-    QMap<QString, xjw::FramePinholeCamera> estimatedCameras;
-    estimatedCameras.insert(images[0], makeGuidedTestCamera(0.0));
-    estimatedCameras.insert(images[1], makeGuidedTestCamera(10.0));
-    estimatedCameras.insert(images[2], makeGuidedTestCamera(11.0));
+    xjw::camera_reference::ReferenceCameraGeometryMap estimatedCameras;
+    estimatedCameras.emplace(xjw::camera_core::ImageId("a.png"), makeGuidedTestGeometry(0.0, "a.png"));
+    estimatedCameras.emplace(xjw::camera_core::ImageId("b.png"), makeGuidedTestGeometry(10.0, "b.png"));
+    estimatedCameras.emplace(xjw::camera_core::ImageId("c.png"), makeGuidedTestGeometry(11.0, "c.png"));
     options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Estimated;
     ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
                                                                      cache,
                                                                      options,
+                                                                     imageIdsFor(images),
                                                                      estimatedCameras,
                                                                      xjw::image_matching::SiftComputeBackend::Cpu,
                                                                      0,
@@ -204,8 +285,17 @@ TEST(PlaMatchHctPairPreselectorTest, MatchesReferenceModeFallbackSemantics)
               output.candidates.front().sources.cend());
 
     options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Sequential;
-    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(
-        images, cache, options, {}, xjw::image_matching::SiftComputeBackend::Cpu, 0, &output, &stats, nullptr, &error))
+    ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
+                                                                     cache,
+                                                                     options,
+                                                                     imageIdsFor(images),
+                                                                     {},
+                                                                     xjw::image_matching::SiftComputeBackend::Cpu,
+                                                                     0,
+                                                                     &output,
+                                                                     &stats,
+                                                                     nullptr,
+                                                                     &error))
         << qPrintable(error);
     EXPECT_EQ(stats.referenceSelectedCount, 0);
     EXPECT_TRUE(stats.usedAllPairsFallback);
@@ -220,10 +310,19 @@ TEST(PlaMatchHctPairPreselectorTest, UsesPositionOnlyReferenceWithoutCoarseFeatu
     options.useGenericPreselection = false;
     options.useReferencePreselection = true;
     options.referencePreselectionNeighbors = 1;
-    QMap<QString, std::array<double, 3>> positions;
-    positions.insert(QStringLiteral("a"), {0.0, 0.0, 0.0});
-    positions.insert(QStringLiteral("b.png"), {100.0, 0.0, 0.0});
-    positions.insert(QStringLiteral("c.png"), {101.0, 0.0, 0.0});
+    xjw::camera_reference::ReferenceCameraPositionMap positions;
+    positions.emplace(
+        xjw::camera_core::ImageId("a.png"),
+        *xjw::camera_reference::ReferenceCameraPosition::create(
+            xjw::camera_core::ImageId("a.png"), xjw::coordinate_system::CoordinateFrameId("world"), {0.0, 0.0, 0.0}));
+    positions.emplace(
+        xjw::camera_core::ImageId("b.png"),
+        *xjw::camera_reference::ReferenceCameraPosition::create(
+            xjw::camera_core::ImageId("b.png"), xjw::coordinate_system::CoordinateFrameId("world"), {100.0, 0.0, 0.0}));
+    positions.emplace(
+        xjw::camera_core::ImageId("c.png"),
+        *xjw::camera_reference::ReferenceCameraPosition::create(
+            xjw::camera_core::ImageId("c.png"), xjw::coordinate_system::CoordinateFrameId("world"), {101.0, 0.0, 0.0}));
 
     xjw::matchphotos::PairSelectionResult output;
     xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
@@ -232,6 +331,7 @@ TEST(PlaMatchHctPairPreselectorTest, UsesPositionOnlyReferenceWithoutCoarseFeatu
         xjw::matchphotos::PlaMatchHctPairPreselector::selectWithPositions(images,
                                                                           emptyCache,
                                                                           options,
+                                                                          imageIdsFor(images),
                                                                           {},
                                                                           positions,
                                                                           xjw::image_matching::SiftComputeBackend::Cpu,
@@ -248,8 +348,8 @@ TEST(PlaMatchHctPairPreselectorTest, UsesPositionOnlyReferenceWithoutCoarseFeatu
 
 TEST(ReferencePoseEpipolarGeometryTest, BuildsHorizontalEpipolarConstraint)
 {
-    const auto geometry =
-        xjw::matchphotos::fundamentalFromReferenceCameras(makeGuidedTestCamera(0.0), makeGuidedTestCamera(1.0));
+    const auto geometry = xjw::matchphotos::fundamentalFromReferenceCameras(makeGuidedTestCamera(0.0, "left"),
+                                                                            makeGuidedTestCamera(1.0, "right"));
 
     ASSERT_TRUE(geometry.valid);
     EXPECT_NEAR(geometry.baseline, 1.0, 1.0e-12);
@@ -260,10 +360,70 @@ TEST(ReferencePoseEpipolarGeometryTest, BuildsHorizontalEpipolarConstraint)
 
 TEST(ReferencePoseEpipolarGeometryTest, RejectsDistortedRawPixelGeometry)
 {
-    xjw::FramePinholeCamera distorted = makeGuidedTestCamera(0.0);
+    auto distorted = makeGuidedTestCamera(0.0, "left");
     distorted.setDistortion(0.01, 0.0, 0.0, 0.0, 0.0);
 
-    EXPECT_FALSE(xjw::matchphotos::fundamentalFromReferenceCameras(distorted, makeGuidedTestCamera(1.0)).valid);
+    EXPECT_FALSE(
+        xjw::matchphotos::fundamentalFromReferenceCameras(distorted, makeGuidedTestCamera(1.0, "right")).valid);
+}
+
+TEST(ReferencePoseEpipolarGeometryTest, RejectsDeclaredWorldFrameMismatch)
+{
+    auto first = makeGuidedTestCamera(0.0, "left", "local-frame-a");
+    auto second = makeGuidedTestCamera(1.0, "right", "local-frame-b");
+
+    EXPECT_FALSE(xjw::matchphotos::fundamentalFromReferenceCameras(first, second).valid);
+}
+
+TEST(ReferenceCameraGeometryTest, RequiresBoundNumericIdentity)
+{
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState unbound;
+    std::string error;
+    EXPECT_FALSE(xjw::camera_reference::ReferenceCameraGeometry::create(unbound, &error).has_value());
+    EXPECT_NE(error.find("bound camera instance"), std::string::npos);
+}
+
+TEST(ReferenceCameraGeometryTest, RejectsReferenceOutsideOrderedInputSet)
+{
+    const std::vector<xjw::camera_core::ImageId> imageIds{xjw::camera_core::ImageId("image-a"),
+                                                          xjw::camera_core::ImageId("image-b")};
+    xjw::camera_reference::ReferenceCameraGeometryMap geometries;
+    geometries.emplace(xjw::camera_core::ImageId("image-outside"), makeGuidedTestGeometry(0.0, "image-outside"));
+
+    std::string error;
+    EXPECT_FALSE(xjw::camera_reference::validateReferenceCameraInputs(
+        imageIds, 2, geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &error));
+    EXPECT_NE(error.find("outside the input image set"), std::string::npos);
+}
+
+TEST(ReferenceCameraGeometryTest, RejectsDuplicateOrderedImageIds)
+{
+    const std::vector<xjw::camera_core::ImageId> imageIds{xjw::camera_core::ImageId("image-a"),
+                                                          xjw::camera_core::ImageId("image-a")};
+    xjw::camera_reference::ReferenceCameraGeometryMap geometries;
+    geometries.emplace(xjw::camera_core::ImageId("image-a"), makeGuidedTestGeometry(0.0, "image-a"));
+
+    std::string error;
+    EXPECT_FALSE(xjw::camera_reference::validateReferenceCameraInputs(
+        imageIds, 2, geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &error));
+    EXPECT_NE(error.find("duplicate identity"), std::string::npos);
+}
+
+TEST(ReferencePoseEpipolarGeometryTest, PreservesDeclaredWorldFrameInProjectCameraMetadata)
+{
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState source;
+    source.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
+    source.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+    ASSERT_TRUE(source.bindIdentity(xjw::camera_core::CameraInstanceId("camera-instance"),
+                                    xjw::camera_core::ImageId("image"),
+                                    xjw::coordinate_system::CoordinateFrameId("local-frame")));
+    const QJsonObject metadata = xjw::common::project::serializeFramePinholeNumericState(source);
+    EXPECT_EQ(metadata.value(QStringLiteral("world_frame")).toString(), QStringLiteral("local-frame"));
+
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState restored;
+    ASSERT_TRUE(xjw::common::project::decodeFramePinholeNumericState(metadata, &restored));
+    EXPECT_TRUE(restored.validateNumericalState());
+    EXPECT_FALSE(restored.hasBoundIdentity());
 }
 
 TEST(MatchPhotosGuidedPolicyTest, UsesTrustedReferencePoseWhenEstimatedModelIsUnavailable)
@@ -271,8 +431,12 @@ TEST(MatchPhotosGuidedPolicyTest, UsesTrustedReferencePoseWhenEstimatedModelIsUn
     const QString image0 = QStringLiteral("a.png");
     const QString image1 = QStringLiteral("b.png");
     xjw::matchphotos::MatchPhotosContext context;
-    context.referenceCameras.insert(image0, makeGuidedTestCamera(0.0));
-    context.referenceCameras.insert(image1, makeGuidedTestCamera(1.0));
+    context.pairInput.images = {image0, image1};
+    context.imageIds = imageIdsFor(context.pairInput.images);
+    context.referenceCameraGeometries.emplace(context.imageIds[0],
+                                              makeGuidedTestGeometry(0.0, context.imageIds[0].value()));
+    context.referenceCameraGeometries.emplace(context.imageIds[1],
+                                              makeGuidedTestGeometry(1.0, context.imageIds[1].value()));
 
     xjw::matchphotos::MatchPhotosOptions options;
     options.guidedMatchingMode = xjw::matchphotos::GuidedMatchingMode::Forced;

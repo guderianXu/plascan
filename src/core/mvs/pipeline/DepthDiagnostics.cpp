@@ -156,19 +156,30 @@ namespace xjw::mvs::pipeline_detail
         return array;
     }
 
-    QJsonObject cameraModelToJson(const FramePinholeCamera& camera)
+    QJsonObject cameraModelToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
     {
-        const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
         const std::array<double, 9> rotation = camera.worldToCameraRotation();
         const std::array<double, 3> translation = camera.worldToCameraTranslation();
         const std::array<double, 3> center = camera.cameraCenter();
-        return QJsonObject{{QStringLiteral("fx"), intrinsics.focalX},
+        QJsonObject object{{QStringLiteral("fx"), intrinsics.focalX},
                            {QStringLiteral("fy"), intrinsics.focalY},
                            {QStringLiteral("cx"), intrinsics.principalX},
                            {QStringLiteral("cy"), intrinsics.principalY},
                            {QStringLiteral("rotation_world_to_camera"), doubleArrayToJson(rotation.data(), 9)},
                            {QStringLiteral("translation_world_to_camera"), doubleArrayToJson(translation.data(), 3)},
                            {QStringLiteral("camera_center"), doubleArrayToJson(center.data(), 3)}};
+        if (camera.hasBoundIdentity())
+        {
+            // MVS artifacts are replayable only when they retain the typed
+            // camera binding that produced the numeric pose.  The generic
+            // project metadata serializer deliberately has a different
+            // contract and does not infer these fields.
+            object.insert(QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value()));
+            object.insert(QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value()));
+            object.insert(QStringLiteral("world_frame"), QString::fromStdString(camera.worldFrame().value()));
+        }
+        return object;
     }
 
     QJsonObject depthPoseRefinementCandidateToJson(const DepthPoseRefinementCandidate& candidate,

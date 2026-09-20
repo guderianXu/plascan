@@ -9,8 +9,12 @@
 class QJsonObject;
 class QLocalServer;
 class QLocalSocket;
-class ProjectManager;
 class QWidget;
+
+namespace xjw::gui::project
+{
+    class ProjectServiceContainer;
+}
 
 namespace xjw::gui::runtime
 {
@@ -49,7 +53,7 @@ namespace xjw::gui::runtime
         void appendLog(int level, const QString& timestamp, const QString& message, const QString& formatted);
 
         QPointer<QWidget> _rootWidget;
-        QPointer<ProjectManager> _projectManager;
+        QPointer<xjw::gui::project::ProjectServiceContainer> _projectServices;
         QPointer<TaskRuntimeService> _taskRuntimeService;
         QLocalServer* _server{};
         QHash<QLocalSocket*, QByteArray> _buffers;

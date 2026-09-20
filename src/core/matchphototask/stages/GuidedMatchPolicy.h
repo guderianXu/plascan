@@ -28,7 +28,10 @@ namespace xjw::matchphotos
 
     struct GuidedMatchPolicyCache
     {
-        QHash<QString, FramePinholeCamera> referenceCamerasByPath;
+        // Path aliases are only input locators.  The actual geometry is
+        // retrieved from MatchPhotosContext::referenceCameraGeometries by
+        // ImageId, so no path-keyed camera state can leak into the solver.
+        QHash<QString, QString> imageIdsByPath;
     };
 
     GuidedMatchPolicyCache buildGuidedMatchPolicyCache(const MatchPhotosContext& context);

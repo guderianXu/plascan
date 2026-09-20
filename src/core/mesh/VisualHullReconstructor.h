@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "MeshTypes.h"
 
 #include <opencv2/core.hpp>
@@ -37,7 +37,7 @@ namespace xjw::mesh
 
     struct VisualHullView
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         cv::Mat silhouetteMask;
         cv::Mat depthMap;
         cv::Mat colorImage;

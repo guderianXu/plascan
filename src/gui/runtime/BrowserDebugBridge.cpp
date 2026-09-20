@@ -1,7 +1,8 @@
 #include "BrowserDebugBridge.h"
 
 #include "Logger.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
 #include "TaskStatusWidget.h"
 #include "TaskRuntimeService.h"
 #include "WorkPanelWidget.h"
@@ -272,8 +273,9 @@ namespace xjw::gui::runtime
 
     BrowserDebugBridge::BrowserDebugBridge(QWidget* rootWidget, QObject* parent)
         : QObject(parent), _rootWidget(rootWidget),
-          _projectManager(rootWidget ? rootWidget->findChild<ProjectManager*>(QStringLiteral("ProjectManager"))
-                                     : nullptr),
+          _projectServices(rootWidget ? rootWidget->findChild<xjw::gui::project::ProjectServiceContainer*>(
+                                            QStringLiteral("ProjectServiceContainer"))
+                                      : nullptr),
           _taskRuntimeService(
               rootWidget ? rootWidget->findChild<TaskRuntimeService*>(QStringLiteral("TaskRuntimeService")) : nullptr),
           _server(new QLocalServer(this))
@@ -523,12 +525,12 @@ namespace xjw::gui::runtime
 
     QJsonObject BrowserDebugBridge::projectSnapshot() const
     {
-        if (!_projectManager)
+        if (!_projectServices)
         {
             return {{QStringLiteral("available"), false}};
         }
-        const auto session = _projectManager->currentSessionContext();
-        const QJsonObject meta = _projectManager->currentMeta();
+        const auto session = _projectServices->session().context();
+        const QJsonObject meta = _projectServices->session().metadata();
         QJsonArray artifacts;
         collectArtifacts(meta, QString(), 0, &artifacts);
         return {
@@ -537,8 +539,8 @@ namespace xjw::gui::runtime
             {QStringLiteral("path"), session.projectPath},
             {QStringLiteral("chunk_id"), session.chunkId},
             {QStringLiteral("generation"), static_cast<double>(session.generation)},
-            {QStringLiteral("dirty"), _projectManager->isDirty()},
-            {QStringLiteral("image_count"), _projectManager->getAllImages().size()},
+            {QStringLiteral("dirty"), _projectServices->session().isDirty()},
+            {QStringLiteral("image_count"), _projectServices->session().allImages().size()},
             {QStringLiteral("artifacts"), artifacts},
         };
     }

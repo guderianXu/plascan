@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "ReferenceP3p.h"
 
 #include <array>
@@ -10,7 +10,7 @@
 namespace xjw
 {
 
-    void refineReferencePose(const FramePinholeCamera& camera,
+    void refineReferencePose(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                              const std::vector<std::array<double, 3>>& worldPoints,
                              const std::vector<std::array<double, 2>>& imagePoints,
                              const std::vector<std::size_t>& inlierIndices,

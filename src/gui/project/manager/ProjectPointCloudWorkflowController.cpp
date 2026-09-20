@@ -1,7 +1,7 @@
 #include "ProjectPointCloudWorkflowController.h"
 
-#include "ProjectManager.h"
-#include "project/ProjectSessionModel.h"
+#include "project/services/ProjectSession.h"
+#include "project/services/ProjectUiMessageAdapter.h"
 #include "MvsSourcePairQualityLoader.h"
 #include "PointCloudInputPreparation.h"
 #include "PointCloudWorkflowConfig.h"
@@ -18,6 +18,9 @@
 #include "DepthFrameUtils.h"
 #include "../tasks/DepthMapTask.h"
 #include "StreamingDepthFusionService.h"
+#include "camera/core/capabilities/CameraOperationPlan.h"
+#include "camera/models/CameraModelFactories.h"
+#include "camera/project/CameraProjectRuntime.h"
 #include "io/PathIO.h"
 #include "Logger.h"
 
@@ -27,12 +30,14 @@
 #include <QFileInfo>
 #include <QImageReader>
 #include <QJsonArray>
-#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QSet>
 
 #include <algorithm>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 using xjw::common::project::normalizePath;
@@ -40,6 +45,7 @@ using xjw::core::project::DenseGenerationSettings;
 
 struct PointCloudWorkflowContext
 {
+    xjw::gui::project::ProjectTaskContext task;
     xjw::gui::project::ProjectSessionContext session;
     DenseGenerationSettings request;
     QJsonObject settings;
@@ -229,26 +235,101 @@ QStringList selectedImagesFromRecord(const QJsonObject &record,
     return images;
 }
 
-bool cameraForImage(const QMap<QString, xjw::FramePinholeCamera> &cameras,
-                    const QString &imagePath,
-                    xjw::FramePinholeCamera *camera)
+using PinholeStatesByImageId =
+    std::unordered_map<xjw::camera_core::ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>;
+
+bool loadMvsCameras(const QJsonObject &metadata,
+                    const std::vector<xjw::camera_core::ImageId> &image_ids,
+                    PinholeStatesByImageId *cameras,
+                    QString *error_message)
+{
+    if (!cameras)
+    {
+        if (error_message)
+        {
+            *error_message = QStringLiteral("MVS 相机输出对象为空");
+        }
+        return false;
+    }
+    cameras->clear();
+
+    const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
+        xjw::common::project::projectFilesRootObject(metadata),
+        xjw::camera_models::makeBuiltinCameraModelRegistry());
+    const auto plan = runtime.planOperationForImages(
+        image_ids, xjw::camera_core::CameraOperation::DenseMvs);
+    if (!plan.ok())
+    {
+        if (error_message)
+        {
+            *error_message = QStringLiteral("MVS 相机能力校验失败：%1")
+                                 .arg(QString::fromStdString(plan.failureMessage()));
+        }
+        return false;
+    }
+
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
+    std::string state_error;
+    if (!runtime.framePinholeStatesForImages(image_ids, &states, &state_error))
+    {
+        if (error_message)
+        {
+            *error_message = QStringLiteral("MVS 面阵针孔数值状态解析失败：%1")
+                                 .arg(QString::fromStdString(state_error));
+        }
+        return false;
+    }
+    if (states.size() != image_ids.size())
+    {
+        if (error_message)
+        {
+            *error_message = QStringLiteral("MVS 相机状态与 ImageId 数量不一致");
+        }
+        return false;
+    }
+    cameras->reserve(image_ids.size());
+    for (std::size_t index = 0; index < image_ids.size(); ++index)
+    {
+        const auto &state = states[index];
+        if (!state.hasBoundIdentity() || state.imageId() != image_ids[index])
+        {
+            if (error_message)
+            {
+                *error_message = QStringLiteral("MVS 相机状态的 canonical identity 不匹配");
+            }
+            cameras->clear();
+            return false;
+        }
+        cameras->emplace(image_ids[index], state);
+    }
+    return true;
+}
+
+bool cameraForImage(const PinholeStatesByImageId& cameras,
+                    const xjw::camera_core::ImageId& imageId,
+                    xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera)
 {
     if (!camera)
     {
         return false;
     }
-    const auto it = cameras.constFind(normalizePath(imagePath));
-    if (it == cameras.constEnd())
+    const auto it = cameras.find(imageId);
+    if (it == cameras.end())
     {
         return false;
     }
-    *camera = it.value();
+    if (!it->second.hasBoundIdentity() || it->second.imageId() != imageId)
+    {
+        return false;
+    }
+    *camera = it->second;
     return true;
 }
 
 bool buildMvsViews(const QString &projectPath,
                    const QStringList &images,
-                   const QMap<QString, xjw::FramePinholeCamera> &cameras,
+                   const std::vector<xjw::camera_core::ImageId> &imageIds,
+                   const PinholeStatesByImageId &cameras,
                    std::vector<xjw::mvs::CameraView> *views,
                    QString *errorMessage)
 {
@@ -256,10 +337,30 @@ bool buildMvsViews(const QString &projectPath,
     {
         return false;
     }
+    if (images.size() != static_cast<qsizetype>(imageIds.size()))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS 影像与 canonical ImageId 数量不一致");
+        }
+        return false;
+    }
+    std::unordered_set<xjw::camera_core::ImageId> seenImageIds;
+    seenImageIds.reserve(imageIds.size());
     views->clear();
     views->reserve(static_cast<std::size_t>(images.size()));
-    for (const QString &image_path : images)
+    for (int index = 0; index < images.size(); ++index)
     {
+        const QString &image_path = images.at(index);
+        const auto &imageId = imageIds[static_cast<std::size_t>(index)];
+        if (!seenImageIds.insert(imageId).second)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("MVS 输入包含重复 canonical ImageId");
+            }
+            return false;
+        }
         if (!QFileInfo::exists(image_path))
         {
             if (errorMessage)
@@ -273,7 +374,7 @@ bool buildMvsViews(const QString &projectPath,
         view.imagePath = xjw::common::io::toUtf8Path(image_path);
         view.validRegionMaskPath = xjw::common::io::toUtf8Path(
             xjw::common::project::ProjectIO::findMaskForImage(projectPath, image_path));
-        if (!cameraForImage(cameras, image_path, &view.camera))
+        if (!cameraForImage(cameras, imageId, &view.camera))
         {
             if (errorMessage)
             {
@@ -304,45 +405,92 @@ QString artifactDirectory(const QJsonObject &record)
     return path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
 }
 
-void clearDepthWorkspace(ProjectData *projectData, const QString &outputDir)
+bool clearDepthWorkspace(xjw::gui::project::ProjectSession* session,
+                         const xjw::gui::project::ProjectTaskContext& taskContext,
+                         const QString& outputDir,
+                         QString* errorMessage)
 {
+    if (!session || !session->isCurrent(taskContext.session) || !taskContext.cancelFlag ||
+        taskContext.cancelFlag->load(std::memory_order_relaxed))
+    {
+        return false;
+    }
     const QString clean_output = QDir::cleanPath(outputDir);
     QDir directory(clean_output);
     const QFileInfoList artifacts = directory.entryInfoList(
-        QStringList{QStringLiteral("depth_*"), QStringLiteral("mvs_manifest.json")},
-        QDir::Files | QDir::Hidden);
-    for (const QFileInfo &artifact : artifacts)
+        QStringList{QStringLiteral("depth_*"), QStringLiteral("mvs_manifest.json")}, QDir::Files | QDir::Hidden);
+    for (const QFileInfo& artifact : artifacts)
     {
         QFile::remove(artifact.absoluteFilePath());
     }
-    QDir prepared_directory(
-        directory.filePath(QStringLiteral("prepared_images")));
-    const QFileInfoList prepared_artifacts = prepared_directory.entryInfoList(
-        QStringList{QStringLiteral("frame_*.png")},
-        QDir::Files | QDir::Hidden);
-    for (const QFileInfo &artifact : prepared_artifacts)
+    QDir prepared_directory(directory.filePath(QStringLiteral("prepared_images")));
+    const QFileInfoList prepared_artifacts =
+        prepared_directory.entryInfoList(QStringList{QStringLiteral("frame_*.png")}, QDir::Files | QDir::Hidden);
+    for (const QFileInfo& artifact : prepared_artifacts)
     {
         QFile::remove(artifact.absoluteFilePath());
     }
     directory.rmdir(QStringLiteral("prepared_images"));
 
-    if (!projectData)
-    {
-        return;
-    }
-    QJsonObject metadata = projectData->metadata();
+    QJsonObject metadata = session->metadata();
     QJsonArray retained;
-    for (const QJsonValue &value : metadata.value(QStringLiteral("depth_map_results")).toArray())
+    for (const QJsonValue& value : metadata.value(QStringLiteral("depth_map_results")).toArray())
     {
         const QJsonObject record = value.toObject();
-        if (QDir::cleanPath(artifactDirectory(record)).compare(
-                clean_output, Qt::CaseInsensitive) != 0)
+        if (QDir::cleanPath(artifactDirectory(record)).compare(clean_output, Qt::CaseInsensitive) != 0)
         {
             retained.append(record);
         }
     }
     metadata[QStringLiteral("depth_map_results")] = retained;
-    xjw::gui::project::persistProjectMeta(projectData, metadata, true);
+    return session->persistMetadata(taskContext.session, metadata, true, errorMessage);
+}
+
+std::vector<xjw::camera_core::ImageId>
+imageIdsForImages(const QJsonObject& metadata, const QStringList& images, bool* allResolved)
+{
+    if (allResolved)
+    {
+        *allResolved = true;
+    }
+    const QMap<QString, QJsonObject> image_meta_by_path =
+        xjw::common::project::projectImageMetaByPath(
+            xjw::common::project::projectFilesRootObject(metadata), true);
+    std::vector<xjw::camera_core::ImageId> result;
+    result.reserve(static_cast<std::size_t>(images.size()));
+    QSet<QString> seen_ids;
+    for (const QString &image_path : images)
+    {
+        const QString image_id = image_meta_by_path.value(normalizePath(image_path))
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString()
+                                     .trimmed();
+        if (image_id.isEmpty() || seen_ids.contains(image_id))
+        {
+            if (allResolved)
+            {
+                *allResolved = false;
+            }
+            continue;
+        }
+        try
+        {
+            result.emplace_back(image_id.toStdString());
+            seen_ids.insert(image_id);
+        }
+        catch (...)
+        {
+            if (allResolved)
+            {
+                *allResolved = false;
+            }
+        }
+    }
+    if (allResolved && result.size() != static_cast<std::size_t>(images.size()))
+    {
+        *allResolved = false;
+    }
+    return result;
 }
 
 QString validMaskPath(const QString &depthPng)
@@ -415,15 +563,10 @@ int fusionNeighborCount(const DenseGenerationSettings &request, int frameCount)
 
 } // namespace
 
-ProjectPointCloudWorkflowController::ProjectPointCloudWorkflowController(
-    ProjectManager *owner,
-    ProjectData *projectData,
-    QWidget *parentWidget,
-    QObject *parent)
-    : QObject(parent)
-    , _owner(owner)
-    , _projectData(projectData)
-    , _parentWidget(parentWidget)
+ProjectPointCloudWorkflowController::ProjectPointCloudWorkflowController(xjw::gui::project::ProjectSession* session,
+                                                                         ProjectUiMessageAdapter* messages,
+                                                                         QObject* parent)
+    : QObject(parent), _session(session), _messages(messages)
 {
 }
 
@@ -431,26 +574,28 @@ ProjectPointCloudWorkflowController::~ProjectPointCloudWorkflowController()
 {
     // runner 可能仍持有共享取消标志；析构前置位可阻止项目关闭后继续读取深度帧。
     cancelActiveTask();
+    waitForActiveTask();
 }
 
 bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
-    const QJsonObject &settings)
+    const QJsonObject& settings, const xjw::gui::project::ProjectTaskContext& task_context)
 {
-    return startWorkflow(settings, false);
+    return startWorkflow(settings, false, task_context);
 }
 
 bool ProjectPointCloudWorkflowController::startDepthMapsOnlyAsync(
-    const QJsonObject &settings)
+    const QJsonObject& settings, const xjw::gui::project::ProjectTaskContext& task_context)
 {
-    return startWorkflow(settings, true);
+    return startWorkflow(settings, true, task_context);
 }
 
-bool ProjectPointCloudWorkflowController::startWorkflow(
-    const QJsonObject &settings,
-    bool depth_maps_only)
+bool ProjectPointCloudWorkflowController::startWorkflow(const QJsonObject& settings,
+                                                        bool depth_maps_only,
+                                                        const xjw::gui::project::ProjectTaskContext& task_context)
 {
     const QString dialog_title = workflowDialogTitle(depth_maps_only);
-    if (!_owner || !_projectData || !_projectData->hasProject())
+    if (!_session || !_session->hasProject() || !_session->isCurrent(task_context.session) ||
+        !task_context.cancelFlag || task_context.cancelFlag->load(std::memory_order_relaxed))
     {
         failTask(QStringLiteral("请先打开项目，并完成正式空中三角测量。"),
                  dialog_title);
@@ -458,15 +603,18 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
     if (_isRunning)
     {
-        QMessageBox::information(_parentWidget,
-                                 dialog_title,
-                                 depth_maps_only
-                                     ? QStringLiteral("已有深度图或点云任务正在运行，请等待或先取消当前任务。")
-                                     : QStringLiteral("已有点云任务正在运行，请等待或先取消当前任务。"));
+        if (_messages)
+        {
+            _messages->information(nullptr,
+                                   dialog_title,
+                                   depth_maps_only
+                                       ? QStringLiteral("已有深度图或点云任务正在运行，请等待或先取消当前任务。")
+                                       : QStringLiteral("已有点云任务正在运行，请等待或先取消当前任务。"));
+        }
         return false;
     }
 
-    const QJsonObject metadata = _projectData->metadata();
+    const QJsonObject metadata = _session->metadata();
     const int at_index = xjw::core::project::findLatestProductionAtResultIndex(metadata);
     const QJsonArray at_results =
         metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
@@ -492,7 +640,8 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     effective_settings[QStringLiteral("sceneProfile")] = scene_profile;
 
     auto context = std::make_shared<PointCloudWorkflowContext>();
-    context->session = _owner->currentSessionContext();
+    context->task = task_context;
+    context->session = task_context.session;
     context->settings = effective_settings;
     context->request = xjw::core::project::denseGenerationSettingsFromJson(
         effective_settings);
@@ -545,18 +694,30 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
         return false;
     }
 
-    bool all_cameras = false;
-    const QMap<QString, xjw::FramePinholeCamera> cameras =
-        _owner->getCamerasForImages(context->selectedImages, &all_cameras);
+    bool all_image_ids = false;
+    const std::vector<xjw::camera_core::ImageId> image_ids =
+        imageIdsForImages(metadata, context->selectedImages, &all_image_ids);
+    PinholeStatesByImageId cameras;
+    QString camera_error;
+    if (!all_image_ids || !loadMvsCameras(metadata, image_ids, &cameras, &camera_error))
+    {
+        failTask(camera_error.isEmpty()
+                     ? QStringLiteral("注册影像缺少稳定 ImageId，无法准备 MVS。")
+                     : camera_error,
+                 dialog_title);
+        return false;
+    }
     QString view_error;
-    if (!all_cameras || !buildMvsViews(context->session.projectPath,
-                                       context->selectedImages,
-                                       cameras,
-                                       &context->views,
-                                       &view_error))
+    if (!buildMvsViews(context->session.projectPath,
+                       context->selectedImages,
+                       image_ids,
+                       cameras,
+                       &context->views,
+                       &view_error))
     {
         failTask(view_error.isEmpty()
-                     ? QStringLiteral("部分注册影像缺少有效相机参数。")
+                     ? (all_image_ids ? QStringLiteral("部分注册影像缺少有效相机参数。")
+                                      : QStringLiteral("注册影像缺少稳定 ImageId，无法准备 MVS。"))
                      : view_error,
                  dialog_title);
         return false;
@@ -623,19 +784,23 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
 
     _isRunning = true;
-    _cancelFlag = std::make_shared<std::atomic_bool>(false);
+    _activeContext = task_context;
     emit pointCloudProgressChanged(
-        can_reuse ? QStringLiteral("正在复用兼容深度图")
-                  : QStringLiteral("正在准备深度图估计"),
-        0);
+        can_reuse ? QStringLiteral("正在复用兼容深度图") : QStringLiteral("正在准备深度图估计"), 0);
+    if (settleIfContextNotLive(task_context))
+    {
+        return false;
+    }
 
     if (can_reuse)
     {
         if (context->depthMapsOnly)
         {
-            emit depthMapBatchReady(
-                context->outputDir,
-                static_cast<int>(stored.frames.size()));
+            emit depthMapBatchReady(context->outputDir, static_cast<int>(stored.frames.size()));
+            if (settleIfContextNotLive(task_context))
+            {
+                return false;
+            }
             finishTask(true);
         }
         else
@@ -646,7 +811,19 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     else
     {
         // 未复用时明确清理当前批次，保证“重新计算”不会被 manifest 静默续跑。
-        clearDepthWorkspace(_projectData, context->outputDir);
+        QString cleanup_error;
+        const bool workspace_cleared =
+            clearDepthWorkspace(_session.get(), task_context, context->outputDir, &cleanup_error);
+        if (settleIfContextNotLive(task_context))
+        {
+            return false;
+        }
+        if (!workspace_cleared)
+        {
+            failTask(cleanup_error.isEmpty() ? QStringLiteral("无法更新深度图工作区元数据。") : cleanup_error,
+                     dialog_title);
+            return false;
+        }
         startDepthEstimation(context);
     }
     return true;
@@ -655,7 +832,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
 void ProjectPointCloudWorkflowController::startDepthEstimation(
     const std::shared_ptr<PointCloudWorkflowContext> &context)
 {
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [context]()
         {
@@ -667,40 +844,26 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                 context->sparsePointSidecarPath);
             if (result.pointCloudInput.ok)
             {
-                result.sourcePairQuality =
-                    xjw::core::project::loadMvsSourcePairQualities(
-                        xjw::common::project::ProjectIO::imageMatchOutputDir(
-                            context->session.projectPath),
-                        context->selectedImages);
+                result.sourcePairQuality = xjw::core::project::loadMvsSourcePairQualities(
+                    xjw::common::project::ProjectIO::imageMatchOutputDir(context->session.projectPath),
+                    context->selectedImages);
             }
             return result;
         },
-        [context](
-            ProjectPointCloudWorkflowController *self,
-            xjw::gui::tasks::TaskOutcome<
-                DepthEstimationPreparationResult> outcome)
+        [context](ProjectPointCloudWorkflowController* self,
+                  xjw::gui::tasks::TaskOutcome<DepthEstimationPreparationResult> outcome)
         {
-            if (!self->_owner ||
-                !self->_owner->isCurrentSession(context->session))
+            if (self->settleIfContextNotLive(context->task))
             {
-                self->finishTask(false);
                 return;
             }
             if (!outcome.succeeded())
             {
-                self->failTask(outcome.errorMessage.isEmpty()
-                                   ? QStringLiteral("稀疏点云预处理失败。")
-                                   : outcome.errorMessage,
+                self->failTask(outcome.errorMessage.isEmpty() ? QStringLiteral("稀疏点云预处理失败。")
+                                                              : outcome.errorMessage,
                                workflowDialogTitle(context->depthMapsOnly));
                 return;
             }
-            if (self->_cancelFlag &&
-                self->_cancelFlag->load(std::memory_order_relaxed))
-            {
-                self->finishTask(false);
-                return;
-            }
-
             auto preparation = std::move(*outcome.value);
             auto prepared = std::move(preparation.pointCloudInput);
             if (!prepared.ok)
@@ -757,38 +920,52 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                     self,
                     [self, context](const QString& stage, float ratio)
                     {
-                        if (self->_owner &&
-                            self->_owner->isCurrentSession(context->session))
+                        if (self->acceptsContext(context->task))
                         {
-                            emit self->pointCloudProgressChanged(
-                                stage,
-                                std::clamp(
-                                    static_cast<int>(ratio * 60.0f), 0, 60));
+                            emit self->pointCloudProgressChanged(stage,
+                                                                 std::clamp(static_cast<int>(ratio * 60.0f), 0, 60));
                         }
                     });
             connect(generator,
                     &xjw::gui::tasks::DepthMapTask::errorOccurred,
                     self,
-                    [context](const QString& message) { context->depthError = message; });
+                    [context](const QString& message)
+                    {
+                        if (context->depthError.isEmpty())
+                        {
+                            context->depthError = message;
+                        }
+                    });
             connect(generator,
                     &xjw::gui::tasks::DepthMapTask::depthMapArtifactSaved,
                     self,
                     [self, context](const QJsonObject& artifact)
                     {
-                        if (!self->_owner ||
-                            !self->_owner->isCurrentSession(context->session))
+                        if (!self->acceptsContext(context->task))
                         {
                             return;
                         }
-                        const QJsonObject record =
-                            depthRecordFromArtifact(artifact, *context);
+                        const QJsonObject record = depthRecordFromArtifact(artifact, *context);
                         if (!record.isEmpty())
                         {
-                            xjw::gui::project::upsertProjectRecordByPath(
-                                self->_projectData,
-                                QStringLiteral("depth_map_results"),
-                                QStringLiteral("depth_png"),
-                                record);
+                            QString write_error;
+                            const bool published =
+                                self->_session->upsertResultRecordByPath(context->task.session,
+                                                                         QStringLiteral("depth_map_results"),
+                                                                         QStringLiteral("depth_png"),
+                                                                         record,
+                                                                         true,
+                                                                         &write_error);
+                            if (!self->acceptsContext(context->task))
+                            {
+                                self->cancelActiveTask();
+                            }
+                            else if (!published)
+                            {
+                                context->depthError =
+                                    write_error.isEmpty() ? QStringLiteral("深度图成果写入项目失败。") : write_error;
+                                self->cancelActiveTask();
+                            }
                         }
                     });
             connect(generator,
@@ -801,43 +978,54 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                             self->_activeGenerator.clear();
                         }
                         generator->deleteLater();
-                        if (!self->_owner ||
-                            !self->_owner->isCurrentSession(context->session))
+                        if (!self->acceptsContext(context->task, true))
                         {
-                            self->finishTask(false);
+                            self->finishTask(false, false);
+                            return;
+                        }
+                        if (context->task.cancelFlag->load(std::memory_order_relaxed))
+                        {
+                            if (context->depthError.isEmpty())
+                            {
+                                self->finishTask(false);
+                            }
+                            else
+                            {
+                                self->failTask(context->depthError, workflowDialogTitle(context->depthMapsOnly));
+                            }
                             return;
                         }
                         if (!success)
                         {
-                            self->failTask(
-                                context->depthError.isEmpty()
-                                    ? QStringLiteral("深度图估计失败或已取消。")
-                                    : context->depthError,
-                                workflowDialogTitle(context->depthMapsOnly));
+                            self->failTask(context->depthError.isEmpty() ? QStringLiteral("深度图估计失败或已取消。")
+                                                                         : context->depthError,
+                                           workflowDialogTitle(context->depthMapsOnly));
                             return;
                         }
-                        if (context->saveAfterEachStep && self->_projectData)
+                        if (context->saveAfterEachStep)
                         {
-                            self->_projectData->saveProjectAsync();
+                            self->_session->requestProjectSave(context->task.session);
+                            if (self->settleIfContextNotLive(context->task))
+                            {
+                                return;
+                            }
                         }
                         if (context->depthMapsOnly)
                         {
-                            const auto stored =
-                                xjw::core::project::collectStoredDepthFramesForDirectory(
-                                    self->_projectData->metadata(),
-                                    context->outputDir);
+                            const auto stored = xjw::core::project::collectStoredDepthFramesForDirectory(
+                                self->_session->metadata(), context->outputDir);
                             if (!stored.status.ok || stored.frames.size() < 2)
                             {
-                                self->failTask(
-                                    stored.status.ok
-                                        ? QStringLiteral("自动估计后可用深度图不足 2 帧。")
-                                        : stored.status.errorMessage,
-                                    QStringLiteral("生成模型"));
+                                self->failTask(stored.status.ok ? QStringLiteral("自动估计后可用深度图不足 2 帧。")
+                                                                : stored.status.errorMessage,
+                                               QStringLiteral("生成模型"));
                                 return;
                             }
-                            emit self->depthMapBatchReady(
-                                context->outputDir,
-                                static_cast<int>(stored.frames.size()));
+                            emit self->depthMapBatchReady(context->outputDir, static_cast<int>(stored.frames.size()));
+                            if (self->settleIfContextNotLive(context->task))
+                            {
+                                return;
+                            }
                             self->finishTask(true);
                             return;
                         }
@@ -847,20 +1035,19 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
             emit self->pointCloudProgressChanged(
                 QStringLiteral("正在估计多视深度图"), 1);
             generator->start();
-        });
+        }));
 }
 
 void ProjectPointCloudWorkflowController::startFusion(
     const std::shared_ptr<PointCloudWorkflowContext> &context)
 {
-    if (!_owner || !_owner->isCurrentSession(context->session))
+    if (settleIfContextNotLive(context->task))
     {
-        finishTask(false);
         return;
     }
 
     const auto discovered = xjw::core::project::collectStoredDepthFramesForDirectory(
-        _projectData->metadata(), context->outputDir);
+        _session->metadata(), context->outputDir);
     if (!discovered.status.ok || discovered.frames.size() < 2)
     {
         failTask(discovered.status.ok
@@ -883,12 +1070,24 @@ void ProjectPointCloudWorkflowController::startFusion(
     {
         frame_images.push_back(frame.refImage);
     }
-    bool all_cameras = false;
-    const QMap<QString, xjw::FramePinholeCamera> cameras =
-        _owner->getCamerasForImages(frame_images, &all_cameras);
-    if (!all_cameras)
+    bool all_image_ids = false;
+    const std::vector<xjw::camera_core::ImageId> frame_image_ids =
+        imageIdsForImages(_session->metadata(), frame_images, &all_image_ids);
+    PinholeStatesByImageId cameras;
+    QString camera_error;
+    if (!all_image_ids ||
+        !loadMvsCameras(_session->metadata(), frame_image_ids, &cameras, &camera_error))
     {
-        failTask(QStringLiteral("部分深度图对应影像缺少当前空三相机参数。"));
+        failTask(camera_error.isEmpty()
+                     ? QStringLiteral("深度图对应影像缺少稳定 ImageId，无法绑定 MVS 相机参数。")
+                     : camera_error);
+        return;
+    }
+    if (frame_image_ids.size() != stored.frames.size())
+    {
+        failTask(all_image_ids
+                     ? QStringLiteral("部分深度图对应影像缺少当前空三相机参数。")
+                     : QStringLiteral("深度图对应影像缺少稳定 ImageId，无法绑定当前空三相机参数。"));
         return;
     }
 
@@ -897,11 +1096,11 @@ void ProjectPointCloudWorkflowController::startFusion(
             .arg(xjw::core::project::processingDeviceId(
                 context->request.processingDevice)),
         65);
-    const auto cancel_flag = _cancelFlag;
+    const auto cancel_flag = context->task.cancelFlag;
     QPointer<ProjectPointCloudWorkflowController> self(this);
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [self, context, stored, cameras, cancel_flag]() -> PointCloudTaskResult
+        [self, context, stored, frame_image_ids, cameras, cancel_flag]() -> PointCloudTaskResult
         {
             PointCloudTaskResult task;
             if (!cancel_flag || cancel_flag->load(std::memory_order_relaxed))
@@ -915,11 +1114,12 @@ void ProjectPointCloudWorkflowController::startFusion(
                 xjw::core::project::buildDepthGenConfig(
                     context->request, frame_count).fusion;
             const xjw::mvs::FusionFrameLoader loader =
-                [stored, cameras, fusion_config, context](
+                [stored, frame_image_ids, cameras, fusion_config, context](
                     int index, xjw::mvs::FusionFrameInput* frame, std::string* error_message)
             {
-                xjw::FramePinholeCamera camera;
-                if (!cameraForImage(cameras, stored.frames[static_cast<std::size_t>(index)].refImage, &camera))
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                if (index < 0 || index >= static_cast<int>(frame_image_ids.size()) ||
+                    !cameraForImage(cameras, frame_image_ids[static_cast<std::size_t>(index)], &camera))
                 {
                     if (error_message)
                     {
@@ -977,8 +1177,7 @@ void ProjectPointCloudWorkflowController::startFusion(
                         self.data(),
                         [self, context, stage_text, workflow_percent]()
                         {
-                            if (self && self->_owner &&
-                                self->_owner->isCurrentSession(context->session))
+                            if (self && self->acceptsContext(context->task))
                             {
                                 emit self->pointCloudProgressChanged(
                                     stage_text,
@@ -1104,28 +1303,23 @@ void ProjectPointCloudWorkflowController::startFusion(
                 {QStringLiteral("output_points"), static_cast<qint64>(cloud.size())}};
             if (!stored.frames.empty())
             {
-                task.record[QStringLiteral("source_depth_config_hash")] =
-                    stored.frames.front().configHash;
+                task.record[QStringLiteral("source_depth_config_hash")] = stored.frames.front().configHash;
             }
             task.ok = true;
             return task;
         },
-        [context](
-            ProjectPointCloudWorkflowController *manager,
-            xjw::gui::tasks::TaskOutcome<PointCloudTaskResult> outcome)
+        [context](ProjectPointCloudWorkflowController* manager,
+                  xjw::gui::tasks::TaskOutcome<PointCloudTaskResult> outcome)
         {
-            if (!manager->_owner ||
-                !manager->_owner->isCurrentSession(context->session))
+            if (manager->settleIfContextNotLive(context->task))
             {
-                manager->finishTask(false);
                 return;
             }
             if (!outcome.succeeded())
             {
                 manager->failTask(outcome.errorMessage.isEmpty()
                                       ? QStringLiteral("点云融合发生未知异常")
-                                      : QStringLiteral("点云融合异常：%1")
-                                            .arg(outcome.errorMessage));
+                                      : QStringLiteral("点云融合异常：%1").arg(outcome.errorMessage));
                 return;
             }
 
@@ -1143,74 +1337,154 @@ void ProjectPointCloudWorkflowController::startFusion(
                 return;
             }
 
-            const QJsonObject processing =
-                result.record.value(QStringLiteral("point_cloud_processing")).toObject();
+            const QJsonObject processing = result.record.value(QStringLiteral("point_cloud_processing")).toObject();
             emit manager->pointCloudProgressChanged(
                 QStringLiteral("点云去噪完成：%1 → %2 点，请求 %3，实际 %4%5")
                     .arg(processing.value(QStringLiteral("input_points")).toInteger())
                     .arg(processing.value(QStringLiteral("output_points")).toInteger())
                     .arg(processing.value(QStringLiteral("requested")).toString())
                     .arg(processing.value(QStringLiteral("actual")).toString())
-                    .arg(processing.value(QStringLiteral("used_fallback")).toBool()
-                             ? QStringLiteral("（已回退）")
-                             : QString()),
+                    .arg(processing.value(QStringLiteral("used_fallback")).toBool() ? QStringLiteral("（已回退）")
+                                                                                    : QString()),
                 97);
+            if (manager->settleIfContextNotLive(context->task))
+            {
+                return;
+            }
 
+            QString write_error;
+            bool published = false;
             if (context->replaceDefaultPointCloud)
             {
-                xjw::gui::project::replaceProjectRecordWithLatest(
-                    manager->_projectData,
-                    QStringLiteral("dense_cloud_results"),
-                    result.record);
+                published = manager->_session->replaceResultRecordWithLatest(
+                    context->task.session, QStringLiteral("dense_cloud_results"), result.record, true, &write_error);
             }
             else
             {
-                xjw::gui::project::upsertProjectRecordByPath(
-                    manager->_projectData,
-                    QStringLiteral("dense_cloud_results"),
-                    QStringLiteral("dense_cloud_xyz"),
-                    result.record);
+                published = manager->_session->upsertResultRecordByPath(context->task.session,
+                                                                        QStringLiteral("dense_cloud_results"),
+                                                                        QStringLiteral("dense_cloud_xyz"),
+                                                                        result.record,
+                                                                        true,
+                                                                        &write_error);
+            }
+            if (manager->settleIfContextNotLive(context->task))
+            {
+                return;
+            }
+            if (!published)
+            {
+                manager->failTask(write_error.isEmpty() ? QStringLiteral("稠密点云成果写入项目失败。") : write_error);
+                return;
             }
             if (context->saveAfterEachStep)
             {
-                manager->_projectData->saveProjectAsync();
+                manager->_session->requestProjectSave(context->task.session);
+                if (manager->settleIfContextNotLive(context->task))
+                {
+                    return;
+                }
             }
-            manager->_owner->refreshReconstructionQualityReport();
-            emit manager->pointCloudResultReady(
-                result.pointCloudPath,
-                result.pointCount);
-            QMessageBox::information(
-                manager->_parentWidget,
-                QStringLiteral("创建点云"),
-                QStringLiteral("点云已生成。\n点数: %1\n路径: %2")
-                    .arg(result.pointCount)
-                    .arg(QDir::toNativeSeparators(result.pointCloudPath)));
+            emit manager->pointCloudResultReady(result.pointCloudPath, result.pointCount);
+            if (manager->settleIfContextNotLive(context->task))
+            {
+                return;
+            }
+            if (manager->_messages)
+            {
+                manager->_messages->information(nullptr,
+                                                QStringLiteral("创建点云"),
+                                                QStringLiteral("点云已生成。\n点数: %1\n路径: %2")
+                                                    .arg(result.pointCount)
+                                                    .arg(QDir::toNativeSeparators(result.pointCloudPath)));
+            }
+            if (manager->settleIfContextNotLive(context->task))
+            {
+                return;
+            }
             manager->finishTask(true);
-        });
+        }));
 }
 
 void ProjectPointCloudWorkflowController::cancelActiveTask()
 {
-    if (_cancelFlag)
+    if (_activeContext.cancelFlag)
     {
-        _cancelFlag->store(true, std::memory_order_relaxed);
+        _activeContext.cancelFlag->store(true, std::memory_order_relaxed);
     }
     if (auto* generator = qobject_cast<xjw::gui::tasks::DepthMapTask*>(_activeGenerator.data()))
     {
         generator->requestCancel();
     }
 }
+
+void ProjectPointCloudWorkflowController::waitForActiveTask()
+{
+    cancelActiveTask();
+    if (auto* generator = qobject_cast<xjw::gui::tasks::DepthMapTask*>(_activeGenerator.data()))
+    {
+        _activeGenerator.clear();
+        delete generator;
+    }
+    for (QFuture<void>& future : _futures)
+    {
+        if (future.isRunning())
+        {
+            future.waitForFinished();
+        }
+    }
+    _futures.clear();
+}
+
 bool ProjectPointCloudWorkflowController::isRunning() const
 {
     return _isRunning;
 }
 
-void ProjectPointCloudWorkflowController::finishTask(bool success)
+bool ProjectPointCloudWorkflowController::hasPendingWork() const noexcept
+{
+    if (_activeGenerator)
+    {
+        return true;
+    }
+    return std::any_of(_futures.cbegin(),
+                       _futures.cend(),
+                       [](const QFuture<void>& future) { return future.isValid() && !future.isFinished(); });
+}
+
+bool ProjectPointCloudWorkflowController::acceptsContext(const xjw::gui::project::ProjectTaskContext& context,
+                                                         bool allow_cancelled) const
+{
+    return _isRunning && _session && _session->isCurrent(context.session) && context.cancelFlag &&
+           (allow_cancelled || !context.cancelFlag->load(std::memory_order_relaxed)) &&
+           _activeContext.taskId == context.taskId && _activeContext.cancelFlag == context.cancelFlag;
+}
+
+bool ProjectPointCloudWorkflowController::settleIfContextNotLive(const xjw::gui::project::ProjectTaskContext& context)
+{
+    if (!acceptsContext(context, true))
+    {
+        finishTask(false, false);
+        return true;
+    }
+    if (context.cancelFlag->load(std::memory_order_relaxed))
+    {
+        finishTask(false);
+        return true;
+    }
+    return false;
+}
+
+void ProjectPointCloudWorkflowController::finishTask(bool success, bool emit_terminal)
 {
     _activeGenerator.clear();
-    _cancelFlag.reset();
+    _activeContext = {};
     _isRunning = false;
-    emit pointCloudProgressFinished(success);
+    pruneFinishedFutures();
+    if (emit_terminal)
+    {
+        emit pointCloudProgressFinished(success);
+    }
 }
 
 void ProjectPointCloudWorkflowController::failTask(const QString &message,
@@ -1219,9 +1493,34 @@ void ProjectPointCloudWorkflowController::failTask(const QString &message,
     const QString effective_message = message.trimmed().isEmpty()
         ? QStringLiteral("点云任务失败，未返回具体错误。")
         : message;
-    QMessageBox::warning(_parentWidget, title, effective_message);
+    if (_messages)
+    {
+        _messages->warning(nullptr, title, effective_message);
+    }
     if (_isRunning)
     {
         finishTask(false);
     }
+}
+
+void ProjectPointCloudWorkflowController::pruneFinishedFutures()
+{
+    _futures.erase(std::remove_if(_futures.begin(),
+                                  _futures.end(),
+                                  [](const QFuture<void> &future) { return future.isFinished(); }),
+                   _futures.end());
+}
+
+void ProjectPointCloudWorkflowController::trackFuture(QFuture<void> future)
+{
+    pruneFinishedFutures();
+    if (future.isValid())
+    {
+        _futures.push_back(std::move(future));
+    }
+}
+
+void ProjectPointCloudWorkflowController::trackFutureForTesting(QFuture<void> future)
+{
+    trackFuture(std::move(future));
 }

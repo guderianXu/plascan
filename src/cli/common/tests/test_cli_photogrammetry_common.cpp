@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 namespace
@@ -11,9 +13,9 @@ namespace
 
     using xjw::cli::parsePhotogrammetryListLine;
 
-    xjw::FramePinholeCamera makeFinalCamera(double centerX)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeFinalCamera(double centerX)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(900.0, 905.0, 320.0, 240.0);
         camera.setPixelPitch(0.01);
         camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {centerX, 0.0, 2.0});
@@ -26,6 +28,62 @@ namespace
         QFile file(path);
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         ASSERT_EQ(file.write("image"), 5);
+    }
+
+    QJsonObject canonicalPinholeDefinition()
+    {
+        return QJsonObject{{QStringLiteral("id"), QStringLiteral("cli-test-definition")},
+                           {QStringLiteral("model_type"), QStringLiteral("frame_pinhole")},
+                           {QStringLiteral("schema_version"), 1},
+                           {QStringLiteral("frame"), QStringLiteral("local")},
+                           {QStringLiteral("parameters"),
+                            QJsonObject{{QStringLiteral("intrinsics"),
+                                         QJsonObject{{QStringLiteral("fx_px"), 900.0},
+                                                     {QStringLiteral("fy_px"), 905.0},
+                                                     {QStringLiteral("cx_px"), 320.0},
+                                                     {QStringLiteral("cy_px"), 240.0},
+                                                     {QStringLiteral("pixel_pitch_mm"), 0.01},
+                                                     {QStringLiteral("u_axis_sign"), 1},
+                                                     {QStringLiteral("v_axis_sign"), 1}}},
+                                        {QStringLiteral("distortion"),
+                                         QJsonObject{{QStringLiteral("k1"), 0.0},
+                                                     {QStringLiteral("k2"), 0.0},
+                                                     {QStringLiteral("k3"), 0.0},
+                                                     {QStringLiteral("p1"), 0.0},
+                                                     {QStringLiteral("p2"), 0.0}}},
+                                        {QStringLiteral("pixel_convention"), QStringLiteral("center")},
+                                        {QStringLiteral("depth_axis_flipped"), false}}}};
+    }
+
+    QJsonObject canonicalPinholeInstance(const QString& imageId)
+    {
+        return QJsonObject{{QStringLiteral("id"), QStringLiteral("cli-test-instance-") + imageId},
+                           {QStringLiteral("image_uuid"), imageId},
+                           {QStringLiteral("definition_id"), QStringLiteral("cli-test-definition")},
+                           {QStringLiteral("schema_version"), 1},
+                           {QStringLiteral("image_size"),
+                            QJsonObject{{QStringLiteral("samples"), 640}, {QStringLiteral("lines"), 480}}},
+                           {QStringLiteral("pose"),
+                            QJsonObject{{QStringLiteral("frame"), QStringLiteral("local")},
+                                        {QStringLiteral("center_m"), QJsonArray{0.0, 0.0, 2.0}},
+                                        {QStringLiteral("camera_to_world_rotation"),
+                                         QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}}};
+    }
+
+    QJsonObject canonicalProjectFiles(const QStringList& images)
+    {
+        QJsonArray imageEntries;
+        QJsonArray instances;
+        for (int index = 0; index < images.size(); ++index)
+        {
+            const QString imageId = QStringLiteral("cli-test-image-%1").arg(index + 1);
+            imageEntries.append(
+                QJsonObject{{QStringLiteral("image_uuid"), imageId}, {QStringLiteral("path"), images.at(index)}});
+            instances.append(canonicalPinholeInstance(imageId));
+        }
+        return QJsonObject{{QStringLiteral("images"), imageEntries},
+                           {QStringLiteral("camera_definitions"), QJsonArray{canonicalPinholeDefinition()}},
+                           {QStringLiteral("camera_instances"), instances}};
     }
 
     TEST(CliPhotogrammetryCommonTest, ParsesShellAndCsvRows)
@@ -85,6 +143,7 @@ namespace
         const QJsonObject projectItem = xjw::cli::inputItemsToJson(items).first().toObject();
         EXPECT_EQ(projectItem.value(QStringLiteral("path")).toString(), item.imagePath);
         EXPECT_EQ(projectItem.value(QStringLiteral("camera_path")).toString(), item.cameraPath);
+        EXPECT_FALSE(projectItem.contains(QStringLiteral("camera")));
 
         const QJsonObject reportPair = xjw::cli::inputPairsToJson(items).first().toObject();
         EXPECT_EQ(reportPair.value(QStringLiteral("image")).toString(), item.imagePath);
@@ -101,13 +160,27 @@ namespace
         ASSERT_GT(file.write("name,x,y,z\nIMG_001.tif,1.5,2.5,3.5\nIMG_002;4;5;6\n"), 0);
         file.close();
 
-        QMap<QString, std::array<double, 3>> positions;
+        const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.tif"));
+        const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("IMG_002.tif"));
+        writePlaceholder(imageA);
+        writePlaceholder(imageB);
+        const QStringList images{imageA, imageB};
+        const QJsonObject projectFiles = canonicalProjectFiles(images);
+        std::vector<xjw::camera_core::ImageId> imageIds;
+        ASSERT_TRUE(xjw::cli::resolveProjectImageIds(projectFiles, images, &imageIds, nullptr));
+
+        xjw::camera_reference::ReferenceCameraPositionMap positions;
         QString error;
-        ASSERT_TRUE(xjw::cli::readReferencePositionCsv(csvPath, &positions, &error)) << qPrintable(error);
-        ASSERT_TRUE(positions.contains(QStringLiteral("IMG_001.tif")));
-        EXPECT_DOUBLE_EQ(positions.value(QStringLiteral("IMG_001.tif"))[0], 1.5);
-        ASSERT_TRUE(positions.contains(QStringLiteral("IMG_002")));
-        EXPECT_DOUBLE_EQ(positions.value(QStringLiteral("IMG_002"))[2], 6.0);
+        ASSERT_TRUE(xjw::cli::readReferencePositionCsv(csvPath, projectFiles, images, imageIds, &positions, &error))
+            << qPrintable(error);
+        ASSERT_EQ(positions.size(), 2U);
+        const auto first = positions.find(imageIds.at(0));
+        ASSERT_NE(first, positions.end());
+        EXPECT_DOUBLE_EQ(first->second.center()[0], 1.5);
+        const auto second = positions.find(imageIds.at(1));
+        ASSERT_NE(second, positions.end());
+        EXPECT_DOUBLE_EQ(second->second.center()[2], 6.0);
+        EXPECT_EQ(first->second.worldFrame().value(), "local");
     }
 
     TEST(CliPhotogrammetryCommonTest, ExportsCompleteFinalBaCameraSetForDirectReuse)

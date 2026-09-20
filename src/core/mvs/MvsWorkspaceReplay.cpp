@@ -16,24 +16,67 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <optional>
+#include <string>
 
 namespace xjw::mvs
 {
     namespace
     {
 
-        bool readDoubleArray(const QJsonValue& value, double* output, int count)
+        bool readFiniteDoubleArray(const QJsonValue& value, double* output, int count)
         {
             const QJsonArray array = value.toArray();
-            if (!output || array.size() != count)
+            if (!output || !value.isArray() || array.size() != count)
             {
                 return false;
             }
             for (int index = 0; index < count; ++index)
             {
-                output[index] = array.at(index).toDouble();
+                const QJsonValue element = array.at(index);
+                if (!element.isDouble())
+                {
+                    return false;
+                }
+                output[index] = element.toDouble();
+                if (!std::isfinite(output[index]))
+                {
+                    return false;
+                }
             }
             return true;
+        }
+
+        bool readRequiredFiniteDouble(const QJsonObject& object, const QString& key, double* output)
+        {
+            if (!output || !object.contains(key))
+            {
+                return false;
+            }
+            const QJsonValue value = object.value(key);
+            if (!value.isDouble())
+            {
+                return false;
+            }
+            *output = value.toDouble();
+            return std::isfinite(*output);
+        }
+
+        bool readOptionalFiniteDouble(const QJsonObject& object,
+                                      const QString& key,
+                                      double defaultValue,
+                                      double* output)
+        {
+            if (!output)
+            {
+                return false;
+            }
+            if (!object.contains(key))
+            {
+                *output = defaultValue;
+                return true;
+            }
+            return readRequiredFiniteDouble(object, key, output);
         }
 
         QString maskPathForImage(const QString& maskDirectory, const QString& imagePath)
@@ -102,7 +145,9 @@ namespace xjw::mvs
 
     } // namespace
 
-    bool cameraFromMvsWorkspaceJson(const QJsonObject& object, FramePinholeCamera* camera)
+    bool cameraFromMvsWorkspaceJson(const QJsonObject& object,
+                                    xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera,
+                                    bool requireBoundIdentity)
     {
         if (!camera || object.isEmpty())
         {
@@ -111,27 +156,43 @@ namespace xjw::mvs
 
         std::array<double, 9> worldToCamera{};
         std::array<double, 3> center{};
-        if (!readDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")), worldToCamera.data(), 9) ||
-            !readDoubleArray(object.value(QStringLiteral("camera_center")), center.data(), 3))
+        if (!readFiniteDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")), worldToCamera.data(), 9) ||
+            !readFiniteDoubleArray(object.value(QStringLiteral("camera_center")), center.data(), 3))
         {
             return false;
         }
 
-        const double focalX = object.value(QStringLiteral("fx")).toDouble();
-        const double focalY = object.value(QStringLiteral("fy")).toDouble();
-        const double principalX = object.value(QStringLiteral("cx")).toDouble();
-        const double principalY = object.value(QStringLiteral("cy")).toDouble();
-        const double radialK1 = object.value(QStringLiteral("k1")).toDouble();
-        const double radialK2 = object.value(QStringLiteral("k2")).toDouble();
-        const double radialK3 = object.value(QStringLiteral("k3")).toDouble();
-        const double tangentialP1 = object.value(QStringLiteral("p1")).toDouble();
-        const double tangentialP2 = object.value(QStringLiteral("p2")).toDouble();
-        if (!std::isfinite(focalX) || !std::isfinite(focalY) || !std::isfinite(principalX) ||
-            !std::isfinite(principalY) || !std::isfinite(radialK1) || !std::isfinite(radialK2) ||
-            !std::isfinite(radialK3) || !std::isfinite(tangentialP1) || !std::isfinite(tangentialP2) ||
-            std::abs(focalX) <= 1.0e-12 || std::abs(focalY) <= 1.0e-12)
+        double focalX = 0.0;
+        double focalY = 0.0;
+        double principalX = 0.0;
+        double principalY = 0.0;
+        double radialK1 = 0.0;
+        double radialK2 = 0.0;
+        double radialK3 = 0.0;
+        double tangentialP1 = 0.0;
+        double tangentialP2 = 0.0;
+        if (!readRequiredFiniteDouble(object, QStringLiteral("fx"), &focalX) ||
+            !readRequiredFiniteDouble(object, QStringLiteral("fy"), &focalY) ||
+            !readRequiredFiniteDouble(object, QStringLiteral("cx"), &principalX) ||
+            !readRequiredFiniteDouble(object, QStringLiteral("cy"), &principalY) ||
+            !readOptionalFiniteDouble(object, QStringLiteral("k1"), 0.0, &radialK1) ||
+            !readOptionalFiniteDouble(object, QStringLiteral("k2"), 0.0, &radialK2) ||
+            !readOptionalFiniteDouble(object, QStringLiteral("k3"), 0.0, &radialK3) ||
+            !readOptionalFiniteDouble(object, QStringLiteral("p1"), 0.0, &tangentialP1) ||
+            !readOptionalFiniteDouble(object, QStringLiteral("p2"), 0.0, &tangentialP2))
         {
             return false;
+        }
+
+        if (object.contains(QStringLiteral("translation_world_to_camera")))
+        {
+            std::array<double, 3> translation{};
+            if (!readFiniteDoubleArray(object.value(QStringLiteral("translation_world_to_camera")),
+                                       translation.data(),
+                                       static_cast<int>(translation.size())))
+            {
+                return false;
+            }
         }
 
         const std::array<double, 9> cameraToWorld{{worldToCamera[0],
@@ -144,13 +205,44 @@ namespace xjw::mvs
                                                    worldToCamera[5],
                                                    worldToCamera[8]}};
 
-        FramePinholeCamera parsed;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
         parsed.setIntrinsics(focalX, focalY, principalX, principalY);
         parsed.setPose(cameraToWorld, center);
         parsed.setDistortion(radialK1, radialK2, radialK3, tangentialP1, tangentialP2);
-        if (!parsed.isValid())
+        std::string validationError;
+        if (!parsed.isValid() || !parsed.validateNumericalState(&validationError))
         {
             return false;
+        }
+
+        const QString instanceId = object.value(QStringLiteral("instance_id")).toString().trimmed();
+        const QString imageId = object.value(QStringLiteral("image_id")).toString().trimmed();
+        const QString worldFrame = object.value(QStringLiteral("world_frame")).toString().trimmed();
+        const bool hasAnyIdentity = object.contains(QStringLiteral("instance_id")) ||
+                                    object.contains(QStringLiteral("image_id")) ||
+                                    object.contains(QStringLiteral("world_frame"));
+        const bool hasCompleteIdentity = object.value(QStringLiteral("instance_id")).isString() &&
+                                         object.value(QStringLiteral("image_id")).isString() &&
+                                         object.value(QStringLiteral("world_frame")).isString() &&
+                                         !instanceId.isEmpty() && !imageId.isEmpty() && !worldFrame.isEmpty();
+        if (hasAnyIdentity && !hasCompleteIdentity)
+        {
+            return false;
+        }
+        if (requireBoundIdentity && !hasCompleteIdentity)
+        {
+            return false;
+        }
+        if (hasCompleteIdentity)
+        {
+            std::string bindError;
+            if (!parsed.bindIdentity(camera_core::CameraInstanceId(instanceId.toStdString()),
+                                     camera_core::ImageId(imageId.toStdString()),
+                                     xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
+                                     &bindError))
+            {
+                return false;
+            }
         }
         *camera = parsed;
         return true;
@@ -212,6 +304,9 @@ namespace xjw::mvs
         views->reserve(recordsByIndex.size());
         QSet<QString> replayImageIdentities;
         QSet<QString> replayRasterIdentities;
+        QSet<QString> replayCameraImageIdentities;
+        QSet<QString> replayCameraInstanceIdentities;
+        std::optional<xjw::coordinate_system::CoordinateFrameId> commonWorldFrame;
         int expectedIndex = 0;
         for (const auto& [index, record] : recordsByIndex)
         {
@@ -288,11 +383,41 @@ namespace xjw::mvs
                 view.preparedImagePath = xjw::common::io::toUtf8Path(raster_path);
             }
             const QJsonObject replay_camera = has_prepared_camera ? record.preparedCameraModel : record.cameraModel;
-            if (!cameraFromMvsWorkspaceJson(replay_camera, &view.camera))
+            if (!cameraFromMvsWorkspaceJson(replay_camera, &view.camera, true))
             {
                 if (errorMessage)
                 {
-                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机模型无效").arg(index);
+                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机模型无效或缺少显式 identity/frame")
+                                        .arg(index);
+                }
+                views->clear();
+                return false;
+            }
+            const QString cameraImageIdentity = QString::fromStdString(view.camera.imageId().value());
+            const QString cameraInstanceIdentity = QString::fromStdString(view.camera.instanceId().value());
+            if (replayCameraImageIdentities.contains(cameraImageIdentity) ||
+                replayCameraInstanceIdentities.contains(cameraInstanceIdentity))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机 identity 与已有帧重复").arg(index);
+                }
+                views->clear();
+                return false;
+            }
+            replayCameraImageIdentities.insert(cameraImageIdentity);
+            replayCameraInstanceIdentities.insert(cameraInstanceIdentity);
+            if (!commonWorldFrame)
+            {
+                commonWorldFrame = view.camera.worldFrame();
+            }
+            else if (*commonWorldFrame != view.camera.worldFrame())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS manifest 相机混用 world frame：%1 与 %2")
+                                        .arg(QString::fromStdString(commonWorldFrame->value()),
+                                             QString::fromStdString(view.camera.worldFrame().value()));
                 }
                 views->clear();
                 return false;
@@ -312,7 +437,7 @@ namespace xjw::mvs
             }
             view.imageWidth = image.cols;
             view.imageHeight = image.rows;
-            view.camera.setImageSize(CameraImageSize{image.cols, image.rows});
+            view.camera.setImageSize(camera_core::ImageSize{image.cols, image.rows});
 
             const QString prepared_mask_path = resolveManifestPath(manifestPath, record.preparedValidMaskPath);
             if (!prepared_mask_path.isEmpty())

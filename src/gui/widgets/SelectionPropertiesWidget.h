@@ -13,14 +13,12 @@ class SelectionPropertiesWidget : public QWidget
     Q_OBJECT
 
 public:
-    explicit SelectionPropertiesWidget(QWidget *parent = nullptr);
+    explicit SelectionPropertiesWidget(QWidget* parent = nullptr);
 
 public slots:
     void clearSelection();
-    void showPhotoProperties(const QJsonObject &meta, const QString &imagePath);
-    void showResourceProperties(const QJsonObject &meta,
-                                const QString &section,
-                                const QString &resourcePath);
+    void showPhotoProperties(const QJsonObject& meta, const QString& imagePath);
+    void showResourceProperties(const QJsonObject& meta, const QString& section, const QString& resourcePath);
 
 signals:
     void selectionStateChanged(bool hasSelection);
@@ -33,21 +31,18 @@ private:
         bool sectionHeader = false;
     };
 
-    void setRows(const QString &title, const QVector<PropertyRow> &rows);
-    void appendFileRows(QVector<PropertyRow> *rows, const QString &path) const;
-    QJsonObject findImageEntry(const QJsonObject &meta, const QString &imagePath) const;
-    QJsonObject findResourceRecord(const QJsonObject &meta,
-                                   const QString &section,
-                                   const QString &resourcePath) const;
-    QVector<PropertyRow> modelPropertyRows(const QJsonObject &meta,
-                                           const QJsonObject &record,
-                                           const QString &resourcePath) const;
-    QString imageAlignedText(const QJsonObject &entry) const;
-    QString cameraCenterText(const QJsonObject &entry) const;
-    QString intrinsicsText(const QJsonObject &entry) const;
+    void setRows(const QString& title, const QVector<PropertyRow>& rows);
+    void appendFileRows(QVector<PropertyRow>* rows, const QString& path) const;
+    QJsonObject findImageEntry(const QJsonObject& meta, const QString& imagePath) const;
+    QJsonObject findResourceRecord(const QJsonObject& meta, const QString& section, const QString& resourcePath) const;
+    QVector<PropertyRow>
+    modelPropertyRows(const QJsonObject& meta, const QJsonObject& record, const QString& resourcePath) const;
+    QString imageAlignedText(const QJsonObject& entry, const QJsonObject& camera) const;
+    QString cameraCenterText(const QJsonObject& entry, const QJsonObject& camera) const;
+    QString intrinsicsText(const QJsonObject& entry, const QJsonObject& camera) const;
     static QString fileSizeText(qint64 bytes);
 
-    QLabel *_title = nullptr;
-    QTableWidget *_table = nullptr;
+    QLabel* _title = nullptr;
+    QTableWidget* _table = nullptr;
     bool _hasSelection = false;
 };

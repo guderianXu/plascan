@@ -66,6 +66,7 @@ target_link_libraries(matchphototask PUBLIC
     plascan_common_io
     plascan_common_model
     plascan_common_project
+    camera_reference_geometry
     sfm
 )
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <string>
 
 namespace xjw::ortho_internal
 {
@@ -18,40 +19,6 @@ namespace
 bool isCancelled(const std::atomic_bool *cancelFlag)
 {
     return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
-}
-
-bool finiteCamera(const FramePinholeCamera &camera)
-{
-    if (!camera.isValid()
-        || !std::isfinite(camera.focalX())
-        || !std::isfinite(camera.focalY())
-        || !std::isfinite(camera.principalX())
-        || !std::isfinite(camera.principalY())
-        || camera.focalX() <= 0.0
-        || camera.focalY() <= 0.0)
-    {
-        return false;
-    }
-    for (double value : camera.cameraCenter())
-    {
-        if (!std::isfinite(value))
-        {
-            return false;
-        }
-    }
-    const auto rotation = camera.cameraToWorldRotation();
-    for (double value : rotation)
-    {
-        if (!std::isfinite(value))
-        {
-            return false;
-        }
-    }
-    const double determinant =
-        rotation[0] * (rotation[4] * rotation[8] - rotation[5] * rotation[7])
-        - rotation[1] * (rotation[3] * rotation[8] - rotation[5] * rotation[6])
-        + rotation[2] * (rotation[3] * rotation[7] - rotation[4] * rotation[6]);
-    return std::isfinite(determinant) && std::abs(determinant) > 1e-6;
 }
 
 double medianValue(std::vector<double> values)
@@ -198,12 +165,13 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
             }
             return false;
         }
-        if (!finiteCamera(input.camera))
+        std::string camera_error;
+        if (!input.camera.validateNumericalState(&camera_error))
         {
             if (errorMsg)
             {
-                *errorMsg = QStringLiteral("影像相机参数无效（内参或位姿）: %1")
-                                .arg(input.imagePath);
+                *errorMsg = QStringLiteral("影像相机参数无效（内参或位姿）: %1；%2")
+                                .arg(input.imagePath, QString::fromStdString(camera_error));
             }
             return false;
         }

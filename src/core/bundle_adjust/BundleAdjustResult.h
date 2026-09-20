@@ -2,7 +2,7 @@
 
 #include "BundleAdjustProblem.h"
 #include "BundleAdjustTypes.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <cstdint>
@@ -146,7 +146,8 @@ namespace xjw
 
         std::vector<BARefinedPoint> points; ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
         std::vector<BARefinedLaserRangeShot> laserRangeShots; ///< 与输入独立测距 shot 一一对应
-        std::vector<FramePinholeCamera> refinedCameras; ///< 优化后的相机列表（与输入 cameras 长度相同）
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+            refinedCameras; ///< 优化后的相机列表（与输入 cameras 长度相同）
     };
 
 } // namespace xjw

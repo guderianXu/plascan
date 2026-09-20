@@ -2,15 +2,19 @@
   "frozen_debt": {
     "core_library_qt_link": {
       "src/core/aerial_triangulation/CMakeLists.txt": {
-        "aerial_triangulation|PRIVATE|Qt6::Gui": 1,
         "aerial_triangulation|PUBLIC|Qt6::Core": 1
       },
-      "src/core/camera_reference/CMakeLists.txt": {
+      "src/core/camera/CMakeLists.txt": {
+        "camera_models_registry|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/camera/project/CMakeLists.txt": {
+        "camera_project|PUBLIC|Qt6::Core": 1
+      },
+      "src/core/camera/reference/CMakeLists.txt": {
         "camera_reference|PUBLIC|Qt6::Core": 1
       },
       "src/core/control_points/CMakeLists.txt": {
-        "control_points|PUBLIC|Qt6::Core": 1,
-        "control_points|PUBLIC|Qt6::Gui": 1
+        "control_points|PUBLIC|Qt6::Core": 1
       },
       "src/core/image_matching/CMakeLists.txt": {
         "image_matching|PUBLIC|Qt6::Core": 1
@@ -40,22 +44,21 @@
         "qc|PUBLIC|Qt6::Core": 1
       },
       "src/core/sfm/CMakeLists.txt": {
-        "sfm_project|PUBLIC|Qt6::Core": 1,
-        "sfm_project|PUBLIC|Qt6::Gui": 1
+        "sfm_project|PUBLIC|Qt6::Core": 1
       },
       "src/core/stereo_dem/CMakeLists.txt": {
         "stereo_dem|PRIVATE|Qt6::Core": 1
       },
       "src/core/terrain/CMakeLists.txt": {
-        "terrain|PRIVATE|Qt6::Core": 1,
-        "terrain|PRIVATE|Qt6::Gui": 1
+        "terrain_utilities|PRIVATE|Qt6::Core": 1,
+        "terrain|PRIVATE|Qt6::Core": 1
       }
     },
     "display_name": {
-      "src/core/camera_reference/io/CameraReferenceSetJson.cpp": {
+      "src/core/camera/reference/io/CameraReferenceSetJson.cpp": {
         "display_name": 1
       },
-      "src/core/camera_reference/io/CameraReferenceSetJsonDecode.cpp": {
+      "src/core/camera/reference/io/CameraReferenceSetJsonDecode.cpp": {
         "display_name": 1
       }
     },
@@ -72,7 +75,6 @@
       "src/core/aerial_triangulation/model/AerialTriangulationResult.h": {
         "QJsonArray": 1,
         "QJsonObject": 1,
-        "QMap": 1,
         "QString": 1
       },
       "src/core/aerial_triangulation/preparation/MatchResultCatalog.h": {
@@ -87,31 +89,17 @@
         "QString": 1
       },
       "src/core/aerial_triangulation/reconstruction/CameraIntrinsicPriorSanitizer.h": {
-        "QJsonObject": 1,
-        "QMap": 1,
-        "QStringList": 1
+        "QJsonObject": 1
       },
       "src/core/aerial_triangulation/reconstruction/MarkerPriorLoader.h": {
         "QJsonObject": 1,
         "QMap": 1,
         "QString": 1
       },
-      "src/core/aerial_triangulation/reconstruction/RpcAerialTriangulationRunner.h": {
-        "QMap": 1
-      },
       "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.h": {
-        "QMap": 1,
         "QSize": 1,
         "QString": 1,
         "QStringList": 1
-      },
-      "src/core/aerial_triangulation/reconstruction/SfmMatchDiagnostics.h": {
-        "QMap": 1,
-        "QPair": 1,
-        "QSet": 1,
-        "QString": 1,
-        "QStringList": 1,
-        "QVector": 1
       },
       "src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h": {
         "QDir": 1,
@@ -127,9 +115,6 @@
         "QJsonArray": 1,
         "QJsonObject": 1
       },
-      "src/core/aerial_triangulation/search/AdaptiveFocalSearch.h": {
-        "QVector": 1
-      },
       "src/core/camera/CameraIntrinsicPrior.h": {
         "QString": 1
       },
@@ -137,17 +122,42 @@
         "QJsonObject": 1,
         "QString": 1
       },
-      "src/core/camera_reference/io/CameraReferenceSetJson.h": {
+      "src/core/camera/models/LineScanModelJson.h": {
         "QJsonObject": 1
       },
-      "src/core/camera_reference/io/CameraReferenceSetStore.h": {
+      "src/core/camera/project/CameraInstanceUpdate.h": {
+        "QJsonObject": 1
+      },
+      "src/core/camera/project/CameraProjectRecords.h": {
+        "QJsonObject": 1,
+        "QMap": 1,
+        "QSet": 1,
+        "QString": 1,
+        "QStringList": 1
+      },
+      "src/core/camera/project/CameraProjectRuntime.h": {
+        "QStringList": 1
+      },
+      "src/core/camera/project/CameraProjectStore.h": {
+        "QJsonArray": 1,
+        "QJsonObject": 1,
+        "QStringList": 1
+      },
+      "src/core/camera/project/CameraProjectValidation.h": {
+        "QJsonArray": 1,
+        "QStringList": 1
+      },
+      "src/core/camera/reference/io/CameraReferenceSetJson.h": {
+        "QJsonObject": 1
+      },
+      "src/core/camera/reference/io/CameraReferenceSetStore.h": {
         "QString": 1
       },
-      "src/core/camera_reference/model/CameraReferenceSet.h": {
+      "src/core/camera/reference/model/CameraReferenceSet.h": {
         "QDateTime": 1,
         "QVector": 1
       },
-      "src/core/camera_reference/model/CameraReferenceTypes.h": {
+      "src/core/camera/reference/model/CameraReferenceTypes.h": {
         "QString": 1
       },
       "src/core/control_points/commands/MarkerChangeSet.h": {
@@ -163,9 +173,7 @@
         "QVector": 1
       },
       "src/core/control_points/detection/MarkerDetector.h": {
-        "QImage": 1,
         "QPointF": 1,
-        "QPolygonF": 1,
         "QString": 1,
         "QVector": 1
       },
@@ -194,12 +202,6 @@
       },
       "src/core/control_points/model/MarkerTypes.h": {
         "QPointF": 1,
-        "QString": 1,
-        "QVector": 1
-      },
-      "src/core/control_points/print/MarkerSheetRenderer.h": {
-        "QImage": 1,
-        "QSizeF": 1,
         "QString": 1,
         "QVector": 1
       },
@@ -266,7 +268,6 @@
         "QStringList": 1
       },
       "src/core/matchphototask/pair_selection/PlaMatchHctPairPreselector.h": {
-        "QMap": 1,
         "QString": 1,
         "QStringList": 1
       },
@@ -408,6 +409,9 @@
       "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
         "QJsonObject": 1
       },
+      "src/core/mvs/DepthArtifactIO.h": {
+        "QString": 1
+      },
       "src/core/mvs/DepthCompletenessMetrics.h": {
         "QJsonObject": 1
       },
@@ -439,6 +443,9 @@
       },
       "src/core/mvs/DepthLayerReliability.h": {
         "QJsonObject": 1
+      },
+      "src/core/mvs/DepthMatStorage.h": {
+        "QString": 1
       },
       "src/core/mvs/DepthMissingReason.h": {
         "QJsonObject": 1
@@ -569,14 +576,12 @@
         "QStringList": 1
       },
       "src/core/sfm/project/BaInputBuilder.h": {
-        "QHash": 1,
         "QJsonObject": 1,
         "QMap": 1,
         "QStringList": 1
       },
       "src/core/sfm/project/MarkerBaAdapter.h": {
-        "QMap": 1,
-        "QString": 1
+        "QMap": 1
       },
       "src/core/sfm/project/ProjectMatchInputReader.h": {
         "QJsonObject": 1,
@@ -623,9 +628,6 @@
         "QString": 1,
         "QStringList": 1
       },
-      "src/core/terrain/GlobalTerrainReportRenderer.h": {
-        "QString": 1
-      },
       "src/core/terrain/ObjMtlLoader.h": {
         "QString": 1
       },
@@ -665,8 +667,8 @@
     "public_header_qt_symbol": {
       "src/core/aerial_triangulation/model/AerialTriangulationOptions.h": {
         "QJsonObject": 2,
-        "QMap": 3,
-        "QString": 27,
+        "QMap": 1,
+        "QString": 25,
         "QStringList": 5,
         "QStringLiteral": 6
       },
@@ -676,9 +678,8 @@
       },
       "src/core/aerial_triangulation/model/AerialTriangulationResult.h": {
         "QJsonArray": 1,
-        "QJsonObject": 4,
-        "QMap": 1,
-        "QString": 5
+        "QJsonObject": 3,
+        "QString": 4
       },
       "src/core/aerial_triangulation/preparation/MatchResultCatalog.h": {
         "QByteArray": 1,
@@ -692,10 +693,7 @@
         "QString": 1
       },
       "src/core/aerial_triangulation/reconstruction/CameraIntrinsicPriorSanitizer.h": {
-        "QJsonObject": 2,
-        "QMap": 1,
-        "QString": 1,
-        "QStringList": 2
+        "QJsonObject": 2
       },
       "src/core/aerial_triangulation/reconstruction/MarkerPriorLoader.h": {
         "QJsonObject": 1,
@@ -703,24 +701,12 @@
         "QString": 3
       },
       "src/core/aerial_triangulation/reconstruction/RpcAerialTriangulationRunner.h": {
-        "QMap": 2,
         "QString": 1
       },
       "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.h": {
-        "QMap": 1,
         "QSize": 1,
         "QString": 3,
-        "QStringList": 2
-      },
-      "src/core/aerial_triangulation/reconstruction/SfmMatchDiagnostics.h": {
-        "QMap": 1,
-        "QPair": 4,
-        "QSet": 4,
-        "QString": 5,
-        "QStringList": 1,
-        "QStringLiteral": 6,
-        "QVector": 14,
-        "Q_UNUSED": 1
+        "QStringList": 1
       },
       "src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h": {
         "QDir": 1,
@@ -737,9 +723,6 @@
         "QJsonArray": 2,
         "QJsonObject": 3
       },
-      "src/core/aerial_triangulation/search/AdaptiveFocalSearch.h": {
-        "QVector": 1
-      },
       "src/core/aerial_triangulation/workflow/AerialTriangulationPipeline.h": {
         "QString": 1
       },
@@ -750,22 +733,48 @@
         "QString": 3
       },
       "src/core/camera/ProjectCameraIO.h": {
-        "QJsonObject": 10,
-        "QString": 4
+        "QJsonObject": 6,
+        "QString": 6
       },
-      "src/core/camera_reference/io/CameraReferenceSetJson.h": {
+      "src/core/camera/models/LineScanModelJson.h": {
+        "QJsonObject": 2
+      },
+      "src/core/camera/project/CameraInstanceUpdate.h": {
+        "QJsonObject": 1
+      },
+      "src/core/camera/project/CameraProjectRecords.h": {
+        "QJsonObject": 20,
+        "QMap": 3,
+        "QSet": 1,
+        "QString": 5,
+        "QStringList": 3
+      },
+      "src/core/camera/project/CameraProjectRuntime.h": {
+        "QJsonObject": 1,
+        "QStringList": 1
+      },
+      "src/core/camera/project/CameraProjectStore.h": {
+        "QJsonArray": 2,
+        "QJsonObject": 3,
+        "QStringList": 3
+      },
+      "src/core/camera/project/CameraProjectValidation.h": {
+        "QJsonArray": 3,
+        "QStringList": 1
+      },
+      "src/core/camera/reference/io/CameraReferenceSetJson.h": {
         "QJsonObject": 2,
         "QString": 1
       },
-      "src/core/camera_reference/io/CameraReferenceSetStore.h": {
+      "src/core/camera/reference/io/CameraReferenceSetStore.h": {
         "QString": 4
       },
-      "src/core/camera_reference/model/CameraReferenceSet.h": {
+      "src/core/camera/reference/model/CameraReferenceSet.h": {
         "QDateTime": 4,
         "QString": 5,
         "QVector": 9
       },
-      "src/core/camera_reference/model/CameraReferenceTypes.h": {
+      "src/core/camera/reference/model/CameraReferenceTypes.h": {
         "QString": 34,
         "QStringLiteral": 3
       },
@@ -774,7 +783,6 @@
         "QVector": 5
       },
       "src/core/control_points/detection/AprilTagDetector.h": {
-        "QImage": 2,
         "QString": 1,
         "QVector": 2
       },
@@ -793,17 +801,14 @@
         "quint64": 1
       },
       "src/core/control_points/detection/MarkerDetector.h": {
-        "QImage": 2,
-        "QPointF": 1,
-        "QPolygonF": 1,
+        "QPointF": 2,
         "QString": 2,
-        "QVector": 1
+        "QVector": 2
       },
       "src/core/control_points/detection/MarkerDetectorFactory.h": {
         "QString": 1
       },
       "src/core/control_points/detection/NonCodedTargetDetector.h": {
-        "QImage": 2,
         "QVector": 1
       },
       "src/core/control_points/geometry/MarkerGeometry.h": {
@@ -843,15 +848,6 @@
         "QString": 18,
         "QStringLiteral": 1,
         "QVector": 1
-      },
-      "src/core/control_points/print/MarkerPdfWriter.h": {
-        "QString": 3
-      },
-      "src/core/control_points/print/MarkerSheetRenderer.h": {
-        "QImage": 2,
-        "QSizeF": 2,
-        "QString": 1,
-        "QVector": 2
       },
       "src/core/control_points/quality/MarkerQualityReport.h": {
         "QVector": 1
@@ -946,8 +942,7 @@
         "QStringList": 2
       },
       "src/core/matchphototask/pair_selection/PlaMatchHctPairPreselector.h": {
-        "QMap": 3,
-        "QString": 6,
+        "QString": 3,
         "QStringList": 2
       },
       "src/core/matchphototask/runtime/MatchPhotosFeatureCache.h": {
@@ -974,14 +969,14 @@
       },
       "src/core/matchphototask/stages/GuidedMatchPolicy.h": {
         "QHash": 1,
-        "QString": 3
+        "QString": 4
       },
       "src/core/matchphototask/stages/MatchingStage.h": {
         "QByteArray": 2
       },
       "src/core/matchphototask/task/MatchPhotosContext.h": {
-        "QMap": 3,
-        "QString": 10
+        "QMap": 1,
+        "QString": 8
       },
       "src/core/matchphototask/task/MatchPhotosOptions.h": {
         "QLatin1String": 25,
@@ -1098,6 +1093,9 @@
       "src/core/mvs/DepthAnchoredHoleInterpolator.h": {
         "QJsonObject": 1
       },
+      "src/core/mvs/DepthArtifactIO.h": {
+        "QString": 1
+      },
       "src/core/mvs/DepthCompletenessMetrics.h": {
         "QJsonObject": 2
       },
@@ -1118,7 +1116,7 @@
       "src/core/mvs/DepthFrameUtils.h": {
         "QJsonArray": 1,
         "QJsonObject": 5,
-        "QString": 38,
+        "QString": 36,
         "QStringList": 1
       },
       "src/core/mvs/DepthGapTargetedRecovery.h": {
@@ -1131,6 +1129,9 @@
       },
       "src/core/mvs/DepthLayerReliability.h": {
         "QJsonObject": 1
+      },
+      "src/core/mvs/DepthMatStorage.h": {
+        "QString": 2
       },
       "src/core/mvs/DepthMissingReason.h": {
         "QJsonObject": 1
@@ -1147,7 +1148,7 @@
         "QString": 2
       },
       "src/core/mvs/MvsPipelineService.h": {
-        "QJsonObject": 3,
+        "QJsonObject": 2,
         "QString": 19
       },
       "src/core/mvs/MvsQualityReport.h": {
@@ -1179,15 +1180,10 @@
       "src/core/mvs/RecoveredModelInput.h": {
         "QString": 2
       },
-      "src/core/mvs/pipeline/DepthArtifactSaveQueue.h": {
-        "QSharedPointer": 1,
-        "QString": 6,
-        "QStringLiteral": 6
-      },
       "src/core/mvs/pipeline/MvsPipelineInternals.h": {
         "QJsonArray": 3,
         "QJsonObject": 7,
-        "QString": 11
+        "QString": 10
       },
       "src/core/project_workflows/MvsSourcePairQualityLoader.h": {
         "QString": 1,
@@ -1202,7 +1198,7 @@
         "QStringLiteral": 3
       },
       "src/core/project_workflows/ProjectResourceCleanup.h": {
-        "QString": 4,
+        "QString": 6,
         "QStringList": 6
       },
       "src/core/project_workflows/ProjectResourceCleanupArtifacts.h": {
@@ -1270,10 +1266,9 @@
         "QStringList": 1
       },
       "src/core/sfm/project/BaInputBuilder.h": {
-        "QHash": 1,
         "QJsonObject": 2,
         "QMap": 1,
-        "QString": 3,
+        "QString": 2,
         "QStringList": 2,
         "QVector": 2
       },
@@ -1283,8 +1278,8 @@
       },
       "src/core/sfm/project/ProjectMatchInputReader.h": {
         "QJsonObject": 2,
-        "QMap": 4,
-        "QString": 7,
+        "QMap": 5,
+        "QString": 10,
         "QStringList": 3
       },
       "src/core/sfm/project/SfmQualityJsonSerializer.h": {
@@ -1327,9 +1322,6 @@
         "QString": 2,
         "QStringList": 1
       },
-      "src/core/terrain/GlobalTerrainReportRenderer.h": {
-        "QString": 2
-      },
       "src/core/terrain/ObjMtlLoader.h": {
         "QString": 2
       },
@@ -1362,7 +1354,7 @@
       },
       "src/core/terrain/SmallBodyGlobalProducts.h": {
         "QJsonObject": 1,
-        "QString": 14,
+        "QString": 16,
         "QStringLiteral": 3
       },
       "src/core/terrain/SmallBodyMeshRaycaster.h": {
@@ -1386,11 +1378,7 @@
         "QString": 1
       }
     },
-    "runtime_qt_dependency": {
-      "src/core/project_workflows/ProjectResourceCleanup.cpp": {
-        "symbol:QObject": 2
-      }
-    }
+    "runtime_qt_dependency": {}
   },
   "schema_version": 1
 }

@@ -342,9 +342,10 @@ __kernel void unproject_dense_cloud(
             checkOpenCl(clSetKernelArg(kernel, index, sizeof(memory), &memory), "kernel buffer binding");
         }
 
-        bool hasZeroDistortion(const FramePinholeCamera& camera)
+        bool hasZeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
         {
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             return distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
                    distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
         }
@@ -389,14 +390,15 @@ __kernel void unproject_dense_cloud(
         }
     }
 
-    std::vector<DensePoint> DensePointCloudOpenCL::unproject(const cv::Mat& depth,
-                                                             const cv::Mat& mask,
-                                                             const FramePinholeCamera& camera,
-                                                             const cv::Mat& colorImage,
-                                                             float minimumDepth,
-                                                             float maximumDepth,
-                                                             std::string* errorMsg,
-                                                             const DenseCloudOptions* options)
+    std::vector<DensePoint>
+    DensePointCloudOpenCL::unproject(const cv::Mat& depth,
+                                     const cv::Mat& mask,
+                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                     const cv::Mat& colorImage,
+                                     float minimumDepth,
+                                     float maximumDepth,
+                                     std::string* errorMsg,
+                                     const DenseCloudOptions* options)
     {
         if (errorMsg)
         {
@@ -460,8 +462,9 @@ __kernel void unproject_dense_cloud(
                                    static_cast<std::size_t>(elementCount) * 3 * sizeof(std::uint8_t));
             OpenClBuffer validBuffer(runtime.context(), static_cast<std::size_t>(elementCount) * sizeof(std::int32_t));
 
-            const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-            const FramePinholeCamera::Pose pose = camera.pose();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                camera.intrinsics();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = camera.pose();
             std::array<float, 9> rotation{};
             std::array<float, 3> center{};
             for (int index = 0; index < 9; ++index)

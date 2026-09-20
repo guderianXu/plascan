@@ -20,16 +20,14 @@ namespace mvs
 namespace
 {
 
-bool isFiniteDistortion(const FramePinholeCamera::Distortion &distortion)
-{
-    return std::isfinite(distortion.radialK1)
-        && std::isfinite(distortion.radialK2)
-        && std::isfinite(distortion.radialK3)
-        && std::isfinite(distortion.tangentialP1)
-        && std::isfinite(distortion.tangentialP2);
+    bool isFiniteDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion)
+    {
+        return std::isfinite(distortion.radialK1) && std::isfinite(distortion.radialK2) &&
+               std::isfinite(distortion.radialK3) && std::isfinite(distortion.tangentialP1) &&
+               std::isfinite(distortion.tangentialP2);
 }
 
-bool hasDistortion(const FramePinholeCamera::Distortion &distortion) noexcept
+bool hasDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion) noexcept
 {
     constexpr double epsilon = 1e-15;
     return std::fabs(distortion.radialK1) > epsilon
@@ -88,7 +86,8 @@ bool writePngAtomic(const QString &path,
 
 } // namespace
 
-bool mvsImagePreparationRequiresDistinctPixels(const FramePinholeCamera &camera) noexcept
+bool mvsImagePreparationRequiresDistinctPixels(
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera) noexcept
 {
     return hasDistortion(camera.distortion());
 }
@@ -132,11 +131,11 @@ cv::Mat normalizeMvsPhotometry(const cv::Mat &source,
     return normalized;
 }
 
-bool prepareMvsImage(const cv::Mat &source,
-                     const FramePinholeCamera &sourceCamera,
-                     cv::Mat *prepared,
-                     FramePinholeCamera *preparedCamera,
-                     std::string *errorMessage)
+bool prepareMvsImage(const cv::Mat& source,
+                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                     cv::Mat* prepared,
+                     xjw::camera_models::frame_pinhole::FramePinholeNumericState* preparedCamera,
+                     std::string* errorMessage)
 {
     cv::Mat unused_valid_mask;
     return prepareMvsImageAndMask(source,
@@ -148,13 +147,13 @@ bool prepareMvsImage(const cv::Mat &source,
                                   errorMessage);
 }
 
-bool prepareMvsImageAndMask(const cv::Mat &source,
-                            const cv::Mat &sourceValidMask,
-                            const FramePinholeCamera &sourceCamera,
-                            cv::Mat *prepared,
-                            cv::Mat *preparedValidMask,
-                            FramePinholeCamera *preparedCamera,
-                            std::string *errorMessage)
+bool prepareMvsImageAndMask(const cv::Mat& source,
+                            const cv::Mat& sourceValidMask,
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                            cv::Mat* prepared,
+                            cv::Mat* preparedValidMask,
+                            xjw::camera_models::frame_pinhole::FramePinholeNumericState* preparedCamera,
+                            std::string* errorMessage)
 {
     if (prepared == nullptr || preparedValidMask == nullptr || preparedCamera == nullptr)
     {
@@ -181,9 +180,9 @@ bool prepareMvsImageAndMask(const cv::Mat &source,
         return false;
     }
 
-    FramePinholeCamera normalized = sourceCamera.normalizedForPositiveDepth();
-    const FramePinholeCamera::Intrinsics intrinsics = normalized.intrinsics();
-    const FramePinholeCamera::Distortion distortion = normalized.distortion();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState normalized = sourceCamera.normalizedForPositiveDepth();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = normalized.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = normalized.distortion();
     if (!(intrinsics.focalX > 0.0) || !(intrinsics.focalY > 0.0)
         || !std::isfinite(intrinsics.focalX) || !std::isfinite(intrinsics.focalY)
         || !std::isfinite(intrinsics.principalX) || !std::isfinite(intrinsics.principalY)
@@ -276,20 +275,19 @@ bool prepareMvsImageAndMask(const cv::Mat &source,
         return false;
     }
 
-    normalized.setDistortion(FramePinholeCamera::Distortion{});
+    normalized.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
     *preparedCamera = normalized;
     if (errorMessage) errorMessage->clear();
     return true;
 }
 
-bool saveMvsPreparedRasterArtifact(
-    const std::string &inputRasterPath,
-    const FramePinholeCamera &inputCamera,
-    const cv::Mat &preparedValidMask,
-    const std::string &workspaceDirectory,
-    int frameIndex,
-    MvsPreparedRasterArtifact *artifact,
-    std::string *errorMessage)
+bool saveMvsPreparedRasterArtifact(const std::string& inputRasterPath,
+                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& inputCamera,
+                                   const cv::Mat& preparedValidMask,
+                                   const std::string& workspaceDirectory,
+                                   int frameIndex,
+                                   MvsPreparedRasterArtifact* artifact,
+                                   std::string* errorMessage)
 {
     if (!artifact || frameIndex < 0 || workspaceDirectory.empty())
     {
@@ -313,7 +311,7 @@ bool saveMvsPreparedRasterArtifact(
     }
 
     cv::Mat prepared_color;
-    FramePinholeCamera prepared_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
     std::string preparation_error;
     if (!prepareMvsImage(source_color,
                          inputCamera,
@@ -378,7 +376,7 @@ bool saveMvsPreparedRasterArtifact(
         return false;
     }
 
-    prepared_camera.setImageSize(CameraImageSize{
+    prepared_camera.setImageSize(camera_core::ImageSize{
         prepared_color.cols,
         prepared_color.rows});
     artifact->imagePath = xjw::common::io::toUtf8Path(image_path);

@@ -305,6 +305,51 @@
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vcpkg-cuda-release/vcpkg_installed",
         "VCPKG_MANIFEST_INSTALL": "OFF"
       }
+    },
+    {
+      "name": "linux-source-headless-release",
+      "displayName": "linux CPU headless Release without PDF/report rendering",
+      "inherits": "linux-source-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "PLASCAN_BUILD_GUI": "OFF",
+        "PLASCAN_BUILD_GUI_TESTS": "OFF",
+        "PLASCAN_BUILD_QT_PRESENTATION": "OFF",
+        "PLASCAN_BUNDLE_RUNTIME": "OFF",
+        "PLASCAN_ENABLE_CUDA": "OFF",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "PLASCAN_ENABLE_OPENCL": "OFF"
+      }
+    },
+    {
+      "name": "macos-source-headless-release",
+      "displayName": "macos CPU headless Release without PDF/report rendering",
+      "inherits": "macos-source-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "PLASCAN_BUILD_GUI": "OFF",
+        "PLASCAN_BUILD_GUI_TESTS": "OFF",
+        "PLASCAN_BUILD_QT_PRESENTATION": "OFF",
+        "PLASCAN_BUNDLE_RUNTIME": "OFF",
+        "PLASCAN_ENABLE_CUDA": "OFF",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "PLASCAN_ENABLE_OPENCL": "OFF"
+      }
+    },
+    {
+      "name": "windows-source-headless-release",
+      "displayName": "windows CPU headless Release without PDF/report rendering",
+      "inherits": "windows-source-release",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "PLASCAN_BUILD_GUI": "OFF",
+        "PLASCAN_BUILD_GUI_TESTS": "OFF",
+        "PLASCAN_BUILD_QT_PRESENTATION": "OFF",
+        "PLASCAN_BUNDLE_RUNTIME": "OFF",
+        "PLASCAN_ENABLE_CUDA": "OFF",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "PLASCAN_ENABLE_OPENCL": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -430,6 +475,18 @@
         "plascan_gui"
       ],
       "jobs": 0
+    },
+    {
+      "name": "linux-source-headless-release",
+      "configurePreset": "linux-source-headless-release"
+    },
+    {
+      "name": "macos-source-headless-release",
+      "configurePreset": "macos-source-headless-release"
+    },
+    {
+      "name": "windows-source-headless-release",
+      "configurePreset": "windows-source-headless-release"
     }
   ],
   "testPresets": [
@@ -513,6 +570,27 @@
     {
       "name": "windows-vcpkg-cuda-release",
       "configurePreset": "windows-vcpkg-cuda-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-source-headless-release",
+      "configurePreset": "linux-source-headless-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-source-headless-release",
+      "configurePreset": "macos-source-headless-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-source-headless-release",
+      "configurePreset": "windows-source-headless-release",
       "output": {
         "outputOnFailure": true
       }

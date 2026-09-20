@@ -27,7 +27,8 @@
 #include "reconstruction/SfmReconstruction.h"
 #include "common/SfmTypes.h"
 #include "graph/CorrespondenceGraph.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "ProjectCameraIO.h"
 #include "BundleAdjustSolver.h"
 #include "triangulation/Triangulator.h"
 
@@ -207,31 +208,31 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, ReferenceFinalStageExposesCompleteBro
 TEST(SfmBundleAdjustCoordinatorPolicyTest, PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
 {
     const std::vector<ImageId> firstIds{2, 5};
-    std::vector<FramePinholeCamera> firstCameras(2);
-    for (FramePinholeCamera& camera : firstCameras)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> firstCameras(2);
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : firstCameras)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
-    std::unordered_map<ImageId, FramePinholeCamera> referencesByImageId;
-    const std::vector<FramePinholeCamera> firstReferences =
+    std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> referencesByImageId;
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> firstReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(firstIds, firstCameras, &referencesByImageId);
     ASSERT_EQ(firstReferences.size(), 2u);
 
-    std::vector<FramePinholeCamera> secondCameras = firstCameras;
-    for (FramePinholeCamera& camera : secondCameras)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> secondCameras = firstCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : secondCameras)
     {
         camera.setIntrinsics(1100.0, 1100.0, 512.0, 384.0);
     }
-    const std::vector<FramePinholeCamera> secondReferences =
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> secondReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(firstIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(secondReferences.size(), 2u);
     EXPECT_DOUBLE_EQ(secondReferences[0].focalX(), 1000.0);
     EXPECT_DOUBLE_EQ(secondReferences[1].focalX(), 1000.0);
 
     const std::vector<ImageId> retryIds{2, 5, 9};
-    secondCameras.push_back(FramePinholeCamera{});
+    secondCameras.push_back(xjw::camera_models::frame_pinhole::FramePinholeNumericState{});
     secondCameras.back().setIntrinsics(900.0, 900.0, 512.0, 384.0);
-    const std::vector<FramePinholeCamera> retryReferences =
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> retryReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(retryIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(retryReferences.size(), 3u);
     EXPECT_DOUBLE_EQ(retryReferences[0].focalX(), 1000.0);
@@ -241,13 +242,13 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, PersistentIntrinsicReferencesSurviveI
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, IntrinsicConvergenceDoesNotAverageOpposingCalibrationGroups)
 {
-    std::vector<FramePinholeCamera> references(2);
-    for (FramePinholeCamera& camera : references)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> references(2);
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : references)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
-    const std::vector<FramePinholeCamera> previous = references;
-    std::vector<FramePinholeCamera> current = references;
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> previous = references;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> current = references;
     current[0].setIntrinsics(1010.0, 1010.0, 512.0, 384.0);
     current[1].setIntrinsics(990.0, 990.0, 512.0, 384.0);
 
@@ -428,9 +429,10 @@ namespace
 {
 
     /// 创建一个简单的 pinhole 相机（焦距 1000px, 主点 512x384, 位于 (cx,cy,cz)）
-    FramePinholeCamera makeCamera(double cx, double cy, double cz, double fu = 1000.0, double fv = 1000.0)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeCamera(double cx, double cy, double cz, double fu = 1000.0, double fv = 1000.0)
     {
-        FramePinholeCamera cam;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
         cam.setIntrinsics(fu, fv, 512.0, 384.0);
         // identity rotation, camera at (cx,cy,cz)
         std::array<double, 9> R = {1, 0, 0, 0, 1, 0, 0, 0, 1};
@@ -440,7 +442,12 @@ namespace
     }
 
     /// 将世界点投影到相机上，返回 (u, v)；成功返回 true
-    bool projectPoint(const FramePinholeCamera& cam, double wx, double wy, double wz, double& u, double& v)
+    bool projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
+                      double wx,
+                      double wy,
+                      double wz,
+                      double& u,
+                      double& v)
     {
         double world[3] = {wx, wy, wz};
         double uv[2] = {0, 0};
@@ -453,8 +460,8 @@ namespace
     TEST(ReferenceStructureFilterTest, DeletesWholePointWhenAnyObservationIsFar)
     {
         SfmReconstruction reconstruction;
-        const FramePinholeCamera camera0 = makeCamera(-2.0, 0.0, 0.0);
-        const FramePinholeCamera camera1 = makeCamera(2.0, 0.0, 0.0);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(-2.0, 0.0, 0.0);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(2.0, 0.0, 0.0);
         const std::array<double, 3> world{{0.0, 0.0, 20.0}};
         double u0 = 0.0;
         double v0 = 0.0;
@@ -491,7 +498,7 @@ namespace
     TEST(ReferenceStructureFilterTest, ParallelChunksMatchSerialFiltering)
     {
         constexpr std::size_t point_count = 205;
-        const std::array<FramePinholeCamera, 3> cameras{{
+        const std::array<xjw::camera_models::frame_pinhole::FramePinholeNumericState, 3> cameras{{
             makeCamera(-2.0, 0.0, 0.0),
             makeCamera(2.0, 0.0, 0.0),
             makeCamera(0.0, 2.0, 0.0),
@@ -563,10 +570,10 @@ namespace
         auto make_reconstruction = []()
         {
             SfmReconstruction reconstruction;
-            FramePinholeCamera camera0 = makeCamera(-2.0, 0.0, 0.0);
-            FramePinholeCamera camera1 = makeCamera(2.0, 0.0, 0.0);
-            camera0.setImageSize(CameraImageSize{6000, 4000});
-            camera1.setImageSize(CameraImageSize{6000, 4000});
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(-2.0, 0.0, 0.0);
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(2.0, 0.0, 0.0);
+            camera0.setImageSize(camera_core::ImageSize{6000, 4000});
+            camera1.setImageSize(camera_core::ImageSize{6000, 4000});
 
             const std::array<double, 3> world{{0.0, 0.0, 20.0}};
             double u0 = 0.0;
@@ -609,7 +616,8 @@ namespace
         double x, y, z;
     };
 
-    double centerDistance(const FramePinholeCamera& a, const FramePinholeCamera& b)
+    double centerDistance(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& a,
+                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& b)
     {
         const auto ca = a.cameraCenter();
         const auto cb = b.cameraCenter();
@@ -622,7 +630,7 @@ namespace
     TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
     {
         SfmReconstruction reconstruction;
-        const std::array<FramePinholeCamera, 3> cameras{{
+        const std::array<xjw::camera_models::frame_pinhole::FramePinholeNumericState, 3> cameras{{
             makeCamera(-1.0, 0.0, 0.0),
             makeCamera(1.0, 0.0, 0.0),
             makeCamera(0.0, 1.0, 0.0),
@@ -679,8 +687,8 @@ namespace
     }
 
     /// 从合成 3D 点生成两幅图像的特征点和匹配
-    void buildSyntheticMatches(const FramePinholeCamera& cam1,
-                               const FramePinholeCamera& cam2,
+    void buildSyntheticMatches(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam1,
+                               const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam2,
                                const std::vector<SyntheticPoint>& points3D,
                                std::vector<FeatureKeypoint>& kpts1,
                                std::vector<FeatureKeypoint>& kpts2,
@@ -722,8 +730,8 @@ namespace
         IncrementalSfmOptions options;
         options.initMinChiralityInliers = 5;
         IncrementalSfm sfm(options);
-        const FramePinholeCamera camera0 = makeCamera(-4.0, 0.0, 0.0);
-        const FramePinholeCamera camera1 = makeCamera(4.0, 0.0, 0.0);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(-4.0, 0.0, 0.0);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(4.0, 0.0, 0.0);
         const auto points = generatePoints(120, 0.0, 0.0, 45.0, 4.0, 20260905);
         std::vector<FeatureKeypoint> keypoints0;
         std::vector<FeatureKeypoint> keypoints1;
@@ -735,13 +743,14 @@ namespace
         sfm.addMatches(0, 1, matches);
 
         InitialPairInitializer initializer(sfm);
-        const std::vector<FramePinholeCamera> hypotheses = initializer.enumerateFivePointPoseHypotheses(0, 1);
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> hypotheses =
+            initializer.enumerateFivePointPoseHypotheses(0, 1);
 
         EXPECT_FALSE(hypotheses.empty());
         EXPECT_LE(hypotheses.size(), 32U);
     }
 
-    void buildKnownPoseTracks(const std::vector<FramePinholeCamera>& cameras,
+    void buildKnownPoseTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
                               const std::vector<SyntheticPoint>& points3D,
                               std::vector<std::vector<FeatureKeypoint>>& keypoints,
                               std::vector<FeatureMatch>& matches01,
@@ -759,7 +768,7 @@ namespace
             projections.reserve(cameras.size());
 
             bool visibleInAll = true;
-            for (const FramePinholeCamera& camera : cameras)
+            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : cameras)
             {
                 double u = 0.0;
                 double v = 0.0;
@@ -790,7 +799,7 @@ namespace
         }
     }
 
-    void buildIndexedKeypoints(const std::vector<FramePinholeCamera>& cameras,
+    void buildIndexedKeypoints(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
                                const std::vector<SyntheticPoint>& points3D,
                                std::vector<std::vector<FeatureKeypoint>>& keypoints)
     {
@@ -802,7 +811,7 @@ namespace
             projections.reserve(cameras.size());
 
             bool visibleInAll = true;
-            for (const FramePinholeCamera& camera : cameras)
+            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : cameras)
             {
                 double u = 0.0;
                 double v = 0.0;
@@ -866,8 +875,8 @@ protected:
 TEST_F(SfmInitTest, SuccessfulInitWithCorrectIntrinsics)
 {
     // 两台相机，baseline 10 单位
-    FramePinholeCamera cam1 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam2 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = makeCamera(10, 0, 0);
 
     // 在 Z=50 附近生成 200 个 3D 点
     auto points = generatePoints(200, 5, 0, 50, 5.0);
@@ -893,8 +902,8 @@ TEST_F(SfmInitTest, SuccessfulInitWithCorrectIntrinsics)
 // 2. 匹配不足时 → 优雅失败（不崩溃）
 TEST_F(SfmInitTest, GracefulFailureWithInsufficientMatches)
 {
-    FramePinholeCamera cam1 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam2 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = makeCamera(10, 0, 0);
 
     // 只有 3 个匹配不够
     std::vector<FeatureKeypoint> kpts1 = {{100, 200}, {300, 400}, {500, 600}};
@@ -916,7 +925,7 @@ TEST_F(SfmInitTest, GracefulFailureWithInsufficientMatches)
 // 3. 单幅图像 → 优雅失败
 TEST_F(SfmInitTest, SingleImageFails)
 {
-    FramePinholeCamera cam = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam = makeCamera(0, 0, 0);
     std::vector<FeatureKeypoint> kpts = {{100, 200}};
 
     IncrementalSfm sfm(opts);
@@ -926,6 +935,25 @@ TEST_F(SfmInitTest, SingleImageFails)
 
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.numRegisteredImages, 0);
+}
+
+TEST_F(SfmInitTest, RejectsMalformedNumericCameraBeforeSfM)
+{
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState malformed = makeCamera(0, 0, 0);
+    malformed.setPose({1.0, 0.0, 0.0,
+                       0.0, 1.0, 0.0,
+                       0.0, 0.0, 2.0},
+                      {0.0, 0.0, 0.0});
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "malformed_0.png", malformed, {});
+    sfm.addImageWithCamera(1, "malformed_1.png", makeCamera(10.0, 0.0, 0.0), {});
+
+    const IncrementalSfmResult result = sfm.run();
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.summary.find("camera"), std::string::npos);
+    EXPECT_NE(result.summary.find("invalid"), std::string::npos);
 }
 
 // 4. 零图像 → 优雅失败
@@ -942,9 +970,9 @@ TEST_F(SfmInitTest, MultiCandidateRetry)
 {
     // 创建 3 幅图像：0和1的匹配主要是共线的（容易导致 chirality failure），
     // 0和2的匹配是良好的三角化几何
-    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(0.001, 0, 0); // 几乎重合 → 差的几何
-    FramePinholeCamera cam2 = makeCamera(10, 0, 0);    // 良好基线
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(0.001, 0, 0); // 几乎重合 → 差的几何
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = makeCamera(10, 0, 0); // 良好基线
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -979,11 +1007,13 @@ TEST_F(SfmInitTest, LoadCameraFromTsaiFile)
     std::string imgDir = std::string(TEST_DATA_DIR) + "/img/";
 
     // 验证测试数据存在
-    FramePinholeCamera testCam;
-    bool loaded = testCam.loadFromFile(tsaiDir + "1.tsai");
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState testCam;
+    QString load_error;
+    const bool loaded = common::project::loadFramePinholeNumericStateFromFile(
+        QString::fromStdString(tsaiDir + "1.tsai"), &testCam, &load_error);
     if (!loaded)
     {
-        GTEST_SKIP() << "Test data not available at " << tsaiDir;
+        GTEST_SKIP() << "Test data not available at " << tsaiDir << ": " << load_error.toStdString();
     }
 
     // 使用真实 .tsai 文件，但只测试两幅图像
@@ -1010,7 +1040,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndRunsStableBA)
     opts.filterMaxReprojError = 0.5;
     opts.filterMinTriAngle = 0.1;
 
-    std::vector<FramePinholeCamera> cameras = {
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
@@ -1059,12 +1089,12 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     opts.baOptions.maxIterations = 6;
     opts.baOptions.filterMaxReprojError = 5.0;
 
-    const std::vector<FramePinholeCamera> trueCameras = {
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> trueCameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
     };
-    std::vector<FramePinholeCamera> inputCameras = trueCameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> inputCameras = trueCameras;
     inputCameras[1] = makeCamera(2.18, 0.0, 0.0);
 
     const auto points = generatePoints(120, 2.0, 0.0, 70.0, 1.5, 37);
@@ -1091,7 +1121,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     EXPECT_GT(result.baTracksOptimized, 0);
     EXPECT_GE(result.baRmsBefore, result.baRmsAfter);
 
-    const FramePinholeCamera& refinedCamera = result.reconstruction->camera(1);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refinedCamera = result.reconstruction->camera(1);
     EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]), centerDistance(inputCameras[1], trueCameras[1]));
 }
 
@@ -1106,7 +1136,7 @@ TEST_F(SfmInitTest, LockedKnownCameraPoseModeKeepsInputExtrinsicsExact)
     opts.filterMaxReprojError = 0.5;
     opts.filterMinTriAngle = 0.1;
 
-    const std::vector<FramePinholeCamera> cameras = {
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
@@ -1148,7 +1178,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTrack
     opts.filterMinTriAngle = 0.1;
     opts.filterMinTrackLen = 2;
 
-    std::vector<FramePinholeCamera> cameras = {
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -1192,7 +1222,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAlmostAllTwoViewOutputWhenMultiVie
     opts.filterMinTriAngle = 0.1;
     opts.filterMinTrackLen = 2;
 
-    std::vector<FramePinholeCamera> cameras = {
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -1233,7 +1263,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeAdaptsTriangulationAngleForNarrowBaseline
 {
     opts.useKnownCameraPoses = true;
 
-    std::vector<FramePinholeCamera> cameras = {
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(0.35, 0.0, 0.0),
     };
@@ -1294,7 +1324,7 @@ TEST(ImageRegistrationEngineTest, DetectsSmallParallelAerialPoseBranch)
         image.id = imageId;
         reconstruction.addImage(image);
 
-        FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
         double angle = 0.0;
         if (imageId == 2 || imageId == 3)
@@ -1335,7 +1365,7 @@ TEST(ImageRegistrationEngineTest, ExpandsSmoothShouldersAroundStrongPoseOutliers
         const double angle = angleDegrees * degreesToRadians;
         const double cosine = std::cos(angle);
         const double sine = std::sin(angle);
-        FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
         camera.setPose({cosine, 0.0, sine, 0.0, 1.0, 0.0, -sine, 0.0, cosine},
                        {static_cast<double>(imageId), 0.0, 10.0});
@@ -1357,7 +1387,7 @@ TEST(ImageRegistrationEngineTest, SkipsNonParallelCameraNetwork)
         image.id = imageId;
         reconstruction.addImage(image);
 
-        FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
         const double angle = 2.0 * pi * static_cast<double>(imageId) / static_cast<double>(imageCount);
         const double cosine = std::cos(angle);
@@ -1380,7 +1410,7 @@ protected:
     /// 构造一个带有离群点的合成 BA 场景
     struct SyntheticBA
     {
-        std::vector<FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         std::vector<BATrack> tracks;
         int numGoodPoints = 0;
         int numOutliers = 0;
@@ -1545,7 +1575,7 @@ TEST_F(BAFilterTest, DisabledFilterKeepsAllPoints)
 // 4. 空场景不崩溃
 TEST_F(BAFilterTest, EmptyScene)
 {
-    std::vector<FramePinholeCamera> cameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
     std::vector<BATrack> tracks;
 
     BAOptions opts;
@@ -1558,7 +1588,7 @@ TEST_F(BAFilterTest, EmptyScene)
 // 5. 单相机场景不崩溃
 TEST_F(BAFilterTest, SingleCamera)
 {
-    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(0, 0, 0)};
     BATrack track;
     track.initialPoint = {5, 0, 50};
     track.observations.push_back({0, 512.0, 384.0});
@@ -1574,7 +1604,7 @@ TEST_F(BAFilterTest, SingleCamera)
 
 TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
 {
-    const std::vector<FramePinholeCamera> cameras = {
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -1773,9 +1803,9 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     opts.hierarchicalBATargetBlockSize = 2;
     opts.hierarchicalBAOverlapImages = 2;
     opts.hierarchicalBAMaxIterations = 2;
-    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
-    FramePinholeCamera cam2 = makeCamera(20, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = makeCamera(20, 0, 0);
     opts.baOptions.sharedIntrinsicReferenceCameras = {cam0, cam1, cam2};
 
     auto points = generatePoints(300, 10, 0, 50, 5.0);
@@ -1835,7 +1865,7 @@ TEST_F(SfmPipelineTest, IndependentCameraBlocksMergeByPersistentTracks)
     opts.globalBAInterval = 100;
     opts.iterativeBARounds = 1;
 
-    std::vector<FramePinholeCamera> cameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
     for (int index = 0; index < 6; ++index)
     {
         cameras.push_back(makeCamera(-5.0 + 2.0 * index, 0.0, 0.0));
@@ -1912,9 +1942,9 @@ TEST_F(SfmPipelineTest, IndependentCameraBlockFailureFallsBackToSingleModel)
     opts.globalBAInterval = 100;
     opts.iterativeBARounds = 1;
 
-    const FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const FramePinholeCamera isolatedCamera = makeCamera(16.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState isolatedCamera = makeCamera(16.0, 0.0, 0.0);
     const auto points = generatePoints(120, 4.0, 0.0, 50.0, 3.0, 90210);
     std::vector<FeatureKeypoint> keypoints0;
     std::vector<FeatureKeypoint> keypoints1;
@@ -1985,7 +2015,7 @@ TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
     opts.triangulatorOptions.continueMaxReprojError = 8.0;
     opts.triangulatorOptions.completeMaxReprojError = 8.0;
 
-    const std::vector<FramePinholeCamera> cameras = {
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(6.0, 0.0, 0.0),
         makeCamera(12.0, 0.0, 0.0),
@@ -2055,7 +2085,7 @@ TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossS
     opts.iterativeBARounds = 1;
     opts.filterMinTrackLen = 1;
 
-    const std::vector<FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(10.0, 0.0, 0.0),
         makeCamera(20.0, 0.0, 0.0),
@@ -2094,8 +2124,8 @@ TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossS
 // 2. 进度回调正常工作
 TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 {
-    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(10, 0, 0);
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -2126,8 +2156,8 @@ TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 // 3. 进度回调中止 → 停止重建
 TEST_F(SfmPipelineTest, ProgressCallbackAbort)
 {
-    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(10, 0, 0);
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -2174,8 +2204,8 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
     img1.point3DIds.resize(10, kInvalidPoint3DId);
     recon.addImage(img1);
 
-    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
-    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0 = makeCamera(0, 0, 0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1 = makeCamera(10, 0, 0);
     recon.registerImage(0, cam0);
     recon.registerImage(1, cam1);
 
@@ -2207,7 +2237,7 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
         {
             if (!recon.hasCamera(elem.imageId))
                 continue;
-            const FramePinholeCamera& cam = recon.camera(elem.imageId);
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = recon.camera(elem.imageId);
             const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
             double cameraPoint[3] = {0.0, 0.0, 0.0};
             cam.worldToCamera(world, cameraPoint);
@@ -2228,7 +2258,7 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
     // 构造一个场景：3 个观测中有 1 个坏观测
     // BA 标记整个点为 invalid，但观测级过滤应保留缩短后的轨迹
 
-    std::vector<FramePinholeCamera> cameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
     cameras.push_back(makeCamera(0, 0, 0));
     cameras.push_back(makeCamera(10, 0, 0));
     cameras.push_back(makeCamera(20, 0, 0));
@@ -2278,7 +2308,8 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
 TEST(IterativeBATest, ConvergesWithMultipleRounds)
 {
     // 创建合成场景
-    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(0, 0, 0),
+                                                                                        makeCamera(10, 0, 0)};
     auto points = generatePoints(100, 5, 0, 50, 5.0);
 
     std::vector<BATrack> tracks;
@@ -2324,7 +2355,8 @@ TEST(IterativeBATest, ConvergesWithMultipleRounds)
 TEST(OutlierTypeTest, LargeReprojErrorOutliers)
 {
     // 离群类型 1：3D 坐标正确但观测坐标错误（匹配错误）
-    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(0, 0, 0),
+                                                                                        makeCamera(10, 0, 0)};
     std::vector<BATrack> tracks;
 
     // 好点
@@ -2375,7 +2407,8 @@ TEST(OutlierTypeTest, LargeReprojErrorOutliers)
 TEST(OutlierTypeTest, WrongTriangulationOutliers)
 {
     // 离群类型 2：3D 坐标错误（错误三角化），观测坐标来自正确位置
-    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(0, 0, 0),
+                                                                                        makeCamera(10, 0, 0)};
     std::vector<BATrack> tracks;
 
     // 好点
@@ -2432,7 +2465,7 @@ protected:
     SfmReconstruction recon;
     CorrespondenceGraph graph;
 
-    FramePinholeCamera cam0, cam1, cam2;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam0, cam1, cam2;
 
     void SetUp() override
     {
@@ -2442,7 +2475,9 @@ protected:
     }
 
     /// 添加一幅已注册图像
-    void addRegisteredImage(ImageId id, const FramePinholeCamera& cam, int numKpts = 10)
+    void addRegisteredImage(ImageId id,
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
+                            int numKpts = 10)
     {
         ImageData img;
         img.id = id;
@@ -2704,7 +2739,7 @@ TEST_F(RetriangulationTest, ParallelPostProcessingMatchesSerialResults)
 TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
 {
     // cam0 在原点朝 +Z 方向，cam3 在 Z=-100 朝 -Z 方向
-    FramePinholeCamera cam3;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam3;
     cam3.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     // 旋转 180° 使相机朝 -Z （绕 Y 旋转 180°: R = [-1,0,0, 0,1,0, 0,0,-1]）
     cam3.setPose({-1, 0, 0, 0, 1, 0, 0, 0, -1}, {0, 0, -100});
@@ -2790,12 +2825,12 @@ TEST_F(RetriangulationTest, CompleteTracksDoesNotAddSecondFeatureFromSameImage)
 
 TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera)
 {
-    FramePinholeCamera baseCam = makeCamera(0, 0, -50);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState baseCam = makeCamera(0, 0, -50);
 
-    FramePinholeCamera rotatedCam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rotatedCam;
     rotatedCam.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    // FramePinholeCamera-to-world rotation around X by +90 degrees. The world point below
-    // has positive depth via FramePinholeCamera::worldToCamera(), but the old row-based
+    // FramePinholeNumericState-to-world rotation around X by +90 degrees. The world point below
+    // has positive depth via FramePinholeNumericState::worldToCamera(), but the old row-based
     // depth formula reports it as negative.
     rotatedCam.setPose({1, 0, 0, 0, 0, -1, 0, 1, 0}, {0, 0, 0});
 

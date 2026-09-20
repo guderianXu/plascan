@@ -120,7 +120,8 @@ namespace xjw::stereo_dem
         return true;
     }
 
-    bool geodeticToProjected(const std::vector<RpcCameraModel::GeodeticCoordinate>& geodetic,
+    bool geodeticToProjected(
+        const std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>& geodetic,
                              const ProjectedCoordinateSystem& coordinateSystem,
                              std::vector<std::array<double, 3>>* projected,
                              QString* errorMessage)
@@ -178,7 +179,7 @@ namespace xjw::stereo_dem
 
     bool projectedRowToGeodetic(const DemGridData& dem,
                                 int row,
-                                std::vector<RpcCameraModel::GeodeticCoordinate>* geodetic,
+                                std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>* geodetic,
                                 QString* errorMessage)
     {
         if (!geodetic || row < 0 || row >= dem.height || dem.width <= 0)

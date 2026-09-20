@@ -59,7 +59,9 @@ namespace xjw::mvs
             throw std::invalid_argument("recovered depth quality must be highest, high, medium, low, or lowest");
         }
 
-        FramePinholeCamera recoveredPublicCamera(const FramePinholeCamera& source, std::uint32_t downscale)
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+        recoveredPublicCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+                              std::uint32_t downscale)
         {
             const auto original = source.normalizedForPositiveDepth();
             const auto intrinsics = original.intrinsics();
@@ -69,12 +71,13 @@ namespace xjw::mvs
                                  intrinsics.focalY / scale,
                                  intrinsics.principalX / scale,
                                  intrinsics.principalY / scale);
-            result.setDistortion(FramePinholeCamera::Distortion{});
+            result.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
             return result;
         }
     } // namespace
 
-    FramePinholeCamera recoveredPublicD4Camera(const FramePinholeCamera& source)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    recoveredPublicD4Camera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source)
     {
         return recoveredPublicCamera(source, 4U);
     }
@@ -189,7 +192,8 @@ namespace xjw::mvs
             for (std::size_t index = 0; index < views.size(); ++index)
             {
                 const CameraView& view = views[index];
-                const FramePinholeCamera camera = view.camera.normalizedForPositiveDepth();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                    view.camera.normalizedForPositiveDepth();
                 if (!camera.isValid() || view.imageWidth <= 0 || view.imageHeight <= 0)
                 {
                     setError(errorMessage, "recovered depth camera is invalid or has no raster dimensions");

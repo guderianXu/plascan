@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustService.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <QDir>
 #include <QFile>
@@ -15,15 +15,17 @@
 namespace
 {
 
-xjw::FramePinholeCamera makePlanetaryCamera(double centerX)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    camera.setPose({{1.0, 0.0, 0.0,
-                     0.0, 1.0, 0.0,
-                     0.0, 0.0, 1.0}},
-                   {{centerX, 0.0, 0.0}});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makePlanetaryCamera(double centerX)
+    {
+        static int nextId = 0;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{centerX, 0.0, 0.0}});
+        const std::string imageId = QStringLiteral("planetary-image-%1").arg(nextId++).toStdString();
+        EXPECT_TRUE(camera.bindIdentity(xjw::camera_core::CameraInstanceId("planetary-instance-" + imageId),
+                                        xjw::camera_core::ImageId(imageId),
+                                        xjw::coordinate_system::CoordinateFrameId("IAU_MOON")));
+        return camera;
 }
 
 xjw::BATrack makePlanetaryTieTrack()
@@ -148,8 +150,8 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RunsRangeShotWithoutPollutingTrackMe
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writePlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::FramePinholeCamera> cameras{
-        makePlanetaryCamera(0.0), makePlanetaryCamera(1.0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
+                                                                                     makePlanetaryCamera(1.0)};
     std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
     const xjw::gui::BaServiceOptions options =
         makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
@@ -184,8 +186,8 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RejectsLineScanAsStaticFrameCamera)
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writePlanetaryLaserJson(
         temporaryDirectory.path(), QStringLiteral("line_scan"));
-    std::vector<xjw::FramePinholeCamera> cameras{
-        makePlanetaryCamera(0.0), makePlanetaryCamera(1.0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
+                                                                                     makePlanetaryCamera(1.0)};
     std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
     xjw::gui::BaServiceOptions options =
         makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
@@ -213,8 +215,8 @@ TEST(BundleAdjustServicePlanetaryLaserTest, MapsExplicitIsisSerialAliasToCamera)
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writeIsisPlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::FramePinholeCamera> cameras{
-        makePlanetaryCamera(0.0), makePlanetaryCamera(1.0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
+                                                                                     makePlanetaryCamera(1.0)};
     std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
     xjw::gui::BaServiceOptions options =
         makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
@@ -271,8 +273,8 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RejectsSelectedImagesAsImplicitCamer
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writePlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::FramePinholeCamera> cameras{
-        makePlanetaryCamera(0.0), makePlanetaryCamera(1.0)};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
+                                                                                     makePlanetaryCamera(1.0)};
     std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
     xjw::gui::BaServiceOptions options =
         makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);

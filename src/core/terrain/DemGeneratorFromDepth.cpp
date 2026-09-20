@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <string>
 #include <vector>
 
 #ifdef _OPENMP
@@ -25,26 +26,12 @@ static float readDepth(const cv::Mat &depthMap, int row, int col)
     return 0.0f;
 }
 
-static void unprojectPixel(int col, int row, double depth,
-                           double fx, double fy, double cx, double cy,
-                           const std::array<double,9> &R,
-                           const std::array<double,3> &C,
-                           double &wx, double &wy, double &wz)
-{
-    const double xn = (col - cx) / fx;
-    const double yn = (row - cy) / fy;
-    const double d = depth;
-    double cp[3] = {xn * d, yn * d, d};
-    wx = R[0]*cp[0] + R[1]*cp[1] + R[2]*cp[2] + C[0];
-    wy = R[3]*cp[0] + R[4]*cp[1] + R[5]*cp[2] + C[1];
-    wz = R[6]*cp[0] + R[7]*cp[1] + R[8]*cp[2] + C[2];
-}
-
-bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                         const std::vector<FramePinholeCamera> &cameras,
-                                         const DemGenerationOptions &options,
-                                         DemGridData *demGrid,
-                                         QString *errorMsg)
+bool DemGenerator::generateFromDepthMaps(
+    const std::vector<cv::Mat>& depthMaps,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+    const DemGenerationOptions& options,
+    DemGridData* demGrid,
+    QString* errorMsg)
 {
     if (!demGrid)
     {
@@ -64,8 +51,23 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
         return false;
     }
 
+    for (std::size_t index = 0; index < cameras.size(); ++index)
+    {
+        std::string camera_error;
+        if (!cameras[index].validateNumericalState(&camera_error))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("Camera %1 has invalid frame-pinhole numeric state: %2")
+                                .arg(index)
+                                .arg(QString::fromStdString(camera_error));
+            }
+            return false;
+        }
+    }
+
     const cv::Mat &refDepth = depthMaps[0];
-    const FramePinholeCamera &refCam = cameras[0];
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam = cameras[0];
     if (refDepth.empty())
     {
         if (errorMsg) *errorMsg = "Reference depth map is empty";
@@ -74,13 +76,6 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
 
     const int imgH = refDepth.rows;
     const int imgW = refDepth.cols;
-    const auto R = refCam.cameraToWorldRotation();
-    const auto C = refCam.cameraCenter();
-    const double fx = refCam.focalX();
-    const double fy = refCam.focalY();
-    const double cx = refCam.principalX();
-    const double cy = refCam.principalY();
-
     // --- Step 0: Compute depth statistics for outlier filtering ---
     // For planetary/asteroid imaging, surface is near origin, camera is far away.
     // Use tight depth filter: median ± 5% covers the expected surface depth range.
@@ -124,12 +119,14 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
             if (depth < depthLo || depth > depthHi)
                 continue;
 
-            double wx, wy, wz;
-            unprojectPixel(col, row, depth, fx, fy, cx, cy, R, C, wx, wy, wz);
+            const double pixel[2]{static_cast<double>(col), static_cast<double>(row)};
+            double world[3]{0.0, 0.0, 0.0};
+            if (!refCam.unprojectPixel(pixel, depth, world))
+                continue;
 
-            wX.at<double>(row, col) = wx;
-            wY.at<double>(row, col) = wy;
-            wZ.at<double>(row, col) = wz;
+            wX.at<double>(row, col) = world[0];
+            wY.at<double>(row, col) = world[1];
+            wZ.at<double>(row, col) = world[2];
             valid.at<uchar>(row, col) = 255;
             ++validCount;
         }
@@ -140,13 +137,7 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
     {
         if (depthMaps[vi].empty()) continue;
         const cv::Mat &secDepth = depthMaps[vi];
-        const FramePinholeCamera &secCam = cameras[vi];
-        const auto R2 = secCam.cameraToWorldRotation();
-        const auto C2 = secCam.cameraCenter();
-        const double fx2 = secCam.focalX();
-        const double fy2 = secCam.focalY();
-        const double cx2 = secCam.principalX();
-        const double cy2 = secCam.principalY();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secCam = cameras[vi];
 
         for (int row = 0; row < secDepth.rows; ++row)
         {
@@ -158,11 +149,13 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
                 if (depth < depthLo || depth > depthHi)
                     continue;
 
-                double wx2, wy2, wz2;
-                unprojectPixel(col, row, depth, fx2, fy2, cx2, cy2, R2, C2, wx2, wy2, wz2);
+                const double source_pixel[2]{static_cast<double>(col), static_cast<double>(row)};
+                double world[3]{0.0, 0.0, 0.0};
+                if (!secCam.unprojectPixel(source_pixel, depth, world))
+                    continue;
 
                 double pixel[2];
-                if (!refCam.projectWorldPoint(&wx2, pixel))
+                if (!refCam.projectWorldPoint(world, pixel))
                     continue;
                 int refCol = static_cast<int>(std::round(pixel[0]));
                 int refRow = static_cast<int>(std::round(pixel[1]));
@@ -171,9 +164,9 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
 
                 if (valid.at<uchar>(refRow, refCol) == 0)
                 {
-                    wX.at<double>(refRow, refCol) = wx2;
-                    wY.at<double>(refRow, refCol) = wy2;
-                    wZ.at<double>(refRow, refCol) = wz2;
+                    wX.at<double>(refRow, refCol) = world[0];
+                    wY.at<double>(refRow, refCol) = world[1];
+                    wZ.at<double>(refRow, refCol) = world[2];
                     valid.at<uchar>(refRow, refCol) = 255;
                     ++validCount;
                 }
@@ -181,9 +174,9 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
                 {
                     // Compute triangulation error: distance between 3D points
                     // from reference and secondary cameras
-                    double dx = wX.at<double>(refRow, refCol) - wx2;
-                    double dy = wY.at<double>(refRow, refCol) - wy2;
-                    double dz = wZ.at<double>(refRow, refCol) - wz2;
+                    double dx = wX.at<double>(refRow, refCol) - world[0];
+                    double dy = wY.at<double>(refRow, refCol) - world[1];
+                    double dz = wZ.at<double>(refRow, refCol) - world[2];
                     double err = std::sqrt(dx*dx + dy*dy + dz*dz);
                     triErr.at<double>(refRow, refCol) = err;
                 }

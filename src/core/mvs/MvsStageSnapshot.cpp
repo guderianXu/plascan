@@ -147,7 +147,7 @@ namespace xjw::mvs
             return array;
         }
 
-        QJsonObject cameraToJson(const FramePinholeCamera& camera)
+        QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
         {
             const auto intrinsics = camera.intrinsics();
             const auto rotation = camera.worldToCameraRotation();
@@ -446,7 +446,7 @@ namespace xjw::mvs
             }
 
             _usedBytes += required_bytes;
-            FramePinholeCamera camera = result.cameraModel;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = result.cameraModel;
             if (camera.isValid() && snapshot_size != depth.size())
             {
                 camera = camera.scaledIntrinsics(static_cast<double>(snapshot_size.width) / depth.cols,

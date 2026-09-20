@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthLayerReliability.h"
 
 #include <opencv2/core.hpp>
@@ -84,16 +84,16 @@ struct DepthGeometryHypothesisRerankMaps
 };
 
 ProjectedDepthEvidence projectSourceDepthEvidenceToReference(
-    const cv::Mat &sourceDepth,
-    const cv::Mat &sourceConfidence,
-    const FramePinholeCamera &sourceCamera,
-    const FramePinholeCamera &referenceCamera,
-    const cv::Size &referenceSize,
+    const cv::Mat& sourceDepth,
+    const cv::Mat& sourceConfidence,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+    const cv::Size& referenceSize,
     float maximumProjectionDistancePixels,
     int baselineSector,
-    std::uint64_t *projectedCandidateCount = nullptr,
+    std::uint64_t* projectedCandidateCount = nullptr,
     int rowWorkerCount = 1,
-    const std::atomic<bool> *cancelled = nullptr);
+    const std::atomic<bool>* cancelled = nullptr);
 
 /// Scores one externally supplied hypothesis (for example a local second-pass
 /// PatchMatch candidate) against the same measured source-depth evidence.

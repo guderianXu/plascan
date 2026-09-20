@@ -42,7 +42,7 @@ struct LineScanLaserObservation
 
 struct PlanetaryLineScanBaWorkingSet
 {
-    std::vector<const PlanetaryLineScanCamera *> cameraModels;
+    std::vector<const camera_models::linescan::LineScanInstance*> cameraInstances;
     std::vector<std::array<double, 6>> cameraParameters;
     std::vector<std::array<double, 3>> tiePoints;
     std::vector<LineScanImageObservation> imageObservations;
@@ -50,11 +50,11 @@ struct PlanetaryLineScanBaWorkingSet
     std::vector<LineScanLaserObservation> laserObservations;
 };
 
-PlanetaryLineScanCamera::PoseBias lineScanPoseBias(
+camera_models::linescan::LineScanTrajectoryBias lineScanPoseBias(
     const std::array<double, 6> &parameters);
 
 bool evaluateLineScanImageObservation(
-    const PlanetaryLineScanCamera &camera,
+    const camera_models::linescan::LineScanInstance& camera,
     const LineScanImageObservation &observation,
     const double *cameraParameters,
     const double *point,

@@ -2,7 +2,7 @@
 
 #include "CameraReferenceProjectIdentity.h"
 #include "project/ProjectSessionModel.h"
-#include "io/CameraReferenceSetStore.h"
+#include "camera/reference/io/CameraReferenceSetStore.h"
 #include "project/ProjectIO.h"
 
 #include <QFile>

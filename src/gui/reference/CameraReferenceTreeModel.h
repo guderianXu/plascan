@@ -1,6 +1,6 @@
 #pragma once
 
-#include "model/CameraReferenceSet.h"
+#include "camera/reference/model/CameraReferenceSet.h"
 
 #include <QJsonObject>
 #include <QStandardItemModel>

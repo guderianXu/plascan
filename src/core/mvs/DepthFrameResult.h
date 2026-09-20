@@ -27,7 +27,8 @@ namespace xjw::mvs
         cv::Size preparedRasterSize;                    ///< MVS 准备后的全分辨率影像尺寸；不随深度缓存释放丢失
         bool effectiveNativeFinalDepthGrid = false;     ///< 该帧实际采用实验原生最终网格策略
         QJsonObject pixelDomainDiagnostics;             ///< full-raster 参数到实际深度网格参数的显式审计
-        FramePinholeCamera cameraModel;                 ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+            cameraModel; ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
         std::vector<int> sourceViewIndices;             ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
         std::vector<int> geometrySourceViewIndices;     ///< geometrySourceMask 的精确位序表，最多 16 个来源
         std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
@@ -76,7 +77,8 @@ namespace xjw::mvs
         DepthEvidenceConfidenceSummary evidenceConfidenceSummary; ///< 双通道置信度的强类型帧级摘要
         QJsonObject learnedCandidateDiagnostics;                  ///< 学习候选加载与最终几何门控统计
         QJsonObject poseRefinementDiagnostics;                    ///< 深度约束位姿细化候选与安全门诊断
-        FramePinholeCamera derivedCameraModel;                    ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+            derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
         std::vector<DepthLevelSummary> pyramidLevels;             ///< 三级深度估计逐层摘要
         std::vector<DepthLevelResult> intermediatePyramidLevels;  ///< 可选的 L3/L2 调试结果
         std::vector<ProjectedSparseDepthSample> projectedSparseDepthSamples; ///< 最终输出栅格上的稀疏绝对深度锚点

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "ProjectResourceCleanup.h"
+#include "ProjectResourceRecoveryBinding.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectSessionModel.h"
 
@@ -22,6 +23,25 @@
 
 namespace
 {
+
+    class InspectableProjectData : public ProjectData
+    {
+    public:
+        using QObject::receivers;
+    };
+
+    TEST(ProjectResourceRecoveryBindingTest, RepeatedInstallationDoesNotDuplicateActivationConnections)
+    {
+        InspectableProjectData project_data;
+        const int open_connections = project_data.receivers(SIGNAL(projectOpened(QString)));
+        const int chunk_connections = project_data.receivers(SIGNAL(activeChunkChanged(QString, QString, int)));
+        xjw::app::project::ProjectResourceRecoveryBinding::install(&project_data);
+        EXPECT_EQ(project_data.receivers(SIGNAL(projectOpened(QString))), open_connections + 1);
+        EXPECT_EQ(project_data.receivers(SIGNAL(activeChunkChanged(QString, QString, int))), chunk_connections + 1);
+        xjw::app::project::ProjectResourceRecoveryBinding::install(&project_data);
+        EXPECT_EQ(project_data.receivers(SIGNAL(projectOpened(QString))), open_connections + 1);
+        EXPECT_EQ(project_data.receivers(SIGNAL(activeChunkChanged(QString, QString, int))), chunk_connections + 1);
+    }
 
 void writeArtifact(const QString &path, const QByteArray &contents = "artifact")
 {
@@ -989,8 +1009,7 @@ TEST(ProjectResourceCleanupTest,
     ASSERT_FALSE(QFileInfo::exists(artifactPath));
     ASSERT_TRUE(QFileInfo::exists(purgeRoot));
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     ASSERT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();
@@ -1036,8 +1055,7 @@ TEST(ProjectResourceCleanupTest,
         << linkError.toStdString();
 
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     EXPECT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();
@@ -1098,8 +1116,7 @@ TEST(ProjectResourceCleanupTest,
 
     ASSERT_FALSE(QFileInfo::exists(artifactPath));
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     ASSERT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();
@@ -1158,8 +1175,7 @@ TEST(ProjectResourceCleanupTest,
     ASSERT_FALSE(QFileInfo::exists(retainedPath));
     ASSERT_TRUE(QFileInfo::exists(stagedPath));
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     ASSERT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();
@@ -1231,8 +1247,7 @@ TEST(ProjectResourceCleanupTest,
     }
 
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     ASSERT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();
@@ -1303,8 +1318,7 @@ TEST(ProjectResourceCleanupTest,
     }
 
     ProjectData reopened;
-    xjw::core::project::ProjectResourceCleanupService::
-        installAutomaticRecovery(&reopened);
+    xjw::app::project::ProjectResourceRecoveryBinding::install(&reopened);
     QString openError;
     ASSERT_TRUE(reopened.openProject(projectPath, &openError))
         << openError.toStdString();

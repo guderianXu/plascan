@@ -34,24 +34,26 @@ namespace
         return value;
     }
 
-    xjw::FramePinholeCamera makeLookAtCamera(const Vec3& center, const Vec3& target, double focal_length = 800.0)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeLookAtCamera(const Vec3& center, const Vec3& target, double focal_length = 800.0)
     {
         const Vec3 forward = normalize(subtract(target, center));
         const Vec3 reference = std::abs(forward[2]) < 0.90 ? Vec3{{0.0, 0.0, 1.0}} : Vec3{{0.0, 1.0, 0.0}};
         const Vec3 right = normalize(cross(reference, forward));
         const Vec3 up = normalize(cross(forward, right));
 
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(focal_length, focal_length, 512.0, 384.0);
         camera.setPose({{right[0], up[0], forward[0], right[1], up[1], forward[1], right[2], up[2], forward[2]}},
                        center);
         return camera;
     }
 
-    std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::FramePinholeCamera>& cameras,
-                                         const std::vector<Vec3>& points,
-                                         int imageWidth = 1024,
-                                         int imageHeight = 768)
+    std::vector<xjw::BATrack>
+    makeTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+               const std::vector<Vec3>& points,
+               int imageWidth = 1024,
+               int imageHeight = 768)
     {
         std::vector<xjw::BATrack> tracks;
         for (const Vec3& point : points)
@@ -93,9 +95,9 @@ namespace
         return points;
     }
 
-    std::vector<xjw::FramePinholeCamera> aerialCameras()
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> aerialCameras()
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         for (int row = -2; row <= 2; ++row)
         {
             for (int column = -2; column <= 2; ++column)
@@ -107,9 +109,9 @@ namespace
         return cameras;
     }
 
-    std::vector<xjw::FramePinholeCamera> weaklyParallelAerialCameras()
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> weaklyParallelAerialCameras()
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         for (int row = -2; row <= 2; ++row)
         {
             for (int column = -2; column <= 2; ++column)
@@ -137,15 +139,16 @@ namespace
         return points;
     }
 
-    std::vector<xjw::FramePinholeCamera> narrowAerialCameras()
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> narrowAerialCameras()
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         for (int row = -2; row <= 2; ++row)
         {
             for (int column = -2; column <= 2; ++column)
             {
                 const Vec3 center{{column * 0.12, row * 0.12, 15.0}};
-                xjw::FramePinholeCamera camera = makeLookAtCamera(center, {{center[0], center[1], 0.0}}, 48000.0);
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                    makeLookAtCamera(center, {{center[0], center[1], 0.0}}, 48000.0);
                 camera.setIntrinsics(48000.0, 48000.0, 1939.0, 1444.0);
                 cameras.push_back(camera);
             }
@@ -169,9 +172,9 @@ namespace
         return points;
     }
 
-    std::vector<xjw::FramePinholeCamera> orbitalCameras()
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> orbitalCameras()
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         constexpr int count = 24;
         constexpr double pi = 3.14159265358979323846;
         for (int index = 0; index < count; ++index)
@@ -200,9 +203,9 @@ namespace
         return points;
     }
 
-    std::vector<xjw::FramePinholeCamera> narrowOrbitalCameras()
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> narrowOrbitalCameras()
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         constexpr int count = 24;
         constexpr double pi = 3.14159265358979323846;
         for (int index = 0; index < count; ++index)
@@ -210,7 +213,8 @@ namespace
             const double angle = 2.0 * pi * index / count;
             const double height = 0.8 * std::sin(2.0 * angle);
             const Vec3 center{{12.0 * std::cos(angle), 12.0 * std::sin(angle), height}};
-            xjw::FramePinholeCamera camera = makeLookAtCamera(center, {{0.0, 0.0, 0.0}}, 48000.0);
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                makeLookAtCamera(center, {{0.0, 0.0, 0.0}}, 48000.0);
             camera.setIntrinsics(48000.0, 48000.0, 1939.0, 1444.0);
             cameras.push_back(camera);
         }
@@ -226,7 +230,7 @@ namespace
 
 TEST(BundleAdjustAdaptiveCameraModelTest, UnanchoredParallelAerialBlockKeepsIntrinsicsFixed)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = aerialCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     ASSERT_GT(tracks.size(), 100u);
 
@@ -251,7 +255,8 @@ TEST(BundleAdjustAdaptiveCameraModelTest, UnanchoredParallelAerialBlockKeepsIntr
 
 TEST(BundleAdjustAdaptiveCameraModelTest, WeaklyParallelUnanchoredAerialBlockKeepsIntrinsicsFixedFromFirstRound)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = weaklyParallelAerialCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras =
+        weaklyParallelAerialCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     ASSERT_GT(tracks.size(), 100u);
 
@@ -278,7 +283,8 @@ TEST(BundleAdjustAdaptiveCameraModelTest, WeaklyParallelUnanchoredAerialBlockKee
 
 TEST(BundleAdjustAdaptiveCameraModelTest, TrustedFocalWeaklyParallelAerialBlockEstimatesOnlyRadialK1)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = weaklyParallelAerialCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras =
+        weaklyParallelAerialCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     ASSERT_GT(tracks.size(), 100u);
 
@@ -311,7 +317,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, TrustedFocalWeaklyParallelAerialBlockE
 
 TEST(BundleAdjustAdaptiveCameraModelTest, ControlledParallelAerialBlockMayEstimateLowOrderDistortion)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = aerialCameras();
     std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     ASSERT_GT(tracks.size(), 100u);
     for (xjw::BATrack& track : tracks)
@@ -332,7 +338,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, ControlledParallelAerialBlockMayEstima
 
 TEST(BundleAdjustAdaptiveCameraModelTest, NarrowFieldBlockUsesFieldNormalizedLowOrderDistortion)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = narrowAerialCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = narrowAerialCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, narrowAerialPoints(), 3878, 2888);
     ASSERT_GT(tracks.size(), 100u);
 
@@ -364,10 +370,11 @@ TEST(BundleAdjustAdaptiveCameraModelTest, NarrowFieldBlockUsesFieldNormalizedLow
 
 TEST(BundleAdjustAdaptiveCameraModelTest, InactiveObliqueCamerasDoNotChangeGeometry)
 {
-    std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = aerialCameras();
     const std::size_t activeCameraCount = cameras.size();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
-    const std::vector<xjw::FramePinholeCamera> inactiveObliqueCameras = orbitalCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> inactiveObliqueCameras =
+        orbitalCameras();
     cameras.insert(cameras.end(), inactiveObliqueCameras.begin(), inactiveObliqueCameras.end());
 
     const xjw::BAAdaptiveCameraModelAssessment assessment = xjw::assessAdaptiveCameraModel(cameras, tracks);
@@ -381,7 +388,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, InactiveObliqueCamerasDoNotChangeGeome
 
 TEST(BundleAdjustAdaptiveCameraModelTest, ConvergentMultiHeightOrbitReleasesMoreParameters)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = orbitalCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = orbitalCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, orbitalPoints());
     ASSERT_GT(tracks.size(), 200u);
 
@@ -405,7 +412,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, ConvergentMultiHeightOrbitReleasesMore
 
 TEST(BundleAdjustAdaptiveCameraModelTest, NarrowConvergentBlockCanReleaseTangentialDistortion)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras = narrowOrbitalCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = narrowOrbitalCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, narrowOrbitalPoints(), 3878, 2888);
     ASSERT_GT(tracks.size(), 200u);
 
@@ -433,9 +440,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest, NarrowFieldPlaMatrixCanEstimateLargeK1
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> referenceCameras = narrowAerialCameras();
-    std::vector<xjw::FramePinholeCamera> truthCameras = referenceCameras;
-    for (xjw::FramePinholeCamera& camera : truthCameras)
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> referenceCameras =
+        narrowAerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras = referenceCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : truthCameras)
     {
         camera.setDistortion(1.05, 0.0, 0.0, 0.0, 0.0);
     }
@@ -474,7 +482,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, NarrowFieldPlaMatrixCanEstimateLargeK1
 
 TEST(BundleAdjustAdaptiveCameraModelTest, OpposingCollinearRaysRemainDegenerate)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeLookAtCamera({{-10.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}),
         makeLookAtCamera({{10.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}),
         makeLookAtCamera({{-14.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}),
@@ -502,7 +510,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, OpposingCollinearRaysRemainDegenerate)
 
 TEST(BundleAdjustAdaptiveCameraModelTest, UnsupportedCalibrationGroupFreezesModel)
 {
-    std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = aerialCameras();
     std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     cameras.push_back(makeLookAtCamera({{40.0, 0.0, 15.0}}, {{40.0, 0.0, 0.0}}));
 
@@ -524,10 +532,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest, UnsupportedCalibrationGroupFreezesMode
 
 TEST(BundleAdjustAdaptiveCameraModelTest, CalibrationGroupsUseConservativeIntersection)
 {
-    std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = aerialCameras();
     std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
     const std::size_t aerialCameraCount = cameras.size();
-    const std::vector<xjw::FramePinholeCamera> orbit = orbitalCameras();
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> orbit = orbitalCameras();
     std::vector<xjw::BATrack> orbitTracks = makeTracks(orbit, orbitalPoints());
     cameras.insert(cameras.end(), orbit.begin(), orbit.end());
     for (xjw::BATrack& track : orbitTracks)
@@ -610,9 +618,9 @@ TEST(BundleAdjustAdaptiveCameraModelTest, RespectsCallerIntrinsicParameterMask)
 
 TEST(BundleAdjustAdaptiveCameraModelTest, RestoresParametersDisabledAfterAnEarlierAdaptiveRound)
 {
-    std::vector<xjw::FramePinholeCamera> references = aerialCameras();
-    std::vector<xjw::FramePinholeCamera> current = references;
-    for (xjw::FramePinholeCamera& camera : current)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> references = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> current = references;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : current)
     {
         camera.setIntrinsics(840.0, 856.8, 524.0, 371.0);
         camera.setDistortion(-0.08, -0.04, 0.01, 0.002, -0.003);
@@ -628,8 +636,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest, RestoresParametersDisabledAfterAnEarli
         EXPECT_DOUBLE_EQ(current[index].focalY(), 840.0);
         EXPECT_DOUBLE_EQ(current[index].principalX(), references[index].principalX());
         EXPECT_DOUBLE_EQ(current[index].principalY(), references[index].principalY());
-        const xjw::FramePinholeCamera::Distortion distortion = current[index].distortion();
-        const xjw::FramePinholeCamera::Distortion reference = references[index].distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+            current[index].distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion reference =
+            references[index].distortion();
         EXPECT_DOUBLE_EQ(distortion.radialK1, reference.radialK1);
         EXPECT_DOUBLE_EQ(distortion.radialK2, reference.radialK2);
         EXPECT_DOUBLE_EQ(distortion.radialK3, reference.radialK3);
@@ -645,10 +655,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest, PlaMatrixHonorsIndividualIntrinsicMask
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    std::vector<xjw::FramePinholeCamera> cameras = orbitalCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = orbitalCameras();
     for (std::size_t index = 0; index < cameras.size(); ++index)
     {
-        xjw::FramePinholeCamera& camera = cameras[index];
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameras[index];
         const double focal_x = camera.focalX();
         camera.setIntrinsics(focal_x,
                              focal_x * (1.0 + 0.0005 * static_cast<double>(index)),
@@ -682,10 +692,12 @@ TEST(BundleAdjustAdaptiveCameraModelTest, PlaMatrixHonorsIndividualIntrinsicMask
     EXPECT_LT(result.meanRmsAfter, 1.0e-5);
     for (std::size_t index = 0; index < cameras.size(); ++index)
     {
-        const xjw::FramePinholeCamera& source = cameras[index];
-        const xjw::FramePinholeCamera& refined = result.refinedCameras[index];
-        const xjw::FramePinholeCamera::Distortion source_distortion = source.distortion();
-        const xjw::FramePinholeCamera::Distortion refined_distortion = refined.distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source = cameras[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refined = result.refinedCameras[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion source_distortion =
+            source.distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion refined_distortion =
+            refined.distortion();
         EXPECT_DOUBLE_EQ(refined.principalX(), source.principalX());
         EXPECT_DOUBLE_EQ(refined.principalY(), source.principalY());
         EXPECT_DOUBLE_EQ(refined.focalY() / refined.focalX(), source.focalY() / source.focalX());
@@ -703,9 +715,9 @@ TEST(BundleAdjustAdaptiveCameraModelTest, FocalOnlyPlaMatrixUsesStableReferenceP
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    std::vector<xjw::FramePinholeCamera> referenceCameras = aerialCameras();
-    std::vector<xjw::FramePinholeCamera> truthCameras = referenceCameras;
-    for (xjw::FramePinholeCamera& camera : truthCameras)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> referenceCameras = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras = referenceCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : truthCameras)
     {
         camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
     }
@@ -747,14 +759,14 @@ TEST(BundleAdjustAdaptiveCameraModelTest, DistortionPriorRemainsAnchoredAcrossRo
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> referenceCameras = aerialCameras();
-    std::vector<xjw::FramePinholeCamera> truthCameras = referenceCameras;
-    std::vector<xjw::FramePinholeCamera> warmCameras = referenceCameras;
-    for (xjw::FramePinholeCamera& camera : truthCameras)
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> referenceCameras = aerialCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras = referenceCameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> warmCameras = referenceCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : truthCameras)
     {
         camera.setDistortion(-0.20, 0.0, 0.0, 0.0, 0.0);
     }
-    for (xjw::FramePinholeCamera& camera : warmCameras)
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : warmCameras)
     {
         camera.setDistortion(-0.10, 0.0, 0.0, 0.0, 0.0);
     }
@@ -802,9 +814,9 @@ TEST(BundleAdjustAdaptiveCameraModelTest, StableIntrinsicReferencePreventsBounds
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    std::vector<xjw::FramePinholeCamera> referenceCameras = orbitalCameras();
-    std::vector<xjw::FramePinholeCamera> truthCameras = referenceCameras;
-    std::vector<xjw::FramePinholeCamera> warmCameras = referenceCameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> referenceCameras = orbitalCameras();
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras = referenceCameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> warmCameras = referenceCameras;
     std::vector<int> calibrationGroups(referenceCameras.size(), 0);
     for (std::size_t index = 0; index < referenceCameras.size(); ++index)
     {
@@ -859,8 +871,8 @@ TEST(BundleAdjustAdaptiveCameraModelTest, StableIntrinsicReferencePreventsBounds
 
     for (std::size_t index = 0; index < second.refinedCameras.size(); ++index)
     {
-        const xjw::FramePinholeCamera& reference = referenceCameras[index];
-        const xjw::FramePinholeCamera& refined = second.refinedCameras[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference = referenceCameras[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refined = second.refinedCameras[index];
         const double referenceAspect = reference.focalY() / reference.focalX();
         const double refinedAspect = refined.focalY() / refined.focalX();
         const double maxPrincipalOffset = reference.focalX() * 0.01;

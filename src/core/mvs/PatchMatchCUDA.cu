@@ -69,9 +69,10 @@ struct HostPinholeCamera
     float principalY = 0.0f;
 };
 
-HostPinholeCamera makeHostPinholeCamera(const FramePinholeCamera& camera, int downsampleFactor)
+HostPinholeCamera makeHostPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                        int downsampleFactor)
 {
-    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
 
     HostPinholeCamera result;
@@ -2473,22 +2474,23 @@ __global__ void kernelFinalizeDepth(
 // =============================================================================
 // GPU 实现
 // =============================================================================
-bool PatchMatchDepthEstimator::estimateGPU(const cv::Mat& refGray,
-                                           const std::vector<cv::Mat>& srcGrays,
-                                           const FramePinholeCamera& refCam,
-                                           const std::vector<FramePinholeCamera>& srcCams,
-                                           float zNear,
-                                           float zFar,
-                                           const PatchMatchConfig& config,
-                                           cv::Mat& depthOut,
-                                           cv::Mat* confOut,
-                                           std::string* errorMsg,
-                                           const cv::Mat* hintDepth,
-                                           const cv::Mat* hintRadius,
-                                           const cv::Mat* refValidMask,
-                                           const std::vector<cv::Mat>* srcValidMasks,
-                                           const PatchMatchAuxiliaryInput* auxiliaryInput,
-                                           PatchMatchAuxiliaryOutput* auxiliaryOutput)
+bool PatchMatchDepthEstimator::estimateGPU(
+    const cv::Mat& refGray,
+    const std::vector<cv::Mat>& srcGrays,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+    float zNear,
+    float zFar,
+    const PatchMatchConfig& config,
+    cv::Mat& depthOut,
+    cv::Mat* confOut,
+    std::string* errorMsg,
+    const cv::Mat* hintDepth,
+    const cv::Mat* hintRadius,
+    const cv::Mat* refValidMask,
+    const std::vector<cv::Mat>* srcValidMasks,
+    const PatchMatchAuxiliaryInput* auxiliaryInput,
+    PatchMatchAuxiliaryOutput* auxiliaryOutput)
 {
     const auto estimate_start = std::chrono::steady_clock::now();
     int device_count = 0;

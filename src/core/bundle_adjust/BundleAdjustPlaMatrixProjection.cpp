@@ -23,8 +23,9 @@ namespace xjw::detail::plamatrix_ba
             return scaled_length / std::atan(scaled_length);
         }
 
-        bool
-        pixelByCameraPointJacobian(const FramePinholeCamera& camera, const double camera_point[3], double jacobian[6])
+        bool pixelByCameraPointJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                        const double camera_point[3],
+                                        double jacobian[6])
         {
             if (!camera_point || !jacobian || !std::isfinite(camera_point[2]) || std::abs(camera_point[2]) <= 1e-12)
             {
@@ -62,14 +63,15 @@ namespace xjw::detail::plamatrix_ba
             return std::all_of(jacobian, jacobian + 6, [](double value) { return std::isfinite(value); });
         }
 
-        FramePinholeCamera cameraWithSharedIntrinsics(const FramePinholeCamera& camera,
-                                                      const FramePinholeCamera& reference_camera,
-                                                      const std::array<double, 9>& parameters,
-                                                      const BAIntrinsicParameterMask& active)
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+        cameraWithSharedIntrinsics(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                                   const std::array<double, 9>& parameters,
+                                   const BAIntrinsicParameterMask& active)
         {
             const auto enabled = [&](BAIntrinsicParameter parameter)
             { return active[static_cast<std::size_t>(parameter)]; };
-            FramePinholeCamera effective = camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState effective = camera;
             const auto source_intrinsics = camera.intrinsics();
             const auto reference_intrinsics = reference_camera.intrinsics();
             const double focal_x =
@@ -113,7 +115,7 @@ namespace xjw::detail::plamatrix_ba
 
     } // namespace
 
-    bool linearizeObservation(const FramePinholeCamera& camera,
+    bool linearizeObservation(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                               const std::array<double, 3>& point,
                               const BAObservation& observation,
                               double huber_delta,
@@ -203,16 +205,17 @@ namespace xjw::detail::plamatrix_ba
         return std::isfinite(linearization->normalWeight) && std::isfinite(linearization->robustCost);
     }
 
-    bool linearizeObservationWithSharedIntrinsics(const FramePinholeCamera& camera,
-                                                  const FramePinholeCamera& reference_camera,
-                                                  const std::array<double, 9>& shared_intrinsics,
-                                                  const BAIntrinsicParameterMask& active_parameters,
-                                                  const std::array<double, 3>& point,
-                                                  const BAObservation& observation,
-                                                  double huber_delta,
-                                                  ObservationLinearization* linearization,
-                                                  bool whiten_by_measurement_scale,
-                                                  bool use_reference_point_parameterization)
+    bool linearizeObservationWithSharedIntrinsics(
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+        const std::array<double, 9>& shared_intrinsics,
+        const BAIntrinsicParameterMask& active_parameters,
+        const std::array<double, 3>& point,
+        const BAObservation& observation,
+        double huber_delta,
+        ObservationLinearization* linearization,
+        bool whiten_by_measurement_scale,
+        bool use_reference_point_parameterization)
     {
         if (!linearization || !std::all_of(shared_intrinsics.begin(),
                                            shared_intrinsics.end(),
@@ -220,7 +223,7 @@ namespace xjw::detail::plamatrix_ba
         {
             return false;
         }
-        const FramePinholeCamera effective =
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState effective =
             cameraWithSharedIntrinsics(camera, reference_camera, shared_intrinsics, active_parameters);
         if (!linearizeObservation(effective,
                                   point,

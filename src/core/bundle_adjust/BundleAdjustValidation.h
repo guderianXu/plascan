@@ -41,8 +41,9 @@ namespace xjw::detail
     bool observationIsUsable(const BAObservation& observation, std::size_t cameraCount);
 
     /// 统计至少由两台相机提供有效观测的实际可用 BA 问题规模。
-    BAProblemStats summarizeUsableProblem(const std::vector<FramePinholeCamera>& cameras,
-                                          const std::vector<BATrack>& tracks);
+    BAProblemStats
+    summarizeUsableProblem(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                           const std::vector<BATrack>& tracks);
 
     /**
      * @brief 校验 BA 输入，并按 gauge 策略补齐自动锚定相机。
@@ -60,9 +61,10 @@ namespace xjw::detail
      *        然后仅补充必要的固定相机索引。
      * @return `ok=true` 表示输入可进入后端；否则 status/message 说明拒绝原因。
      */
-    BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(const std::vector<FramePinholeCamera>& cameras,
-                                                                         const std::vector<BATrack>& tracks,
-                                                                         const BAOptions& requestedOptions,
-                                                                         BAOptions* normalizedOptions);
+    BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& requestedOptions,
+        BAOptions* normalizedOptions);
 
 } // namespace xjw::detail

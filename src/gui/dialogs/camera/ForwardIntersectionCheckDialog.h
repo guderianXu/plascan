@@ -6,8 +6,8 @@
 #include <QVector>
 
 #include "Intersection.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
-class ProjectManager;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -15,15 +15,16 @@ class QTableWidget;
 class QTabWidget;
 class DualImageViewer;
 
-namespace xjw {
-class FramePinholeCamera;
+namespace xjw::gui::project
+{
+class ProjectSession;
 }
 
 class ForwardIntersectionCheckDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ForwardIntersectionCheckDialog(ProjectManager *projectManager, QWidget *parent = nullptr);
+    explicit ForwardIntersectionCheckDialog(xjw::gui::project::ProjectSession *session, QWidget *parent = nullptr);
     ~ForwardIntersectionCheckDialog() override;
 
 private slots:
@@ -42,7 +43,9 @@ private:
     void setupUi();
     void loadImagesWithCamera();
     bool collectAutoPointPairs(QVector<QPointF> *pts1, QVector<QPointF> *pts2, QString *sourceInfo);
-    bool buildCameraFromImageMeta(const QJsonObject &imgObj, xjw::FramePinholeCamera *cam, QString *errorMsg) const;
+    bool buildCameraFromImageMeta(const QJsonObject& imgObj,
+                                  xjw::camera_models::frame_pinhole::FramePinholeNumericState* cam,
+                                  QString* errorMsg) const;
     QJsonObject findImageMetaByPath(const QString &imagePath) const;
     void refreshViewer(bool reloadImages);
     void refreshPairTable();
@@ -58,7 +61,7 @@ private:
     QString selectedImage1() const;
     QString selectedImage2() const;
 
-    ProjectManager *_projectManager{};
+    xjw::gui::project::ProjectSession *_session{};
 
     QComboBox *_image1Combo{};
     QComboBox *_image2Combo{};

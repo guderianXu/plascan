@@ -32,7 +32,7 @@ struct MvsDepthFrameQualification
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 55;
+inline constexpr int kMvsDepthAlgorithmRevision = 56;
 /// Revision 37 persists the exact source-view ordinal table used by the
 /// per-pixel geometry-source mask. Revision 36 stored only the shorter
 /// PatchMatch source list even though orbital consistency and measured repair
@@ -116,6 +116,10 @@ inline constexpr int kMvsFinalPropagationAndGuidedFilterRevision = 51;
 /// with the reference record index (d8/d4/d2/d1 = 6/24/96/384). Older cached
 /// depth maps used a fixed terminal threshold of 30 and must not be reused.
 inline constexpr int kMvsRecoveredFinerSpeckleRevision = 55;
+/// Revision 56 carries the typed image/instance/world-frame binding in every
+/// replayable camera artifact and includes it in the depth-input fingerprint.
+/// Workspaces without that binding are intentionally stale and are not reused.
+inline constexpr int kMvsCameraIdentityRevision = 56;
 
 struct MvsDepthFrameRecord
 {

@@ -102,13 +102,12 @@ bool invertRegularizedPointInformation(
     return true;
 }
 
-bool pointProjectionJacobian(
-    const FramePinholeCamera &camera,
-    const double *cameraPoint,
-    double x,
-    double y,
-    std::array<double, 3> *derivativeU,
-    std::array<double, 3> *derivativeV)
+bool pointProjectionJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                             const double* cameraPoint,
+                             double x,
+                             double y,
+                             std::array<double, 3>* derivativeU,
+                             std::array<double, 3>* derivativeV)
 {
     if (!cameraPoint || !derivativeU || !derivativeV ||
         !std::isfinite(cameraPoint[2]) ||
@@ -116,7 +115,7 @@ bool pointProjectionJacobian(
     {
         return false;
     }
-    const FramePinholeCamera::Distortion distortion = camera.distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
     const double r2 = x * x + y * y;
     const double r4 = r2 * r2;
     const double radial = 1.0 + distortion.radialK1 * r2 +
@@ -479,10 +478,10 @@ std::string adaptiveCameraModelName(const BAIntrinsicParameterMask &mask)
     return first ? "fixed" : stream.str();
 }
 
-BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
-    const std::vector<FramePinholeCamera> &cameras,
-    const std::vector<BATrack> &tracks,
-    const BAOptions *options)
+BAAdaptiveCameraModelAssessment
+assessAdaptiveCameraModel(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                          const std::vector<BATrack>& tracks,
+                          const BAOptions* options)
 {
     BAAdaptiveCameraModelAssessment result;
     result.cameraCount = static_cast<int>(cameras.size());
@@ -538,7 +537,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             for (const int groupId : groupIds)
             {
                 std::vector<int> cameraRemap(cameras.size(), -1);
-                std::vector<FramePinholeCamera> groupCameras;
+                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> groupCameras;
                 for (std::size_t cameraIndex = 0;
                      cameraIndex < cameras.size();
                      ++cameraIndex)
@@ -611,14 +610,15 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         }
     }
 
-    std::vector<FramePinholeCamera> normalizedCameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> normalizedCameras;
     normalizedCameras.reserve(cameras.size());
     std::vector<double> focalSamples;
     focalSamples.reserve(cameras.size());
     int validCameraCount = 0;
-    for (const FramePinholeCamera &sourceCamera : cameras)
+    for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera : cameras)
     {
-        const FramePinholeCamera camera = sourceCamera.normalizedForPositiveDepth();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+            sourceCamera.normalizedForPositiveDepth();
         normalizedCameras.push_back(camera);
         if (!camera.isValid() || !std::isfinite(camera.focalX()) ||
             !std::isfinite(camera.focalY()) || camera.focalX() <= 1.0e-9 ||
@@ -683,8 +683,8 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const FramePinholeCamera &camera = normalizedCameras[
-                static_cast<std::size_t>(observation.cameraIndex)];
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                normalizedCameras[static_cast<std::size_t>(observation.cameraIndex)];
             double pixel[2] = {0.0, 0.0};
             if (!camera.isValid() ||
                 !camera.projectWorldPoint(world, pixel))
@@ -734,8 +734,8 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const FramePinholeCamera &camera = normalizedCameras[
-                static_cast<std::size_t>(observation.cameraIndex)];
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                normalizedCameras[static_cast<std::size_t>(observation.cameraIndex)];
             if (!camera.isValid() || camera.focalX() <= 1.0e-9 ||
                 camera.focalY() <= 1.0e-9)
             {
@@ -759,7 +759,8 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             const double r4 = r2 * r2;
             const double r6 = r4 * r2;
             const double radial = 1.0 + distortion.radialK1 * r2 +
@@ -1344,9 +1345,9 @@ bool applyAdaptiveCameraModel(
 }
 
 bool restoreInactiveAdaptiveIntrinsics(
-    std::vector<FramePinholeCamera> *cameras,
-    const std::vector<FramePinholeCamera> &stableReferences,
-    const BAIntrinsicParameterMask &activeMask)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* cameras,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences,
+    const BAIntrinsicParameterMask& activeMask)
 {
     if (!cameras || cameras->size() != stableReferences.size())
     {
@@ -1358,10 +1359,12 @@ bool restoreInactiveAdaptiveIntrinsics(
     };
     for (std::size_t index = 0; index < cameras->size(); ++index)
     {
-        FramePinholeCamera &camera = (*cameras)[index];
-        const FramePinholeCamera &reference = stableReferences[index];
-        const FramePinholeCamera::Intrinsics currentIntrinsics = camera.intrinsics();
-        const FramePinholeCamera::Intrinsics referenceIntrinsics = reference.intrinsics();
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = (*cameras)[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference = stableReferences[index];
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics currentIntrinsics =
+            camera.intrinsics();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics referenceIntrinsics =
+            reference.intrinsics();
 
         const double focalX = active(BAIntrinsicParameter::FocalLength)
             ? currentIntrinsics.focalX
@@ -1390,8 +1393,9 @@ bool restoreInactiveAdaptiveIntrinsics(
             : referenceIntrinsics.principalY;
         camera.setIntrinsics(focalX, focalY, principalX, principalY);
 
-        FramePinholeCamera::Distortion distortion = camera.distortion();
-        const FramePinholeCamera::Distortion referenceDistortion = reference.distortion();
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion referenceDistortion =
+            reference.distortion();
         if (!active(BAIntrinsicParameter::RadialK1))
         {
             distortion.radialK1 = referenceDistortion.radialK1;

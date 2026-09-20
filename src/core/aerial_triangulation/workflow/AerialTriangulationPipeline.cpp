@@ -11,7 +11,10 @@
 
 #include "CameraIntrinsicPrior.h"
 #include "ProjectCameraIO.h"
+#include "camera/models/CameraModelFactories.h"
+#include "camera/project/CameraProjectRuntime.h"
 #include "io/PathIO.h"
+#include "io/ImageIO.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
 #include "reporting/AerialTriangulationResultWriter.h"
@@ -23,10 +26,10 @@
 #include "search/SfmSearchPolicy.h"
 #include "log/Logger.h"
 
-#include <QElapsedTimer>
+#include <chrono>
 #include <QFileInfo>
-#include <QImageReader>
 #include <QJsonArray>
+#include <QMap>
 
 #include <algorithm>
 #include <array>
@@ -35,6 +38,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -85,8 +89,7 @@ namespace xjw::aerial_triangulation
                 const int imageIndex =
                     inspectedCount == 1 ? 0 : sample * (imagePaths.size() - 1) / (inspectedCount - 1);
                 const QString& path = imagePaths.at(imageIndex);
-                QImageReader reader(path);
-                const QSize size = reader.size();
+                const QSize size = xjw::common::io::readImageSize(path);
                 if (!size.isValid())
                 {
                     continue;
@@ -207,7 +210,8 @@ namespace xjw::aerial_triangulation
             std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
             for (const ImageId imageId : imageIds)
             {
-                const FramePinholeCamera camera = reconstruction.camera(imageId).normalizedForPositiveDepth();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                    reconstruction.camera(imageId).normalizedForPositiveDepth();
                 const auto center = camera.cameraCenter();
                 const auto rotation = camera.cameraToWorldRotation();
                 for (int axis = 0; axis < 3; ++axis)
@@ -264,7 +268,7 @@ namespace xjw::aerial_triangulation
         /**
          * @brief 判断每张影像是否都有可直接使用的可信内参。
          *
-         * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效 FramePinholeCamera。
+         * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效数值状态。
          * 由上一次 SfM 写回的 intrinsic_source=sfm_estimated 不作为新一轮初始化真值。
          */
         bool hasCompleteExternalCameraFiles(const PreparedAerialTriangulationInput& input)
@@ -278,13 +282,136 @@ namespace xjw::aerial_triangulation
                                    {
                                        return false;
                                    }
-                                   FramePinholeCamera camera;
-                                   return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) && camera.isValid();
-                               });
+                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                                   return xjw::common::project::loadFramePinholeNumericStateFromFile(path, &camera);
+                   });
+        }
+
+        std::vector<QString> canonicalImageIdsForInput(const PreparedAerialTriangulationInput& input)
+        {
+            std::vector<QString> imageIds;
+            if (input.imageIds.size() == static_cast<std::size_t>(input.images.size()))
+            {
+                imageIds.reserve(input.imageIds.size());
+                for (const camera_core::ImageId& imageId : input.imageIds)
+                {
+                    imageIds.push_back(QString::fromStdString(imageId.value()));
+                }
+                return imageIds;
+            }
+            if (input.cameraBindings.size() == static_cast<std::size_t>(input.images.size()))
+            {
+                imageIds.reserve(input.cameraBindings.size());
+                for (const SolverCameraBinding& binding : input.cameraBindings)
+                {
+                    imageIds.push_back(QString::fromStdString(binding.imageId.value()));
+                }
+            }
+            return imageIds;
+        }
+
+        struct CanonicalRuntimeSelection
+        {
+            bool present = false;
+            std::optional<xjw::camera_project::CameraProjectRuntimeResult> runtime;
+            std::vector<camera_core::ImageId> imageIds;
+            QString error;
+        };
+
+        CanonicalRuntimeSelection resolveCanonicalRuntime(const PreparedAerialTriangulationInput& input)
+        {
+            CanonicalRuntimeSelection result;
+            if (input.projectMeta.isEmpty())
+            {
+                return result;
+            }
+
+            const QJsonObject projectFiles = xjw::common::project::projectFilesRootObject(input.projectMeta);
+            const bool hasInstances = projectFiles.contains(QStringLiteral("camera_instances"));
+            const bool hasDefinitions = projectFiles.contains(QStringLiteral("camera_definitions"));
+            if (!hasInstances && !hasDefinitions)
+            {
+                return result;
+            }
+            result.present = true;
+            if (!projectFiles.value(QStringLiteral("camera_instances")).isArray() ||
+                !projectFiles.value(QStringLiteral("camera_definitions")).isArray())
+            {
+                result.error = QStringLiteral(
+                    "canonical camera_definitions/camera_instances 必须同时存在且为数组");
+                return result;
+            }
+
+            if (input.imageIds.size() == static_cast<std::size_t>(input.images.size()))
+            {
+                result.imageIds = input.imageIds;
+            }
+            else if (input.cameraBindings.size() == static_cast<std::size_t>(input.images.size()))
+            {
+                result.imageIds.reserve(input.cameraBindings.size());
+                for (const SolverCameraBinding& binding : input.cameraBindings)
+                {
+                    result.imageIds.push_back(binding.imageId);
+                }
+            }
+            else
+            {
+                result.error = QStringLiteral("canonical 相机预检要求 imageIds 或 cameraBindings 与 images 对齐");
+                return result;
+            }
+
+            result.runtime = xjw::camera_project::CameraProjectRuntime::load(
+                projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+            if (!result.runtime->ok())
+            {
+                result.error = QStringLiteral("canonical 相机运行时无效: %1")
+                                   .arg(result.runtime->errors.join(QStringLiteral("; ")));
+            }
+            return result;
+        }
+
+        QString validateCanonicalStaticSfMInput(const CanonicalRuntimeSelection& canonical)
+        {
+            if (!canonical.present)
+            {
+                return {};
+            }
+            if (!canonical.error.isEmpty())
+            {
+                return canonical.error;
+            }
+            if (!canonical.runtime)
+            {
+                return QStringLiteral("canonical 相机运行时未解析");
+            }
+
+            const camera_core::CameraOperationPlan plan = canonical.runtime->planOperationForImages(
+                canonical.imageIds, camera_core::CameraOperation::StaticSfM);
+            if (!plan.ok())
+            {
+                return QString::fromStdString(plan.failureMessage());
+            }
+            return {};
+        }
+
+        QMap<QString, QJsonObject> projectCameraParametersByImageId(const QJsonObject& metadata)
+        {
+            QMap<QString, QJsonObject> result;
+            for (const QJsonValue& value : xjw::common::project::projectImageEntries(metadata))
+            {
+                const QJsonObject image = value.toObject();
+                const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+                if (!imageId.isEmpty())
+                {
+                    result.insert(imageId, xjw::common::project::projectCameraModelParameters(metadata, image));
+                }
+            }
+            return result;
         }
 
         bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput& input,
-                                             bool hasCompleteExternalCameras)
+                                             bool hasCompleteExternalCameras,
+                                             const CanonicalRuntimeSelection& canonical)
         {
             if (hasCompleteExternalCameras)
             {
@@ -295,19 +422,51 @@ namespace xjw::aerial_triangulation
                 return false;
             }
 
-            const QMap<QString, QJsonObject> imageMeta =
-                xjw::common::project::projectImageMetaByPath(input.projectMeta, true);
-            for (const QString& imagePath : input.images)
+            if (canonical.present)
             {
-                const auto metadata = imageMeta.constFind(xjw::common::project::normalizePath(imagePath));
-                if (metadata == imageMeta.cend())
+                if (!canonical.error.isEmpty() || !canonical.runtime)
                 {
                     return false;
                 }
-                const QJsonObject cameraObject = metadata.value().value(QStringLiteral("camera")).toObject();
-                FramePinholeCamera camera;
+                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
+                std::string conversionError;
+                if (!canonical.runtime->framePinholeStatesForImages(
+                        canonical.imageIds, &states, &conversionError))
+                {
+                    return false;
+                }
+                const QMap<QString, QJsonObject> cameraParameters =
+                    projectCameraParametersByImageId(input.projectMeta);
+                for (const camera_core::ImageId& imageId : canonical.imageIds)
+                {
+                    const auto metadata = cameraParameters.constFind(QString::fromStdString(imageId.value()));
+                    if (metadata == cameraParameters.cend() ||
+                        !isTrustedProjectCameraIntrinsic(metadata.value()))
+                    {
+                        return false;
+                    }
+                }
+                return !canonical.imageIds.empty();
+            }
+
+            const std::vector<QString> imageIds = canonicalImageIdsForInput(input);
+            if (imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                return false;
+            }
+            const QMap<QString, QJsonObject> cameraParameters =
+                projectCameraParametersByImageId(input.projectMeta);
+            for (const QString& imageId : imageIds)
+            {
+                const auto metadata = cameraParameters.constFind(imageId);
+                if (metadata == cameraParameters.cend())
+                {
+                    return false;
+                }
+                const QJsonObject cameraObject = metadata.value();
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
                 if (!isTrustedProjectCameraIntrinsic(cameraObject) ||
-                    !xjw::common::project::cameraFromJson(cameraObject, &camera) || !camera.isValid())
+                    !xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) || !camera.isValid())
                 {
                     return false;
                 }
@@ -317,7 +476,8 @@ namespace xjw::aerial_triangulation
 
         /// 与正式 AttemptRunner 使用同一规则判断是否能复用一整组真实外参。
         bool hasCompleteKnownCameraPosePrior(const PreparedAerialTriangulationInput& input,
-                                             bool hasCompleteExternalCameras)
+                                             bool hasCompleteExternalCameras,
+                                             const CanonicalRuntimeSelection& canonical)
         {
             if (hasCompleteExternalCameras)
             {
@@ -328,19 +488,51 @@ namespace xjw::aerial_triangulation
                 return false;
             }
 
-            const QMap<QString, QJsonObject> imageMeta =
-                xjw::common::project::projectImageMetaByPath(input.projectMeta, true);
-            for (const QString& imagePath : input.images)
+            if (canonical.present)
             {
-                const auto metadata = imageMeta.constFind(xjw::common::project::normalizePath(imagePath));
-                if (metadata == imageMeta.cend())
+                if (!canonical.error.isEmpty() || !canonical.runtime)
                 {
                     return false;
                 }
-                const QJsonObject cameraObject = metadata.value().value(QStringLiteral("camera")).toObject();
-                FramePinholeCamera camera;
+                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
+                std::string conversionError;
+                if (!canonical.runtime->framePinholeStatesForImages(
+                        canonical.imageIds, &states, &conversionError))
+                {
+                    return false;
+                }
+                const QMap<QString, QJsonObject> cameraParameters =
+                    projectCameraParametersByImageId(input.projectMeta);
+                for (const camera_core::ImageId& imageId : canonical.imageIds)
+                {
+                    const auto metadata = cameraParameters.constFind(QString::fromStdString(imageId.value()));
+                    if (metadata == cameraParameters.cend() ||
+                        metadata.value().value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+                    {
+                        return false;
+                    }
+                }
+                return !canonical.imageIds.empty();
+            }
+
+            const std::vector<QString> imageIds = canonicalImageIdsForInput(input);
+            if (imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                return false;
+            }
+            const QMap<QString, QJsonObject> cameraParameters =
+                projectCameraParametersByImageId(input.projectMeta);
+            for (const QString& imageId : imageIds)
+            {
+                const auto metadata = cameraParameters.constFind(imageId);
+                if (metadata == cameraParameters.cend())
+                {
+                    return false;
+                }
+                const QJsonObject cameraObject = metadata.value();
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
                 if (cameraObject.value(QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
-                    !xjw::common::project::cameraFromJson(cameraObject, &camera) || !camera.isValid())
+                    !xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) || !camera.isValid())
                 {
                     return false;
                 }
@@ -702,8 +894,7 @@ namespace xjw::aerial_triangulation
     AerialTriangulationReconstructionResult
     AerialTriangulationPipeline::run(const PreparedAerialTriangulationInput& input) const
     {
-        QElapsedTimer timer;
-        timer.start();
+        const auto timer = std::chrono::steady_clock::now();
 
         // RPC00B 是随像点变化的区域传感器模型，不能进入固定光心针孔 SfM。
         // 生产 runner 在焦距先验和针孔候选搜索之前完成模型分流；测试注入 runner
@@ -716,22 +907,44 @@ namespace xjw::aerial_triangulation
                 AerialTriangulationReconstructionResult failed;
                 failed.errorMessage = rpcInput.errorMessage;
                 failed.summary = failed.errorMessage;
-                failed.durationSeconds = timer.elapsed() / 1000.0;
+                failed.durationSeconds =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                        .count() /
+                    1000.0;
                 return failed;
             }
             if (rpcInput.status == RpcCameraInputStatus::Complete)
             {
                 AerialTriangulationReconstructionResult rpcResult =
                     RpcAerialTriangulationRunner().run(input, rpcInput.cameras);
-                rpcResult.durationSeconds = timer.elapsed() / 1000.0;
+                rpcResult.durationSeconds =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                        .count() /
+                    1000.0;
                 return rpcResult;
             }
         }
 
+        const CanonicalRuntimeSelection canonical = resolveCanonicalRuntime(input);
+        const QString canonicalError = validateCanonicalStaticSfMInput(canonical);
+        if (!canonicalError.isEmpty())
+        {
+            AerialTriangulationReconstructionResult failed;
+            failed.errorMessage = QStringLiteral("canonical 相机预检失败：%1").arg(canonicalError);
+            failed.summary = failed.errorMessage;
+            failed.durationSeconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                    .count() /
+                1000.0;
+            return failed;
+        }
+
         const auto originalProgress = input.progressFn;
         const bool hasCompleteExternalCameras = hasCompleteExternalCameraFiles(input);
-        const bool hasProjectOrExternalPrior = hasCompleteCameraIntrinsicPrior(input, hasCompleteExternalCameras);
-        const bool hasCompleteKnownPosePrior = hasCompleteKnownCameraPosePrior(input, hasCompleteExternalCameras);
+        const bool hasProjectOrExternalPrior =
+            hasCompleteCameraIntrinsicPrior(input, hasCompleteExternalCameras, canonical);
+        const bool hasCompleteKnownPosePrior =
+            hasCompleteKnownCameraPosePrior(input, hasCompleteExternalCameras, canonical);
         const BatchFocalPrior metadataPrior = hasProjectOrExternalPrior || hasCompleteKnownPosePrior
                                                   ? BatchFocalPrior{}
                                                   : resolveBatchFocalPrior(input.images);
@@ -773,18 +986,23 @@ namespace xjw::aerial_triangulation
             }
             auto sharedGraph = std::make_shared<PreparedTiePointGraph>();
             QString graphError;
-            QElapsedTimer graphTimer;
-            graphTimer.start();
+            const auto graphTimer = std::chrono::steady_clock::now();
             if (!SfmAttemptRunner::readTiePointGraph(input.tiePointPath, input.images, sharedGraph.get(), &graphError))
             {
                 AerialTriangulationReconstructionResult failed;
                 failed.success = false;
                 failed.errorMessage = graphError;
                 failed.summary = graphError;
-                failed.durationSeconds = timer.elapsed() / 1000.0;
+                failed.durationSeconds =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                        .count() /
+                    1000.0;
                 return failed;
             }
-            tiePointGraphPrepareSeconds = graphTimer.elapsed() / 1000.0;
+            tiePointGraphPrepareSeconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - graphTimer)
+                    .count() /
+                1000.0;
             preparedTiePointTrackCount = sharedGraph->trackCount;
             preparedTiePointPairCount = static_cast<int>(sharedGraph->matchPairs.size());
             preparedTiePointDirectEdgeCount = static_cast<qint64>(sharedGraph->directEdgeCount);
@@ -830,7 +1048,7 @@ namespace xjw::aerial_triangulation
             adaptiveRefinementAccepted =
                 attemptInput.adaptiveCameraModelFitting && hasAppliedAdaptiveCameraModelRefinement(execution);
         }
-        QVector<AdaptiveFocalCandidate> focalCandidates;
+        std::vector<AdaptiveFocalCandidate> focalCandidates;
         std::vector<SfmCandidateSummary> candidateSummaries;
         QVector<SfmAttemptExecutionResult> candidateExecutions;
         double selectedFocalScale = attemptInput.estimatedFocalScale;
@@ -861,7 +1079,7 @@ namespace xjw::aerial_triangulation
                 {
                     candidateExecution.result.sfmDiagnostics.insert(QStringLiteral("sparse_quality"), sparseQuality);
                 }
-                focalCandidates.append(candidateFromExecution(focalScale, candidateExecution));
+                focalCandidates.push_back(candidateFromExecution(focalScale, candidateExecution));
                 candidateSummaries.push_back(
                     summaryFromExecution(candidateIndex, focalScale, candidateExecution, input.sequenceLoopClosure));
                 candidateExecutions.append(std::move(candidateExecution));
@@ -912,7 +1130,10 @@ namespace xjw::aerial_triangulation
                 cancelled.success = false;
                 cancelled.errorMessage = QStringLiteral("用户取消");
                 cancelled.summary = cancelled.errorMessage;
-                cancelled.durationSeconds = timer.elapsed() / 1000.0;
+                cancelled.durationSeconds =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                        .count() /
+                    1000.0;
                 return cancelled;
             };
 
@@ -995,7 +1216,7 @@ namespace xjw::aerial_triangulation
             // 排序首要目标是注册完整性，其次才是网络刚性、闭环连续性、RMS 和点数。
             const std::vector<SfmCandidateSummary> ranked = rankCandidates(candidateSummaries);
             const int selectedIndex = ranked.empty() ? 0 : ranked.front().candidateIndex;
-            selectedFocalScale = focalCandidates.at(selectedIndex).focalScale;
+            selectedFocalScale = focalCandidates[static_cast<std::size_t>(selectedIndex)].focalScale;
             execution = std::move(candidateExecutions[selectedIndex]);
             // 排序完成后只保留胜出重建，及时释放其它候选的相机、点云和观测内存。
             candidateExecutions.clear();
@@ -1074,7 +1295,7 @@ namespace xjw::aerial_triangulation
         }
         else
         {
-            focalCandidates.append(candidateFromExecution(attemptInput.estimatedFocalScale, execution));
+            focalCandidates.push_back(candidateFromExecution(attemptInput.estimatedFocalScale, execution));
         }
 
         // 在正式提交前固化所有焦距候选及选择结果；失败返回也保留诊断。
@@ -1086,7 +1307,7 @@ namespace xjw::aerial_triangulation
             {
                 summary = &candidateSummaries[static_cast<std::size_t>(index)];
             }
-            focalCandidateJson.append(candidateToJson(focalCandidates.at(index), summary));
+            focalCandidateJson.append(candidateToJson(focalCandidates[static_cast<std::size_t>(index)], summary));
         }
         const bool adaptiveCameraModelFittingEvaluated =
             adaptiveCameraModelFittingScheduled &&
@@ -1151,7 +1372,6 @@ namespace xjw::aerial_triangulation
                                                adaptiveCameraModelFittingSkipReason);
         execution.result.sfmDiagnostics.insert(QStringLiteral("adaptive_camera_model_refinement_accepted"),
                                                adaptiveRefinementAccepted);
-        execution.result.sfmDiagnostics.insert(QStringLiteral("adaptive_focal_scale"), selectedFocalScale);
         execution.result.sfmDiagnostics.insert(QStringLiteral("adaptive_focal_seed_scale"), selectedFocalScale);
         execution.result.sfmDiagnostics.insert(QStringLiteral("adaptive_focal_candidates"), focalCandidateJson);
         execution.result.sfmDiagnostics.insert(QStringLiteral("focal_probe_registration_limit"), focalProbeLimit);
@@ -1171,7 +1391,7 @@ namespace xjw::aerial_triangulation
         execution.result.sfmDiagnostics.insert(QStringLiteral("focal_search_exhaustive_fallback"),
                                                focalSearchExhaustiveFallback);
         execution.result.sfmDiagnostics.insert(QStringLiteral("focal_search_evaluated_candidate_count"),
-                                               focalCandidates.size());
+                                               static_cast<int>(focalCandidates.size()));
         execution.result.sfmDiagnostics.insert(QStringLiteral("focal_search_shared_tie_point_graph"),
                                                static_cast<bool>(attemptInput.preparedTiePointGraph));
         execution.result.sfmDiagnostics.insert(QStringLiteral("tie_point_graph_prepare_seconds"),
@@ -1224,9 +1444,8 @@ namespace xjw::aerial_triangulation
         }
 
         const bool focalInitializationSearch = focalCandidates.size() > 1;
-        const int refinedIntrinsicCount = execution.result.sfmDiagnostics
-                                              .value(QStringLiteral("ba_refined_intrinsic_count"))
-                                              .toInt();
+        const int refinedIntrinsicCount =
+            execution.result.sfmDiagnostics.value(QStringLiteral("ba_refined_intrinsic_count")).toInt();
         const bool intrinsicModelRefined = refinedIntrinsicCount > 0;
         QString selfCalibrationStatus =
             hasCompleteKnownPosePrior
@@ -1269,7 +1488,10 @@ namespace xjw::aerial_triangulation
 
         if (!execution.result.success)
         {
-            execution.result.durationSeconds = timer.elapsed() / 1000.0;
+            execution.result.durationSeconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                    .count() /
+                1000.0;
             return execution.result;
         }
         if (input.cancelFlag && input.cancelFlag->load())
@@ -1277,7 +1499,10 @@ namespace xjw::aerial_triangulation
             execution.result.success = false;
             execution.result.errorMessage = QStringLiteral("用户取消");
             execution.result.summary = execution.result.errorMessage;
-            execution.result.durationSeconds = timer.elapsed() / 1000.0;
+            execution.result.durationSeconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                    .count() /
+                1000.0;
             return execution.result;
         }
 
@@ -1292,11 +1517,16 @@ namespace xjw::aerial_triangulation
             execution.result.success = false;
             execution.result.errorMessage = writeError;
             execution.result.summary = writeError;
-            execution.result.durationSeconds = timer.elapsed() / 1000.0;
+            execution.result.durationSeconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer)
+                    .count() /
+                1000.0;
             return execution.result;
         }
 
-        execution.result.durationSeconds = timer.elapsed() / 1000.0;
+        execution.result.durationSeconds =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer).count() /
+            1000.0;
         if (originalProgress)
         {
             originalProgress(QStringLiteral("完成"), 100);

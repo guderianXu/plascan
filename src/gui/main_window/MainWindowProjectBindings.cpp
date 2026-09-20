@@ -57,6 +57,12 @@
 #include "camera/ForwardIntersectionResultsDialog.h"
 #include "HenuBrandWidget.h"
 #include "ProjectManager.h"
+#include "project/services/ProjectLifecycleService.h"
+#include "project/services/ProjectResourceCleanupCoordinator.h"
+#include "project/services/ProjectResourceService.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
+#include "project/tasks/ProjectTaskOrchestrator.h"
 #include "ProjectTiePointResultService.h"
 #include "project/ProjectIO.h"
 #include "project/SparseResultQuality.h"
@@ -94,16 +100,28 @@
 void MainWindow::setupProjectManager()
 {
     _projectData = new ProjectData(this);
-    _projectManager = new ProjectManager(_projectData, this);
+    auto* project_manager = new ProjectManager(_projectData, this);
+    _projectServices = &project_manager->services();
+    _projectServices->setObjectName(QStringLiteral("ProjectServiceContainer"));
+    _projectServices->setParent(this);
     _taskRuntimeService = new xjw::gui::runtime::TaskRuntimeService(this);
-    _projectLifecyclePresenter = new ProjectLifecyclePresenter(_projectManager, this, statusBar(), this);
+    _projectLifecyclePresenter = new ProjectLifecyclePresenter(
+        &_projectServices->lifecycle(), &_projectServices->session(), this, statusBar(), this);
     connect(_projectLifecyclePresenter,
             &ProjectLifecyclePresenter::closeAfterSaveRequested,
             this,
             &QWidget::close,
             Qt::QueuedConnection);
-    _projectManager->setObjectName(QStringLiteral("ProjectManager"));
-    _taskStatusController = new ProjectTaskStatusController(_projectManager, _dashboard, statusBar(), this, this);
+    project_manager->setObjectName(QStringLiteral("ProjectManager"));
+    _taskStatusController = new ProjectTaskStatusController(&_projectServices->tasks(),
+                                                            &_projectServices->resources(),
+                                                            &_projectServices->cleanup(),
+                                                            &_projectServices->lifecycle(),
+                                                            &_projectServices->session(),
+                                                            _dashboard,
+                                                            statusBar(),
+                                                            this,
+                                                            this);
     connect(_taskRuntimeService,
             &xjw::gui::runtime::TaskRuntimeService::taskSnapshotsChanged,
             _taskStatusController,
@@ -118,10 +136,10 @@ void MainWindow::setupProjectManager()
             });
     const auto sync_task_session = [this]
     {
-        const auto session = _projectManager->currentSessionContext();
+        const auto session = _projectServices->session().context();
         _taskRuntimeService->setProjectSession(session.projectPath, session.chunkId, session.generation);
     };
-    connect(_projectManager, &ProjectManager::projectSessionChanged, this, sync_task_session);
+    connect(project_manager, &ProjectManager::projectSessionChanged, this, sync_task_session);
     sync_task_session();
     connect(_workPanel,
             &WorkPanelWidget::taskCommandRequested,
@@ -157,7 +175,7 @@ void MainWindow::setupProjectManager()
             _taskStatusController,
             &ProjectTaskStatusController::finishImageLoading);
 
-    _tiePointWorkflowController = new TiePointWorkflowController(_projectManager, this);
+    _tiePointWorkflowController = new TiePointWorkflowController(&_projectServices->session(), this);
     connect(_tiePointWorkflowController,
             &TiePointWorkflowController::progressStarted,
             _taskStatusController,
@@ -178,6 +196,10 @@ void MainWindow::setupProjectManager()
             &TiePointWorkflowController::warningRequested,
             this,
             [this](const QString& title, const QString& message) { QMessageBox::warning(this, title, message); });
+    connect(_tiePointWorkflowController,
+            &TiePointWorkflowController::matchPairReady,
+            &_projectServices->session(),
+            &xjw::gui::project::ProjectSession::matchPairReady);
     connect(_taskStatusController,
             &ProjectTaskStatusController::tiePointCancelRequested,
             _tiePointWorkflowController,
@@ -212,9 +234,9 @@ void MainWindow::setupProjectManager()
                                    {
                                        if (_photoStrip)
                                        {
-                                           if (_projectManager)
+                                           if (_projectServices)
                                            {
-                                               _photoStrip->setProjectPath(_projectManager->currentProjectPath());
+                                               _photoStrip->setProjectPath(_projectServices->session().projectPath());
                                            }
                                            _photoStrip->loadFromJson(meta);
                                        }
@@ -305,10 +327,12 @@ void MainWindow::setupProjectManager()
     }
 
     _menuWorkflowController = new MenuWorkflowController(this, this);
-    _menuWorkflowController->setProjectManager(_projectManager);
+    _menuWorkflowController->setProjectServices(&_projectServices->session(),
+                                                &_projectServices->tasks(),
+                                                &_projectServices->resources());
 
     _reconController = new ReconstructionWorkflowController(this, this);
-    _reconController->setProjectManager(_projectManager);
+    _reconController->setProjectServices(&_projectServices->session(), &_projectServices->tasks());
     // 连接特征显示选项更新到CanvasWidget
     connect(_menuWorkflowController,
             &MenuWorkflowController::requestApplyFeatureDisplayOptions,
@@ -336,9 +360,9 @@ void MainWindow::setupProjectManager()
                 this,
                 [this](const QStringList& imagePaths)
                 {
-                    if (_projectManager)
+                    if (_projectServices)
                     {
-                        _projectManager->openGenerateMaskDialogForImages(imagePaths);
+                        _projectServices->tasks().openGenerateMaskDialogForImages(imagePaths);
                     }
                 });
         connect(_photoStrip,
@@ -346,9 +370,9 @@ void MainWindow::setupProjectManager()
                 this,
                 [this](const QStringList& imagePaths)
                 {
-                    if (_projectManager)
+                    if (_projectServices)
                     {
-                        _projectManager->clearMasksForImages(imagePaths);
+                        _projectServices->tasks().clearMasksForImages(imagePaths);
                     }
                 });
     }
@@ -364,9 +388,9 @@ void MainWindow::setupProjectManager()
                     int rotation = xjw::gui::config::imageViewRotationForPath(_imageViewRotations, stateKey);
                     _canvas->setViewRotationDegrees(rotation);
                     saveUiSetting(QJsonObject{{QStringLiteral("active_image_id"), stateKey}});
-                    if (_projectManager)
+                    if (_projectServices)
                     {
-                        _projectManager->setActiveImagePath(path);
+                        _projectServices->tasks().setActiveImagePath(path);
                     }
                 });
         connect(_canvas,
@@ -383,7 +407,10 @@ void MainWindow::setupProjectManager()
 
     if (_config)
     {
-        _projectManager->setFileDialogStateManager(_config->fileDialogs());
+        FileDialogStateManager* dialog_state = _config->fileDialogs();
+        _projectServices->setDirectoryAccessors(
+            [dialog_state](const QString& key) { return dialog_state->lastDir(key); },
+            [dialog_state](const QString& key, const QString& dir) { dialog_state->setLastDir(key, dir); });
     }
 
     if (_mainMenu)
@@ -396,7 +423,7 @@ void MainWindow::setupProjectManager()
                     [this]()
                     {
                         persistCurrentUiSettings();
-                        _projectManager->createNewProject();
+                        _projectServices->lifecycle().createNewProject();
                     });
         }
         if (_mainMenu->openAction())
@@ -407,27 +434,36 @@ void MainWindow::setupProjectManager()
                     [this]()
                     {
                         persistCurrentUiSettings();
-                        _projectManager->openProject();
+                        _projectServices->lifecycle().openProject();
                     });
         }
         if (_mainMenu->addPhotoAction())
         {
-            connect(_mainMenu->addPhotoAction(), &QAction::triggered, _projectManager, &ProjectManager::addPhoto);
+            connect(_mainMenu->addPhotoAction(),
+                    &QAction::triggered,
+                    &_projectServices->resources(),
+                    [this]() { _projectServices->resources().addPhoto(); });
         }
         if (_mainMenu->addFolderAction())
         {
-            connect(_mainMenu->addFolderAction(), &QAction::triggered, _projectManager, &ProjectManager::addFolder);
+            connect(_mainMenu->addFolderAction(),
+                    &QAction::triggered,
+                    &_projectServices->resources(),
+                    [this]() { _projectServices->resources().addFolder(); });
         }
         if (_mainMenu->importPointCloudAction())
         {
             connect(_mainMenu->importPointCloudAction(),
                     &QAction::triggered,
-                    _projectManager,
-                    &ProjectManager::importPointCloud);
+                    &_projectServices->resources(),
+                    [this]() { _projectServices->resources().importPointCloud(); });
         }
         if (_mainMenu->importModelAction())
         {
-            connect(_mainMenu->importModelAction(), &QAction::triggered, _projectManager, &ProjectManager::importModel);
+            connect(_mainMenu->importModelAction(),
+                    &QAction::triggered,
+                    &_projectServices->resources(),
+                    [this]() { _projectServices->resources().importModel(); });
         }
         if (_mainMenu->importReferenceAction())
         {
@@ -463,16 +499,19 @@ void MainWindow::setupProjectManager()
                         {
                             _cameraReferenceController->importMetashapeReference();
                         }
-                        else if (reference_type_dialog.clickedButton() == marker_reference_button && _projectManager)
+                        else if (reference_type_dialog.clickedButton() == marker_reference_button && _projectServices)
                         {
-                            _projectManager->openSurveyControlDialog();
+                            _projectServices->resources().openSurveyControlDialog();
                         }
                     });
         }
         if (_mainMenu->saveAction())
         {
             _mainMenu->saveAction()->setEnabled(false);
-            connect(_mainMenu->saveAction(), &QAction::triggered, _projectManager, &ProjectManager::saveProject);
+            connect(_mainMenu->saveAction(),
+                    &QAction::triggered,
+                    &_projectServices->lifecycle(),
+                    &ProjectLifecycleService::saveProject);
         }
         if (_mainMenu->exportMatchedPairsAction())
         {
@@ -484,8 +523,8 @@ void MainWindow::setupProjectManager()
             _mainMenu->exportPortableProjectAction()->setEnabled(false);
             connect(_mainMenu->exportPortableProjectAction(),
                     &QAction::triggered,
-                    _projectManager,
-                    &ProjectManager::exportPortableProject);
+                    &_projectServices->lifecycle(),
+                    &ProjectLifecycleService::exportPortableProject);
         }
 
         if (_menuWorkflowController)
@@ -534,10 +573,14 @@ void MainWindow::setupProjectManager()
                     {
                         CreateTiePointsDialog dlg(this);
                         bool hasAllReferenceCameras = false;
-                        const QStringList images = _projectManager ? _projectManager->getAllImages() : QStringList();
+                        const QStringList images =
+                            _projectServices ? _projectServices->session().allImages() : QStringList();
                         const int cameraCount =
-                            _projectManager
-                                ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size()
+                            _projectServices
+                                ? static_cast<int>(_projectServices->session()
+                                                       .getReferenceCameraGeometriesForImages(
+                                                           images, &hasAllReferenceCameras)
+                                                       .size())
                                 : 0;
                         dlg.setReferencePreselectionAvailable(hasAllReferenceCameras && cameraCount == images.size() &&
                                                                   images.size() >= 2,
@@ -599,15 +642,15 @@ void MainWindow::setupProjectManager()
                 this,
                 [this]()
                 {
-                    if (!_projectManager || !_workspaceCenter || !_workspaceCenter->modelView())
+                    if (!_projectServices || !_workspaceCenter || !_workspaceCenter->modelView())
                     {
                         QMessageBox::warning(this, tr("清理连接点"), tr("三维视图或项目管理器尚未就绪。"));
                         return;
                     }
 
-                    const QString projectPath = _projectManager->currentProjectPath();
+                    const QString projectPath = _projectServices->session().projectPath();
                     const auto selection = xjw::gui::project::ProjectTiePointResultService::selectCurrent(
-                        _projectManager->currentMeta(), projectPath);
+                        _projectServices->session().metadata(), projectPath);
                     if (!selection.isValid())
                     {
                         QMessageBox::information(this, tr("清理连接点"), tr("当前项目中没有可清理的连接点成果。"));
@@ -890,7 +933,7 @@ void MainWindow::setupProjectManager()
                         return;
                     }
 
-                    if (!_projectManager || _projectManager->currentProjectPath() != projectPath)
+                    if (!_projectServices || _projectServices->session().projectPath() != projectPath)
                     {
                         modelView->clearTiePointPruneSession();
                         QMessageBox::warning(this, tr("清理连接点"), tr("预览期间项目已经切换，已取消本次清理。"));
@@ -962,7 +1005,7 @@ void MainWindow::setupProjectManager()
 
                     modelView->clearTiePointPrunePreview();
                     statusBar()->showMessage(tr("正在后台删除 %1 个候选连接点…").arg(candidateCount), 5000);
-                    _projectManager->startSparseCloudOutlierRemovalAsync(settings);
+                    _projectServices->tasks().startSparseCloudOutlierRemovalAsync(settings);
                 });
         }
 
@@ -981,12 +1024,12 @@ void MainWindow::setupProjectManager()
                     this,
                     [this]()
                     {
-                        if (!_projectManager)
+                        if (!_projectServices)
                         {
-                            LOG_ERROR(QStringLiteral("无法打开前方交汇检测：ProjectManager 未初始化"));
+                            LOG_ERROR(QStringLiteral("无法打开前方交汇检测：项目会话未初始化"));
                             return;
                         }
-                        auto* dlg = new ForwardIntersectionCheckDialog(_projectManager, this);
+                        auto* dlg = new ForwardIntersectionCheckDialog(&_projectServices->session(), this);
                         dlg->setAttribute(Qt::WA_DeleteOnClose);
                         dlg->exec();
                     });
@@ -999,23 +1042,23 @@ void MainWindow::setupProjectManager()
                     this,
                     [this]()
                     {
-                        if (!_projectManager)
+                        if (!_projectServices)
                         {
-                            LOG_ERROR(QStringLiteral("无法打开前方交汇结果：ProjectManager 未初始化"));
+                            LOG_ERROR(QStringLiteral("无法打开前方交汇结果：项目会话未初始化"));
                             return;
                         }
-                        auto* dlg = new ForwardIntersectionResultsDialog(_projectManager, this);
+                        auto* dlg = new ForwardIntersectionResultsDialog(&_projectServices->session(), this);
                         dlg->setAttribute(Qt::WA_DeleteOnClose);
                         dlg->exec();
                     });
         }
 
-        connect(_projectManager, &ProjectManager::projectOpened, this, &MainWindow::onProjectOpened);
-        connect(_projectManager, &ProjectManager::projectClosed, this, &MainWindow::onProjectClosed);
+        connect(project_manager, &ProjectManager::projectOpened, this, &MainWindow::onProjectOpened);
+        connect(project_manager, &ProjectManager::projectClosed, this, &MainWindow::onProjectClosed);
 
         // 匹配分片提交后刷新当前影像的匹配观测。SIFT 描述子不再落盘，
         // 因此这里不再切换旧的特征文件后缀。
-        connect(_projectManager,
+        connect(project_manager,
                 &ProjectManager::imageMatchResultAppended,
                 this,
                 [this](const QString& imagePath)
@@ -1045,13 +1088,13 @@ void MainWindow::setupProjectManager()
     {
         connect(_canvas,
                 &CanvasWidget::interactiveMaskEditRequested,
-                _projectManager,
-                &ProjectManager::saveInteractiveMask);
-        connect(_projectManager,
+                &_projectServices->tasks(),
+                &xjw::gui::project::ProjectTaskOrchestrator::saveInteractiveMask);
+        connect(project_manager,
                 &ProjectManager::interactiveMaskSaved,
                 _canvas,
                 &CanvasWidget::confirmInteractiveMaskSaved);
-        connect(_projectManager,
+        connect(project_manager,
                 &ProjectManager::interactiveMaskSaveFailed,
                 this,
                 [](const QString& imagePath, quint64 revision, const QString& message)
@@ -1063,7 +1106,7 @@ void MainWindow::setupProjectManager()
                 });
     }
 
-    connect(_projectManager,
+    connect(project_manager,
             &ProjectManager::masksGenerated,
             this,
             [this](const QStringList& imagePaths)
@@ -1084,14 +1127,14 @@ void MainWindow::setupProjectManager()
                 }
             });
 
-    connect(_projectManager,
+    connect(project_manager,
             &ProjectManager::projectMetadataUpdated,
             this,
             [this](const QString&)
             {
-                if (_projectManager)
+                if (_projectServices)
                 {
-                    const QJsonObject meta = _projectManager->currentMeta();
+                    const QJsonObject meta = _projectServices->session().metadata();
                     scheduleProjectMetadataRefresh(meta);
                     if (_canvas)
                     {
@@ -1099,7 +1142,7 @@ void MainWindow::setupProjectManager()
                     }
                 }
             });
-    connect(_projectManager,
+    connect(project_manager,
             &ProjectManager::projectMetadataChanged,
             this,
             [this](const QJsonObject& meta)
@@ -1110,7 +1153,7 @@ void MainWindow::setupProjectManager()
                     _canvas->setProjectMetadata(meta);
                 }
             });
-    connect(_projectManager,
+    connect(project_manager,
             &ProjectManager::tiePointResultReady,
             this,
             [this](const QString& sparseCloudPath, const QString& sidecarPath)
@@ -1120,10 +1163,17 @@ void MainWindow::setupProjectManager()
                     _workspaceCenter->showTiePointCloudFile(sparseCloudPath, sidecarPath);
                 }
             });
-    connect(_projectManager, &ProjectManager::chunkListChanged, _dataTree, &DataTreeWidget::setChunkContext);
+    connect(project_manager, &ProjectManager::chunkListChanged, _dataTree, &DataTreeWidget::setChunkContext);
 
-    connect(_dataTree, &DataTreeWidget::removeRequested, _projectManager, &ProjectManager::removeResources);
-    connect(_dataTree, &DataTreeWidget::deleteDataRequested, _projectManager, &ProjectManager::deleteGeneratedData);
+    connect(_dataTree,
+            &DataTreeWidget::removeRequested,
+            &_projectServices->resources(),
+            [this](const QStringList& paths) { _projectServices->resources().removeResources(paths); });
+    connect(_dataTree,
+            &DataTreeWidget::deleteDataRequested,
+            &_projectServices->resources(),
+            [this](const QString& section, const QStringList& paths)
+            { _projectServices->resources().deleteGeneratedData(section, paths); });
     connect(_dataTree,
             &DataTreeWidget::viewMatchesRequested,
             this,
@@ -1154,11 +1204,26 @@ void MainWindow::setupProjectManager()
                 }
                 _workspaceCenter->showSideBySideImages(_lastSelectedImage, path);
             });
-    connect(_dataTree, &DataTreeWidget::packRequested, _projectManager, &ProjectManager::packResource);
-    connect(_dataTree, &DataTreeWidget::createChunkRequested, _projectManager, &ProjectManager::createChunk);
-    connect(_dataTree, &DataTreeWidget::renameChunkRequested, _projectManager, &ProjectManager::renameChunk);
-    connect(_dataTree, &DataTreeWidget::removeChunkRequested, _projectManager, &ProjectManager::removeChunk);
-    connect(_dataTree, &DataTreeWidget::switchChunkRequested, _projectManager, &ProjectManager::switchChunk);
+    connect(_dataTree,
+            &DataTreeWidget::packRequested,
+            &_projectServices->resources(),
+            [this](const QString& path) { _projectServices->resources().packResource(path); });
+    connect(_dataTree,
+            &DataTreeWidget::createChunkRequested,
+            &_projectServices->lifecycle(),
+            &ProjectLifecycleService::createChunk);
+    connect(_dataTree,
+            &DataTreeWidget::renameChunkRequested,
+            &_projectServices->lifecycle(),
+            &ProjectLifecycleService::renameChunk);
+    connect(_dataTree,
+            &DataTreeWidget::removeChunkRequested,
+            &_projectServices->lifecycle(),
+            &ProjectLifecycleService::removeChunk);
+    connect(_dataTree,
+            &DataTreeWidget::switchChunkRequested,
+            &_projectServices->lifecycle(),
+            &ProjectLifecycleService::switchChunk);
     connect(_dataTree,
             &DataTreeWidget::openRequested,
             this,
@@ -1184,7 +1249,7 @@ void MainWindow::setupProjectManager()
             this,
             [this](const QString& section, const QString& path)
             {
-                if (!_workspaceCenter || !_projectManager)
+                if (!_workspaceCenter || !_projectServices)
                 {
                     return;
                 }
@@ -1196,7 +1261,7 @@ void MainWindow::setupProjectManager()
                 selectResource(section, path);
 
                 auto normalizedMeta = [this]()
-                { return xjw::common::project::projectFilesRootObject(_projectManager->currentMeta()); };
+                { return xjw::common::project::projectFilesRootObject(_projectServices->session().metadata()); };
 
                 if (section == QStringLiteral("深度图"))
                 {
@@ -1220,7 +1285,8 @@ void MainWindow::setupProjectManager()
                 {
                     if (!path.isEmpty() && QFileInfo::exists(path))
                     {
-                        const QString projectRoot = QFileInfo(_projectManager->currentProjectPath()).absolutePath();
+                        const QString projectRoot =
+                            QFileInfo(_projectServices->session().projectPath()).absolutePath();
                         auto resolveProjectPath = [&projectRoot](const QString& storedPath)
                         {
                             const QString trimmedPath = storedPath.trimmed();
@@ -1274,11 +1340,11 @@ void MainWindow::setupProjectManager()
                 }
                 if (section == QStringLiteral("观测网络"))
                 {
-                    if (!_projectManager)
+                    if (!_projectServices)
                     {
                         return;
                     }
-                    const QJsonObject meta = _projectManager->currentMeta();
+                    const QJsonObject meta = _projectServices->session().metadata();
                     const QJsonArray results = meta.value(QStringLiteral("observation_network_results")).toArray();
                     if (results.isEmpty())
                     {
@@ -1409,7 +1475,7 @@ void MainWindow::setupProjectManager()
                         { openMarkerFocusMeasurement(id, _canvas ? _canvas->currentImagePath() : QString()); });
                 dialog->show();
             });
-    connect(_projectManager,
+    connect(project_manager,
             &ProjectManager::surveyControlChanged,
             this,
             [this]()
@@ -1423,7 +1489,7 @@ void MainWindow::setupProjectManager()
     connect(_referencePanel,
             &ReferencePanelWidget::importMarkerReferencesRequested,
             this,
-            [this]() { _projectManager->openSurveyControlDialog(); });
+            [this]() { _projectServices->resources().openSurveyControlDialog(); });
     connect(_referencePanel,
             &ReferencePanelWidget::importCameraReferencesRequested,
             _cameraReferenceController,

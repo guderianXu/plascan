@@ -39,22 +39,22 @@ void PatchMatchDepthEstimator::cleanupOpenClResources()
 }
 
 bool PatchMatchDepthEstimator::estimateOpenCL(
-    const cv::Mat &,
-    const std::vector<cv::Mat> &,
-    const FramePinholeCamera &,
-    const std::vector<FramePinholeCamera> &,
+    const cv::Mat&,
+    const std::vector<cv::Mat>&,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>&,
     float,
     float,
-    const PatchMatchConfig &,
-    cv::Mat &,
-    cv::Mat *,
-    std::string *errorMsg,
-    const cv::Mat *,
-    const cv::Mat *,
-    const cv::Mat *,
-    const std::vector<cv::Mat> *,
-    const PatchMatchAuxiliaryInput *,
-    PatchMatchAuxiliaryOutput *)
+    const PatchMatchConfig&,
+    cv::Mat&,
+    cv::Mat*,
+    std::string* errorMsg,
+    const cv::Mat*,
+    const cv::Mat*,
+    const cv::Mat*,
+    const std::vector<cv::Mat>*,
+    const PatchMatchAuxiliaryInput*,
+    PatchMatchAuxiliaryOutput*)
 {
     if (errorMsg)
     {

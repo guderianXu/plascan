@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-09-15。
+行星表面摄影测量处理系统。最后更新: 2026-09-20。
 
 ## 顶层目录
 
@@ -9,6 +9,7 @@ plascan/
 ├── src/            # 所有源代码
 │   ├── common/     # 通用工具库 (日志, IO, 模型与项目公共能力)
 │   ├── core/       # 核心算法库 (相机, 特征, 匹配, 标记控制网, SfM, MVS, LiDAR, 蒙版, 网格, 地形)
+│   ├── adapters/qt/ # GUI/CLI 共用的 Qt 呈现与会话事件适配
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找、源码依赖 superbuild、运行时部署)
 ├── 3rdparty/       # git submodule：PlaMatrix、PlaPoint、Qt、OpenCV、GDAL、OpenEXR/Imath 与算法依赖
@@ -50,6 +51,14 @@ common/
 │   ├── PathIO.h/cpp        # UTF-8/本机路径转换、字节读取和原子文件写入
 │   ├── ImageIO.h/cpp       # OpenCV 解码及 TIFF/GeoTIFF 的 GDAL 直接读取
 │   └── JsonObjectFile.h/cpp # JSON 对象的安全读取与原子写入
+├── file/           # 独立标准文件模块与 nlohmann JSON I/O，见 file/README.md
+│   ├── FileIO.h/cpp        # Qt-free 标准路径、目录创建、读取和原子写入
+│   └── JsonFile.h/cpp      # Qt-free nlohmann JSON 文件适配
+├── plafs/
+│   ├── PlaFile.h/cpp       # 单文件值对象
+│   ├── PlaDir.h/cpp        # 目录值对象和非破坏性检查
+│   ├── PlaChunkLayout.h/cpp # 当前 Chunk 的物理路径规则（含 imported/packed 资源目录）
+│   └── PlaProjectLayout.h/cpp # 项目与数字 Chunk 的物理路径规则
 ├── json/
 │   └── JsonObjectMerge.h/cpp # 无业务语义的 JSON 对象深度合并
 ├── runtime/
@@ -61,6 +70,7 @@ common/
 │   └── BiRefNetModelCatalog.h/cpp # BiRefNet Dynamic ONNX 文件名、实际路径和安装状态
 ├── project/
 │   ├── ProjectIO.h/cpp # 项目目录、临时缓存、资源和产物路径规则
+│   ├── ProjectPathBridge.h # Qt QString 与标准物理布局之间的窄适配
 │   ├── ProjectArtifactIO.cpp # 基于规范化影像路径哈希的项目产物寻址
 │   ├── ProjectAssetInspection.h/cpp # OBJ/PLY/XYZ 统计及 OBJ 材质/纹理依赖解析
 │   ├── ProjectAssetImporter.h/cpp # Metashape/通用点云与模型复制、成果记录构建
@@ -110,6 +120,89 @@ common/
 - 项目格式需要保留的快照式展示字段由 `src/gui/project` 序列化适配层写入。核心工作流不生成中文操作名，
   也不提供无消费者的展示摘要。
 
+### 坐标系、相机身份与外部姿态边界
+
+`src/core/coordinate_system/` 是坐标语义的唯一所有者。Qt-free 的 `coordinate_system_types` 定义
+`CoordinateContextId`、`SpatialReferenceId`、`CoordinateFrameId`、参考 frame、规范 CRS、线性/角度单位、
+时间基准以及 solver 尺度状态；`CoordinateContext` 注册 frame/CRS，并以 ID 绑定单一 solver frame/reference；
+`coordinate_system_transform` 在其上提供显式静态刚体变换图、单位换算和 transform-chain hash。
+`coordinate_system_gdal` 独立封装 WKT2 规范化、非 ballpark CRS 转换、轴序和对角不确定度传播；
+`coordinate_system_json` 使用 nlohmann JSON 严格编解码 `chunk.coordinate_system`，完整保存 WKT 与 SHA-256。
+未定尺度重建使用 `ProjectUnit`，不能与米、千米等物理单位隐式互转。types/transform 不依赖相机、Qt 或 GDAL。
+
+相机领域收拢在 `src/core/camera/`。`camera/core` 与 `camera/models` 定义 Qt-free 的相机身份、能力、
+相机 `Pose` 和具体模型实例，但所有 frame/time 类型均引用坐标模块；`camera/project` 使用 Qt Core 完成
+规范化项目记录和运行态装载。`camera_core` PUBLIC 依赖 `coordinate_system_types`，
+`camera_reference_core` 再依赖 `coordinate_system_transform`，依赖方向不能反转。
+`camera_reference_core` 负责外部 GNSS/IMU/POS observation 的 frame/单位解析、
+`CameraReferenceResolver` 以及 typed `ResolvedCameraPosePrior`；Qt 目标 `camera_reference` 只保存/比较
+sidecar，不把 JSON DTO 直接传入数值内核。
+
+`control_points/reference` 保留 Qt/raw DTO 适配以及旧线性 CRS 的检查和单位归一化；context-aware 的通用 GDAL
+变换来自 `coordinate_system_gdal`。控制点进入 BA/SfM 前必须通过
+`resolveMetricReferenceCoordinate()`：没有 context 时仅接受投影/地心线性坐标并统一坐标和 sigma 为米；
+EPSG:4979 等角坐标 fail-closed。有显式米制 context 时，源 CRS 必须已注册，随后按 source→solver plan
+转换坐标并以数值 Jacobian 传播对角标准差。混合 context/solver reference 或垂直基准继续拒绝，原始 sidecar
+坐标保持不变。旧 Qt/OGR 检查路径后续再迁移，不作为新业务共享变换入口。
+
+`CameraProjectRuntime` 将 canonical 定义/实例解码为不可变集合，`CameraOperationPlan` 按 SfM、BA、MVS、
+DOM 正射、RPC 空三、推扫空三和外部姿态参考分别检查所需能力及共同 world frame。DOM 正射只要求
+`Projection + StaticPose`，静态 SfM/BA/MVS 还要求对应的 Ray/Optimization 能力。静态数值入口通过批量解析
+一次性获得有序的 `FramePinholeNumericState`；深度批次指纹只认 canonical `ImageId` 和完整相机记录，身份或
+路径有歧义时直接阻断缓存复用。地形、网格和质检也使用同一数值状态，不再解码影像条目中的嵌套相机或读取
+报告旁车中的 Tsai 路径。
+
+`ResolvedCameraPosePrior` 的生产入口是已解析且目标 frame 明确的 reference factory，携带稳定 `ImageId`、
+目标 `Pose`、可选协方差、杆臂状态和来源指纹；该 factory 会拒绝 unresolved 或缺少 provenance 的结果。
+`transformProvenanceHash` 只表示 frame/单位归一化、变换链
+和解析策略来源，不包含影像观测值；观测级解析指纹不能替代它。SfM 的
+`CameraReferencePosePriorAdapter` 在 `sfm_core` 边界按 image ID 将这些 prior 转成有序
+`BACameraPosePrior`，只接受共同 world frame 和 matched references 的一致 provenance，不在该边界隐式转换
+坐标系。
+
+匹配和航测的投影参考使用独立的 `camera_reference_geometry` 针孔适配目标中的
+`camera_reference::ReferenceCameraGeometry`，它只接受经过数值校验并绑定
+`CameraInstanceId`/`ImageId`/`CoordinateFrameId` 的 `FramePinholeNumericState`；位置-only 参考使用独立的
+`ReferenceCameraPosition`。两类 map 均按 `ImageId` 键控，GUI/CLI 中的路径仅用于把输入行定位到稳定影像身份，
+不会再作为 solver 相机 map 的 key。`validateReferenceCameraInputs()` 在 pair planning 前检查 map 成员、重复
+身份和共同输入顺序，pose-only reference 不能被当作投影相机。
+
+需要稳定身份或外部姿态的空三输入必须通过 `aerial_triangulation::SolverCameraBinding` 显式提供每幅影像的
+`instanceId`、`imageId` 和 `worldFrame`。`SfmAttemptRunner` 会校验一一对应、唯一性和共同 frame，并调用
+`FramePinholeNumericState::bindIdentity()`；相机路径、文件名、列表序号和数值索引只能定位资源，不能回退
+生成 solver identity。缺少绑定、未初始化 frame 或无法证明 provenance 时应在进入数值求解前 fail-closed。
+
+### Qt 呈现和会话适配边界
+
+`src/adapters/qt` 在 core 之后、GUI/CLI 之前注册独立静态库；生产 core 不链接它们：
+
+- `marker_detection_qt`：`markers/detection/MarkerImageAdapter`，把 QImage 转换为灰度 cv::Mat，
+  保留原 Qt 灰度转换和 `qGray(mask.pixel())` 排除语义，供检测 GUI/CLI 使用。
+  core 检测接口只接受二维 CV_8UC1 图像和可选同尺寸蒙版，支持 ROI/行填充，调用期间借用存储。
+  角点列表使用 `QVector<QPointF>`，`control_points` 不再链接 QtGui，但仍使用 QtCore 值类型。
+
+- `marker_print_qt`：`markers/print/MarkerSheetRenderer` 与 `MarkerPdfWriter`，供打印 GUI、CLI 和测试使用。
+  原 `print/` 包含路径和 C++ API 保留，由新 target 导出；源文件已移出 core，未留下转发头文件。
+- `terrain_report_qt`：`terrain/GlobalTerrainReportRenderer`，供 GUI 和小天体 CLI 显式提供预览写入函数。
+  `terrain` 删除直接 QtGui 链接；计算库只接受 `SmallBodyPreviewWriter` 回调。
+  请求预览时必须提供写入器，关闭预览时不需要。回调写入事务临时路径，在全部 GeoTIFF/JSON 发布前运行；
+  回调失败、异常或随后取消时继续由原事务回滚，不将报告写出变成一次独立的非原子操作。
+  Qt 字体和进程类型相关渲染行为保留在呈现适配器中，本轮未改动渲染算法。
+- `project_recovery_qt`：`project/ProjectResourceRecoveryBinding`，负责安装打开前预检、
+  projectOpened/activeChunkChanged 连接和已打开会话的即时恢复，重复安装不会重复连接。
+  core 的 `ProjectResourceCleanupService` 只公开同步恢复操作；GUI 的 ProjectManager 调用绑定适配器。
+  资源事务计划、WAL、持久化和路径安全检查继续留在 core；项目格式仍依赖 QtCore。
+
+`PLASCAN_BUILD_QT_PRESENTATION=OFF` 不注册打印和报告库，也不生成打印 CLI 和对应呈现测试。
+桌面 GUI 要求此选项开启。三个 `<platform>-source-headless-release` CPU preset 关闭 GUI、GUI 测试和
+呈现能力；保留标靶图像转换及 CLI、地形计算和事务测试。小天体 CLI 在此配置中默认关闭 PNG，
+显式请求 `--preview` 会报告构建能力缺失；桌面配置仍默认生成 PNG。
+`--no-preview` 路径仅初始化 QCoreApplication。headless 仍需要公开 QtGui：
+标靶图像转换、网格纹理和空三图像读取尚未迁移，不能视为无 Qt 的 engine 配置。
+SfM 的 TriangulationService 已复用公共 ImageIO/OpenCV 着色，sfm_project 不再链接 QtGui。
+颜色采样保留原始像素方向、舍入/边界夹取和多视平均；读取失败缓存并记录路径/原因，
+无有效颜色时保留中性灰几何点和相应结果诊断。
+
 ### MVS 数据与同步处理边界
 
 - `mvs_contracts` 是公共数据契约 target，提供 `DepthFrameResult.h`、
@@ -119,8 +212,13 @@ common/
   像素域参数缩放、缺失原因和质量指标。它不启动后台任务、不访问项目、不写工件文件。
 - `DepthFrameUtils.cpp` 直接调用 `DepthPostprocessor`；`MvsStageSnapshot.cpp`
   只消费数据契约，不包含 `DepthMapGenerator.h`。
-- `mvs_backend` 承担后端算法、深度读取和重放；`mvs_pipeline` 的 `MvsPipelineService`
-  同步调用 `pipeline/` 内影像准备、源计划、估计、恢复、一致性和工件发布阶段，不启动线程。
+- `mvs_storage` 承担二进制矩阵读写、深度预览、manifest/缓存身份与产物准入、影像重放和点云 IO/验证；
+  只依赖 `mvs_contracts` 与通用 IO，不链接计算后端或同步流程。`DepthMatStorage.h` 可供只读写矩阵的
+  消费者使用，无需包含 `DepthFrameUtils.h` 的融合接口；格式、缓存 revision 与发布顺序保持不变。
+- `mvs_backend` 承担后端算法及融合帧读取适配，向下依赖 `mvs_storage`；`mvs_pipeline` 的 `MvsPipelineService`
+  同步执行 recovered scene-wide CUDA 深度估计、三层投票、影像准备和工件发布，不启动线程。
+  无调用的旧单帧估计、私有源计划缓存、跨视一致性、残差恢复和学习候选编排已删除；
+  独立 PatchMatch、重放、后处理和融合能力仍保留。
 - 旧 `DepthMapGenerator`、`mvs` target 及静态转发已删除。CLI 直接执行同步服务；
   `gui/project/tasks/DepthMapTask` 承担 GUI 信号与 future 生命周期，运行期间拒绝修改配置，
   析构取消并等待 worker。它不是核心算法 API 的兼容转发层。
@@ -128,12 +226,17 @@ common/
   `mesh/workflow/` 拆分参数、输入准入、质量、纹理和成果发布；深度产品仍仅走 recovered_ooc。
 - `mesh/tsdf/` 拆出帧读取、布局、观测、积分、支持域恢复、等值面、清理、简化和最终质量检查。
   阶段状态引用已有大数组，保持运算及失败顺序；旧不可达模型分支已删除，不作生产回退。
+- 未接入生产流程的能力拆为 `EXCLUDE_FROM_ALL` 静态库：`terrain_utilities` 提供
+  `DemMosaic`/`TerrainProductManifest`，`qc_baseline` 提供质量基线管理。各自测试显式链接；原
+  `terrain`/`qc` 产品目标不依赖它们。RPC 控制点改正已经归入 typed `camera_models_rpc`，与生产 RPC
+  投影和交会共享 `RpcInstance`，不再维护另一套可选旧相机库。
 - `task_runtime/WorkflowExecution.h` 提供纯 C++ 取消/进度/结果契约，MVS、模型和 TSDF 入口接入；
   模型公开请求与 TSDF options 只保留 execution；不再合并旧取消/进度回调。
   这是协作取消，不提供暂停或 checkpoint 恢复保证。
 - MVS targets 不向消费者公开整个 `src/core` 包含路径。相机头文件通过 `camera` target 提供，
   内部 recovered include 路径保持 PRIVATE。
-- `test_depth_frame_contract` 只链接数据契约，`test_depth_postprocessor` 只链接同步处理库；
+- `test_depth_frame_contract` 只链接数据契约，`test_depth_postprocessor` 只链接同步处理库，
+  `test_mvs_storage` 只链接存储库，覆盖二进制兼容、截断文件、预览、重放和点云发布验证；
   `CoreBoundaryContractTest` 同时限制数据消费者重新依赖生成器及下层 target 反向依赖工作流。
   已完成阶段、调用约束与验收方式见 [Core 渐进重构](CORE_REFACTORING.md)。
 
@@ -148,31 +251,35 @@ core/
 │   ├── TaskScheduler.h/cpp     # priority+FIFO、DAG、资源 lease、revision 命令与 executor 注册表
 │   └── TaskJournal.h/cpp       # 项目 sidecar 队列/检查点/结果/错误持久化和 Interrupted 恢复
 │
-├── camera/                     # 相机模型
-│   ├── CameraModel.h/cpp       # 面阵/线阵/RPC 共享的只读像点、射线和空间点投影抽象
-│   ├── FramePinholeCamera*.h/cpp # CameraModel 面阵实现及 Tsai/Brown-Conrady 状态、投影和文件 IO
-│   ├── PlanetaryLineScanCamera*.h/cpp # CameraModel 线阵实现、USGSCSM ISD、逐行时间与月固系时变姿轨
-│   ├── RpcCameraModel.h/cpp、RpcCameraCoordinates.cpp # RPC00B、WGS84 坐标转换、正反投影和近似射线
-│   ├── RpcCameraImageCorrection.cpp # RPC 归一化影像仿射改正的校验与应用
-│   ├── RpcCameraIO.h/cpp       # GDAL RPC metadata domain 与关联 RPC/RPB 旁车导入
-│   ├── RpcBiasAdjustment.h/cpp # 基于控制点的 RPC 平移/归一化影像仿射偏差估计
-│   ├── RpcStereoIntersection.h/cpp # 双 RPC 像点的 ECEF 迭代前方交会
-│   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
-│   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
-│   ├── ColmapImageUndistorter.h/cpp # 复杂 COLMAP 模型的导入边界预去畸变
-│   ├── ProjectCameraIO.h/cpp、ProjectRpcCameraIO.cpp # FramePinhole/RPC 项目元数据适配
-│   └── test/                      # 相机测试与诊断程序
-│       ├── FramePinholeCamera_tests.cpp
-│       ├── RpcCameraModel_tests.cpp
-│       ├── CameraBaseline_tests.cpp
-│       ├── CameraFormatConverter_tests.cpp
-│       ├── test_tsai_loader.cpp
-│       └── test.cpp
+├── coordinate_system/          # 跨相机/控制点/重建共享的坐标语义
+│   ├── types/                  # 稳定 ID、frame/单位、时间基准及坐标域错误
+│   ├── context/                # CoordinateContext、CRS、solver frame、SHA-256 与尺度契约
+│   ├── transform/              # 静态刚体变换图、单位换算及 transform-chain hash
+│   ├── gdal/                   # WKT2/CRS 规范化、严格 GDAL 变换与 sigma 传播
+│   └── serialization/          # Qt-free chunk.coordinate_system JSON schema/校验
 │
-├── camera_reference/           # 独立于解算相机的外部导航参考观测
-│   ├── model/                  # 相机参考源、原始/已转换观测、杆臂和稳定 image_uuid 绑定
-│   ├── io/                     # camera_reference_set.json 严格 schema 与 QSaveFile 原子读写
-│   └── tests/                  # 缺文件、往返、损坏及高版本拒绝测试
+├── camera/                     # 完整相机领域
+│   ├── core/                   # Qt-free 相机身份、能力和 Pose；引用 coordinate_system 类型
+│   │   ├── model/              # CameraDefinition/CameraInstance/CameraInstanceSet 和注册表
+│   │   ├── capabilities/       # Projection/StaticPose/Trajectory/Optimization 能力检查
+│   │   └── types/              # ImageId、CameraInstanceId、Pose 和不确定度
+│   ├── models/                 # typed 定义/实例及 solver-owned 数值状态
+│   │   ├── frame_pinhole/      # FramePinholeDefinition/Instance/NumericState
+│   │   ├── rpc/                # RPC 投影、ECEF 交会和控制点影像改正
+│   │   ├── linescan/           # 分段行时、姿轨、投影和优化偏置
+│   │   └── LineScanModelJson*.cpp # 推扫 schema 2 的唯一 JSON 编解码边界
+│   ├── project/                # 规范项目记录、运行态加载和模型注册边界
+│   ├── reference/              # 独立于解算相机的外部导航参考观测
+│   │   ├── geometry/           # ImageId-keyed 针孔参考几何适配
+│   │   ├── model/              # 参考源、观测、杆臂和 image_uuid 绑定
+│   │   ├── resolve/            # Qt-free resolver、pose prior 和 provenance 校验
+│   │   └── io/                 # camera_reference_set.json 严格读写
+│   ├── FramePinholeTsaiIO.h/cpp # Tsai 文本导入
+│   ├── PlanetaryLineScanIsdIO.h/cpp # USGSCSM ISD 导入
+│   ├── RpcRasterIO.h/cpp       # GDAL RPC/RPB 导入
+│   ├── CameraBaseline.h/cpp    # 通用摄影测量基线几何
+│   ├── CameraFormatConverter.h/cpp # 外部相机格式转换
+│   └── test/                   # 导入、转换与诊断测试
 │
 ├── inference/                  # 跨业务模块复用的推理基础设施
 │   └── tensorrt/               # TensorRT 能力、ONNX Builder、环境指纹缓存、Session 与张量 ABI
@@ -212,8 +319,8 @@ core/
 │   └── Intersection.h/cpp      # 多射线交汇解算 + 精度评估
 │
 ├── overlap/                    # 重叠度分析
-│   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
-│   └── GroundBackProjector.h/cpp  # 地面投影
+│   ├── OverlapAnalyzer.h/cpp   # 只消费经能力校验的 FramePinholeNumericState
+│   └── GroundBackProjector.h/cpp  # 统一数值射线的地面投影；球面方向估计也复用该射线
 │
 ├── matchphototask/             # Metashape-like 匹配照片编排层
 │   ├── algorithm/
@@ -241,7 +348,7 @@ core/
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
 │   │   ├── GuidedMatchStage.h/cpp   # 三态 SIFT 双向引导重匹配及任务调度
 │   │   ├── GuidedMatchPolicy.h/cpp  # 弱像对、H/F 退化和自适应核线带策略
-│   │   └── ReferencePoseEpipolarGeometry.h/cpp # 可信参考相机 E/F 推导与一致性检查
+│   │   └── ReferencePoseEpipolarGeometry.h/cpp # 可信参考相机 E/F 推导、world-frame 检查与一致性门控
 │   ├── tie_points/
 │   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
 │   └── tests/                       # matchphototask 模块级测试
@@ -250,12 +357,11 @@ core/
 │   ├── model/                   # MarkerSet、投影状态、控制/检查点和比例尺
 │   ├── io/                      # marker_set.json、CSV 和旧 survey_control 单次迁移
 │   ├── commands/                # 可撤销 MarkerChangeSet
-│   ├── detection/               # AprilTag/非编码检测、合并和 detection_review.json
+│   ├── detection/               # cv::Mat AprilTag/非编码检测、输入校验、合并和 detection_review.json
 │   ├── geometry/                # 三角化、预测投影与亚像素几何
-│   ├── reference/               # CRS、轴序和坐标转换
+│   ├── reference/               # GDAL CRS/轴序适配与 solver 前米制坐标门禁
 │   ├── registration/            # PriorTrack、绝对定向和控制网络解算；control_network target 无 Qt
 │   ├── quality/                 # 投影、控制点、检查点和比例尺质量报告
-│   ├── print/                   # 共享标靶页面渲染与 PDF 输出
 │   └── README.md                # 工作流、支持族、sidecar 和 CLI 说明
 │
 ├── bundle_adjust/              # 光束法平差
@@ -265,7 +371,7 @@ core/
 │   ├── BundleAdjustResult.h    # 相机/点结果及跨后端诊断统计
 │   ├── BundleAdjustSolver.h + BundleAdjust.cpp # BA 求解器门面、自动后端选择和统一质量门控
 │   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
-│   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeCamera 一致的模板投影模型和共享相机快照转换
+│   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeNumericState 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustPlaMatrix.h/cpp # PlaMatrix 联合相机/点/内参参考 Armijo 驱动
 │   ├── BundleAdjustPlaMatrixProblem.h/cpp # 活动轨迹、标定组、固定块和工作集映射
 │   ├── BundleAdjustPlaMatrixModel.cpp # 分组 Brown 内参初始化、边界、阶段与结果发布
@@ -325,6 +431,7 @@ core/
 │   │   ├── ReferenceTrackSpatialSelector.h/cpp # 逐影像、逆尺度加权的网格水位空间选择
 │   │   └── CorrespondenceTrackThinner.h/cpp # 原始 SfM 输入图的参考兼容轨迹选择适配器
 │   ├── pose/PnpSolver.h/cpp    # 通用 PnP 位姿解算与参考后方交会选路
+│   ├── pose/CameraReferencePosePriorAdapter.h/cpp # image-keyed 外部姿态先验到 BA 相机顺序的显式适配
 │   ├── pose/ReferenceP3p.h/cpp # 参考三点 P3P 四次方程与绝对定向
 │   ├── pose/ReferencePoseRefiner.h/cpp # 解析 Brown 投影位姿精化
 │   ├── pose/ReferenceResectionSolver.h/cpp # 固定采样、十级阈值和重分类状态机
@@ -342,8 +449,8 @@ core/
 │   ├── filtering/              # PlaPoint 稀疏点云工作区和后处理
 │   ├── project/                # Qt JSON、控制点/标记和 BA 输入适配
 │   ├── ReferenceTerrainPrior.h/cpp # 参考 DEM/LiDAR 局部地形面作为 BA soft prior
-│   ├── TriangulationService.h/cpp  # 项目级预览三角化服务
-│   └── test/                   # SfM 模块自有 GTest
+│   ├── TriangulationService.h/cpp  # 项目级预览三角化、公共 ImageIO 着色和读取失败诊断；QtCore
+│   └── test/                   # SfM 模块自有 GTest，含无 QtGui 的预览颜色采样测试
 │
 ├── mvs/                        # Multi-View Stereo：recovered scene 深度生产、manifest 与流式融合
 │   ├── MvsTypes.h              # MVS 公共类型
@@ -351,12 +458,14 @@ core/
 │   ├── DepthPyramidTypes.h     # 金字塔逐层像素结果与轻量摘要，不依赖估计执行器
 │   ├── depth_processing/      # 独立同步处理库 mvs_depth_processing
 │   ├── MvsPipelineService.h   # 无 QObject 的同步流程入口 / mvs_pipeline
-│   ├── pipeline/             # 影像/源计划/估计/一致性/恢复/工件发布等私有阶段
+│   ├── pipeline/             # recovered CUDA 编排、影像准备、诊断及工件发布；无旧逐帧生产阶段
 │   │   ├── DepthPostprocessor.h/cpp # 融合前置信度/几何证据过滤与阶段损失统计
 │   │   └── DepthNoiseFilters.cpp # 稀疏支撑软先验、局部离群及小连通域过滤
 │   ├── DenseCloudRefinementService.h/cpp # 流式 PLY 多轮细化与内存回退，供 CLI/工作流复用
 │   ├── StreamingDepthFusionService.h/cpp # 融合窗口、帧缓存、共识配置和分批聚合编排
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
+│   ├── DepthMatStorage.h/cpp  # 独立矩阵 IO / mvs_storage，保留 40 字节二进制文件头
+│   ├── DepthArtifactIO.h/cpp # 深度预览与存储路径选择，无流程服务依赖
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash、source plan 与几何来源位序
 │   ├── MvsSourcePlanner.h/cpp  # 旧深度工件重放/诊断兼容；不参与 recovered 正式选源
 │   ├── MvsImagePreprocessor.h/cpp # 原图与 valid mask 共用去畸变映射，并生成正深度、零畸变工作相机
@@ -397,7 +506,7 @@ core/
 │   ├── recovered_depth/        # 内部区域过滤/track 选邻、PatchMatch/OOC 金字塔、Morton 树、变分融合；直接编译 .cu
 │   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
 │   ├── DepthMapFusion.h/cpp    # 深度图融合；流式窗口可用 CUDA/OpenCL 反投影，几何一致性仍在 CPU
-│   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
+│   ├── DepthFrameUtils.h/cpp   # 已存储帧选择、证据读取及融合输入适配
 │   ├── EpipolarRectifier.h/cpp # 极线校正、工作相机深度范围转换及原相机 Z_cam 回投
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
 │   ├── DensePointCloudCUDA.h/cu # CUDA 深度图反投影
@@ -411,11 +520,12 @@ core/
 │       ├── test_mvs_depth_completeness.cpp
 │       ├── test_mvs_depth_pose_alignment.cpp
 │       ├── test_mvs_types.cpp
-│       └── test_mvs_pipeline.cpp
+│       ├── test_mvs_pipeline.cpp
+│       └── test_mvs_storage.cpp # 只链接独立存储库的格式/重放/产物验证
 │
 ├── project_workflows/          # GUI/CLI 共享的项目级摄影测量工作流配置与资源适配
 │   ├── MvsSourcePairQualityLoader.h/cpp # `.pimatch` 几何审计到 MVS source pair 质量的统一桥接
-│   ├── PointCloudInputPreparation.h/cpp # 从正式 SfM sidecar 保留 track observations；无 sidecar 的旧流程才读取并过滤 PLY
+│   ├── PointCloudInputPreparation.h/cpp # 严格读取 SfM v3 sidecar，并按 canonical ImageId 校验 track observations
 │   ├── PointCloudWorkflowConfig.h/cpp # 点云/深度质量档位到核心配置的统一转换
 │   └── ProjectWorkflowOperations.h/cpp # 稀疏点后处理与地形产品等项目工作流入口
 │
@@ -445,7 +555,6 @@ core/
 │   ├── SparseOrbitalScaffoldBuilder.h/cpp # 质量过滤、离群点剔除、体素降采样及径向外法向
 │   ├── ScreenedPoissonSurfaceBuilder.h/cpp # 官方 Screened Poisson 的固定版本适配器
 │   ├── MeshVoxelTopologyRepair.h/cpp # 保守体素化、闭运算、MC33/三角质量优化及闭合 genus-0 回退
-│   ├── OrbitalSparseScaffoldSurfaceBuilder.h/cpp # 环拍稀疏全局载体的 fail-closed 编排
 │   ├── MeshIO.cpp              # 网格文件 I/O
 │   ├── TextureMapper.h/cpp     # 纹理配置/结果门面及无相机时的顶点色回退
 │   ├── CameraTextureMapper.cpp # 默认 v4 Natural 调度；旧 camera atlas 仅保留为编译期不可达的历史实现
@@ -516,7 +625,7 @@ core/
 │   ├── SmallBodyGlobalProducts.h # 小天体全球产品与无本地化文本的阶段/进度事件
 │   ├── DemGridAggregator.h/cpp # mean/median/NMAD/P80/count/confidence/error weighted 聚合
 │   ├── DemMosaic.h/cpp         # CPU/CUDA/OpenCL 同网格多 tile DEM mosaic
-│   ├── TerrainProductManifest.h/cpp # DEM/DOM/error/count/confidence/coverage 产品记录
+│   ├── TerrainProductManifest.h/cpp # 可选 terrain_utilities 产品记录，未接入生产持久化
 │   ├── DemGenerator.h/cpp      # DEM 生成
 │   ├── DemGeneratorFromDepth.cpp  # 从深度图生成 DEM
 │   ├── DomGenerator.h/cpp      # DOM 正射影像生成
@@ -535,7 +644,7 @@ core/
 │   ├── SmallBodyGlobalProducts.h/cpp # 体固连全球产品参数、共享栅格与结果 DTO
 │   ├── SmallBodyMeshRaycaster.h/cpp # BVH + Möller–Trumbore 体心径向网格求交、颜色/UV 插值
 │   ├── SmallBodyGlobalProductGenerator.h/cpp # 0–360°径向 DEM、高程 DEM、DOM 与质量产品
-│   ├── GlobalTerrainReportRenderer.h/cpp # 核心侧稳定生成全球产品四联 PNG
+│   ├── SmallBodyGlobalProductGenerator.h/cpp # 全球地形计算与事务发布；预览写入由调用方提供
 │   ├── DemDomIO.h/cpp          # DEM 元数据/栅格、RGB+覆盖 Alpha GeoTIFF 和质量栅格 I/O
 │   ├── TerrainPipeline.h/cpp   # 地形流水线 (主入口)
 │   ├── projection/
@@ -557,17 +666,18 @@ core/
 │   ├── ModelImageMetrics.h/cpp # 轮廓、覆盖、边缘、SSIM/PSNR 影像空间指标
 │   ├── ModelGeometryComparator.h/cpp # 连通分量与参考点云双向最近邻 A+C 几何验收
 │   ├── ModelImageQualityEvaluator.h/cpp # GUI/CLI 可复用的统一门控、诊断图和 JSON/CSV 报告
-│   ├── ProcessingBaselineManager.h/cpp # 总输入/分阶段快照指纹、参考网格指标和跨版本质量门
+│   ├── ProcessingBaselineManager.h/cpp # 可选 qc_baseline 输入指纹、网格指标与质量门
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
 ├── aerial_triangulation/       # 对齐照片式空中三角测量，职责对应 Metashape Align Photos
-│   ├── model/                  # GUI/CLI 共用 Options、ResolvedConfig、Result DTO
+│   ├── engine/                 # 标准类型的针孔/RPC 数值入口与 nlohmann 连接点读取
+│   ├── model/                  # GUI/CLI 共用 Qt Options、ResolvedConfig、Result DTO
 │   ├── workflow/               # 唯一入口与正式 Pipeline
 │   ├── preparation/            # MatchPhotosTask 适配、缓存编目和前置检查
 │   ├── reconstruction/         # 单次针孔 SfM、RPC 空三、标记点先验、相机内参清洗、候选对与图诊断
 │   ├── search/                 # 无相机焦距候选排序和资源策略
 │   ├── reporting/              # 稀疏点云、质量元数据和结果记录
-│   └── CMakeLists.txt          # 独立 aerial_triangulation target
+│   └── CMakeLists.txt          # aerial_triangulation_engine 数值入口 + aerial_triangulation 工程工作流
 │
 └── image_matching/lightglue/
     └── LightGlueFeatureBudget.h  # LightGlue/SIFT 显存感知关键点预算工具
@@ -582,6 +692,15 @@ SfM 位姿和稀疏重建状态；默认仍复用影像身份、算法版本、�
 避免大型工程因每个观测重复字段名和绝对路径而产生数量级更大的缓存与单核 JSON 解析开销。
 “精度”统一为 `highest/high/medium/low/lowest`，对应首层特征采样 downscale `0/1/2/4/8`；它只影响
 特征检测和匹配输入，不再联动关键点配额、预选策略、SfM 质量门或 BA 迭代。空三与“创建连接点”默认均为“高”。
+
+需要稳定相机身份或外部姿态先验时，`AerialTriangulationOptions` 和准备好的输入最终必须得到与 `images`
+一一对应的 `SolverCameraBinding`。它明确给出 `instanceId`、`imageId` 和 `worldFrame`；运行器优先从当前工程已验证的
+`camera_instances` 按 `image_uuid` 传播绑定，并在调用方同时提供 binding 时校验两者一致，然后在读取外部
+Tsai 或项目相机后调用 `FramePinholeNumericState::bindIdentity()`，检查数量、唯一性和共同 frame。工程外部相机或
+canonical 集合不完整时仍需调用方显式提供绑定。相机路径、文件名、列表序号与数值索引只是资源定位信息，不能用于隐式补全 identity。外部
+GNSS/IMU/POS 先验由 `camera_reference_core` 生成 typed `ResolvedCameraPosePrior`，再经
+`sfm_core` 的 `CameraReferencePosePriorAdapter` 按 image ID 对齐；未绑定、frame 不一致、matched provenance
+冲突或 unresolved reference 均 fail-closed，局部 BA 窗口外的 reference 只计入 ignored 诊断。
 
 正式 Pipeline 在焦距搜索前检查本次全部相机模型。全 RPC00B 批次由
 `RpcAerialTriangulationRunner` 保持厂商 RPC 固定，恢复多视连接点轨迹并使用非线性 RPC 前方交会
@@ -632,9 +751,9 @@ filename/stem 回退。当前一个 shot 只允许一台同期相机；ISIS 多 
 门控拒绝时直接失败，禁止忽略测距约束。行星激光 dry-run 仍执行数据、传感器模型、
 坐标系和别名预校验；初始落点与杆臂修正后的发射点重合时也会在求解前拒绝。
 
-LRO NAC / LOLA 推扫数据不经过上述静态适配器，而使用独立
-`camera/PlanetaryLineScanCamera` 与 `lidar/PlanetaryLineScanBundleAdjust` P0。相机从 USGSCSM ISD 解析
-逐行曝光时间、Hermite 位置、四元数姿态和 LRO NAC 畸变；控制网 PVL 的 ISIS `(1,1)` 像素中心在
+LRO NAC / LOLA 推扫数据不经过上述静态适配器。`camera/PlanetaryLineScanIsdIO` 将 USGSCSM ISD
+直接导入 `camera/models/linescan` 的 `LineScanInstance`，`lidar/PlanetaryLineScanBundleAdjust` P0
+在该 typed 实例上解析分段逐行曝光时间、Hermite 位置、四元数姿态和 LRO NAC 畸变；控制网 PVL 的 ISIS `(1,1)` 像素中心在
 投影边界统一转换到 CSM `(0.5,0.5)`。普通 Free 控制点以观测行瞬时射线三角化，range 默认在 shot
 TDB ET 求相机中心；`isis_line` 仅用于上游回归时复现虚拟 measure 的行时刻，虚拟像点不会进入影像残差。
 P0 每景只优化月固系一个 6DoF 刚性偏差，并明确限制为 `MOON_ME`、单程、单同期影像、零杆臂和 Free
@@ -728,11 +847,47 @@ PnP 初值，未经 3D-2D 几何验证的相机不会计入正式注册覆盖率
 `CameraIntrinsicPriorSanitizer` 会仅在同尺寸相机存在占主导焦距群时修正超过 2 倍的旧 SfM 焦距离群值；
 它不复用旧外参，并将修正数量、焦距中位值和影像列表写入 SfM 诊断。
 
+空三库已移除 QtGui 链接。公共 `common/io/ImageSizeReader.cpp` 实现 `readImageSize()`，
+通过 GDAL 栅格头或 BMP 固定长度头读取原始宽高，不分配像素缓冲、不应用 EXIF 旋转。
+`SfmAttemptRunner`、批次焦距先验和质量报告共用该接口；尺寸失败沿用各调用方的处理规则。
+针孔结果导出与 RPC 点云颜色采样使用公共 ImageIO 的 8 位 BGR 图像，并转成 RGB 输出，
+保留首个有效观测、坐标取整、边界裁剪以及不可读影像时的灰色几何。
+`common/io/test/test_image_size_reader.cpp` 覆盖常见格式、错误路径、BMP 顶部向下存储和大图头读取；
+`aerial_triangulation/tests/test_aerial_image_io.cpp` 覆盖点云颜色采样与失败保留几何。
+RPC 坐标读取通过 std::map::at() 引用原关键点容器，避免容器临时复制带来的悬空引用；
+RPC 回归按 sidecar 的观测索引逐点核对 PLY 颜色。
+
+`aerial_triangulation_engine` 提供 `engine/PinholeEngine.h` 与 `RpcEngine.h` 的同步数值入口。
+相机已在调用边界解析为明确的相机模型，连接点图使用标准路径、map 和 vector；取消采用 atomic，
+进度采用标准函数和字符串，不传递项目 JSON、QString 或 UI 对象。生产 `SfmAttemptRunner` 和
+`RpcAerialTriangulationRunner` 均调用这一入口，工程相机/标记数据转换和结果登记仍由原工作流负责。
+`engine/TiePointGraphReader.cpp` 通过 nlohmann::json 读取 v1/v2/v3 连接点，保留影像 ID 重映射、
+原始特征压缩、真实边与 v1 闭包边语义。归档项目 token 规则通过标准函数回调适配。
+`reporting/SparsePlyWriter.*` 使用标准流显式编码 32 位 little-endian float，针孔与 RPC 共用此输出。
+Pipeline 计时使用 std::chrono::steady_clock。
+
+`common/file/` 独立提供 `plascan_common_file` 与 `plascan_common_json_io`：标准路径、目录创建、
+二进制读取、流式/字节串原子写入和 nlohmann JSON 读写，不链接 Qt 或影像库。
+空三 PLY、JSON sidecar 发布与连接点文件读取已接入此模块；点云格式本身属于空三报告层。
+`common/io` 仍提供 Qt 路径、安全比较与影像能力，不向新的文件模块反向注入依赖。
+`common/plafs/` 新增 `plascan_common_plafs`，提供标准 C++ 的 `PlaFile`、`PlaDir`、
+`PlaChunkLayout` 和 `PlaProjectLayout`。它集中计算 `.plascan`、`.files`、共享目录、Chunk 和标准
+`assets` 路径，
+不解析项目 XML、不打开归档、不持有 GUI 会话，也不提供递归删除。现有 Qt
+`ProjectPackageLayout` 和 `ProjectIO` 已作为兼容门面委托这些物理路径计算；后续可逐步迁移
+项目资源存储和各业务产物寻址，减少 `QString` 路径拼接和重复的 `assets/...` 字符串。
+
+这一阶段不等于整个空三链接链路已脱离 Qt：`aerial_triangulation` 工程门面、匹配准备、
+质量报告和项目 metadata 仍使用 Qt Core，`camera` 的公共 I/O 和 SfM 日志也仍有 Qt 传递依赖。
+新数值入口源码与接口没有 Qt 类型，进一步移除链接依赖需继续拆分这些共享库。
+
 `aerial_triangulation/reporting/QualityReportWriter.cpp` 在内存中构造稀疏点、逐相机残差、BA 摘要和
 SfM 诊断；`AerialTriangulationResultWriter.cpp` 原子写入保留全部可用算法点的 `sfm_sparse.ply`、
 仅用于可视化的 `sfm_sparse_display.ply` 和全量 `sfm_sparse_points.json`。工程中主稀疏云仍是后续
-MVS/重算输入，显示清理云作为独立派生文件。质量文件使用 `plascan.sfm_sparse_points.v2`：影像路径在
-顶层表中去重，逐点观测保存为固定数值行；GUI 读取器同时兼容旧对象格式。连接点候选图、实际匹配图和
+MVS/重算输入，显示清理云作为独立派生文件。质量文件使用严格的
+`plascan.sfm_sparse_points.v3`：影像表同时保存局部 `camera_index`、canonical `image_id` 和栅格路径，
+逐点观测必须为带身份字段的对象；读取端以 `ImageId` 为主，路径只作为栅格定位线索，不再读取 v2、固定数值行
+或旧对象兼容格式。连接点候选图、实际匹配图和
 pair 状态仍由 `matchphototask` 的报告负责。PlaMatch-HCT 完整特征由 `matchphototask` 以 `.pihctcache`
 原子持久化，影像身份和生产参数一致时在影像解码前直接复用；CPU HCT 索引只在 CPU 匹配真正请求时构建。
 
@@ -752,6 +907,7 @@ gui/
 │
 ├── main_window/                # 主窗口层
 │   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
+│   ├── WindowControlsWidget.h/cpp # Wayland Vulkan 窗口的应用内最小化、最大化/还原、全屏及关闭按钮
 │   ├── ProjectUiHydrator.h/cpp # 分阶段刷新项目界面，并通过代次号丢弃过期请求
 │   ├── ProjectLifecyclePresenter.h/cpp # 项目打开/保存进度、脏状态标题及关闭后保存
 │   ├── ProjectTaskStatusController.h/cpp # 状态栏任务控件、取消路由及概览快照
@@ -816,8 +972,7 @@ gui/
 │
 ├── project/                    # 项目管理层
 │   ├── manager/
-│   │   ├── ProjectManager.h/cpp # 项目管理器；含参考激光 JSON 导入、frame/坐标系确认和 BA 启动
-│   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
+│   │   ├── ProjectManager.h/cpp                      # 薄兼容门面；只持有服务容器、公开服务入口并桥接既有 Qt 信号
 │   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成/交互保存、取消及结果登记
 │   │   ├── ProjectMaskInferenceAdapter.h/cpp         # U2Net/BiRefNet 后端适配和实际模型/设备/engine 元数据
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建与连接点质量剔除，产出一致的 PLY/sidecar 并通知三维视图刷新
@@ -826,14 +981,21 @@ gui/
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 局部 DEM、原生小天体全球 DEM/DOM、取消与 Chunk 隔离登记
 │   │   ├── ProjectTerrainRpcProducts.cpp             # RPC 立体 DEM/正射 DOM 异步执行、取消、质量成果与项目登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
-│   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── tasks/
-│   │   └── DepthMapTask.h/cpp                       # GUI 独占的 MVS 异步、取消与 future 生命周期
+│   │   ├── DepthMapTask.h/cpp                       # GUI 独占的 MVS 异步、取消与 future 生命周期
+│   │   ├── ProjectTaskContext.h                     # 任务 ID、会话代次与共享取消标志
+│   │   ├── ProjectTaskOrchestrator.h/cpp            # 全任务编排、共享取消与非阻塞 session drain；项目 mutation 前等待真实 future 收敛
+│   │   └── ProjectBundleAdjustController.h/cpp      # BA 运行、预览、提交和回滚生命周期
 │   ├── services/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
-│   │   ├── ProjectSessionFacade.h/cpp                 # ProjectManager 与 ProjectData 间的会话查询/修改兼容门面
+│   │   ├── ProjectServiceContainer.h/cpp              # 会话、生命周期、资源、清理、消息和任务服务的组合根
+│   │   ├── ProjectSession.h/cpp                       # GUI 会话读写端口与 generation 守卫
+│   │   ├── ProjectLifecycleService.h/cpp              # 新建、打开、关闭及 Chunk mutation；统一在 session drain 后提交
+│   │   ├── ProjectResourceService.h/cpp               # 导入、删除、打包和参考资源操作
+│   │   ├── ProjectResourceCleanupCoordinator.h/cpp    # 清理/导出互斥、取消和 future 收敛
+│   │   ├── ProjectUiMessageAdapter.h/cpp              # 文件/输入/确认/错误消息的唯一 Qt UI 适配边界
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
@@ -915,11 +1077,24 @@ PlaScan 工程采用 Metashape 式 `name.plascan + name.files` 结构。
 按需创建，空 Chunk 只包含 `chunk.zip`。GUI 和 CLI 的 BA 运行产物统一写入当前 Chunk
 的 `bundle_adjust/<run>/`，不再混入 `assets/`；生效相机参数仍写回 Chunk 文档，
 综合报告继续位于 `reports/`。
-其中 `images[*].camera` 只表示导入/初始化/空三得到的相机模型与当前解算结果；外部
-GNSS/IMU/POS 观测独立存入 `assets/camera_references/camera_reference_set.json`，按
+相机定义和影像实例分别存入 `project_files.camera_definitions` 与
+`project_files.camera_instances`；`images[]` 不再嵌入相机对象，出现 `images[*].camera` 或
+`images[*].camera_file` 会被当前工程校验拒绝，写入路径不会自动清理这些旧字段。定义 schema
+按模型独立校验；推扫线阵使用 schema 2 保存探元映射、分段行时以及直接姿态或组合坐标系轨迹，
+旧线阵 schema 1 不兼容读取。面阵针孔、RPC00B 和推扫线阵通过字符串模型注册表创建，实例按能力
+声明投影、反投影、射线、静态位姿或轨迹等接口；RPC 和推扫不会伪造静态光心。工作流通过
+`camera_core::CameraOperationPlan` 请求能力和共同 world frame，静态 SfM/BA/MVS、RPC 空三、
+推扫空三和外部姿态参考各自使用独立合同；缺失时返回包含 image UUID、定义 ID 和模型类型的
+结构化错误，不能互相降级。
+外部 GNSS/IMU/POS 观测独立存入 `assets/camera_references/camera_reference_set.json`，按
 `image_uuid` 绑定，并同时保留 raw 与 resolved 状态。未完成 CRS、姿态轴向和杆臂方向
-归一化的 raw 数据可以在“参考”面板查看，但不会静默标记为可用 BA 先验。控制点、检查点
-和标尺继续存入 `assets/control_points/marker_set.json`。
+归一化的 raw 数据可以在“参考”面板查看，但不会静默标记为可用 BA 先验。Qt 存储层的
+`normalization_hash` 用于 sidecar 一致性检查；进入 solver 时由 `camera_reference_core` 生成
+`ResolvedCameraPosePrior::transformProvenanceHash`，它不含观测数值。SfM/BA 仅通过
+`CameraReferencePosePriorAdapter` 消费已解析 prior，不从路径或旧相机 JSON 推断 identity/frame。控制点、检查点
+和标尺继续存入 `assets/control_points/marker_set.json`。这些参考坐标在 sidecar 中保留原始 CRS/轴序/单位；
+进入 BA 或空三前才在 `control_points/reference` 边界规范为共同的米制笛卡尔坐标。缺少显式上下文的
+经纬高、混合 CRS 或混合垂直基准会在启动数值求解前被拒绝。
 `ProjectWorkspaceStore` 只解析 `plascan:///chunk/...` 逻辑 URI，不再接受
 `plascan:///workspace/...`。旧版根级 `workspace/` 分体工程和旧版
 单体工程均明确拒绝加载，并保持旧文件不变。归档条目在组合物理路径前执行跨平台名称、
@@ -1011,7 +1186,7 @@ DOM 输入；模型支持 OBJ、PLY，OBJ 的 MTL 与其引用纹理会一起复
 ```text
 MenuWorkflowController
   -> MapProjectDialog（常规/RPC 产品模式、DEM/彩色点云、投影参考、输出估算、进度与取消）
-  -> ProjectManager -> ProjectTerrainProductsManager
+  -> ProjectServiceContainer -> ProjectTaskOrchestrator -> ProjectTerrainProductsManager
   -> GuiTaskRunner::runGuardedWithOutcome
   -> 产品模式分流
        ├─ 常规 -> core/project_workflows::runOrthoProduct -> TerrainPipeline
@@ -1063,6 +1238,20 @@ Terrain OpenCL 正射投影使用双精度世界坐标，设备须支持 `cl_khr
 复用当前修订版的完整批次，旧批次保留在磁盘并先触发当前多视深度重算。
 可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与
 非零顶点数检查。
+
+一键重建在 SfM 成功写回 `camera_instances` 后会刷新工程快照，再由
+`CameraProjectRuntime` 按 `image_uuid` 解析面阵针孔数值状态。MVS 只接收带显式
+`instanceId`、`imageId` 和 `worldFrame` 的 canonical 状态；待写回 JSON、路径键、列表顺序和通用数值
+序列化结果都不是 MVS 相机来源。RPC 与推扫线阵实例在这个边界明确失败，混用 world frame 也会在图像准备
+前失败。
+
+MVS workspace replay 在读取 manifest 中的相机 JSON 时复用同一套面阵针孔数值校验：必需内参、旋转和
+相机中心字段必须是有限 JSON 数值，存在的畸变字段不得用 Qt 默认值填充，解析后的状态还必须通过
+`FramePinholeNumericState::validateNumericalState()`。当前 manifest 还必须携带唯一的
+`instance_id`/`image_id`/`world_frame` 绑定，并拒绝重复身份或混合 frame；算法修订号变化会使旧缓存失效。
+因此损坏、身份不完整或跨 frame 的回放缓存会在打开工作栅格前失败，不会绕过 SfM/BA/MVS 的数值入口。
+极线校正生成的派生栅格相机会继承输入的 `instanceId`、`imageId`、`worldFrame` 和影像尺寸，再修改栅格姿态与内参，
+避免工件在中间变换后丢失来源绑定。
 
 正式深度输入必须来自空三的 `sfm_sparse_points.json`，每个稀疏点保留稳定 track ID 与观测相机集合；
 只有 PLY 而没有逐点观测 sidecar 时会明确失败。场景至少需要 2 台注册相机，每台参考相机按共同 track、
@@ -1233,36 +1422,12 @@ A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节�
 且带弱相机支持顶点的终端悬挂三角形，以及只有一条开放边但三个顶点均为弱支持的薄片，并执行两轮
 限位边界平滑；候选面和实际移除面数会单独记录。PLY
 
-当环拍小天体的局部深度未通过完整性/拓扑判定、自然背景策略已经生效，并且工作区提供正式 SfM PLY
-与逐点质量 sidecar JSON 的完整配对时，模型工作流优先调用
-`OrbitalSparseScaffoldSurfaceBuilder` 构造独立的闭合全局载体。PLY 与 sidecar 被视为不可拆分的同源工件：
-`SparseSfmPointQualityReader` 流式读取 `point_xyz`、`track_len`、`rms_reproj_px` 和
-`triangulation_angle_deg`/`min_tri_angle_deg` 字段，不把数百 MiB 的 JSON 一次性展开为 DOM；读取后
-必须验证逐点坐标与 PLY 对齐。手动剔点导致 PLY 点数少于同源 sidecar 时，仅当每个剩余 PLY 点都能按
-原顺序和坐标容差证明为 sidecar 的有序子集时，才重新关联对应质量记录；sidecar 少于 PLY、顺序被
-打乱或任一点无法匹配仍立即失败，禁止按索引截断或猜测。默认只保留轨迹长度至少 3、重投影 RMS
-不大于 `1.5 px`、
-最小三角化角不小于
-`5°` 的点，再执行有限值、全局径向及统计离群点过滤和 PlaPoint 体素降采样，并以鲁棒中心生成向外径向
-法向。稀疏 SfM 点不注入 TSDF，因为它们不具备深度像素的自由空间和实测表面语义。
+旧环拍稀疏全局载体编排 `OrbitalSparseScaffoldSurfaceBuilder` 已无生产或测试调用，现已删除。
+`SparseSfmPointQualityReader`、`SparseOrbitalScaffoldBuilder`、`ScreenedPoissonSurfaceBuilder` 和
+`MeshVoxelTopologyRepair` 的独立算法及测试仍保留；深度建模产品入口只接受 `recovered_ooc`，
+不会根据质量门结果自动退回稀疏载体、TSDF 或 Visual Hull。
 
-过滤后的有向点由 `ScreenedPoissonSurfaceBuilder` 交给官方
-[PoissonRecon](https://github.com/mkazhdan/PoissonRecon) Screened Poisson 实现；源码通过
-`3rdparty/PoissonRecon` submodule 固定在 commit `262b0f539d404057d1f36e1adc07fc9388678899`。默认参数为
-depth 9、`pointWeight=4`、
-`samplesPerNode=1.5`、scale 1.1、8 次求解迭代、CG 精度 `1e-3`，并启用 manifold 提取。无效样本和零
-法向被拒绝，`pointWeight` 必须严格大于 0，不能静默退化为非 screened Poisson。这里的官方适配器与
-PlaPoint 通用表面重建中的 Poisson/PCG 后端是两条独立实现，环拍稀疏全局载体使用前者。
-
-Poisson 输出先只保留最大面连通分量，剔除卫星碎片。若该分量还不是单连通、闭合、genus-0 的二流形，
-`MeshVoxelTopologyRepair` 必须执行保守三角形体素化、六邻域外部空域洪泛和从小到大的形态学闭运算；
-必要时只保留最大实体分量。候选只有在体素实体为单分量且 Euler 数为 1、其边界为单分量闭合二流形且
-表面 Euler 数为 2 时才能返回。默认闭运算搜索上限为 8 个体素，但仍从半径 0 开始，并在首个严格通过
-的结果停止；COLMAP building 回归数据在半径 4 首次通过，因此提高搜索上限不会强制已通过模型使用
-更大的闭运算。已选择该补全分支后，配对不完整、sidecar 缺失或错位、过滤后点数不足、
-Screened Poisson 失败、拓扑修复无法证明上述条件，或最终深度完整性/质量门失败，都会立即停止写出，
-不会仅凭原始 PLY 或旧载体静默继续。两项稀疏工件均未提供时不会伪装成该补全分支，仍由常规 TSDF
-交付门决定是否允许输出。
+下述 TSDF/可见性占据策略描述保留的独立算法，不代表当前 recovered 深度建模产品会调用这些分支。
 
 常规环拍任意 3D 深度主体使用双分辨率隐式表面路径。72 级规则网格执行可见性占据图割：深度前方提供
 空域证据，深度邻域提供表面/实体证据，轮廓只作有界先验；占据体按“柄修复、良构修复、内部气泡
@@ -1459,7 +1624,8 @@ TSDF 对自适应几何冲突采用连续鲁棒权重，低冲突观测保持原
 和相对面积门，输出以低置信度及 `crossViewRepairedMask` 标记。清单中的
 `cross_view_repair_diagnostics` 记录逐原因拒绝、轮廓保护和最终后处理插值统计。
 
-处理基线由 `ProcessingBaselineManager` 统一管理。基线 JSON 保存相机版本、参与融合的深度帧和
+独立验证库 `qc_baseline` 提供 `ProcessingBaselineManager`，当前只被基线测试调用；
+GUI/CLI 生产流程未接入该 API，也不链接该可选库。基线 JSON 保存相机版本、参与融合的深度帧和
 影响几何的处理参数快照，并可分别冻结相机、深度、融合和网格阶段的 SHA-256 指纹，阻止输入漂移
 后的结果混入同一组 A/B，同时在比较报告中直接列出发生漂移的阶段。参考网格与候选
 网格统一统计面数、开放边、连通分量、瘦长面、归一化表面积，以及流形相邻三角面的法线夹角
@@ -1562,6 +1728,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 |------|------|------|
 | 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 缓存、RHI 资源 DTO、覆盖层、几何准备与点云编辑已拆分；继续将具体图集上传/绘制方法提取为独立渲染器 |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
+| 坐标上下文尚未覆盖全部工作流 | `core/coordinate_system`、camera/RPC/terrain/project | 已提供严格 context、Chunk codec、GDAL 变换及 GCP→BA/SfM 显式传播；后续接入 ProjectSession 自动装载、相机 runtime/operation plan、RPC/DEM/DOM、动态天体 frame 与完整协方差 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
 
 ## 六、构建系统
@@ -1592,11 +1759,11 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   并通过项目 `cuda` vcpkg overlay 显式传递 CUDA compiler，避免混用系统旧版 `nvcc`；
   TensorRT 不由 vcpkg 提供，Linux 使用外部 SDK，Windows 可由标准配置脚本安装固定 SDK
 - **测试**: `-DBUILD_TESTS=ON` → CTest；按改动范围优先跑相关测试，再决定是否跑全量
-## GUI 模块边界（2026-08）
+## GUI 模块边界（2026-09）
 
 - `src/common/project/ProjectSessionModel.*`、`ProjectDocumentModel.*` 和三类项目配置管理器负责
   QtCore 项目会话、文档分域与持久化；GUI 直接使用 common 中的项目接口，不再保留
-  `src/gui/project/data` 旧包含路径。资源清理模块安装的 path-only open preflight 会在
+  `src/gui/project/data` 旧包含路径。应用侧 `ProjectResourceRecoveryBinding` 安装的 path-only open preflight 会在
   `ProjectData` 解析归档和校验资源索引前恢复事务区产物，避免缺失资源先阻断恢复入口。
 - `src/core/project_workflows` 负责 DEM/正射、稀疏点后处理、点云参数/输入准备、参考数据检查和
   生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。资源清理按
@@ -1606,10 +1773,13 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   `TaskRuntimeService` 把当前项目 path、Chunk 和 generation 适配给 scheduler，并向 Work Pane 与 Browser Agent 暴露
   同一份 revision/capabilities snapshot 和命令入口。现有摄影测量工作流仍按
   `docs/TASK_RUNTIME.md` 的迁移矩阵逐项接入；未迁移任务不会宣称可暂停或可恢复。
-- `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
-  控制器；其对 `ProjectData` 的 UI 设置、元数据/影像查询、相机替换和交会结果兼容调用统一经过
-  `ProjectSessionFacade`。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController`
-  只协调深度估计与点云融合。
+- `ProjectManager` 是兼容层：唯一状态是 `ProjectServiceContainer`，自身不实现生命周期、资源变更、任务
+  编排或 UI 对话逻辑。`ProjectServiceContainer` 组合 `ProjectSession`、`ProjectLifecycleService`、
+  `ProjectResourceService`、`ProjectResourceCleanupCoordinator`、`ProjectUiMessageAdapter` 和
+  `ProjectTaskOrchestrator`；外部控制器直接依赖这些窄接口，不再保存 `ProjectManager*`。
+- `ProjectTaskOrchestrator` 唯一拥有稀疏重建、BA、蒙版、点云、模型、DEM/正射和相机任务控制器，统一负责
+  session generation 校验、取消、lane 互斥、future join 与终态信号。GUI 中不存在“稠密重建管理器”；
+  `ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
   `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理，特征点/残差显示配置由
   `FeatureVisualizationController` 管理。任务栏图标进度由 `ProjectTaskStatusController` 聚合项目打开、保存、
@@ -1621,7 +1791,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   `scripts/dev/browser_agent.py` 与 `browser_agent_protocol.py` 在桥上提供 Agent-first 低 token 协议：稳定 revision、
   分页查询、语义动作、复合等待/断言、JSONL watch、批量表单和诊断包。命名夹具由 `browser_fixtures.py` 解析；
   South Building 默认复制工程元数据与共享影像，并用稀疏文件隔离大型派生产物，禁止 Agent 启动写工程工作流。
-- 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
+- 正射流程为 `MenuWorkflowController -> ProjectTaskOrchestrator -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。
 - 小天体全球 DEM/DOM 核心只发布 `SmallBodyGlobalStage`、总进度和栅格行计数；GUI 与 CLI 各自在边界层
   映射中文文案。GUI 在项目成果登记成功前最多显示 99%，登记完成后才发布 100%。

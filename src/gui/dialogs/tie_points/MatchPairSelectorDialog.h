@@ -27,7 +27,11 @@ class QTableWidget;
 class QPushButton;
 class QLabel;
 class QProgressBar;
-class ProjectManager;
+
+namespace xjw::gui::project
+{
+class ProjectSession;
+}
 
 // MatchPairSelectorDialog: 匹配对选择器（类似 Metashape）
 // 功能：
@@ -40,10 +44,10 @@ class MatchPairSelectorDialog : public QDialog
     Q_OBJECT
 
 public:
-    // 构造函数，传入项目管理器以读取影像列表和匹配元数据
-    // projectManager — 项目管理器指针
+    // 构造函数，传入项目会话以读取影像列表和匹配元数据
+    // session — 项目会话指针
     // parent         — 父窗口指针
-    explicit MatchPairSelectorDialog(ProjectManager *projectManager, QWidget *parent = nullptr);
+    explicit MatchPairSelectorDialog(xjw::gui::project::ProjectSession *session, QWidget *parent = nullptr);
     ~MatchPairSelectorDialog() override;
 
     // 指定打开查看器时优先显示的项目影像；允许在首次异步刷新前调用。
@@ -65,7 +69,7 @@ private slots:
     // 点击"刷新"按钮时，重新加载项目影像列表及当前影像的匹配对
     void onRefresh();
 
-    // 收到 ProjectManager::matchPairReady 信号时，触发防抖刷新
+    // 收到匹配结果写入信号时，触发防抖刷新
     void scheduleRefresh();
 
     // 后台匹配扫描完成后回到 GUI 线程填表
@@ -75,7 +79,7 @@ private slots:
     void onSortSectionClicked(int column);
 
 private:
-    // 只包含后台线程可安全读取的数据快照，避免 worker 访问 ProjectManager/QWidget。
+    // 只包含后台线程可安全读取的数据快照，避免 worker 访问项目会话/QWidget。
     struct MatchDataSnapshot {
         QString projectPath;
         QString matchDir;
@@ -112,7 +116,7 @@ private:
     void setupUI();
     // 初始化匹配对表格（列头、列宽、选择模式等）
     void setupTable();
-    // 从项目管理器加载所有影像并填充下拉框
+    // 从项目会话加载所有影像并填充下拉框
     void loadProjectImages();
     // 为指定影像路径加载其所有匹配对，并填充到表格中
     void loadMatchPairsForImage(const QString &imagePath);
@@ -151,8 +155,8 @@ private:
         const QMap<QString, QString> &baseToPath);
 
 private:
-    // 项目管理器指针，用于获取影像列表和匹配元数据
-    ProjectManager *_projectManager;
+    // 项目会话指针，用于获取影像列表和匹配元数据
+    xjw::gui::project::ProjectSession *_session;
     
     // 顶部影像选择下拉框
     QComboBox *_imageComboBox;

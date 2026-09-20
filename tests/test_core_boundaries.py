@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -20,6 +21,117 @@ SPEC.loader.exec_module(BOUNDARIES)
 
 
 class CoreBoundaryTest(unittest.TestCase):
+    def test_core_does_not_own_presentation_or_session_bindings(self):
+        adapters = {"marker_print_qt", "marker_detection_qt", "terrain_report_qt", "project_recovery_qt"}
+        for path in (ROOT / "src/core").rglob("CMakeLists.txt"):
+            for command, body in BOUNDARIES._iter_cmake_commands(path.read_text(encoding="utf-8")):
+                tokens = BOUNDARIES._cmake_tokens(body)
+                if command == "target_link_libraries" and tokens and not tokens[0].startswith("test_"):
+                    self.assertFalse(adapters.intersection(tokens[1:]), str(path))
+                    if tokens[0] in {
+                        "terrain", "control_points", "sfm_core", "sfm_postprocess", "sfm_project",
+                        "aerial_triangulation",
+                    }:
+                        self.assertNotIn("Qt6::Gui", tokens[1:])
+        cleanup = (ROOT / "src/core/project_workflows/ProjectResourceCleanup.cpp").read_text(encoding="utf-8")
+        for operation in ("QObject::connect", "setProperty", "installProjectOpenPreflight"):
+            self.assertNotIn(operation, cleanup)
+        generator = (ROOT / "src/core/terrain/SmallBodyGlobalProductGenerator.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("GlobalTerrainReportRenderer", generator)
+        for path in ("src/core/control_points/print/MarkerSheetRenderer.h",
+                     "src/core/control_points/print/MarkerPdfWriter.h",
+                     "src/core/terrain/GlobalTerrainReportRenderer.h"):
+            self.assertFalse((ROOT / path).exists(), path)
+
+    def test_sfm_color_sampling_uses_image_io_without_qt_gui(self):
+        directory = ROOT / "src/core/sfm"
+        for path in directory.rglob("*.*"):
+            if path.suffix not in {".h", ".cpp"} or "test" in path.relative_to(directory).parts:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for qt_type in ("QImage", "QImageReader", "QPixmap", "QPainter", "QRgb"):
+                self.assertNotIn(qt_type, source, str(path))
+        service = (directory / "TriangulationService.cpp").read_text(encoding="utf-8")
+        self.assertIn("xjw::common::io::readImage", service)
+        self.assertIn("cv::IMREAD_IGNORE_ORIENTATION", service)
+        self.assertIn('QStringLiteral("color_read_failures")', service)
+
+    def test_aerial_image_io_does_not_use_qt_gui(self):
+        directory = ROOT / "src/core/aerial_triangulation"
+        for path in directory.rglob("*.*"):
+            if path.suffix not in {".h", ".cpp"} or "tests" in path.relative_to(directory).parts:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for qt_type in ("QImage", "QImageReader", "QColor", "QPixmap", "QPainter"):
+                self.assertNotIn(qt_type, source, str(path))
+        size_reader = (ROOT / "src/common/io/ImageSizeReader.cpp").read_text(encoding="utf-8")
+        self.assertIn("GDALOpenEx", size_reader)
+        self.assertNotIn("cv::imdecode", size_reader)
+        self.assertNotIn("->RasterIO", size_reader)
+
+    def test_marker_core_image_api_does_not_expose_qt_gui_types(self):
+        directory = ROOT / "src/core/control_points/detection"
+        for path in directory.glob("*.*"):
+            if path.suffix not in {".cpp", ".h"}:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for qt_type in ("QImage", "QPolygonF", "QPixmap", "QPainter"):
+                self.assertNotIn(qt_type, source, str(path))
+        api = (directory / "MarkerDetector.h").read_text(encoding="utf-8")
+        self.assertIn("const cv::Mat& image", api)
+        self.assertIn("QVector<QPointF> corners", api)
+
+    def test_headless_presets_disable_desktop_and_presentation(self):
+        presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+        configured = {preset["name"]: preset for preset in presets["configurePresets"]}
+        for platform in ("linux", "windows", "macos"):
+            name = f"{platform}-source-headless-release"
+            preset = configured[name]
+            self.assertEqual(preset["inherits"], f"{platform}-source-release")
+            for option in ("PLASCAN_BUILD_GUI", "PLASCAN_BUILD_GUI_TESTS",
+                           "PLASCAN_BUILD_QT_PRESENTATION", "PLASCAN_ENABLE_CUDA",
+                           "PLASCAN_ENABLE_TENSORRT", "PLASCAN_ENABLE_OPENCL"):
+                self.assertEqual(preset["cacheVariables"][option], "OFF", option)
+            for group in ("buildPresets", "testPresets"):
+                self.assertTrue(any(preset["name"] == name and preset["configurePreset"] == name
+                                    for preset in presets[group]))
+
+    def test_standalone_utilities_are_not_product_dependencies(self):
+        utility_sources = {
+            "terrain_utilities": {"DemMosaic.cpp", "TerrainProductManifest.cpp"},
+            "qc_baseline": {"ProcessingBaselineManager.cpp"},
+        }
+        libraries = {}
+        dependencies = {}
+        for path in (ROOT / "src").rglob("CMakeLists.txt"):
+            for command, body in BOUNDARIES._iter_cmake_commands(path.read_text(encoding="utf-8")):
+                tokens = BOUNDARIES._cmake_tokens(body)
+                if not tokens:
+                    continue
+                if command == "add_library":
+                    libraries[tokens[0]] = set(tokens[1:])
+                elif command == "target_link_libraries":
+                    dependencies.setdefault(tokens[0], set()).update(tokens[1:])
+        for target, sources in utility_sources.items():
+            self.assertTrue(sources.issubset(libraries[target]), target)
+            self.assertIn("EXCLUDE_FROM_ALL", libraries[target], target)
+            for owner, linked in dependencies.items():
+                if not owner.startswith("test_"):
+                    self.assertNotIn(target, linked, owner)
+                if owner != target:
+                    self.assertFalse(sources.intersection(libraries.get(owner, set())), owner)
+
+    def test_recovered_pipeline_has_no_legacy_private_stages(self):
+        header = (ROOT / "src/core/mvs/MvsPipelineService.h").read_text(encoding="utf-8")
+        for method in ("computeDepthForView", "prepareFrameCaches", "crossCheckDepthConsistency",
+                       "crossCheckDepthConsistencyStreaming", "recoverResidualDepthAfterConsistency",
+                       "applyLearnedDepthCandidatesAfterConsistency", "runDepthPoseRefinementCandidateStage"):
+            self.assertNotIn(method + "(", header)
+        execution = (ROOT / "src/core/mvs/pipeline/MvsPipelineExecution.cpp").read_text(encoding="utf-8")
+        self.assertIn("runRecoveredDepthScene(", execution)
+        for method in ("openClDevices", "prepareOpenClDevice", "resolveDepthComputeBackend"):
+            self.assertNotIn(method + "(", execution)
+
     def test_refactoring_shims_cannot_return_to_core(self):
         for relative_path in ("src/core/mvs/DepthMapGenerator.h",
                               "src/core/mvs/DepthMapGenerator.cpp",
@@ -135,10 +247,11 @@ class CoreBoundaryTest(unittest.TestCase):
 
     def test_mvs_lower_targets_have_no_reverse_pipeline_dependency(self):
         text = (ROOT / "src/core/mvs/CMakeLists.txt").read_text(encoding="utf-8")
-        lower_targets = {"mvs_contracts", "mvs_depth_processing"}
+        lower_targets = {"mvs_contracts", "mvs_depth_processing", "mvs_storage"}
         forbidden_dependencies = {
             "mvs", "meshing", "project_workflows", "plascan_common_project",
             "Qt6::Concurrent", "Qt6::Widgets",
+            "mvs_backend", "mvs_pipeline",
         }
         found_targets = set()
         for command, body in BOUNDARIES._iter_cmake_commands(text):
@@ -151,6 +264,31 @@ class CoreBoundaryTest(unittest.TestCase):
                     if visibility in {"PUBLIC", "INTERFACE"}:
                         self.assertNotEqual(value, "${CMAKE_CURRENT_SOURCE_DIR}/..")
         self.assertEqual(found_targets, lower_targets)
+
+    def test_mvs_storage_has_independent_sources_and_link_test(self):
+        cmake = (ROOT / "src/core/mvs/CMakeLists.txt").read_text(encoding="utf-8")
+        targets = {}
+        for command, body in BOUNDARIES._iter_cmake_commands(cmake):
+            tokens = BOUNDARIES._cmake_tokens(body)
+            if command == "add_library" and tokens:
+                targets[tokens[0]] = tokens[1:]
+        storage_sources = {"DepthMatStorage.cpp", "DepthArtifactIO.cpp", "MvsWorkspaceManifest.cpp",
+                           "MvsWorkspaceReplay.cpp", "PointCloudArtifactIO.cpp", "DenseCloudArtifactValidation.cpp"}
+        self.assertTrue(storage_sources.issubset(targets["mvs_storage"]))
+        self.assertNotIn("pipeline/DepthArtifactIO.cpp", targets["mvs_pipeline"])
+        self.assertFalse((ROOT / "src/core/mvs/pipeline/DepthArtifactIO.cpp").exists())
+        for path in storage_sources | {"DepthMatStorage.h", "DepthArtifactIO.h"}:
+            source = (ROOT / "src/core/mvs" / path).read_text(encoding="utf-8")
+            for include in BOUNDARIES._cpp_includes(source):
+                self.assertNotIn(include.split("/")[-1],
+                                 {"MvsPipelineService.h", "MvsPipelineInternals.h", "DepthFrameUtils.h",
+                                  "DepthMapFusion.h", "PatchMatchCUDA.h", "QThread"}, path)
+        independent_dependencies = set()
+        for command, body in BOUNDARIES._iter_cmake_commands(cmake):
+            tokens = BOUNDARIES._cmake_tokens(body)
+            if command == "target_link_libraries" and tokens[0] == "test_mvs_storage":
+                independent_dependencies.update(tokens[1:])
+        self.assertEqual(independent_dependencies, {"PRIVATE", "mvs_storage", "GTest::gtest_main"})
 
     def setUp(self):
         self._temporary_directory = tempfile.TemporaryDirectory()

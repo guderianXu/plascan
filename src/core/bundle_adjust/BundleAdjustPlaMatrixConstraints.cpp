@@ -43,7 +43,7 @@ std::array<double, 3> rotationLog(const std::array<double, 9>& rotation)
     return {{scale * vee[0], scale * vee[1], scale * vee[2]}};
 }
 
-std::array<double, 3> poseRotationResidual(const FramePinholeCamera& camera,
+std::array<double, 3> poseRotationResidual(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                            const BACameraPosePrior& prior)
 {
     const auto rotation = camera.cameraToWorldRotation();
@@ -150,7 +150,7 @@ bool linearizeScaleBar(const BAScaleBarConstraint& constraint,
     return finishRobust(output, options.scaleBarHuberDeltaMeters);
 }
 
-bool linearizePosePrior(const FramePinholeCamera& camera,
+bool linearizePosePrior(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                         const BACameraPosePrior& prior,
                         const BAOptions& options,
                         ConstraintLinearization* output)
@@ -201,7 +201,7 @@ bool linearizePosePrior(const FramePinholeCamera& camera,
     return finishRobust(output, options.cameraPosePriorHuberDelta);
 }
 
-bool linearizeCameraPlane(const FramePinholeCamera& camera,
+bool linearizeCameraPlane(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                           std::size_t camera_index,
                           const BAOptions& options,
                           ConstraintLinearization* output)
@@ -231,7 +231,7 @@ bool linearizeCameraPlane(const FramePinholeCamera& camera,
     return finishRobust(output, options.cameraPlaneHuberDelta);
 }
 
-bool linearizeLaserRange(const FramePinholeCamera& camera,
+bool linearizeLaserRange(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                          const BALaserRangeConstraint& constraint,
                          const std::array<double, 3>& point,
                          const BAOptions& options,

@@ -23,7 +23,7 @@
 #include <cstdint>
 #include <atomic>
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthPoseRefinementStage.h"
 
 #include <opencv2/core.hpp>
@@ -197,8 +197,10 @@ namespace xjw
             cv::Mat validMask;                        ///< CV_8U, 项目/内容蒙版传播后的权威有效区域
             cv::Mat geometrySupportCount;             ///< CV_16U, 参考帧加跨视几何一致来源的总观测数
             bool geometrySupportPrevalidated = false; ///< recovered 加权投票已完成，不重复套用离散观测数门禁
-            FramePinholeCamera cameraModel;           ///< 与深度栅格对应的正深度、零畸变工作相机
-            FramePinholeCamera sourceCamera;          ///< 与 imagePath 原始像素对应的完整相机，用于融合取色预处理
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState
+                cameraModel; ///< 与深度栅格对应的正深度、零畸变工作相机
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState
+                sourceCamera; ///< 与 imagePath 原始像素对应的完整相机，用于融合取色预处理
             int viewIndex = -1;                       ///< 原始 CameraView 下标，用于将 source plan 重映射到融合帧下标
             int imgW = 0;
             int imgH = 0;
@@ -360,7 +362,7 @@ namespace xjw
             std::string validRegionMaskPath; ///< 项目蒙版路径；文件中非零=排除，MVS 内部转换为 255=有效
             int imageWidth = 0;
             int imageHeight = 0;
-            xjw::FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         };
 
         // =============================================================================

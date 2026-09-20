@@ -24,7 +24,7 @@ namespace xjw::aerial_triangulation
     {
         PreparedAerialTriangulationInput pipelineInput;  ///< 连接点准备完成后交给 SfM。
         matchphotos::MatchPhotosOptions tiePointOptions; ///< 特征/匹配算法和配额。
-        matchphotos::MatchPhotosContext tiePointContext; ///< 路径、蒙版、参考相机和回调。
+        matchphotos::MatchPhotosContext tiePointContext; ///< 影像定位、ImageId、参考几何、蒙版和回调。
         bool prepareTiePoints = false;                   ///< 需要重建或补齐连接点。
         bool forceRebuildTiePoints = false; ///< 清理当前影像相关匹配/连接点，并要求前端重算。
         int cachedTiePointLimit = -1; ///< 运行前持久化连接点配额；-1 表示无缓存或旧缓存未记录。

@@ -51,6 +51,22 @@ namespace xjw::core::project
             return true;
         }
 
+        bool readNonNegativeInteger(const QJsonValue& value, int* output)
+        {
+            if (!output || !value.isDouble())
+            {
+                return false;
+            }
+            const double number = value.toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(number) || number < 0.0 || std::floor(number) != number ||
+                number > static_cast<double>(std::numeric_limits<int>::max()))
+            {
+                return false;
+            }
+            *output = static_cast<int>(number);
+            return true;
+        }
+
         bool coordinatesMatchExactly(const std::array<float, 3>& left, const std::array<float, 3>& right)
         {
             for (int axis = 0; axis < 3; ++axis)
@@ -192,19 +208,60 @@ namespace xjw::core::project
                 return false;
             }
 
+            const QJsonObject root = document.object();
+            if (root.value(QStringLiteral("schema")).toString() !=
+                QStringLiteral("plascan.sfm_sparse_points.v3"))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral(
+                        "SfM 点观测 sidecar 必须使用 plascan.sfm_sparse_points.v3；旧 schema 不再兼容");
+                }
+                return false;
+            }
+            const QJsonArray root_images = root.value(QStringLiteral("images")).toArray();
+            if (root_images.size() != static_cast<qsizetype>(views.size()) || root_images.isEmpty())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 必须完整覆盖当前 MVS 输入");
+                }
+                return false;
+            }
+
             std::unordered_map<std::string, int> view_by_path;
             view_by_path.reserve(views.size());
+            std::unordered_map<std::string, int> view_by_canonical_image_id;
+            view_by_canonical_image_id.reserve(views.size());
             for (int view_index = 0; view_index < static_cast<int>(views.size()); ++view_index)
             {
-                view_by_path.emplace(
+                const std::string path =
                     normalizedPath(QString::fromStdString(views[static_cast<std::size_t>(view_index)].imagePath))
-                        .toStdString(),
-                    view_index);
+                        .toStdString();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                    views[static_cast<std::size_t>(view_index)].camera;
+                if (path.empty() || !camera.hasBoundIdentity())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral(
+                            "当前 MVS 输入的每个视图都必须带非空路径和 canonical 相机身份");
+                    }
+                    return false;
+                }
+                if (!view_by_path.emplace(path, view_index).second ||
+                    !view_by_canonical_image_id.emplace(camera.imageId().value(), view_index).second)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("当前 MVS 输入包含重复路径或 canonical ImageId");
+                    }
+                    return false;
+                }
             }
 
             std::unordered_map<int, int> view_by_image_id;
             xjw::mvs::SparseCloud tracked;
-            const QJsonObject root = document.object();
             const QJsonValue region_value = root.value(QStringLiteral("reconstruction_region"));
             if (!region_value.isUndefined() && !region_value.isNull())
             {
@@ -226,18 +283,77 @@ namespace xjw::core::project
                 }
                 tracked.reconstructionRegionSpecified = true;
             }
-            const QJsonArray root_images = root.value(QStringLiteral("images")).toArray();
             for (const QJsonValue& image_value : root_images)
             {
-                const QJsonObject image = image_value.toObject();
-                const int image_id = image.value(QStringLiteral("image_id")).toInt(-1);
-                const std::string image_path =
-                    normalizedPath(image.value(QStringLiteral("image_path")).toString()).toStdString();
-                const auto found = view_by_path.find(image_path);
-                if (image_id >= 0 && found != view_by_path.end())
+                if (!image_value.isObject())
                 {
-                    view_by_image_id[image_id] = found->second;
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 行必须是对象");
+                    }
+                    return false;
                 }
+                const QJsonObject image = image_value.toObject();
+                int camera_index = -1;
+                if (!readNonNegativeInteger(image.value(QStringLiteral("camera_index")), &camera_index))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 images.camera_index 必须是非负整数");
+                    }
+                    return false;
+                }
+                const QJsonValue image_id_value = image.value(QStringLiteral("image_id"));
+                const QJsonValue image_path_value = image.value(QStringLiteral("image_path"));
+                if (!image_id_value.isString() || !image_path_value.isString())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 必须包含字符串 image_id 和 image_path");
+                    }
+                    return false;
+                }
+                const QString canonical_image_id = image_id_value.toString().trimmed();
+                const QString raw_image_path = image_path_value.toString().trimmed();
+                const std::string image_path = normalizedPath(raw_image_path).toStdString();
+                if (canonical_image_id.isEmpty() || raw_image_path.isEmpty() || image_path.empty() ||
+                    camera_index >= static_cast<int>(views.size()))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 身份字段无效或超出当前 MVS 输入范围");
+                    }
+                    return false;
+                }
+                const auto found = view_by_path.find(image_path);
+                const auto canonical = view_by_canonical_image_id.find(canonical_image_id.toStdString());
+                if (canonical == view_by_canonical_image_id.end() || canonical->second != camera_index ||
+                    (found != view_by_path.end() && found->second != camera_index))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral(
+                            "SfM v3 sidecar 的 images camera_index 与 canonical ImageId 不一致，或已知路径指向另一影像");
+                    }
+                    return false;
+                }
+                const auto [existing, inserted] = view_by_image_id.emplace(camera_index, canonical->second);
+                if (!inserted && existing->second != canonical->second)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 表包含冲突的 camera_index 映射");
+                    }
+                    return false;
+                }
+            }
+            if (view_by_image_id.size() != views.size())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("SfM v3 sidecar 的 images 表未覆盖全部 camera_index");
+                }
+                return false;
             }
 
             std::array<float, 3> minimum{std::numeric_limits<float>::max(),
@@ -246,7 +362,16 @@ namespace xjw::core::project
             std::array<float, 3> maximum{std::numeric_limits<float>::lowest(),
                                          std::numeric_limits<float>::lowest(),
                                          std::numeric_limits<float>::lowest()};
-            const QJsonArray sidecar_points = root.value(QStringLiteral("points")).toArray();
+            const QJsonValue sidecar_points_value = root.value(QStringLiteral("points"));
+            if (!sidecar_points_value.isArray())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("SfM v3 sidecar 的 points 必须是数组");
+                }
+                return false;
+            }
+            const QJsonArray sidecar_points = sidecar_points_value.toArray();
             if (sidecar_points.size() < static_cast<qsizetype>(ply_positions.size()))
             {
                 if (errorMessage)
@@ -348,46 +473,84 @@ namespace xjw::core::project
                     return false;
                 }
 
-                std::vector<int> observations;
-                for (const QJsonValue& observation_value : point.value(QStringLiteral("observations")).toArray())
+                const QJsonValue observations_value = point.value(QStringLiteral("observations"));
+                if (!observations_value.isArray())
                 {
-                    int image_id = -1;
-                    int mapped_view_index = -1;
-                    if (observation_value.isArray())
+                    if (errorMessage)
                     {
-                        const QJsonArray observation = observation_value.toArray();
-                        if (!observation.isEmpty())
-                        {
-                            image_id = observation.first().toInt(-1);
-                        }
+                        *errorMessage = QStringLiteral("SfM v3 sidecar 的 points.observations 必须是数组");
                     }
-                    else if (observation_value.isObject())
+                    return false;
+                }
+                std::vector<int> observations;
+                for (const QJsonValue& observation_value : observations_value.toArray())
+                {
+                    if (!observation_value.isObject())
                     {
-                        const QJsonObject observation = observation_value.toObject();
-                        image_id = observation.value(QStringLiteral("image_id")).toInt(-1);
-                        const QString observation_path = observation.value(QStringLiteral("image_path")).toString();
-                        if (!observation_path.isEmpty())
+                        if (errorMessage)
                         {
-                            const auto path_match = view_by_path.find(normalizedPath(observation_path).toStdString());
-                            if (path_match != view_by_path.end())
+                            *errorMessage = QStringLiteral("SfM v3 sidecar 的 observations 必须是对象");
+                        }
+                        return false;
+                    }
+                    const QJsonObject observation = observation_value.toObject();
+                    int camera_index = -1;
+                    if (!readNonNegativeInteger(observation.value(QStringLiteral("camera_index")), &camera_index) ||
+                        camera_index >= static_cast<int>(views.size()))
+                    {
+                        if (errorMessage)
+                        {
+                            *errorMessage = QStringLiteral(
+                                "SfM v3 sidecar 的 observation.camera_index 无效或超出当前 MVS 输入范围");
+                        }
+                        return false;
+                    }
+                    const QJsonValue observation_image_id = observation.value(QStringLiteral("image_id"));
+                    if (!observation_image_id.isString())
+                    {
+                        if (errorMessage)
+                        {
+                            *errorMessage = QStringLiteral("SfM v3 sidecar 的 observation.image_id 必须是字符串");
+                        }
+                        return false;
+                    }
+                    const QString canonical_image_id = observation_image_id.toString().trimmed();
+                    const auto canonical = view_by_canonical_image_id.find(canonical_image_id.toStdString());
+                    const auto mapped = view_by_image_id.find(camera_index);
+                    if (canonical_image_id.isEmpty() || canonical == view_by_canonical_image_id.end() ||
+                        mapped == view_by_image_id.end() || canonical->second != camera_index ||
+                        mapped->second != camera_index)
+                    {
+                        if (errorMessage)
+                        {
+                            *errorMessage = QStringLiteral(
+                                "SfM v3 sidecar 的 observation 的 image_id 与 camera_index 身份字段不一致");
+                        }
+                        return false;
+                    }
+                    const QJsonValue observation_path_value = observation.value(QStringLiteral("image_path"));
+                    if (!observation_path_value.isUndefined() && !observation_path_value.isString())
+                    {
+                        if (errorMessage)
+                        {
+                            *errorMessage = QStringLiteral("SfM v3 sidecar 的 observation.image_path 必须是字符串");
+                        }
+                        return false;
+                    }
+                    const QString observation_path = observation_path_value.toString();
+                    if (!observation_path.isEmpty())
+                    {
+                        const auto path_match = view_by_path.find(normalizedPath(observation_path).toStdString());
+                        if (path_match != view_by_path.end() && path_match->second != camera_index)
+                        {
+                            if (errorMessage)
                             {
-                                mapped_view_index = path_match->second;
+                                *errorMessage = QStringLiteral("SfM 点观测的 camera_index 与相机身份不一致");
                             }
+                            return false;
                         }
                     }
-                    const auto mapped = view_by_image_id.find(image_id);
-                    if (mapped_view_index >= 0)
-                    {
-                        observations.push_back(mapped_view_index);
-                    }
-                    else if (mapped != view_by_image_id.end())
-                    {
-                        observations.push_back(mapped->second);
-                    }
-                    else if (root_images.isEmpty() && image_id >= 0 && image_id < static_cast<int>(views.size()))
-                    {
-                        observations.push_back(image_id);
-                    }
+                    observations.push_back(camera_index);
                 }
                 std::sort(observations.begin(), observations.end());
                 observations.erase(std::unique(observations.begin(), observations.end()), observations.end());

@@ -9,7 +9,6 @@
 #include <QDialog>
 
 // 前向声明，避免头文件循环依赖
-class ProjectManager;
 class QListWidget;
 class QLineEdit;
 class QCheckBox;
@@ -17,16 +16,21 @@ class QDoubleSpinBox;
 class QTableWidget;
 class QLabel;
 
+namespace xjw::gui::project
+{
+class ProjectSession;
+}
+
 // OverlapAnalysisDialog — 影像重叠度获取对话框
 // 从项目元数据中读取影像及相机参数，结合 DEM 或固定高程计算两两影像的重叠度。
 class OverlapAnalysisDialog : public QDialog
 {
     Q_OBJECT
 public:
-    // 构造函数，传入项目管理器以访问影像和相机元数据
-    // projectManager — 项目管理器指针，用于获取影像列表和相机参数
+    // 构造函数，传入项目会话以访问影像和相机元数据
+    // session — 项目会话指针，用于获取影像列表和相机参数
     // parent         — 父窗口指针
-    explicit OverlapAnalysisDialog(ProjectManager *projectManager, QWidget *parent = nullptr);
+    explicit OverlapAnalysisDialog(xjw::gui::project::ProjectSession *session, QWidget *parent = nullptr);
 
 private slots:
     // 点击"浏览"按钮时，弹出文件选择对话框，用于选取 DEM（XYZ 格式）文件路径
@@ -38,8 +42,8 @@ private:
     // 从项目元数据中加载影像列表，填充 _imageList 复选框列表
     void loadProjectImages();
 
-    // 项目管理器指针，用于读取影像路径和相机参数
-    ProjectManager *_projectManager = nullptr;
+    // 项目会话指针，用于读取影像路径和相机参数
+    xjw::gui::project::ProjectSession *_session = nullptr;
 
     // 影像复选框列表控件，支持多选；每项 UserRole 存储完整路径
     QListWidget *_imageList = nullptr;

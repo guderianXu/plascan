@@ -7,7 +7,7 @@
 //           2. openProject    - 优先从临时缓存恢复，再读归档
 //           3. saveProject    - 将内存元数据写回当前 Chunk 的 chunk.zip
 //           4. addImages      - 追加影像引用到 images[] 数组
-//           5. setImageCameras- 批量写入相机参数到 images[*].camera
+//           5. setCameraInstances- 批量写入规范化 camera_definitions/camera_instances
 //           6. appendXxx      - 各类结果追加，统一写入 project_results.json
 //           7. saveIpfindSettings - 更新可复现的工作流配置
 //           8. saveUiSettings     - 更新独立的项目视图状态
@@ -22,8 +22,12 @@
 #include "PlascanArchive.h"
 #include "ProjectChunkStore.h"
 #include "ProjectWorkspaceStore.h"
+#include "camera/project/CameraProjectRecords.h"
+#include "camera/project/CameraProjectRuntime.h"
+#include "camera/models/CameraModelFactories.h"
 #include "ProjectUiConfigManager.h"
 #include "project/ProjectPackageLayout.h"
+#include "project/ProjectPathBridge.h"
 #include "project/ProjectChunkIndex.h"
 #include "project/ProjectLock.h"
 #include "project/ProjectSharedImageStore.h"
@@ -44,11 +48,14 @@
 #include <QScopeGuard>
 #include <QDateTime>
 #include <QSet>
+#include <QThread>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUuid>
 #include <QtConcurrent/QtConcurrent>
 
+using xjw::camera_project::CameraProjectData;
+using xjw::camera_project::CameraProjectStore;
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
 using xjw::common::project::ProjectChunkRecord;
@@ -171,6 +178,21 @@ struct ProjectData::PersistenceResult
 
 namespace
 {
+
+    bool validRuntimeCameraCollections(const QJsonObject& files, QStringList* errors)
+    {
+        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
+            files, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        if (runtime.ok())
+        {
+            return true;
+        }
+        if (errors)
+        {
+            *errors = runtime.errors;
+        }
+        return false;
+    }
 
     QJsonObject versionedResultRecord(const QJsonObject& record)
     {
@@ -339,7 +361,6 @@ namespace
         return doc.isObject() ? doc.object() : QJsonObject();
     }
 
-
     bool jsonArrayContains(const QJsonArray& array, const QJsonValue& needle)
     {
         for (const QJsonValue& value : array)
@@ -416,7 +437,7 @@ ProjectData::ProjectData(QObject* parent)
     : QObject(parent),
       _persistenceCommitCoordinator(std::make_shared<xjw::common::project::ProjectPersistenceCommitCoordinator>())
 {
-    // 防抖归档写入定时器：将多次 appendIpfind/appendIpmatch/setImageCameras 合并为一次 ZIP 写入
+    // 防抖归档写入定时器：将多次 appendIpfind/appendIpmatch/setCameraInstances 合并为一次 ZIP 写入
     _archiveSyncTimer = new QTimer(this);
     _archiveSyncTimer->setSingleShot(true);
     connect(_archiveSyncTimer, &QTimer::timeout, this, &ProjectData::syncToArchive);
@@ -428,14 +449,25 @@ ProjectData::ProjectData(QObject* parent)
 
 ProjectData::~ProjectData()
 {
+    _shuttingDown = true;
     if (_archiveSyncTimer)
     {
         _archiveSyncTimer->stop();
     }
+    settleBundleAdjustMetadataStageForShutdown();
+    const bool forceDrain = _persistenceRunning || (_deferredPersistenceResult != nullptr);
+    if (_persistencePool)
+    {
+        _persistencePool->waitForDone();
+    }
+    _deferredPersistenceResult.reset();
+    _persistenceRunning = false;
+    _runningPersistenceGeneration = 0;
+    _runningPersistenceSessionGeneration = 0;
     if (!_projectPath.isEmpty())
     {
         QString persistenceError;
-        if (drainPersistenceForClose(&persistenceError))
+        if (drainPersistenceForClose(&persistenceError, forceDrain))
         {
             ProjectSharedImageStore(_projectPath).releaseReservations(_filesManager.getAllImages());
         }
@@ -443,11 +475,6 @@ ProjectData::~ProjectData()
         {
             LOG_ERROR(QStringLiteral("项目析构前无法持久化最新归档或临时恢复快照: %1").arg(persistenceError));
         }
-    }
-    _shuttingDown = true;
-    if (_persistencePool)
-    {
-        _persistencePool->waitForDone();
     }
     if (!_projectPath.isEmpty())
     {
@@ -483,9 +510,17 @@ void ProjectData::emitCurrentMetadataChanged()
 void ProjectData::scheduleArchiveSync(
     bool coreDirty, bool resultsDirty, bool writeTemporary, bool configDirty, bool uiStateDirty, bool workspaceDirty)
 {
-    if ((coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty) && _persistenceCommitCoordinator)
+    const bool hasArchiveChanges = coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty;
+    if (hasArchiveChanges && _persistenceCommitCoordinator)
     {
-        _persistenceCommitCoordinator->advanceGeneration();
+        if (_bundleAdjustPersistenceSuspended)
+        {
+            _bundleAdjustPersistenceGenerationAdvanceDeferred = true;
+        }
+        else
+        {
+            _persistenceCommitCoordinator->advanceGeneration();
+        }
     }
     if (coreDirty)
     {
@@ -508,7 +543,18 @@ void ProjectData::scheduleArchiveSync(
         _workspaceDirtyForArchive = true;
     }
 
-    if ((coreDirty || resultsDirty || configDirty || uiStateDirty || workspaceDirty) && _archiveSyncTimer &&
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        _archiveSyncPending = _archiveSyncPending || hasArchiveChanges;
+        if (writeTemporary)
+        {
+            _temporarySavePending = true;
+            _bundleAdjustPersistenceGenerationAdvanceDeferred = true;
+        }
+        return;
+    }
+
+    if (hasArchiveChanges && _archiveSyncTimer &&
         QCoreApplication::instance())
     {
         _archiveSyncTimer->start(2000);
@@ -949,6 +995,22 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
     {
         return snapshot;
     }
+    {
+        CameraProjectData cameraData;
+        QStringList cameraErrors;
+        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
+        {
+            snapshot.errorMessage =
+                QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            return snapshot;
+        }
+        if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
+        {
+            snapshot.errorMessage =
+                QStringLiteral("project_files 相机模型无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            return snapshot;
+        }
+    }
 
     const QJsonObject runtimeFiles = readJsonObjectFile(ProjectIO::tempFilesPath(snapshot.projectPath));
     if (!runtimeFiles.isEmpty())
@@ -979,6 +1041,22 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
         !ProjectConfigManager::validateCurrentConfig(snapshot.configMeta, &snapshot.errorMessage))
     {
         return snapshot;
+    }
+    {
+        CameraProjectData cameraData;
+        QStringList cameraErrors;
+        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
+        {
+            snapshot.errorMessage =
+                QStringLiteral("临时 project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            return snapshot;
+        }
+        if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
+        {
+            snapshot.errorMessage =
+                QStringLiteral("临时 project_files 相机模型无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            return snapshot;
+        }
     }
     if (snapshot.uiState.value(QStringLiteral("schema_version")).toInt() != 1 ||
         !snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
@@ -1105,6 +1183,28 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot& snapshot, Q
         !ProjectConfigManager::validateCurrentConfig(snapshot.configMeta, errorMsg))
     {
         return false;
+    }
+    {
+        CameraProjectData cameraData;
+        QStringList cameraErrors;
+        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
+        {
+            if (errorMsg)
+            {
+                *errorMsg =
+                    QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            }
+            return false;
+        }
+        if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
+        {
+            if (errorMsg)
+            {
+                *errorMsg =
+                    QStringLiteral("project_files 相机模型无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
+            }
+            return false;
+        }
     }
     if (snapshot.uiState.value(QStringLiteral("schema_version")).toInt() != 1 ||
         !snapshot.uiState.value(QStringLiteral("display_settings")).isObject())
@@ -1256,6 +1356,7 @@ bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot& snapshot, Q
 
 ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(PersistenceMode mode) const
 {
+    Q_ASSERT(!_bundleAdjustPersistenceSuspended);
     PersistenceSnapshot snapshot;
     snapshot.mode = mode;
     snapshot.projectPath = _projectPath;
@@ -1337,14 +1438,14 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(PersistenceSnapshot 
         snapshot.projectPath = portableStagingProject;
         snapshot.writeTemporary = false;
     }
-    const auto cleanupPortableStaging = qScopeGuard([&portableStagingProject]()
-                                                     {
-                                                         if (!portableStagingProject.isEmpty())
-                                                         {
-                                                             QDir(QFileInfo(portableStagingProject).absolutePath())
-                                                                 .removeRecursively();
-                                                         }
-                                                     });
+    const auto cleanupPortableStaging = qScopeGuard(
+        [&portableStagingProject]()
+        {
+            if (!portableStagingProject.isEmpty())
+            {
+                QDir(QFileInfo(portableStagingProject).absolutePath()).removeRecursively();
+            }
+        });
 
     const bool workspaceIndexRequested =
         snapshot.writeCoreToArchive || snapshot.writeResultsToArchive || snapshot.writeWorkspaceIndex;
@@ -1435,8 +1536,7 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(PersistenceSnapshot 
         result.success = true;
         return result;
     }
-    if (result.archiveRequested &&
-        (!snapshot.commitCoordinator || snapshot.mode == PersistenceMode::PortableExport))
+    if (result.archiveRequested && (!snapshot.commitCoordinator || snapshot.mode == PersistenceMode::PortableExport))
     {
         commitArchive();
     }
@@ -1519,7 +1619,8 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(PersistenceSnapshot 
 
 void ProjectData::startNextPersistence()
 {
-    if (_shuttingDown || _persistenceRunning || _resourceCleanupPersistenceGeneration != 0 || !_persistencePool)
+    if (_shuttingDown || _bundleAdjustPersistenceSuspended || _persistenceRunning ||
+        _resourceCleanupPersistenceGeneration != 0 || !_persistencePool)
     {
         return;
     }
@@ -1626,6 +1727,16 @@ void ProjectData::startNextPersistence()
 
 void ProjectData::handlePersistenceFinished(PersistenceResult result)
 {
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        if (_deferredPersistenceResult)
+        {
+            LOG_ERROR(QStringLiteral("BA 元数据事务期间收到多个持久化完成结果"));
+            return;
+        }
+        _deferredPersistenceResult = std::make_unique<PersistenceResult>(std::move(result));
+        return;
+    }
     if (_persistenceRunning && result.commitGeneration == _runningPersistenceGeneration &&
         result.sessionGeneration == _runningPersistenceSessionGeneration)
     {
@@ -1757,8 +1868,127 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
     startNextPersistence();
 }
 
-bool ProjectData::drainPersistenceForClose(QString* errorMessage)
+void ProjectData::releaseBundleAdjustPersistenceBarrier(bool invalidateRunningPersistence)
 {
+    if (!_bundleAdjustPersistenceSuspended)
+    {
+        return;
+    }
+
+    const bool advanceGeneration =
+        invalidateRunningPersistence || _bundleAdjustPersistenceGenerationAdvanceDeferred;
+    _bundleAdjustPersistenceGenerationAdvanceDeferred = false;
+    if (advanceGeneration && _persistenceCommitCoordinator)
+    {
+        _persistenceCommitCoordinator->advanceGeneration();
+    }
+
+    _bundleAdjustPersistenceSuspended = false;
+    std::unique_ptr<PersistenceResult> deferredResult = std::move(_deferredPersistenceResult);
+    if (deferredResult)
+    {
+        handlePersistenceFinished(std::move(*deferredResult));
+        return;
+    }
+    startNextPersistence();
+}
+
+void ProjectData::restoreBundleAdjustBeforeStateAndMergeResponsibilities(
+    const ProjectBundleAdjustMetadataStageToken& token, BundleAdjustArchiveTimerPolicy timerPolicy)
+{
+    const bool currentDirty = _isDirty;
+    const bool currentCoreDirty = _coreFileDirtyForArchive;
+    const bool currentResultsDirty = _resultsDirtyForArchive;
+    const bool currentConfigDirty = _configDirtyForArchive;
+    const bool currentUiStateDirty = _uiStateDirtyForArchive;
+    const bool currentWorkspaceDirty = _workspaceDirtyForArchive;
+    const bool currentFullSavePending = _fullSavePending;
+    const bool currentArchiveSyncPending = _archiveSyncPending;
+    const bool currentTemporarySavePending = _temporarySavePending;
+    const bool currentTimerActive = _archiveSyncTimer && _archiveSyncTimer->isActive();
+    const int currentTimerRemainingMs = currentTimerActive ? _archiveSyncTimer->remainingTime() : -1;
+
+    _filesManager.setCoreData(token._beforeCore);
+    _filesManager.setResultsData(token._beforeResults);
+    _isDirty = currentDirty || token._wasDirty;
+    _coreFileDirtyForArchive = currentCoreDirty || token._coreFileDirtyForArchive;
+    _resultsDirtyForArchive = currentResultsDirty || token._resultsDirtyForArchive;
+    _configDirtyForArchive = currentConfigDirty || token._configDirtyForArchive;
+    _uiStateDirtyForArchive = currentUiStateDirty || token._uiStateDirtyForArchive;
+    _workspaceDirtyForArchive = currentWorkspaceDirty || token._workspaceDirtyForArchive;
+    _fullSavePending = currentFullSavePending || token._fullSavePending;
+    _archiveSyncPending = currentArchiveSyncPending || token._archiveSyncPending;
+    _temporarySavePending = currentTemporarySavePending || token._temporarySavePending;
+
+    if (!_archiveSyncTimer)
+    {
+        return;
+    }
+    if (timerPolicy == BundleAdjustArchiveTimerPolicy::Suppress)
+    {
+        _archiveSyncTimer->stop();
+        return;
+    }
+    if (!QCoreApplication::instance() || token._archiveTimerRemainingMs < 0)
+    {
+        return;
+    }
+    if (!currentTimerActive || currentTimerRemainingMs < 0 || token._archiveTimerRemainingMs < currentTimerRemainingMs)
+    {
+        _archiveSyncTimer->start(qMax(1, token._archiveTimerRemainingMs));
+    }
+}
+
+void ProjectData::settleBundleAdjustMetadataStageForShutdown()
+{
+    if (!_bundleAdjustPersistenceSuspended)
+    {
+        return;
+    }
+
+    if (_activeBundleAdjustMetadataStage)
+    {
+        const ProjectBundleAdjustMetadataStageToken token = *_activeBundleAdjustMetadataStage;
+        const bool sameSession = token._owner == this && token._stageId == _activeBundleAdjustMetadataStageId &&
+                                 token._sessionGeneration == _sessionGeneration &&
+                                 token._projectPath == _projectPath && token._chunkId == _activeChunkId &&
+                                 token._chunkDirectory == _activeChunkDirectory;
+        const bool unchanged = sameSession && _filesManager.coreData() == token._stagedCore &&
+                               _filesManager.resultsData() == token._stagedResults;
+        if (unchanged)
+        {
+            restoreBundleAdjustBeforeStateAndMergeResponsibilities(token, BundleAdjustArchiveTimerPolicy::Suppress);
+        }
+        else if (sameSession)
+        {
+            _isDirty = true;
+            _coreFileDirtyForArchive = true;
+            _resultsDirtyForArchive = _resultsDirtyForArchive || _resultsLoaded;
+            _archiveSyncPending = true;
+            _temporarySavePending = true;
+        }
+    }
+
+    _activeBundleAdjustMetadataStageId = 0;
+    _activeBundleAdjustMetadataStage.reset();
+    _bundleAdjustPersistenceGenerationAdvanceDeferred = false;
+    _bundleAdjustPersistenceSuspended = false;
+    if (_persistenceCommitCoordinator)
+    {
+        _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit();
+    }
+}
+
+bool ProjectData::drainPersistenceForClose(QString* errorMessage, bool forceDrain)
+{
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("BA 元数据事务正在处理，无法持久化关闭快照");
+        }
+        return false;
+    }
     if (_projectPath.trimmed().isEmpty())
     {
         return true;
@@ -1781,15 +2011,14 @@ bool ProjectData::drainPersistenceForClose(QString* errorMessage)
         {
             if (errorMessage)
             {
-                *errorMessage = portableResult.errorMessage.isEmpty()
-                                    ? QStringLiteral("关闭项目前无法完成便携项目导出")
-                                    : portableResult.errorMessage;
+                *errorMessage = portableResult.errorMessage.isEmpty() ? QStringLiteral("关闭项目前无法完成便携项目导出")
+                                                                      : portableResult.errorMessage;
             }
             return false;
         }
     }
 
-    const bool needsDurableSnapshot = workerWasRunning || _isDirty || _coreFileDirtyForArchive ||
+    const bool needsDurableSnapshot = forceDrain || workerWasRunning || _isDirty || _coreFileDirtyForArchive ||
                                       _resultsDirtyForArchive || _configDirtyForArchive || _uiStateDirtyForArchive ||
                                       _workspaceDirtyForArchive || _fullSavePending || _archiveSyncPending ||
                                       _temporarySavePending;
@@ -1837,17 +2066,41 @@ bool ProjectData::drainPersistenceForClose(QString* errorMessage)
     return false;
 }
 
-void ProjectData::saveProjectAsync()
+bool ProjectData::saveProjectAsync(QString* errorMsg)
 {
+    if (errorMsg)
+    {
+        errorMsg->clear();
+    }
     if (_projectPath.trimmed().isEmpty())
     {
-        emit projectSaveCompleted(false, QStringLiteral("没有打开的项目"));
-        return;
+        const QString error = QStringLiteral("没有打开的项目");
+        if (errorMsg)
+        {
+            *errorMsg = error;
+        }
+        emit projectSaveCompleted(false, error);
+        return false;
+    }
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        const QString error = QStringLiteral("BA 元数据事务正在处理，请稍后保存");
+        if (errorMsg)
+        {
+            *errorMsg = error;
+        }
+        emit projectSaveCompleted(false, error);
+        return false;
     }
     if (_resourceCleanupPersistenceGeneration != 0)
     {
-        emit projectSaveCompleted(false, QStringLiteral("资源清理任务正在提交，请稍后保存"));
-        return;
+        const QString error = QStringLiteral("资源清理任务正在提交，请稍后保存");
+        if (errorMsg)
+        {
+            *errorMsg = error;
+        }
+        emit projectSaveCompleted(false, error);
+        return false;
     }
     if (_archiveSyncTimer)
     {
@@ -1855,6 +2108,7 @@ void ProjectData::saveProjectAsync()
     }
     _fullSavePending = true;
     startNextPersistence();
+    return true;
 }
 
 bool ProjectData::exportPortableProjectAsync(const QString& outputZipPath, QString* errorMsg)
@@ -1865,6 +2119,14 @@ bool ProjectData::exportPortableProjectAsync(const QString& outputZipPath, QStri
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("没有打开的项目");
+        }
+        return false;
+    }
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("BA 元数据事务正在处理，请稍后导出");
         }
         return false;
     }
@@ -1901,6 +2163,12 @@ void ProjectData::scheduleTemporaryMetadataSave()
     {
         return;
     }
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        _temporarySavePending = true;
+        _bundleAdjustPersistenceGenerationAdvanceDeferred = true;
+        return;
+    }
     if (_persistenceCommitCoordinator)
     {
         _persistenceCommitCoordinator->advanceGeneration();
@@ -1915,6 +2183,14 @@ bool ProjectData::saveProject(QString* errorMsg)
     {
         if (errorMsg)
             *errorMsg = QStringLiteral("没有打开的项目");
+        return false;
+    }
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("BA 元数据事务正在处理，请稍后保存");
+        }
         return false;
     }
     if (_resourceCleanupPersistenceGeneration != 0)
@@ -2022,6 +2298,16 @@ bool ProjectData::closeProject(QString* errorMsg)
     {
         errorMsg->clear();
     }
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        const QString message = QStringLiteral("BA 元数据事务处理期间拒绝关闭项目");
+        LOG_WARN(message);
+        if (errorMsg)
+        {
+            *errorMsg = message;
+        }
+        return false;
+    }
     if (_resourceCleanupPersistenceGeneration != 0)
     {
         const QString message = QStringLiteral("资源清理事务提交期间拒绝关闭项目，以保持项目锁有效");
@@ -2093,22 +2379,27 @@ bool ProjectData::closeProject(QString* errorMsg)
 // 防抖定时器回调：把最新快照交给串行持久化线程。
 void ProjectData::syncToArchive()
 {
-    if (_projectPath.isEmpty() || (!_resultsDirtyForArchive && !_coreFileDirtyForArchive && !_configDirtyForArchive &&
-                                   !_uiStateDirtyForArchive && !_workspaceDirtyForArchive))
+    if (_projectPath.isEmpty() ||
+        (!_resultsDirtyForArchive && !_coreFileDirtyForArchive && !_configDirtyForArchive &&
+         !_uiStateDirtyForArchive && !_workspaceDirtyForArchive))
     {
         return;
     }
 
     _archiveSyncPending = true;
+    if (_bundleAdjustPersistenceSuspended)
+    {
+        return;
+    }
     startNextPersistence();
 }
 
-void ProjectData::updateMetadata(const QJsonObject& meta, bool markDirty)
+bool ProjectData::applyMetadata(const QJsonObject& metadata)
 {
-    const bool hasResults = containsResultKeys(meta);
+    const bool hasResults = containsResultKeys(metadata);
     QJsonObject core;
     QJsonObject results;
-    for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
+    for (auto it = metadata.constBegin(); it != metadata.constEnd(); ++it)
     {
         if (ProjectFilesManager::isResultKey(it.key()))
         {
@@ -2129,12 +2420,34 @@ void ProjectData::updateMetadata(const QJsonObject& meta, bool markDirty)
     {
         _resultsLoaded = true;
     }
+    return hasResults;
+}
+
+void ProjectData::updateMetadata(const QJsonObject& meta, bool markDirty)
+{
+    const bool hasResults = applyMetadata(meta);
     markDirtyIfRequested(markDirty);
     if (markDirty)
     {
         scheduleArchiveSync(true, hasResults, false);
     }
 
+    emitCurrentMetadataChanged();
+}
+
+void ProjectData::persistMetadata(const QJsonObject& meta, bool markDirty)
+{
+    const bool hasResults = applyMetadata(meta);
+    const bool dirty_state_changed = markDirty && !_isDirty;
+    if (dirty_state_changed)
+    {
+        _isDirty = true;
+    }
+    scheduleArchiveSync(markDirty, markDirty && hasResults, true);
+    if (dirty_state_changed)
+    {
+        emit dirtyStateChanged(true);
+    }
     emitCurrentMetadataChanged();
 }
 
@@ -2323,7 +2636,7 @@ bool ProjectData::loadTemporaryMetadata()
 
 bool ProjectData::saveTemporaryMetadata()
 {
-    if (_resourceCleanupPersistenceGeneration != 0)
+    if (_bundleAdjustPersistenceSuspended || _resourceCleanupPersistenceGeneration != 0)
     {
         return false;
     }
@@ -2374,7 +2687,7 @@ bool ProjectData::commitResourceCleanupMetadata(const QJsonObject& metadata, QSt
         }
         return false;
     }
-    if (_resourceCleanupPersistenceGeneration != 0)
+    if (_bundleAdjustPersistenceSuspended || _resourceCleanupPersistenceGeneration != 0)
     {
         if (errorMsg)
         {
@@ -2384,6 +2697,16 @@ bool ProjectData::commitResourceCleanupMetadata(const QJsonObject& metadata, QSt
     }
 
     const quint64 cleanupGeneration = _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit();
+    _resourceCleanupPersistenceGeneration = cleanupGeneration;
+    const auto releaseCleanupReservation = qScopeGuard(
+        [this, cleanupGeneration]()
+        {
+            if (_resourceCleanupPersistenceGeneration == cleanupGeneration)
+            {
+                _resourceCleanupPersistenceGeneration = 0;
+            }
+            startNextPersistence();
+        });
     updateMetadata(metadata, false);
 
     PersistenceSnapshot snapshot = createPersistenceSnapshot(PersistenceMode::CleanupCommit);
@@ -2417,7 +2740,7 @@ ProjectResourceCleanupPersistence ProjectData::prepareResourceCleanupPersistence
 {
     ProjectResourceCleanupPersistence persistence;
     if (_projectPath.trimmed().isEmpty() || !_persistenceCommitCoordinator ||
-        _resourceCleanupPersistenceGeneration != 0)
+        _bundleAdjustPersistenceSuspended || _resourceCleanupPersistenceGeneration != 0)
     {
         return persistence;
     }
@@ -2617,8 +2940,8 @@ bool ProjectData::addValidatedExternalImages(const QStringList& projectImagePath
     }
 
     int skipped = std::max(0, previouslySkipped);
-    const QString sharedImagesRoot = QDir::fromNativeSeparators(
-        QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath)));
+    const QString sharedImagesRoot =
+        QDir::fromNativeSeparators(QDir::cleanPath(ProjectPackageLayout::sharedImagesDirectory(_projectPath)));
     for (const QString& projectImagePath : projectImagePaths)
     {
         const QString cleanPath = QDir::cleanPath(projectImagePath.trimmed());
@@ -2760,33 +3083,38 @@ bool ProjectData::removeResources(const QStringList& resourcePaths)
         }
     }
 
-    const QString importedRoot = QDir(projectRoot).filePath(QStringLiteral("assets/imported"));
-    QString importedPrefix = QDir::cleanPath(importedRoot);
-    if (!importedPrefix.endsWith(QLatin1Char('/')))
+    const auto chunk = xjw::common::project::path_bridge::chunkLayout(projectRoot);
+    const QString importedRoot =
+        chunk ? xjw::common::project::path_bridge::toQtPath(chunk->importedDirectory()) : QString();
+    if (!importedRoot.isEmpty())
     {
-        importedPrefix += QLatin1Char('/');
-    }
-    for (const QString& path : removedProjectFiles)
-    {
-        const QString cleanPath = QDir::cleanPath(path);
-#if defined(Q_OS_WIN)
-        const bool isImported = cleanPath.startsWith(importedPrefix, Qt::CaseInsensitive);
-#else
-        const bool isImported = cleanPath.startsWith(importedPrefix);
-#endif
-        if (!isImported || !QFileInfo(cleanPath).isFile())
+        QString importedPrefix = QDir::cleanPath(importedRoot);
+        if (!importedPrefix.endsWith(QLatin1Char('/')))
         {
-            continue;
+            importedPrefix += QLatin1Char('/');
         }
-        QFile::remove(cleanPath);
-
-        QDir parent(QFileInfo(cleanPath).absolutePath());
-        while (parent.absolutePath().size() > importedRoot.size() &&
-               parent.entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+        for (const QString& path : removedProjectFiles)
         {
-            const QString directory = parent.absolutePath();
-            parent.cdUp();
-            QDir().rmdir(directory);
+            const QString cleanPath = QDir::cleanPath(path);
+#if defined(Q_OS_WIN)
+            const bool isImported = cleanPath.startsWith(importedPrefix, Qt::CaseInsensitive);
+#else
+            const bool isImported = cleanPath.startsWith(importedPrefix);
+#endif
+            if (!isImported || !QFileInfo(cleanPath).isFile())
+            {
+                continue;
+            }
+            QFile::remove(cleanPath);
+
+            QDir parent(QFileInfo(cleanPath).absolutePath());
+            while (parent.absolutePath().size() > importedRoot.size() &&
+                   parent.entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+            {
+                const QString directory = parent.absolutePath();
+                parent.cdUp();
+                QDir().rmdir(directory);
+            }
         }
     }
 
@@ -2799,239 +3127,283 @@ bool ProjectData::removeResources(const QStringList& resourcePaths)
     return true;
 }
 
-bool ProjectData::setImageCamera(const QString& imagePath, const QJsonObject& cameraMeta, QString* errorMsg)
+bool ProjectData::setCameraInstance(const QString& imagePath, const QJsonObject& modelMetadata, QString* errorMsg)
 {
-    QMap<QString, QJsonObject> one;
-    one.insert(imagePath, cameraMeta);
-    return setImageCameras(one, nullptr, errorMsg);
+    return setCameraInstances(QMap<QString, QJsonObject>{{imagePath, modelMetadata}}, nullptr, errorMsg);
 }
 
-bool ProjectData::setImageCameras(const QMap<QString, QJsonObject>& cameraMetaByImage,
-                                  int* updatedCount,
-                                  QString* errorMsg)
+bool ProjectData::setCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
+                                     int* updatedCount,
+                                     QString* errorMsg)
 {
     if (updatedCount)
+    {
         *updatedCount = 0;
-
+    }
     if (_projectPath.isEmpty())
     {
         if (errorMsg)
+        {
             *errorMsg = QStringLiteral("没有打开的项目");
+        }
         return false;
     }
-
-    if (cameraMetaByImage.isEmpty())
+    if (modelMetadataByImage.isEmpty())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("没有可写入的相机元数据");
+        {
+            *errorMsg = QStringLiteral("没有可写入的相机实例元数据");
+        }
         return false;
     }
 
-    // 预处理：将输入的所有键路径规范化为 cleanPath + absoluteFilePath，
-    // 避免不同表示方式（相对路径 vs 绝对路径、双斜线等）导致匹配失败
-    QMap<QString, QJsonObject> normalizedMap;
-    for (auto it = cameraMetaByImage.constBegin(); it != cameraMetaByImage.constEnd(); ++it)
+    QMap<QString, QJsonObject> normalized;
+    for (auto it = modelMetadataByImage.constBegin(); it != modelMetadataByImage.constEnd(); ++it)
     {
-        normalizedMap.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
+        normalized.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
     }
-
-    // 遍历影像数组，对匹配的条目写入 camera 字段
     QJsonObject core = _filesManager.coreData();
-    QJsonArray images = core.value("images").toArray();
-    int changed = 0;
-
-    for (int i = 0; i < images.size(); ++i)
-    {
-        if (!images[i].isObject())
-            continue;
-        QJsonObject imgObj = images[i].toObject();
-        // 同样规范化影像路径后再查找
-        const QString imgPath = QDir::cleanPath(QFileInfo(imgObj.value("path").toString()).absoluteFilePath());
-        auto it = normalizedMap.constFind(imgPath);
-        if (it == normalizedMap.constEnd())
-            continue;
-
-        // 写入相机参数到影像对象的 camera 字段
-        imgObj.remove(QStringLiteral("camera_file"));
-        imgObj["camera"] = it.value();
-        images[i] = imgObj;
-        ++changed;
-    }
-
-    if (changed <= 0)
+    const auto result = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&core, normalized);
+    if (!result.ok())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        {
+            *errorMsg = result.errors.join(QStringLiteral("; "));
+        }
         return false;
     }
-
-    core["images"] = images;
+    if (result.updatedCount <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        }
+        return false;
+    }
     _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
-
     if (updatedCount)
-        *updatedCount = changed;
+    {
+        *updatedCount = result.updatedCount;
+    }
     return true;
 }
 
-bool ProjectData::replaceImageCameras(const QStringList& targetImagePaths,
-                                      const QMap<QString, QJsonObject>& cameraMetaByImage,
-                                      int* updatedCount,
-                                      int* clearedCount,
-                                      QString* errorMsg)
+bool ProjectData::setCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
+                                         int* updatedCount,
+                                         QString* errorMsg)
 {
     if (updatedCount)
+    {
         *updatedCount = 0;
-    if (clearedCount)
-        *clearedCount = 0;
-
+    }
     if (_projectPath.isEmpty())
     {
         if (errorMsg)
+        {
             *errorMsg = QStringLiteral("没有打开的项目");
+        }
+        return false;
+    }
+    if (updates.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有可写入的相机实例更新");
+        }
+        return false;
+    }
+
+    QJsonObject core = _filesManager.coreData();
+    const auto result = xjw::camera_project::CameraProjectRecords::upsertByImageId(&core, updates);
+    if (!result.ok())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = result.errors.join(QStringLiteral("; "));
+        }
+        return false;
+    }
+    _filesManager.setCoreData(core);
+    markDirtyIfRequested(true);
+    emitCurrentMetadataChanged();
+    scheduleArchiveSync(true, false, true);
+    if (updatedCount)
+    {
+        *updatedCount = result.updatedCount;
+    }
+    return true;
+}
+
+bool ProjectData::replaceCameraInstances(const QStringList& targetImagePaths,
+                                         const QMap<QString, QJsonObject>& modelMetadataByImage,
+                                         int* updatedCount,
+                                         int* clearedCount,
+                                         QString* errorMsg)
+{
+    if (updatedCount)
+    {
+        *updatedCount = 0;
+    }
+    if (clearedCount)
+    {
+        *clearedCount = 0;
+    }
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有打开的项目");
+        }
         return false;
     }
     if (targetImagePaths.isEmpty())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("没有指定要替换相机结果的影像");
+        {
+            *errorMsg = QStringLiteral("没有指定要替换相机实例的影像");
+        }
         return false;
     }
 
-    QSet<QString> normalizedTargets;
-    for (const QString& path : targetImagePaths)
+    QMap<QString, QJsonObject> normalized;
+    for (auto it = modelMetadataByImage.constBegin(); it != modelMetadataByImage.constEnd(); ++it)
     {
-        normalizedTargets.insert(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+        normalized.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
     }
-
-    QMap<QString, QJsonObject> normalizedCameras;
-    for (auto it = cameraMetaByImage.constBegin(); it != cameraMetaByImage.constEnd(); ++it)
-    {
-        normalizedCameras.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
-    }
-
     QJsonObject core = _filesManager.coreData();
-    QJsonArray images = core.value(QStringLiteral("images")).toArray();
-    int foundTargets = 0;
-    int updated = 0;
-    int cleared = 0;
-    for (int index = 0; index < images.size(); ++index)
-    {
-        if (!images[index].isObject())
-        {
-            continue;
-        }
-
-        QJsonObject image = images[index].toObject();
-        const QString imagePath =
-            QDir::cleanPath(QFileInfo(image.value(QStringLiteral("path")).toString()).absoluteFilePath());
-        if (!normalizedTargets.contains(imagePath))
-        {
-            continue;
-        }
-        ++foundTargets;
-
-        const auto cameraIt = normalizedCameras.constFind(imagePath);
-        if (cameraIt != normalizedCameras.constEnd())
-        {
-            image.remove(QStringLiteral("camera_file"));
-            image[QStringLiteral("camera")] = cameraIt.value();
-            ++updated;
-        }
-        else if (image.contains(QStringLiteral("camera")) || image.contains(QStringLiteral("camera_file")))
-        {
-            image.remove(QStringLiteral("camera"));
-            image.remove(QStringLiteral("camera_file"));
-            ++cleared;
-        }
-        images[index] = image;
-    }
-
-    if (foundTargets <= 0)
+    const auto result =
+        xjw::camera_project::CameraProjectRecords::replaceByImagePath(&core, targetImagePaths, normalized);
+    if (!result.ok())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        {
+            *errorMsg = result.errors.join(QStringLiteral("; "));
+        }
         return false;
     }
-
-    // 一次提交并只发出一次 metadataChanged，避免界面短暂显示新旧位姿混合状态。
-    core[QStringLiteral("images")] = images;
     _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
-
     if (updatedCount)
-        *updatedCount = updated;
+    {
+        *updatedCount = result.updatedCount;
+    }
     if (clearedCount)
-        *clearedCount = cleared;
+    {
+        *clearedCount = result.clearedCount;
+    }
     return true;
 }
 
-// ---------- 清除相机参数 ----------
-
-bool ProjectData::clearImageCameras(const QStringList& imagePaths, int* clearedCount, QString* errorMsg)
+bool ProjectData::replaceCameraInstancesById(const xjw::camera_project::CameraImageIds& targetImageIds,
+                                             const xjw::camera_project::CameraInstanceUpdates& updates,
+                                             int* updatedCount,
+                                             int* clearedCount,
+                                             QString* errorMsg)
 {
+    if (updatedCount)
+    {
+        *updatedCount = 0;
+    }
     if (clearedCount)
+    {
         *clearedCount = 0;
-
+    }
     if (_projectPath.isEmpty())
     {
         if (errorMsg)
+        {
             *errorMsg = QStringLiteral("没有打开的项目");
+        }
         return false;
     }
-
-    if (imagePaths.isEmpty())
+    if (targetImageIds.empty())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("没有指定要清除的影像");
+        {
+            *errorMsg = QStringLiteral("没有指定要替换相机实例的影像");
+        }
         return false;
     }
-
-    // 规范化路径
-    QSet<QString> normalizedSet;
-    for (const QString& p : imagePaths)
-        normalizedSet.insert(QDir::cleanPath(QFileInfo(p).absoluteFilePath()));
 
     QJsonObject core = _filesManager.coreData();
-    QJsonArray images = core.value("images").toArray();
-    int cleared = 0;
-
-    for (int i = 0; i < images.size(); ++i)
-    {
-        if (!images[i].isObject())
-            continue;
-        QJsonObject imgObj = images[i].toObject();
-        const QString imgPath = QDir::cleanPath(QFileInfo(imgObj.value("path").toString()).absoluteFilePath());
-        if (!normalizedSet.contains(imgPath))
-            continue;
-        const QJsonObject camera = imgObj.value(QStringLiteral("camera")).toObject();
-        if (camera.isEmpty())
-            continue;
-
-        imgObj.remove(QStringLiteral("camera"));
-        images[i] = imgObj;
-        ++cleared;
-    }
-
-    if (cleared <= 0)
+    const auto result =
+        xjw::camera_project::CameraProjectRecords::replaceByImageId(&core, targetImageIds, updates);
+    if (!result.ok())
     {
         if (errorMsg)
-            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        {
+            *errorMsg = result.errors.join(QStringLiteral("; "));
+        }
         return false;
     }
-
-    core["images"] = images;
     _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
-
+    if (updatedCount)
+    {
+        *updatedCount = result.updatedCount;
+    }
     if (clearedCount)
-        *clearedCount = cleared;
+    {
+        *clearedCount = result.clearedCount;
+    }
+    return true;
+}
+
+bool ProjectData::clearCameraInstances(const QStringList& imagePaths, int* clearedCount, QString* errorMsg)
+{
+    if (clearedCount)
+    {
+        *clearedCount = 0;
+    }
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有打开的项目");
+        }
+        return false;
+    }
+    if (imagePaths.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有指定要清除的影像");
+        }
+        return false;
+    }
+    QJsonObject core = _filesManager.coreData();
+    const auto result = xjw::camera_project::CameraProjectRecords::clearByImagePath(&core, imagePaths);
+    if (!result.ok())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = result.errors.join(QStringLiteral("; "));
+        }
+        return false;
+    }
+    if (result.clearedCount <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("未找到可匹配的相机实例");
+        }
+        return false;
+    }
+    _filesManager.setCoreData(core);
+    markDirtyIfRequested(true);
+    emitCurrentMetadataChanged();
+    scheduleArchiveSync(true, false, true);
+    if (clearedCount)
+    {
+        *clearedCount = result.clearedCount;
+    }
     return true;
 }
 
@@ -3077,6 +3449,246 @@ QJsonArray ProjectData::getBundleAdjustResults() const
     return _filesManager.resultsData().value(QLatin1String("bundle_adjust_results")).toArray();
 }
 
+bool ProjectData::stageBundleAdjustMetadata(const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+                                            const QJsonObject& bundleAdjustResult,
+                                            ProjectBundleAdjustMetadataStageToken* token,
+                                            QString* errorMsg)
+{
+    if (errorMsg)
+    {
+        errorMsg->clear();
+    }
+    if (token)
+    {
+        *token = {};
+    }
+    const auto reject = [errorMsg](const QString& message)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = message;
+        }
+        return false;
+    };
+    if (!token)
+    {
+        return reject(QStringLiteral("缺少 BA 元数据暂存令牌输出"));
+    }
+    if (QThread::currentThread() != thread())
+    {
+        return reject(QStringLiteral("BA 元数据事务必须在项目数据线程处理"));
+    }
+    if (_projectPath.isEmpty())
+    {
+        return reject(QStringLiteral("没有打开的项目"));
+    }
+    if (_activeBundleAdjustMetadataStageId != 0 || _bundleAdjustPersistenceSuspended)
+    {
+        return reject(QStringLiteral("已有 BA 元数据事务正在等待处理"));
+    }
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        return reject(QStringLiteral("资源清理事务提交期间拒绝暂存 BA 元数据"));
+    }
+    if (cameraUpdates.empty())
+    {
+        return reject(QStringLiteral("没有可应用的平差相机结果"));
+    }
+    if (!ensureResultsLoaded())
+    {
+        return reject(QStringLiteral("项目结果尚未成功加载，拒绝暂存 BA 元数据"));
+    }
+
+    const QJsonObject beforeCore = _filesManager.coreData();
+    const QJsonObject beforeResults = _filesManager.resultsData();
+    QJsonObject stagedCore = beforeCore;
+    const auto cameraResult = xjw::camera_project::CameraProjectRecords::upsertByImageId(&stagedCore, cameraUpdates);
+    if (!cameraResult.ok())
+    {
+        return reject(QStringLiteral("写回相机参数失败: %1").arg(cameraResult.errors.join(QStringLiteral("; "))));
+    }
+
+    QJsonObject compactBundleAdjustResult = bundleAdjustResult;
+    compactBundleAdjustResult.remove(QStringLiteral("point_preview"));
+    QJsonObject stagedResults = beforeResults;
+    QJsonArray bundleAdjustResults = stagedResults.value(QStringLiteral("bundle_adjust_results")).toArray();
+    bundleAdjustResults.append(versionedResultRecord(compactBundleAdjustResult));
+    stagedResults[QStringLiteral("bundle_adjust_results")] = bundleAdjustResults;
+
+    ProjectBundleAdjustMetadataStageToken stagedToken;
+    stagedToken._owner = this;
+    stagedToken._stageId = _nextBundleAdjustMetadataStageId++;
+    if (stagedToken._stageId == 0)
+    {
+        stagedToken._stageId = _nextBundleAdjustMetadataStageId++;
+    }
+    stagedToken._sessionGeneration = _sessionGeneration;
+    stagedToken._projectPath = _projectPath;
+    stagedToken._chunkId = _activeChunkId;
+    stagedToken._chunkDirectory = _activeChunkDirectory;
+    stagedToken._beforeCore = beforeCore;
+    stagedToken._beforeResults = beforeResults;
+    stagedToken._stagedCore = stagedCore;
+    stagedToken._stagedResults = stagedResults;
+    stagedToken._updatedCameraCount = cameraResult.updatedCount;
+    stagedToken._persistenceGeneration =
+        _persistenceCommitCoordinator ? _persistenceCommitCoordinator->currentGeneration() : 0;
+    stagedToken._wasDirty = _isDirty;
+    stagedToken._resultsDirtyForArchive = _resultsDirtyForArchive;
+    stagedToken._coreFileDirtyForArchive = _coreFileDirtyForArchive;
+    stagedToken._configDirtyForArchive = _configDirtyForArchive;
+    stagedToken._uiStateDirtyForArchive = _uiStateDirtyForArchive;
+    stagedToken._workspaceDirtyForArchive = _workspaceDirtyForArchive;
+    stagedToken._fullSavePending = _fullSavePending;
+    stagedToken._archiveSyncPending = _archiveSyncPending;
+    stagedToken._temporarySavePending = _temporarySavePending;
+    if (_archiveSyncTimer && _archiveSyncTimer->isActive())
+    {
+        stagedToken._archiveTimerRemainingMs = _archiveSyncTimer->remainingTime();
+        _archiveSyncTimer->stop();
+    }
+
+    _activeBundleAdjustMetadataStageId = stagedToken._stageId;
+    _activeBundleAdjustMetadataStage = stagedToken;
+    _bundleAdjustPersistenceSuspended = true;
+    _bundleAdjustPersistenceGenerationAdvanceDeferred = false;
+    _filesManager.setCoreData(stagedCore);
+    _filesManager.setResultsData(stagedResults);
+    *token = stagedToken;
+    return true;
+}
+
+ProjectBundleAdjustMetadataStageResolveResult ProjectData::resolveBundleAdjustMetadataStage(
+    const ProjectBundleAdjustMetadataStageToken& token,
+    ProjectBundleAdjustMetadataStageDecision decision)
+{
+    ProjectBundleAdjustMetadataStageResolveResult result;
+    const auto reject = [&result](const QString& message)
+    {
+        result.status = ProjectBundleAdjustMetadataStageStatus::Rejected;
+        result.errorMessage = message;
+        return result;
+    };
+    if (!token.isValid() || token._owner != this)
+    {
+        return reject(QStringLiteral("BA 元数据暂存令牌不属于当前项目数据"));
+    }
+    if (QThread::currentThread() != thread())
+    {
+        return reject(QStringLiteral("BA 元数据事务必须在项目数据线程处理"));
+    }
+    if (_activeBundleAdjustMetadataStageId != token._stageId || !_activeBundleAdjustMetadataStage ||
+        _activeBundleAdjustMetadataStage->_stageId != token._stageId)
+    {
+        return reject(QStringLiteral("BA 元数据暂存令牌已失效"));
+    }
+    if (_sessionGeneration != token._sessionGeneration || _projectPath != token._projectPath ||
+        _activeChunkId != token._chunkId || _activeChunkDirectory != token._chunkDirectory)
+    {
+        _activeBundleAdjustMetadataStageId = 0;
+        _activeBundleAdjustMetadataStage.reset();
+        releaseBundleAdjustPersistenceBarrier(true);
+        return reject(QStringLiteral("项目或 Chunk 已变化，拒绝处理旧 BA 元数据暂存"));
+    }
+    const auto stageSessionIsCurrent = [this, &token]()
+    {
+        return _sessionGeneration == token._sessionGeneration && _projectPath == token._projectPath &&
+               _activeChunkId == token._chunkId && _activeChunkDirectory == token._chunkDirectory;
+    };
+
+    const QJsonObject liveCore = _filesManager.coreData();
+    const QJsonObject liveResults = _filesManager.resultsData();
+    if (liveCore == token._stagedCore && liveResults == token._stagedResults)
+    {
+        if (decision == ProjectBundleAdjustMetadataStageDecision::Rollback)
+        {
+            restoreBundleAdjustBeforeStateAndMergeResponsibilities(
+                token, BundleAdjustArchiveTimerPolicy::RestoreSavedDeadline);
+            _activeBundleAdjustMetadataStageId = 0;
+            _activeBundleAdjustMetadataStage.reset();
+            releaseBundleAdjustPersistenceBarrier(false);
+            result.status = ProjectBundleAdjustMetadataStageStatus::RolledBack;
+            return result;
+        }
+
+        _activeBundleAdjustMetadataStageId = 0;
+        _activeBundleAdjustMetadataStage.reset();
+        markDirtyIfRequested(true);
+        if (!stageSessionIsCurrent())
+        {
+            releaseBundleAdjustPersistenceBarrier(true);
+            return reject(QStringLiteral("项目或 Chunk 在 BA 提交通知期间已变化"));
+        }
+        emitCurrentMetadataChanged();
+        if (!stageSessionIsCurrent())
+        {
+            releaseBundleAdjustPersistenceBarrier(true);
+            return reject(QStringLiteral("项目或 Chunk 在 BA 提交通知期间已变化"));
+        }
+        if (_filesManager.coreData() != token._stagedCore || _filesManager.resultsData() != token._stagedResults)
+        {
+            scheduleArchiveSync(true, true, true);
+            releaseBundleAdjustPersistenceBarrier(true);
+            return reject(QStringLiteral("BA 提交通知期间检测到冲突修改"));
+        }
+        scheduleArchiveSync(true, true, true);
+        releaseBundleAdjustPersistenceBarrier(true);
+        result.status = ProjectBundleAdjustMetadataStageStatus::Committed;
+        return result;
+    }
+
+    const QJsonArray liveBundleAdjustResults =
+        liveResults.value(QStringLiteral("bundle_adjust_results")).toArray();
+    const QJsonArray stagedBundleAdjustResults =
+        token._stagedResults.value(QStringLiteral("bundle_adjust_results")).toArray();
+    const QJsonArray liveTiePointResults =
+        liveResults.value(QStringLiteral("aerial_triangulation_results")).toArray();
+    const QJsonArray stagedTiePointResults =
+        token._stagedResults.value(QStringLiteral("aerial_triangulation_results")).toArray();
+    QJsonObject expectedExternalResults = token._stagedResults;
+    expectedExternalResults[QStringLiteral("aerial_triangulation_results")] = liveTiePointResults;
+    for (const QString& key : {QStringLiteral("depth_map_results"),
+                               QStringLiteral("dense_cloud_results"),
+                               QStringLiteral("model_results"),
+                               QStringLiteral("dem_results"),
+                               QStringLiteral("ortho_results")})
+    {
+        expectedExternalResults[key] = QJsonArray{};
+    }
+    const bool completeExternalCommit =
+        liveCore == token._stagedCore && liveBundleAdjustResults == stagedBundleAdjustResults &&
+        liveTiePointResults.size() == 1 && liveTiePointResults != stagedTiePointResults &&
+        liveResults == expectedExternalResults;
+    _activeBundleAdjustMetadataStageId = 0;
+    _activeBundleAdjustMetadataStage.reset();
+    if (completeExternalCommit)
+    {
+        markDirtyIfRequested(true);
+        if (!stageSessionIsCurrent())
+        {
+            releaseBundleAdjustPersistenceBarrier(true);
+            return reject(QStringLiteral("项目或 Chunk 在 BA 外部提交通知期间已变化"));
+        }
+        if (_filesManager.coreData() != liveCore || _filesManager.resultsData() != liveResults)
+        {
+            scheduleArchiveSync(true, true, true);
+            releaseBundleAdjustPersistenceBarrier(true);
+            return reject(QStringLiteral("BA 外部提交通知期间检测到冲突修改"));
+        }
+        scheduleArchiveSync(true, true, true);
+        releaseBundleAdjustPersistenceBarrier(true);
+        result.status = ProjectBundleAdjustMetadataStageStatus::ExternalCommit;
+        return result;
+    }
+    markDirtyIfRequested(true);
+    if (stageSessionIsCurrent())
+    {
+        scheduleArchiveSync(true, true, true);
+    }
+    releaseBundleAdjustPersistenceBarrier(true);
+    return reject(QStringLiteral("BA 元数据暂存期间检测到冲突修改，未覆盖当前项目数据"));
+}
+
 bool ProjectData::appendResultRecord(const QString& arrayKey, const QJsonObject& record, bool markDirty)
 {
     if (_projectPath.isEmpty())
@@ -3105,31 +3717,60 @@ bool ProjectData::upsertResultRecordByPath(const QString& arrayKey,
                                            const QJsonObject& record,
                                            bool markDirty)
 {
+    return upsertResultRecordsByPath(
+        QVector<ProjectResultRecordPathUpsert>{{arrayKey, pathKey, record, markDirty}});
+}
+
+bool ProjectData::upsertResultRecordsByPath(const QVector<ProjectResultRecordPathUpsert>& records,
+                                            QString* errorMsg)
+{
+    if (errorMsg)
+    {
+        errorMsg->clear();
+    }
     if (_projectPath.isEmpty())
     {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有打开的项目");
+        }
         return false;
     }
-
     if (!ensureResultsLoaded())
     {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("项目结果尚未成功加载，拒绝写入成果记录");
+        }
         return false;
     }
-    QJsonObject results = _filesManager.resultsData();
-    const QString targetPath = record.value(pathKey).toString();
-    const QString normalizedTargetPath = normalizedResultPath(_projectPath, targetPath);
-    const QJsonArray source = results.value(arrayKey).toArray();
-    QJsonArray deduped;
-    for (const QJsonValue& value : source)
+    if (records.isEmpty())
     {
-        const QString existingPath = value.toObject().value(pathKey).toString();
-        if (!normalizedTargetPath.isEmpty() && normalizedResultPath(_projectPath, existingPath) == normalizedTargetPath)
-        {
-            continue;
-        }
-        deduped.append(value);
+        return true;
     }
-    deduped.append(versionedResultRecord(record));
-    results[arrayKey] = deduped;
+
+    QJsonObject results = _filesManager.resultsData();
+    bool markDirty = false;
+    for (const ProjectResultRecordPathUpsert& write : records)
+    {
+        const QString targetPath = write.record.value(write.pathKey).toString();
+        const QString normalizedTargetPath = normalizedResultPath(_projectPath, targetPath);
+        const QJsonArray source = results.value(write.arrayKey).toArray();
+        QJsonArray deduped;
+        for (const QJsonValue& value : source)
+        {
+            const QString existingPath = value.toObject().value(write.pathKey).toString();
+            if (!normalizedTargetPath.isEmpty() &&
+                normalizedResultPath(_projectPath, existingPath) == normalizedTargetPath)
+            {
+                continue;
+            }
+            deduped.append(value);
+        }
+        deduped.append(versionedResultRecord(write.record));
+        results[write.arrayKey] = deduped;
+        markDirty = markDirty || write.markDirty;
+    }
     _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
@@ -3311,37 +3952,48 @@ QJsonObject ProjectData::loadUiSettings() const
     return settings.isEmpty() ? ProjectUiConfigManager::defaultUiSettings() : settings;
 }
 
-void ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord& record)
+bool ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord& record, QString* errorMsg)
 {
-    if (!ensureResultsLoaded())
-    {
-        LOG_WARN(QStringLiteral("项目结果尚未成功加载，拒绝追加影像匹配结果"));
-        return;
-    }
-    _filesManager.appendImageMatchResult(record);
-
-    markDirtyIfRequested(true);
-    emitCurrentMetadataChanged();
-    scheduleArchiveSync(false, true, false);
+    return appendImageMatchResults(QVector<ProjectImageMatchResultRecord>{record}, errorMsg);
 }
 
-void ProjectData::appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records)
+bool ProjectData::appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records, QString* errorMsg)
 {
+    if (errorMsg)
+    {
+        errorMsg->clear();
+    }
+    if (_projectPath.isEmpty())
+    {
+        const QString error = QStringLiteral("没有打开的项目");
+        if (errorMsg)
+        {
+            *errorMsg = error;
+        }
+        LOG_WARN(error);
+        return false;
+    }
     if (records.isEmpty())
     {
-        return;
+        return true;
     }
 
     if (!ensureResultsLoaded())
     {
-        LOG_WARN(QStringLiteral("项目结果尚未成功加载，拒绝批量追加影像匹配结果"));
-        return;
+        const QString error = QStringLiteral("项目结果尚未成功加载，拒绝批量追加影像匹配结果");
+        if (errorMsg)
+        {
+            *errorMsg = error;
+        }
+        LOG_WARN(error);
+        return false;
     }
     _filesManager.appendImageMatchResults(records);
 
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(false, true, false);
+    return true;
 }
 
 // 辅助方法实现 — 通过 ProjectIO 解耦路径计算逻辑

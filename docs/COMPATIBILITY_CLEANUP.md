@@ -9,6 +9,10 @@
 
 | 兼容项 | 当前入口与影响 |
 | --- | --- |
+| MVS 无调用的旧私有生产阶段 | 删除单帧估计、源缓存、跨视一致性、残差/学习/位姿候选编排及其专用一致性投票和保存队列；生产仍执行 recovered CUDA，独立后端与重放/融合 API 保留 |
+| MVS 不可达 OpenCL/异构调度 | 删除关闭的 OpenCL 枚举与异构选择分支，Auto/显式 CUDA 均保存严格 CUDA 配置；CUDA 不可用时报告明确错误，不再显示继续使用 CPU |
+| 孤立环拍稀疏载体编排 | 删除 `OrbitalSparseScaffoldSurfaceBuilder.h/.cpp` 和闲置 include；下层独立算法与测试保留 |
+| 默认库中的未接入能力 | DEM mosaic/产品清单、RPC 偏差估计、质量基线分别移至 `terrain_utilities`、`camera_rpc_adjustment`、`qc_baseline`；接口保留，使用者显式链接可选目标 |
 | core 的 `DepthMapGenerator.h/.cpp` 与 `mvs` target | CLI 直接调用同步 `MvsPipelineService`；异步生命周期移至 `gui/project/tasks/DepthMapTask`，不再属于 core API |
 | 生成器的静态转发与同步服务的四个后处理转发 | 调用方直接使用真实实现接口；像素后处理统一调用 `DepthPostprocessor` |
 | `meshing` INTERFACE 链接别名 | 业务调用方链接 `model_workflow`；质量评估链接 `meshing_algorithms` |
@@ -22,6 +26,10 @@
 | TSDF 旧回调与取消合并 | DepthTsdfOptions 仅保留 execution，全部算法阶段和测试已迁移；删除 combineWorkflowCancellation，保留真实 TSDF 算法及诊断快照 |
 | BA 旧后端与无效参数 | 删除 LegacyCpu/legacy_cpu、旧点/相机迭代上限、影像 Huber、有限差分/阻尼/步长及无效 dense Schur 参数；GUI/CLI/基准和配置同步删除，拒绝旧字段和名称 |
 | BA 无条件 CPU 对照求解 | 删除 compareAutoBackendWithLegacy 与对比路径；只在状态或质量门控拒绝时运行当前 CPU 回退，不删除当前 PlaMatrix 求解器 |
+| 项目相机模型别名与双套字段 | 项目更新只接受 `frame_pinhole`、`rpc00b`、`planetary_linescan`；删除 `tsai/pinhole/rpc/line_scan` 识别、px/mm 回退、扁平线阵参数及默认 frame/姿态补全 |
+| 相机领域并列根目录 | 将 `camera_core`、`camera_models`、`camera_project`、`camera_reference` 收拢为 `camera/core`、`camera/models`、`camera/project`、`camera/reference`；公开 include 同步迁移，不保留旧路径转发头 |
+| 相机标定报告旧字段 | 删除 `legacyCamera`/`copyLegacyParameter` 和 before/after 扁平字段读写；报告只保存 `initial_camera`/`adjusted_camera` 完整快照，缺少规范比较记录或显式 `adaptive_camera_model_fitting_applied` 时不推断旧结果 |
+| 焦距诊断字段别名 | 只写读 `adaptive_focal_seed_scale`，删除重复的 `adaptive_focal_scale` |
 
 旧 C++ 接口和 target 不再可用，仓库内调用方已迁移。
 GUI 的 future 持有、取消、析构等待和重复启动拒绝仍保留，这是必要的线程职责，不是旧算法兼容壳。
@@ -33,12 +41,11 @@ GUI 的 future 持有、取消、析构等待和重复启动拒绝仍保留，�
 | GUI 会话兼容门面 | `src/gui/project/services/ProjectSessionFacade.h/.cpp` | 仍被 ProjectManager 等调用，包含元数据归一化、空会话检查等业务行为；尚未将调用方统一至新的会话接口，不能作为纯空壳删除 |
 | 旧深度工件重放 / 源计划 / PatchMatch 诊断路径 | `src/core/mvs/MvsWorkspaceReplay.cpp`、`MvsSourcePlanner.h/.cpp`、`PatchMatchEstimator.cpp` | 并非当前 recovered 正式生产器；显式重放、诊断和算法测试仍有使用，不能按名字删除整套实现 |
 | Python 旧环境变量及生成配置读取 | `src/common/runtime/PythonRuntimeLocator.cpp` | PLASCAN_PYTHON 作为 PLASCAN_PYTHON_EXECUTABLE 的旧别名，另读取 build/env/plascan-env.json；需要同步环境与安装入口 |
-| 相机标定旧字段读取 | `src/gui/dialogs/camera/CameraCalibrationData.cpp` | legacyCamera/copyLegacyParameter 仍读取比较记录中的旧 before/after 扁平字段；本轮 BA 求解器清理未迁移此展示格式 |
 | 模型减面旧 targetFaces 字段 | `src/gui/dialogs/reconstruction/GenerateModelDialog.cpp`、`application/WorkflowSettingsDialog.cpp` | 仍将旧面数推导为 faceCountMode/faceCountCustom；属于参数 UI 迁移，不是 TSDF 求解器接口 |
 | BA 基准 seconds 输出别名 | `src/core/bundle_adjust/tools/ba_backend_benchmark.cpp`、`scripts/bench/run_ba_backend_benchmark.py` | seconds 与 api_wall_seconds 同时输出；本轮删除旧求解器设置，但未更改现有 CSV 指标格式 |
 
 这是本次源码审查确认的剩余清单，不是通过关键词自动推断的“全仓无兼容层”证明。
-本轮完成 TSDF 控制和 BA 求解器接口清理；上述会话、诊断、环境、展示字段及基准输出格式仍保留。
+本轮完成 TSDF 控制、BA 求解器接口和相机标定展示字段清理；上述会话、诊断、环境及基准输出格式仍保留。
 
 ## 必须保留的真实边界
 

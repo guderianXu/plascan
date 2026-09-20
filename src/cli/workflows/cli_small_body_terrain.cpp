@@ -2,8 +2,11 @@
 #include "CliJsonIO.h"
 
 #include "TerrainPipeline.h"
-
+#include <QCoreApplication>
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
+#include "GlobalTerrainReportRenderer.h"
 #include <QGuiApplication>
+#endif
 #include <QJsonObject>
 #include <QString>
 
@@ -11,6 +14,7 @@
 #include <atomic>
 #include <csignal>
 #include <string>
+#include <memory>
 
 namespace
 {
@@ -74,15 +78,13 @@ QString smallBodyGlobalStageText(xjw::SmallBodyGlobalStage stage)
 
 int main(int argc, char *argv[])
 {
-    CLI::App app{"PlaScan 原生小天体全球径向 DEM/DOM 生成工具"};
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
+    CLI::App app{"PlaScan 原生小天体全球径向 DEM/DOM 生成工具（默认生成 PNG 预览）"};
+#else
+    CLI::App app{"PlaScan 原生小天体全球径向 DEM/DOM 生成工具（当前构建仅输出 GeoTIFF/JSON）"};
+#endif
     cli::configureApp(app);
     argv = app.ensure_utf8(argv);
-    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
-    {
-        qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
-    }
-    QGuiApplication qt_application(argc, argv);
-
     std::string surface;
     std::string output_dir;
     std::string target = "Small Body";
@@ -97,6 +99,7 @@ int main(int argc, char *argv[])
     long long maximum_pixels = 25000000;
     bool manual_center = false;
     bool no_preview = false;
+    bool preview_requested = false;
 
     app.add_option("--surface", surface, "带三角面的体固连 PLY/OBJ 表面模型")->required();
     app.add_option("--output-dir", output_dir, "全球地形产品输出目录")->required();
@@ -112,8 +115,37 @@ int main(int argc, char *argv[])
     app.add_option("--center-z", center_z, "手动体心 Z（米）");
     app.add_option("--maximum-pixels", maximum_pixels, "全球栅格最大像元数");
     app.add_flag("--no-preview", no_preview, "不生成四联图 PNG（GeoTIFF/JSON 仍生成）");
+    app.add_flag("--preview", preview_requested, "生成四联图 PNG（需要启用 Qt 报告绘制）");
 
     CLI11_PARSE(app, argc, argv);
+
+    if (no_preview && preview_requested)
+    {
+        cli::fatal("--preview 与 --no-preview 不能同时指定", cli::EXIT_ARG_ERR);
+    }
+    std::unique_ptr<QCoreApplication> qt_application;
+    xjw::SmallBodyPreviewWriter preview_writer;
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
+    if (!no_preview)
+    {
+        if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+        {
+            qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+        }
+        qt_application = std::make_unique<QGuiApplication>(argc, argv);
+        preview_writer = xjw::GlobalTerrainReportRenderer::writePreview;
+    }
+#else
+    if (preview_requested)
+    {
+        cli::fatal("本构建未启用地形报告绘制；请使用 PLASCAN_BUILD_QT_PRESENTATION=ON 的配置", cli::EXIT_ARG_ERR);
+    }
+    no_preview = true;
+#endif
+    if (!qt_application)
+    {
+        qt_application = std::make_unique<QCoreApplication>(argc, argv);
+    }
 
     xjw::SmallBodyGlobalOptions options;
     options.targetName = QString::fromUtf8(target);
@@ -139,9 +171,14 @@ int main(int argc, char *argv[])
         std::fwrite(line.constData(), 1, static_cast<std::size_t>(line.size()), stderr);
         std::fflush(stderr);
     };
-    if (!xjw::TerrainPipeline::generateSmallBodyGlobalProducts(
-            QString::fromUtf8(surface), QString::fromUtf8(output_dir),
-            options, &result, &error, &gCancellationRequested, progress))
+    if (!xjw::TerrainPipeline::generateSmallBodyGlobalProducts(QString::fromUtf8(surface),
+                                                               QString::fromUtf8(output_dir),
+                                                               options,
+                                                               &result,
+                                                               &error,
+                                                               &gCancellationRequested,
+                                                               progress,
+                                                               preview_writer))
     {
         result[QStringLiteral("ok")] = false;
         result[QStringLiteral("error")] = error;

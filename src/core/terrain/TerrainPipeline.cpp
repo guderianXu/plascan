@@ -10,7 +10,6 @@
 #include "PointCloudDomGenerator.h"
 #include "SmallBodyGlobalProductGenerator.h"
 #include "projection/AsteroidProjection.h"
-#include "FramePinholeCamera.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -1069,11 +1068,12 @@ namespace xjw
                                                           QJsonObject* result,
                                                           QString* errorMsg,
                                                           const std::atomic_bool* cancelFlag,
-                                                          const SmallBodyProgressCallback& progressCallback)
+                                                          const SmallBodyProgressCallback& progressCallback,
+                                                          const SmallBodyPreviewWriter& previewWriter)
     {
         SmallBodyGlobalProducts products;
         if (!SmallBodyGlobalProductGenerator::generate(
-                surfacePath, outputDir, options, &products, errorMsg, cancelFlag, progressCallback))
+                surfacePath, outputDir, options, &products, errorMsg, cancelFlag, progressCallback, previewWriter))
         {
             return false;
         }
@@ -1376,11 +1376,12 @@ namespace xjw
         return true;
     }
 
-    bool TerrainPipeline::generateDemFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
-                                                   const std::vector<FramePinholeCamera>& cameras,
-                                                   const QString& outputDir,
-                                                   QJsonObject* result,
-                                                   QString* errorMsg)
+    bool TerrainPipeline::generateDemFromDepthMaps(
+        const std::vector<cv::Mat>& depthMaps,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const QString& outputDir,
+        QJsonObject* result,
+        QString* errorMsg)
     {
         if (depthMaps.empty() || cameras.empty())
         {

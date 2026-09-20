@@ -89,30 +89,26 @@ namespace xjw::aerial_triangulation
             return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
         }
 
-        const FramePinholeCamera* referenceCameraForImage(const QMap<QString, FramePinholeCamera>& cameras,
-                                                          const QString& image)
+        const camera_reference::ReferenceCameraGeometry* referenceCameraForImage(
+            const std::vector<camera_core::ImageId>& imageIds,
+            const camera_reference::ReferenceCameraGeometryMap& cameras,
+            std::size_t imageIndex)
         {
-            const auto direct = cameras.constFind(image);
-            if (direct != cameras.constEnd())
+            if (imageIndex >= imageIds.size())
             {
-                return &direct.value();
+                return nullptr;
             }
-            const QString normalized = QDir::fromNativeSeparators(QDir::cleanPath(image));
-            for (auto it = cameras.constBegin(); it != cameras.constEnd(); ++it)
-            {
-                if (QDir::fromNativeSeparators(QDir::cleanPath(it.key())).compare(normalized, Qt::CaseInsensitive) == 0)
-                {
-                    return &it.value();
-                }
-            }
-            return nullptr;
+            const auto camera = cameras.find(imageIds[imageIndex]);
+            return camera == cameras.cend() ? nullptr : &camera->second;
         }
 
         ClosedSequenceEvidence detectEstimatedClosedSequence(const QStringList& images,
-                                                             const QMap<QString, FramePinholeCamera>& referenceCameras)
+                                                             const std::vector<camera_core::ImageId>& imageIds,
+                                                             const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries)
         {
             ClosedSequenceEvidence evidence;
-            if (images.size() < 6 || referenceCameras.size() < images.size())
+            if (images.size() < 6 || images.size() != static_cast<qsizetype>(imageIds.size()) ||
+                referenceCameraGeometries.size() < static_cast<std::size_t>(images.size()))
             {
                 return evidence;
             }
@@ -123,14 +119,15 @@ namespace xjw::aerial_triangulation
             axes.reserve(static_cast<std::size_t>(images.size()));
             std::array<double, 3> meanCenter{};
             std::array<double, 3> meanAxis{};
-            for (const QString& image : images)
+            for (std::size_t imageIndex = 0; imageIndex < static_cast<std::size_t>(images.size()); ++imageIndex)
             {
-                const FramePinholeCamera* referenceCamera = referenceCameraForImage(referenceCameras, image);
-                if (!referenceCamera || !referenceCamera->isValid())
+                const camera_reference::ReferenceCameraGeometry* referenceCamera =
+                    referenceCameraForImage(imageIds, referenceCameraGeometries, imageIndex);
+                if (!referenceCamera)
                 {
                     return evidence;
                 }
-                const FramePinholeCamera camera = referenceCamera->normalizedForPositiveDepth();
+                const auto camera = referenceCamera->numericState().normalizedForPositiveDepth();
                 const auto center = camera.cameraCenter();
                 const auto rotation = camera.cameraToWorldRotation();
                 const std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};
@@ -298,7 +295,12 @@ namespace xjw::aerial_triangulation
         // 不隐式改变连接点缓存策略。
         PreparedAerialTriangulationInput& pipeline = resolved.pipelineInput;
         pipeline.images = options.images;
+        pipeline.imageIds = options.imageIds;
+        pipeline.cameraBindings = options.cameraBindings;
         pipeline.cameraPaths = options.cameraPaths;
+        pipeline.cameraReferencePosePriors = options.cameraReferencePosePriors;
+        pipeline.referenceCameraGeometries = options.referenceCameraGeometries;
+        pipeline.referencePositions = options.referencePositions;
         pipeline.projectPath = options.projectPath;
         pipeline.markerSetPath = options.projectPath.isEmpty()
                                      ? QString()
@@ -322,7 +324,7 @@ namespace xjw::aerial_triangulation
         const ClosedSequenceEvidence estimatedSequence =
             options.referencePreselection &&
                     referencePreselectionMode == matchphotos::ReferencePreselectionMode::Estimated
-                ? detectEstimatedClosedSequence(options.images, options.referenceCameras)
+                ? detectEstimatedClosedSequence(options.images, options.imageIds, options.referenceCameraGeometries)
                 : ClosedSequenceEvidence{};
         const bool usesSequenceGeometry = usesPhotoSequence || estimatedSequence.detected;
         const bool usesClosedSequenceGeometry = estimatedSequence.detected;
@@ -416,12 +418,12 @@ namespace xjw::aerial_triangulation
         // generic → reference union 预筛选；算法选择只影响后续正式特征与匹配。
         const QString referenceMode = normalizedReferenceMode;
         tieOptions.referencePreselectionMode = referencePreselectionMode;
+        // Reference geometry is an explicit ImageId-keyed input.  External
+        // camera paths belong to the SfM input loader and must not implicitly
+        // turn into a guided-matching reference set.
         const bool hasReferencePosition =
-            !options.referencePositions.isEmpty() || !options.referenceCameras.isEmpty() ||
-            (!options.cameraPaths.isEmpty() && options.cameraPaths.size() == options.images.size());
-        const bool hasReferenceCameraPose =
-            !options.referenceCameras.isEmpty() ||
-            (!options.cameraPaths.isEmpty() && options.cameraPaths.size() == options.images.size());
+            !options.referencePositions.empty() || !options.referenceCameraGeometries.empty();
+        const bool hasReferenceCameraPose = !options.referenceCameraGeometries.empty();
         tieOptions.guidedUseReferenceCameraPoses = options.guidedImageMatching && options.referencePreselection &&
                                                    hasReferenceCameraPose &&
                                                    referenceMode != QStringLiteral("estimated");
@@ -448,7 +450,8 @@ namespace xjw::aerial_triangulation
                                         : QDir::cleanPath(options.matchDir);
         tieContext.pairInput.images = options.images;
         tieContext.pairInput.manualPairKeys = options.allowedPairs;
-        tieContext.referenceCameras = options.referenceCameras;
+        tieContext.imageIds = options.imageIds;
+        tieContext.referenceCameraGeometries = options.referenceCameraGeometries;
         tieContext.referencePositions = options.referencePositions;
         tieContext.maskPaths = options.maskPaths;
         tieContext.cancelFlag = options.cancelFlag.get();
@@ -610,6 +613,27 @@ namespace xjw::aerial_triangulation
                                                                const TiePointRunner& tiePointRunner)
     {
         AerialTriangulationResult result;
+        std::string referenceError;
+        if (!camera_reference::validateReferenceCameraInputs(options.imageIds,
+                                                             static_cast<std::size_t>(options.images.size()),
+                                                             options.referenceCameraGeometries,
+                                                             options.referencePositions,
+                                                             &referenceError))
+        {
+            result.reconstructionResult.errorMessage =
+                QStringLiteral("参考相机输入无效：%1").arg(QString::fromStdString(referenceError));
+            result.reconstructionResult.summary = result.reconstructionResult.errorMessage;
+            return result;
+        }
+        if (!camera_reference::commonReferenceWorldFrame(
+                options.referenceCameraGeometries, options.referencePositions, &referenceError) &&
+            (!options.referenceCameraGeometries.empty() || !options.referencePositions.empty()))
+        {
+            result.reconstructionResult.errorMessage =
+                QStringLiteral("参考相机坐标系不一致：%1").arg(QString::fromStdString(referenceError));
+            result.reconstructionResult.summary = result.reconstructionResult.errorMessage;
+            return result;
+        }
         result.config = resolveConfig(options);
         Logger::instance()->infof("[AERIAL] tiepoint_limit requested=%d cached=%d action=%s",
                                   result.config.tiePointOptions.maxTiePointsPerImage,

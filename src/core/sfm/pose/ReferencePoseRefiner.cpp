@@ -137,7 +137,9 @@ namespace xjw
             return {x * scale, y * scale, z * scale};
         }
 
-        bool projectLocal(const FramePinholeCamera& camera, const cv::Vec3d& local, cv::Vec2d* pixel)
+        bool projectLocal(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                          const cv::Vec3d& local,
+                          cv::Vec2d* pixel)
         {
             if (!pixel || !(local[2] > 1e-9))
             {
@@ -147,7 +149,8 @@ namespace xjw
             const double x = local[0] * inverse_z;
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r2 * r2 + distortion.radialK3 * r2 * r2 * r2;
             const double distorted_x =
@@ -159,7 +162,9 @@ namespace xjw
             return std::isfinite((*pixel)[0]) && std::isfinite((*pixel)[1]);
         }
 
-        std::array<double, 6> projectionLocalJacobian(const FramePinholeCamera& camera, const cv::Vec3d& local)
+        std::array<double, 6>
+        projectionLocalJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                const cv::Vec3d& local)
         {
             std::array<double, 6> result{};
             if (std::abs(local[2]) < 1e-15)
@@ -171,7 +176,8 @@ namespace xjw
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
             const double r4 = r2 * r2;
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r4 + distortion.radialK3 * r4 * r2;
             const double radial_derivative =
@@ -197,7 +203,7 @@ namespace xjw
 
     } // namespace
 
-    void refineReferencePose(const FramePinholeCamera& camera,
+    void refineReferencePose(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                              const std::vector<std::array<double, 3>>& worldPoints,
                              const std::vector<std::array<double, 2>>& imagePoints,
                              const std::vector<std::size_t>& inlierIndices,

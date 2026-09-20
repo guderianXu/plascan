@@ -2,7 +2,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "PatchMatchHostUtils.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -27,17 +27,17 @@ struct CudaPatchMatchRunStats
     double elapsedMs = 0.0;
 };
 
-xjw::FramePinholeCamera makeCamera(double fu,
-                                   double fv,
-                                   double cu,
-                                   double cv,
-                                   int uDir,
-                                   int vDir,
-                                   const double r_wc[9],
-                                   const double center[3],
-                                   bool depthAxisFlipped)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double fu,
+                                                                       double fv,
+                                                                       double cu,
+                                                                       double cv,
+                                                                       int uDir,
+                                                                       int vDir,
+                                                                       const double r_wc[9],
+                                                                       const double center[3],
+                                                                       bool depthAxisFlipped)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     std::array<double, 9> rotation{{r_wc[0], r_wc[1], r_wc[2], r_wc[3], r_wc[4], r_wc[5], r_wc[6], r_wc[7], r_wc[8]}};
     std::array<double, 3> cameraCenter{{center[0], center[1], center[2]}};
     camera.setIntrinsics(fu, fv, cu, cv);
@@ -80,13 +80,14 @@ cv::Mat makeShiftedImage(const cv::Mat& image, int disparity)
     return shifted;
 }
 
-CudaPatchMatchRunStats executeCudaPatchMatchCase(const cv::Mat& refGray,
-                                                 const cv::Mat& srcGray,
-                                                 const xjw::FramePinholeCamera& refCam,
-                                                 const xjw::FramePinholeCamera& srcCam,
-                                                 bool useParallelSweep,
-                                                 int iterations,
-                                                 double expectedDepth = 10.0)
+CudaPatchMatchRunStats
+executeCudaPatchMatchCase(const cv::Mat& refGray,
+                          const cv::Mat& srcGray,
+                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& srcCam,
+                          bool useParallelSweep,
+                          int iterations,
+                          double expectedDepth = 10.0)
 {
     xjw::mvs::PatchMatchConfig config;
     config.backend = xjw::mvs::PatchMatchBackend::Cuda;
@@ -102,17 +103,18 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(const cv::Mat& refGray,
     cv::Mat confidenceMap;
     std::string errorMessage;
     const auto start = std::chrono::steady_clock::now();
-    const bool ok = xjw::mvs::PatchMatchDepthEstimator::estimate(refGray,
-                                                                 std::vector<cv::Mat>{srcGray},
-                                                                 refCam,
-                                                                 std::vector<xjw::FramePinholeCamera>{srcCam},
-                                                                 5.0f,
-                                                                 15.0f,
-                                                                 config,
-                                                                 depthMap,
-                                                                 &confidenceMap,
-                                                                 &errorMessage,
-                                                                 nullptr);
+    const bool ok = xjw::mvs::PatchMatchDepthEstimator::estimate(
+        refGray,
+        std::vector<cv::Mat>{srcGray},
+        refCam,
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{srcCam},
+        5.0f,
+        15.0f,
+        config,
+        depthMap,
+        &confidenceMap,
+        &errorMessage,
+        nullptr);
     const auto stop = std::chrono::steady_clock::now();
 
     EXPECT_TRUE(ok) << errorMessage;
@@ -198,17 +200,18 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
     cv::Mat depthMap;
     cv::Mat confidenceMap;
     std::string errorMessage;
-    const bool ok = xjw::mvs::PatchMatchDepthEstimator::estimate(refGray,
-                                                                 std::vector<cv::Mat>{srcGray},
-                                                                 refCam,
-                                                                 std::vector<xjw::FramePinholeCamera>{srcCam},
-                                                                 5.0f,
-                                                                 15.0f,
-                                                                 config,
-                                                                 depthMap,
-                                                                 &confidenceMap,
-                                                                 &errorMessage,
-                                                                 nullptr);
+    const bool ok = xjw::mvs::PatchMatchDepthEstimator::estimate(
+        refGray,
+        std::vector<cv::Mat>{srcGray},
+        refCam,
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{srcCam},
+        5.0f,
+        15.0f,
+        config,
+        depthMap,
+        &confidenceMap,
+        &errorMessage,
+        nullptr);
 
     ASSERT_TRUE(ok) << errorMessage;
     ASSERT_EQ(depthMap.size(), refGray.size());
@@ -283,7 +286,8 @@ TEST(PatchMatchCpuCancellationTest, StopsPromptlyInsideLongPixelSweeps)
                                      reference,
                                      std::vector<cv::Mat>{source},
                                      reference_camera,
-                                     std::vector<xjw::FramePinholeCamera>{source_camera},
+                                     std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                         source_camera},
                                      5.0f,
                                      15.0f,
                                      config,
@@ -350,7 +354,8 @@ TEST(PatchMatchCudaCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
                                      reference,
                                      std::vector<cv::Mat>{source},
                                      reference_camera,
-                                     std::vector<xjw::FramePinholeCamera>{source_camera},
+                                     std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                         source_camera},
                                      5.0f,
                                      30.0f,
                                      config,
@@ -426,7 +431,8 @@ TEST(PatchMatchOpenClCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
                                          reference,
                                          std::vector<cv::Mat>{source},
                                          reference_camera,
-                                         std::vector<xjw::FramePinholeCamera>{source_camera},
+                                         std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                             source_camera},
                                          5.0f,
                                          30.0f,
                                          config,
@@ -462,10 +468,10 @@ TEST(PatchMatchCpuRegressionTest, FrozenGeometryGuidanceEmitsSeparatePhotometric
     const double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     const double reference_center[3] = {0.0, 0.0, 0.0};
     const double source_center[3] = {baseline, 0.0, 0.0};
-    const xjw::FramePinholeCamera reference_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
         makeCamera(focal, focal, width * 0.5, height * 0.5, 1, 1, identity, reference_center, false)
             .normalizedForPositiveDepth();
-    const xjw::FramePinholeCamera source_camera =
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
         makeCamera(focal, focal, width * 0.5, height * 0.5, 1, 1, identity, source_center, false)
             .normalizedForPositiveDepth();
     const cv::Mat reference = makeTexturedImage(width, height);
@@ -492,22 +498,23 @@ TEST(PatchMatchCpuRegressionTest, FrozenGeometryGuidanceEmitsSeparatePhotometric
     cv::Mat guided_depth;
     cv::Mat guided_confidence;
     std::string error;
-    ASSERT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(reference,
-                                                             std::vector<cv::Mat>{source},
-                                                             reference_camera,
-                                                             std::vector<xjw::FramePinholeCamera>{source_camera},
-                                                             5.0f,
-                                                             15.0f,
-                                                             config,
-                                                             guided_depth,
-                                                             &guided_confidence,
-                                                             &error,
-                                                             &hint,
-                                                             &hint_radius,
-                                                             nullptr,
-                                                             nullptr,
-                                                             &auxiliary_input,
-                                                             &auxiliary_output))
+    ASSERT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        reference,
+        std::vector<cv::Mat>{source},
+        reference_camera,
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{source_camera},
+        5.0f,
+        15.0f,
+        config,
+        guided_depth,
+        &guided_confidence,
+        &error,
+        &hint,
+        &hint_radius,
+        nullptr,
+        nullptr,
+        &auxiliary_input,
+        &auxiliary_output))
         << error;
 
     ASSERT_EQ(source_selection.type(), CV_32SC1);
@@ -603,22 +610,23 @@ TEST(PatchMatchCpuRegressionTest, DepthIsInvariantToLargeCommonWorldTranslation)
     config.doMedianBlur = false;
     config.doBilateralFilter = false;
 
-    const auto estimate = [&](const xjw::FramePinholeCamera& reference_camera,
-                              const xjw::FramePinholeCamera& source_camera,
+    const auto estimate = [&](const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
                               cv::Mat* depth,
                               cv::Mat* confidence)
     {
         std::string error;
-        EXPECT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(reference_image,
-                                                                 std::vector<cv::Mat>{source_image},
-                                                                 reference_camera,
-                                                                 std::vector<xjw::FramePinholeCamera>{source_camera},
-                                                                 5.0f,
-                                                                 15.0f,
-                                                                 config,
-                                                                 *depth,
-                                                                 confidence,
-                                                                 &error))
+        EXPECT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+            reference_image,
+            std::vector<cv::Mat>{source_image},
+            reference_camera,
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{source_camera},
+            5.0f,
+            15.0f,
+            config,
+            *depth,
+            confidence,
+            &error))
             << error;
     };
 

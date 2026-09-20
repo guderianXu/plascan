@@ -1,5 +1,6 @@
 #include "MvsPipelineInternals.h"
-#include "DepthArtifactSaveQueue.h"
+
+#include <optional>
 
 namespace xjw::mvs
 {
@@ -10,6 +11,37 @@ namespace xjw::mvs
     {
         const int NV = static_cast<int>(_views.size());
         const int runCpuThreadBudget = resolvedTotalCpuThreadBudget(_config);
+
+        // MVS is the last numerical consumer in the reconstruction chain.  Do
+        // the same strict state/frame gate used by SfM and BA before any
+        // raster, CUDA, or workspace side effect is started.
+        std::optional<xjw::coordinate_system::CoordinateFrameId> commonFrame;
+        for (std::size_t viewIndex = 0; viewIndex < _views.size(); ++viewIndex)
+        {
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _views[viewIndex].camera;
+            std::string cameraError;
+            if (!camera.isValid() || !camera.validateNumericalState(&cameraError))
+            {
+                const QString message =
+                    QStringLiteral("MVS 影像相机数值状态非法[%1]：%2")
+                        .arg(static_cast<qulonglong>(viewIndex))
+                        .arg(QString::fromStdString(cameraError.empty() ? std::string("相机未准备") : cameraError));
+                errorOccurred(message);
+                emitFinishedOnce(false);
+                return;
+            }
+            if (!commonFrame.has_value())
+            {
+                commonFrame = camera.worldFrame();
+            }
+            else if (*commonFrame != camera.worldFrame())
+            {
+                const QString message = QStringLiteral("MVS 相机集合混用 world frame；必须先显式归一化");
+                errorOccurred(message);
+                emitFinishedOnce(false);
+                return;
+            }
+        }
 #ifdef _OPENMP
         // This background thread owns the serial preparation, consistency, and
         // fusion stages. Keep their implicit OpenMP teams inside the same budget
@@ -80,7 +112,6 @@ namespace xjw::mvs
 
         std::vector<DepthComputeWorker> physicalAcceleratorWorkers;
         std::vector<std::unique_ptr<GpuDeviceLeaseSet>> acceleratorDeviceLeases;
-        std::unordered_set<std::string> selectedPhysicalDeviceIdentities;
         QStringList acceleratorPreparationFailures;
         auto acquire_device_lease = [&acceleratorPreparationFailures](
                                         const GpuDeviceDescriptor& descriptor) -> std::unique_ptr<GpuDeviceLeaseSet>
@@ -112,7 +143,6 @@ namespace xjw::mvs
                 return;
             }
             physicalAcceleratorWorkers.push_back({DepthComputeBackend::Cuda, device_index});
-            selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity);
             acceleratorDeviceLeases.push_back(std::move(lease));
         };
 
@@ -128,79 +158,12 @@ namespace xjw::mvs
             }
         }
         const bool cudaAvailable = !physicalAcceleratorWorkers.empty();
-        // recovered depth is CUDA-only. Do not enumerate, lease, or initialize an
-        // OpenCL alias during Auto selection.
-        const bool probeOpenCl = false;
-        const std::vector<OpenClDeviceInfo> detectedOpenClDevices =
-            probeOpenCl ? PatchMatchDepthEstimator::openClDevices() : std::vector<OpenClDeviceInfo>{};
-        std::vector<OpenClDeviceInfo> selectedOpenClDevices;
-        for (const OpenClDeviceInfo& device : detectedOpenClDevices)
+        if (!cudaAvailable)
         {
-            if (_config.patchMatch.openClDeviceIndex >= 0 && device.index != _config.patchMatch.openClDeviceIndex)
-            {
-                continue;
-            }
-            const GpuDeviceDescriptor descriptor{device.physicalDeviceIdentity, device.vendor + " " + device.name};
-            if (selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity))
-            {
-                LOG_DEBUG(QStringLiteral("[MVS] 跳过与已选 CUDA 设备重复的 OpenCL 接口: index=%1 device=%2 identity=%3")
-                              .arg(device.index)
-                              .arg(QString::fromStdString(device.name))
-                              .arg(QString::fromStdString(descriptor.physicalIdentity)));
-                continue;
-            }
-            if (shouldSkipUnstableOpenClCudaAlias(device.vendor, descriptor.physicalIdentity, cudaAvailable))
-            {
-                LOG_WARN(QStringLiteral("[MVS] 跳过无法取得稳定 PCI 身份的 NVIDIA OpenCL 接口："
-                                        "index=%1 device=%2；CUDA 已接管该厂商设备，避免重复执行通道")
-                             .arg(device.index)
-                             .arg(QString::fromStdString(device.name)));
-                continue;
-            }
-            std::unique_ptr<GpuDeviceLeaseSet> lease = acquire_device_lease(descriptor);
-            if (!lease)
-            {
-                continue;
-            }
-
-            std::string preparation_error;
-            if (!PatchMatchDepthEstimator::prepareOpenClDevice(device.index, &preparation_error))
-            {
-                QString detail = QStringLiteral("OpenCL GPU %1 (%2) 预检失败：%3")
-                                     .arg(device.index)
-                                     .arg(QString::fromStdString(device.name))
-                                     .arg(QString::fromStdString(preparation_error));
-                if (detail.size() > 1024)
-                {
-                    detail = detail.left(1021) + QStringLiteral("...");
-                }
-                acceleratorPreparationFailures.push_back(detail);
-                LOG_WARN(QStringLiteral("[MVS] %1").arg(detail));
-                continue;
-            }
-            selectedOpenClDevices.push_back(device);
-            physicalAcceleratorWorkers.push_back({DepthComputeBackend::OpenCl, device.index});
-            selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity);
-            acceleratorDeviceLeases.push_back(std::move(lease));
-        }
-        const std::optional<DepthComputeBackend> requestedBackend =
-            configuredBackend == PatchMatchBackend::Auto
-                ? std::nullopt
-                : std::make_optional(configuredBackend == PatchMatchBackend::Cuda     ? DepthComputeBackend::Cuda
-                                     : configuredBackend == PatchMatchBackend::OpenCl ? DepthComputeBackend::OpenCl
-                                                                                      : DepthComputeBackend::Cpu);
-        const DepthComputeBackend effectiveBackend =
-            resolveDepthComputeBackend(requestedBackend, cudaAvailable, !selectedOpenClDevices.empty());
-        const bool openClAvailable = !selectedOpenClDevices.empty();
-        const bool heterogeneousAuto =
-            configuredBackend == PatchMatchBackend::Auto && automaticAcceleration && cudaAvailable && openClAvailable;
-        const bool requestedBackendUnavailable = (effectiveBackend == DepthComputeBackend::Cuda && !cudaAvailable) ||
-                                                 (effectiveBackend == DepthComputeBackend::OpenCl && !openClAvailable);
-        if (requestedBackendUnavailable)
-        {
-            QString message =
-                QStringLiteral("请求的 %1 深度估计后端不可用或设备编号无效；显式后端不会自动切换到其他设备")
-                    .arg(QString::fromLatin1(depthComputeBackendName(effectiveBackend)));
+            QString message = configuredBackend == PatchMatchBackend::Cuda
+                                  ? QStringLiteral("请求的 CUDA 深度估计后端不可用或设备编号无效；"
+                                                   "显式后端不会自动切换到其他设备")
+                                  : QStringLiteral("recovered 多视深度需要可用 CUDA 设备；未执行旧算法回退");
             if (!acceleratorPreparationFailures.isEmpty())
             {
                 message += QStringLiteral("。%1").arg(acceleratorPreparationFailures.join(QStringLiteral("；")));
@@ -210,33 +173,12 @@ namespace xjw::mvs
             emitFinishedOnce(false);
             return;
         }
-        // A heterogeneous Auto batch retains the Auto token in the workspace hash;
-        // single-family and explicit batches keep the resolved strict backend. This
-        // prevents a CUDA-only resume from silently reusing a CUDA+OpenCL workset.
-        _config.patchMatch.backend = heterogeneousAuto                                 ? PatchMatchBackend::Auto
-                                     : effectiveBackend == DepthComputeBackend::Cuda   ? PatchMatchBackend::Cuda
-                                     : effectiveBackend == DepthComputeBackend::OpenCl ? PatchMatchBackend::OpenCl
-                                                                                       : PatchMatchBackend::Cpu;
+        _config.patchMatch.backend = PatchMatchBackend::Cuda;
         _config.patchMatch.cudaFallbackToCpu = false;
         _config.patchMatch.openClFallbackToCpu = false;
 
-        const QString effective_backend_name = QString::fromLatin1(depthComputeBackendName(effectiveBackend));
-        QString backend_message;
-        if (configuredBackend == PatchMatchBackend::Auto)
-        {
-            backend_message = heterogeneousAuto
-                                  ? QStringLiteral("深度估计后端：Auto 异构调度已启用 CUDA + OpenCL（逐帧收益调度）")
-                                  : QStringLiteral("深度估计后端：Auto 已选择 %1").arg(effective_backend_name);
-        }
-        else
-        {
-            backend_message = QStringLiteral("深度估计后端：请求并使用 %1").arg(effective_backend_name);
-        }
-        if (configuredBackend == PatchMatchBackend::Auto && effectiveBackend == DepthComputeBackend::Cpu &&
-            !acceleratorPreparationFailures.isEmpty())
-        {
-            backend_message += QStringLiteral("；CUDA 租约或 OpenCL 运行时预检不可用，已继续使用 CPU");
-        }
+        const QString backend_message = automaticAcceleration ? QStringLiteral("深度估计后端：Auto 已选择 CUDA")
+                                                              : QStringLiteral("深度估计后端：请求并使用 CUDA");
         LOG_INFO(QStringLiteral("[MVS] %1").arg(backend_message));
         progressChanged(backend_message, 0.0f);
 
@@ -253,18 +195,6 @@ namespace xjw::mvs
             return;
         }
 
-        // The recovered producer is a closed scene operation: all d4 PatchMatch
-        // pyramids are completed before its three-level voting stage starts.
-        // Keep this boundary ahead of the former per-frame scheduler so an
-        // unsupported request cannot silently execute the old depth algorithm.
-        if (!cudaAvailable)
-        {
-            const QString error = QStringLiteral("recovered 多视深度需要可用 CUDA 设备；未执行旧算法回退");
-            LOG_ERROR(QStringLiteral("[MVS] %1").arg(error));
-            errorOccurred(error);
-            emitFinishedOnce(false);
-            return;
-        }
         if (_config.runFusion)
         {
             const QString error =

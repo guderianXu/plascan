@@ -27,6 +27,7 @@
     "libjpeg-turbo",
     "libzip",
     "openexr",
+    "nlohmann-json",
     "opencl",
     {
       "name": "qtbase",
@@ -89,7 +90,8 @@
       "name": "vulkan-loader",
       "default-features": false,
       "features": [
-        "xcb"
+        "xcb",
+        "wayland"
       ],
       "platform": "linux"
     }

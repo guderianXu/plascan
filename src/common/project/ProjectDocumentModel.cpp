@@ -34,20 +34,14 @@
 #include <QHash>
 
 // ── 工具：判断 key 是否属于 results 域 ───────────────────────────────────────
-bool ProjectFilesManager::isResultKey(const QString &key)
+bool ProjectFilesManager::isResultKey(const QString& key)
 {
-    return key == QLatin1String("image_match_results")
-        || key == QLatin1String("intersection_results")
-        || key == QLatin1String("bundle_adjust_results")
-        || key == QLatin1String("aerial_triangulation_results")
-        || key == QLatin1String("observation_network_results")
-        || key == QLatin1String("depth_map_results")
-        || key == QLatin1String("dense_cloud_results")
-        || key == QLatin1String("model_results")
-        || key == QLatin1String("dem_results")
-        || key == QLatin1String("ortho_results")
-        || key == QLatin1String("report_results")
-        || key == QLatin1String("reference_datasets");
+    return key == QLatin1String("image_match_results") || key == QLatin1String("intersection_results") ||
+           key == QLatin1String("bundle_adjust_results") || key == QLatin1String("aerial_triangulation_results") ||
+           key == QLatin1String("observation_network_results") || key == QLatin1String("depth_map_results") ||
+           key == QLatin1String("dense_cloud_results") || key == QLatin1String("model_results") ||
+           key == QLatin1String("dem_results") || key == QLatin1String("ortho_results") ||
+           key == QLatin1String("report_results") || key == QLatin1String("reference_datasets");
 }
 
 // ── 默认结构 ─────────────────────────────────────────────────────────────────
@@ -55,26 +49,29 @@ QJsonObject ProjectFilesManager::defaultFiles()
 {
     QJsonObject files;
     files[QLatin1String("images")] = QJsonArray();
+    files[QLatin1String("camera_definitions")] = QJsonArray();
+    files[QLatin1String("camera_instances")] = QJsonArray();
     return files;
 }
 
 QJsonObject ProjectFilesManager::defaultResults()
 {
-    return QJsonObject();   // 所有数组按需初始化为空，无需预建
+    return QJsonObject(); // 所有数组按需初始化为空，无需预建
 }
 
 // ── 分域接口 ─────────────────────────────────────────────────────────────────
 
-void ProjectFilesManager::setResultsData(const QJsonObject &data)
+void ProjectFilesManager::setResultsData(const QJsonObject& data)
 {
-    _resultFiles  = data;
+    _resultFiles = data;
     _resultsDirty = false;
 }
 
 QJsonObject ProjectFilesManager::combinedData() const
 {
     QJsonObject merged = _coreFiles;
-    for (auto it = _resultFiles.constBegin(); it != _resultFiles.constEnd(); ++it) {
+    for (auto it = _resultFiles.constBegin(); it != _resultFiles.constEnd(); ++it)
+    {
         merged.insert(it.key(), it.value());
     }
     return merged;
@@ -86,7 +83,8 @@ QStringList ProjectFilesManager::getAllImages() const
 {
     QStringList result;
     const QJsonArray images = _coreFiles.value(QLatin1String("images")).toArray();
-    for (const QJsonValue &val : images) {
+    for (const QJsonValue& val : images)
+    {
         const QString path = val.toObject().value(QLatin1String("path")).toString();
         if (!path.isEmpty())
             result << path;
@@ -94,11 +92,12 @@ QStringList ProjectFilesManager::getAllImages() const
     return result;
 }
 
-QStringList ProjectFilesManager::getImagesByCategory(const QString &category) const
+QStringList ProjectFilesManager::getImagesByCategory(const QString& category) const
 {
     QStringList result;
     const QJsonArray images = _coreFiles.value(QLatin1String("images")).toArray();
-    for (const QJsonValue &val : images) {
+    for (const QJsonValue& val : images)
+    {
         const QJsonObject obj = val.toObject();
         if (category.isEmpty() || obj.value(QLatin1String("category")).toString() == category)
             result << obj.value(QLatin1String("path")).toString();
@@ -108,26 +107,26 @@ QStringList ProjectFilesManager::getImagesByCategory(const QString &category) co
 
 namespace
 {
-QString normalizedImageKey(const QString &path)
-{
-    QString key = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QString normalizedImageKey(const QString& path)
+    {
+        QString key = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 #if defined(Q_OS_WIN)
-    key = key.toLower();
+        key = key.toLower();
 #endif
-    return key;
-}
+        return key;
+    }
 
-bool sameImage(const QString &left, const QString &right)
-{
-    return !left.trimmed().isEmpty() && normalizedImageKey(left) == normalizedImageKey(right);
-}
-}
+    bool sameImage(const QString& left, const QString& right)
+    {
+        return !left.trimmed().isEmpty() && normalizedImageKey(left) == normalizedImageKey(right);
+    }
+} // namespace
 
 QMap<QString, QString> ProjectFilesManager::getImageMatchOutputMap() const
 {
     QMap<QString, QString> result;
     const QJsonArray records = _resultFiles.value(QLatin1String("image_match_results")).toArray();
-    for (const QJsonValue &value : records)
+    for (const QJsonValue& value : records)
     {
         const QJsonObject object = value.toObject();
         const QString image = object.value(QLatin1String("image")).toString();
@@ -140,10 +139,10 @@ QMap<QString, QString> ProjectFilesManager::getImageMatchOutputMap() const
     return result;
 }
 
-QString ProjectFilesManager::findMatchFile(const QString &imgA, const QString &imgB) const
+QString ProjectFilesManager::findMatchFile(const QString& imgA, const QString& imgB) const
 {
     const QJsonArray results = _resultFiles.value(QLatin1String("image_match_results")).toArray();
-    for (const QJsonValue &value : results)
+    for (const QJsonValue& value : results)
     {
         const QJsonObject object = value.toObject();
         const QString owner = object.value(QLatin1String("image")).toString();
@@ -153,11 +152,10 @@ QString ProjectFilesManager::findMatchFile(const QString &imgA, const QString &i
             continue;
         }
         const QJsonArray neighbors = object.value(QLatin1String("neighbors")).toArray();
-        for (const QJsonValue &neighbor : neighbors)
+        for (const QJsonValue& neighbor : neighbors)
         {
             const QString peer = neighbor.toString();
-            if ((sameImage(owner, imgA) && sameImage(peer, imgB)) ||
-                (sameImage(owner, imgB) && sameImage(peer, imgA)))
+            if ((sameImage(owner, imgA) && sameImage(peer, imgB)) || (sameImage(owner, imgB) && sameImage(peer, imgA)))
             {
                 return output;
             }
@@ -168,18 +166,17 @@ QString ProjectFilesManager::findMatchFile(const QString &imgA, const QString &i
 
 // ── 修改接口 ─────────────────────────────────────────────────────────────────
 
-void ProjectFilesManager::setImages(const QJsonArray &images)
+void ProjectFilesManager::setImages(const QJsonArray& images)
 {
     _coreFiles[QLatin1String("images")] = images;
 }
 
-void ProjectFilesManager::appendImageMatchResult(const ProjectImageMatchResultRecord &record)
+void ProjectFilesManager::appendImageMatchResult(const ProjectImageMatchResultRecord& record)
 {
     appendImageMatchResults(QVector<ProjectImageMatchResultRecord>{record});
 }
 
-void ProjectFilesManager::appendImageMatchResults(
-    const QVector<ProjectImageMatchResultRecord> &records)
+void ProjectFilesManager::appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records)
 {
     QJsonArray results = _resultFiles.value(QLatin1String("image_match_results")).toArray();
 
@@ -187,15 +184,14 @@ void ProjectFilesManager::appendImageMatchResults(
     existingImages.reserve(results.size());
     for (int i = 0; i < results.size(); ++i)
     {
-        const QString existing = normalizedImageKey(
-            results[i].toObject().value(QLatin1String("image")).toString());
+        const QString existing = normalizedImageKey(results[i].toObject().value(QLatin1String("image")).toString());
         if (!existing.isEmpty())
         {
             existingImages.insert(existing, i);
         }
     }
 
-    for (const ProjectImageMatchResultRecord &record : records)
+    for (const ProjectImageMatchResultRecord& record : records)
     {
         const QString imageKey = normalizedImageKey(record.image);
         if (imageKey.isEmpty() || record.output.trimmed().isEmpty())

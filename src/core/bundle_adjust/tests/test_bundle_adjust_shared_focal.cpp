@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustSolver.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <cmath>
@@ -11,28 +11,33 @@
 namespace
 {
 
-    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double focal)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeCamera(double cx, double cy, double cz, double focal)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(focal, focal, 512.0, 384.0);
         camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{cx, cy, cz}});
         return camera;
     }
 
-    xjw::FramePinholeCamera makeCameraWithIntrinsics(double cameraX,
-                                                     double cameraY,
-                                                     double cameraZ,
-                                                     double focalX,
-                                                     double focalY,
-                                                     double principalX,
-                                                     double principalY)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCameraWithIntrinsics(double cameraX,
+                                                                                         double cameraY,
+                                                                                         double cameraZ,
+                                                                                         double focalX,
+                                                                                         double focalY,
+                                                                                         double principalX,
+                                                                                         double principalY)
     {
-        xjw::FramePinholeCamera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+            makeCamera(cameraX, cameraY, cameraZ, focalX);
         camera.setIntrinsics(focalX, focalY, principalX, principalY);
         return camera;
     }
 
-    bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& point, double* u, double* v)
+    bool projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                      const std::array<double, 3>& point,
+                      double* u,
+                      double* v)
     {
         const double world[3] = {point[0], point[1], point[2]};
         double pixel[2] = {0.0, 0.0};
@@ -45,7 +50,8 @@ namespace
         return true;
     }
 
-    xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera>& truthCameras, const std::array<double, 3>& truth)
+    xjw::BATrack makeTrack(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truthCameras,
+                           const std::array<double, 3>& truth)
     {
         xjw::BATrack track;
         track.initialPoint = truth;
@@ -62,7 +68,8 @@ namespace
         return track;
     }
 
-    std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::FramePinholeCamera>& truthCameras)
+    std::vector<xjw::BATrack>
+    makeSharedFocalTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truthCameras)
     {
         std::vector<xjw::BATrack> tracks;
         for (int y = 0; y < 5; ++y)
@@ -84,7 +91,8 @@ namespace
         return tracks;
     }
 
-    std::vector<xjw::BATrack> makeWideCalibrationTracks(const std::vector<xjw::FramePinholeCamera>& truthCameras)
+    std::vector<xjw::BATrack> makeWideCalibrationTracks(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truthCameras)
     {
         std::vector<xjw::BATrack> tracks;
         for (int y = -6; y <= 6; ++y)
@@ -110,13 +118,13 @@ namespace
 
 TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInitialFocal)
 {
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -156,13 +164,13 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixJointlyRefinesSharedFocalAndPoints)
         GTEST_SKIP() << "PlaMatrix CPU reference backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -200,13 +208,13 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixUsesOneAbsoluteFocalForHeterogeneousI
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 800.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),
@@ -235,7 +243,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixUsesOneAbsoluteFocalForHeterogeneousI
     const double refinedFocal = result.refinedCameras.front().focalX();
     EXPECT_GT(refinedFocal, 1200.0);
     EXPECT_LT(refinedFocal, 1700.0);
-    for (const xjw::FramePinholeCamera& camera : result.refinedCameras)
+    for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), refinedFocal, 1e-6);
     }
@@ -280,13 +288,13 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRefinesIndependentCalibrationGroups)
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1200.0),
         makeCamera(0.0, -2.0, 0.0, 1200.0),
         makeCamera(2.0, 0.0, 0.0, 1800.0),
         makeCamera(0.0, 2.0, 0.0, 1800.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -326,13 +334,13 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -357,7 +365,7 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
 
 TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0, 900.0),
         makeCamera(1.0, 0.0, 0.0, 900.0),
     };
@@ -380,13 +388,13 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedPinholeIntrinsic
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(0.0, 2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
         makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
         makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
@@ -417,7 +425,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedPinholeIntrinsic
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
-    const xjw::FramePinholeCamera& camera = result.refinedCameras.front();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = result.refinedCameras.front();
     EXPECT_NEAR(camera.focalX(), 1500.0, 15.0);
     EXPECT_NEAR(camera.focalY(), 1530.0, 20.0);
     EXPECT_NEAR(camera.principalX(), 485.0, 8.0);
@@ -429,7 +437,7 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedPinholeIntrinsic
 
 TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFocal)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-1.0, 0.0, 0.0, 900.0),
         makeCamera(1.0, 0.0, 0.0, 900.0),
     };
@@ -451,17 +459,17 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedBrownConradyDist
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    std::vector<xjw::FramePinholeCamera> truthCameras{
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera& camera : truthCameras)
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : truthCameras)
     {
         camera.setDistortion(-0.12, 0.035, 0.08, 0.003, -0.002);
     }
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
@@ -498,7 +506,8 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixRecoversBoundedSharedBrownConradyDist
     ASSERT_EQ(result.usedBackend, xjw::BABackend::PlaMatrixCpu) << result.backendMessage;
     EXPECT_EQ(result.selfCalibrationStagesRun, 1);
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::FramePinholeCamera::Distortion distortion = result.refinedCameras.front().distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+        result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.12, 0.02);
     EXPECT_NEAR(distortion.radialK2, 0.035, 0.03);
     EXPECT_NEAR(distortion.radialK3, 0.08, 0.04);
@@ -517,23 +526,23 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    std::vector<xjw::FramePinholeCamera> truthCameras{
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera& camera : truthCameras)
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : truthCameras)
     {
         camera.setDistortion(-0.10, 0.0, 0.0, 0.0, 0.0);
     }
-    std::vector<xjw::FramePinholeCamera> initialCameras{
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::FramePinholeCamera& camera : initialCameras)
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : initialCameras)
     {
         camera.setDistortion(0.0, 0.012, -0.018, 0.001, -0.002);
     }
@@ -558,7 +567,8 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::FramePinholeCamera::Distortion distortion = result.refinedCameras.front().distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+        result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.10, 0.02);
     EXPECT_DOUBLE_EQ(distortion.radialK2, 0.012);
     EXPECT_DOUBLE_EQ(distortion.radialK3, -0.018);
@@ -569,13 +579,13 @@ TEST(BundleAdjustSharedFocalTest, PlaMatrixLowOrderModeKeepsHighOrderDistortionF
 
 TEST(BundleAdjustSharedFocalTest, ReferenceCpuRespectsDisabledFocalParameterMask)
 {
-    const std::vector<xjw::FramePinholeCamera> truthCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::FramePinholeCamera> initialCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -608,14 +618,14 @@ TEST(BundleAdjustSharedFocalTest, ReferenceCpuRespectsDisabledFocalParameterMask
 
 TEST(BundleAdjustSharedFocalTest, ReferenceCpuProjectsWarmStartIntoStableFocalBounds)
 {
-    const std::vector<xjw::FramePinholeCamera> referenceCameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> referenceCameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, 2.0, 0.0, 1000.0),
     };
-    std::vector<xjw::FramePinholeCamera> warmCameras = referenceCameras;
-    for (xjw::FramePinholeCamera& camera : warmCameras)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> warmCameras = referenceCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : warmCameras)
     {
         camera.setIntrinsics(1200.0, 900.0, 512.0, 384.0);
     }
@@ -638,7 +648,7 @@ TEST(BundleAdjustSharedFocalTest, ReferenceCpuProjectsWarmStartIntoStableFocalBo
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), warmCameras.size());
     EXPECT_NEAR(result.refinedSharedFocalScale, 1.05, 1.0e-12);
-    for (const xjw::FramePinholeCamera& camera : result.refinedCameras)
+    for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), 1050.0, 1.0e-8);
         EXPECT_NEAR(camera.focalY(), 787.5, 1.0e-8);
@@ -647,7 +657,7 @@ TEST(BundleAdjustSharedFocalTest, ReferenceCpuProjectsWarmStartIntoStableFocalBo
 
 TEST(BundleAdjustSharedFocalTest, ReferenceCpuSupportsMultipleCalibrationGroups)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1200.0),
@@ -675,7 +685,7 @@ TEST(BundleAdjustSharedFocalTest, AutoRejectsMultipleGroupsWithoutAlternateCpuFa
         GTEST_SKIP() << "PlaMatrix CPU backend is not available";
     }
 
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1200.0),
@@ -701,7 +711,7 @@ TEST(BundleAdjustSharedFocalTest, AutoRejectsMultipleGroupsWithoutAlternateCpuFa
 
 TEST(BundleAdjustSharedFocalTest, AutoRejectsFocalPriorWithoutAlternateCpuFallback)
 {
-    const std::vector<xjw::FramePinholeCamera> cameras{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),

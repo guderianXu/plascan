@@ -1,11 +1,11 @@
 #include "ProjectTerrainProductsManager.h"
 
-#include "ProjectManager.h"
+#include "project/services/ProjectSession.h"
+#include "project/services/ProjectUiMessageAdapter.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "GuiTaskRunner.h"
 #include "project/ProjectIO.h"
-#include "project/ProjectSessionModel.h"
 
 #include "RpcDomGenerator.h"
 #include "RpcStereoDemGenerator.h"
@@ -14,7 +14,6 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QMessageBox>
 #include <QPointer>
 #include <QUuid>
 
@@ -72,15 +71,21 @@ namespace
 
 } // namespace
 
-void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::project::DemGenerationRequest& request)
+void ProjectTerrainProductsManager::startRpcStereoDemAsync(
+    const xjw::gui::project::DemGenerationRequest& request,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
-    const auto session = _owner->currentSessionContext();
-    const QString project_root = xjw::common::project::ProjectIO::projectRootFromPlascan(session.projectPath);
-    const auto resolve_path = [&session](const QString& path)
-    { return xjw::common::project::ProjectIO::resolveProjectResourcePath(session.projectPath, path.trimmed()); };
+    const QString project_root =
+        xjw::common::project::ProjectIO::projectRootFromPlascan(taskContext.session.projectPath);
+    const auto resolve_path = [&taskContext](const QString& path)
+    {
+        return xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            taskContext.session.projectPath, path.trimmed());
+    };
     const QStringList selected_images = request.imageStereoOptions.sourceImages;
     if (selected_images.size() != 2)
     {
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(
             false,
             QStringLiteral("当前摄影测量内核尚未完成多影像联合平差与 DEM 融合；为避免静默忽略影像，"
@@ -93,15 +98,17 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
     {
         const QString message =
             QStringLiteral("RPC 立体像对不存在或不可访问。\n左：%1\n右：%2").arg(left_image, right_image);
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
 
     const QString output_root = xjw::gui::project::resolveProjectOutputDir(
-        session.projectPath, request.outputDirectory.trimmed(), QStringLiteral("assets/dem/rpc_stereo"));
-    const QString output_dir = uniqueRunDirectory(output_root, session.chunkId);
+        taskContext.session.projectPath, request.outputDirectory.trimmed(), QStringLiteral("assets/dem/rpc_stereo"));
+    const QString output_dir = uniqueRunDirectory(output_root, taskContext.session.chunkId);
     if (!QDir().mkpath(output_dir))
     {
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, QStringLiteral("无法创建 RPC DEM 输出目录：%1").arg(output_dir));
         return;
     }
@@ -111,16 +118,13 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
     options.maximumFeatures = request.imageStereoOptions.maximumFeatures;
     options.maximumReprojectionErrorPixels = request.imageStereoOptions.maximumReprojectionErrorPixels;
 
-    const auto cancel_flag = std::make_shared<std::atomic_bool>(false);
-    const QString task_id = QStringLiteral("dem-rpc:%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-    _demCancelFlag = cancel_flag;
-    _demTaskId = task_id;
-    _demTaskChunkId = session.chunkId;
+    const auto cancel_flag = taskContext.cancelFlag;
+    const QString task_id = taskContext.taskId;
     emit backgroundTaskProgressChanged(task_id, 0, 100);
     emit demPipelineProgressChanged(QStringLiteral("准备 RPC 立体 DEM"), 0);
 
     QPointer<ProjectTerrainProductsManager> self(this);
-    const auto progress_callback = [self, cancel_flag, session, task_id](const QString& stage, int percent)
+    const auto progress_callback = [self, cancel_flag, taskContext, task_id](const QString& stage, int percent)
     {
         if (!self)
         {
@@ -128,10 +132,10 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
         }
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancel_flag, session, task_id, stage, percent]()
+            [self, cancel_flag, taskContext, task_id, stage, percent]()
             {
-                if (!self || self->_demCancelFlag != cancel_flag || !self->_owner ||
-                    !self->_owner->isCurrentSession(session))
+                if (!self || !self->demContextMatches(taskContext) ||
+                    cancel_flag->load(std::memory_order_relaxed))
                 {
                     return;
                 }
@@ -142,7 +146,7 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
             Qt::QueuedConnection);
     };
 
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [left_image, right_image, output_dir, options, cancel_flag, progress_callback]()
         {
@@ -157,27 +161,22 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
                                                           cancel_flag.get());
             return run;
         },
-        [left_image, right_image, output_dir, project_root, session, cancel_flag, task_id](
+        [left_image, right_image, output_dir, project_root, taskContext, cancel_flag, task_id](
             ProjectTerrainProductsManager* manager, xjw::gui::tasks::TaskOutcome<RpcProductRun> outcome)
         {
+            if (!manager->demContextMatches(taskContext, false))
+            {
+                return;
+            }
+            if (!manager->_session || !manager->_session->isCurrent(taskContext.session))
+            {
+                manager->clearDemContextIfMatches(taskContext);
+                return;
+            }
             emit manager->backgroundTaskFinished(task_id);
-            if (manager->_demTaskId != task_id)
-            {
-                return;
-            }
-            manager->_demTaskId.clear();
-            manager->_demTaskChunkId.clear();
-            if (manager->_demCancelFlag == cancel_flag)
-            {
-                manager->_demCancelFlag.reset();
-            }
-            if (!manager->_owner || !manager->_projectData || !manager->_owner->isCurrentSession(session))
-            {
-                emit manager->demPipelineFinished(false, QStringLiteral("项目已切换，RPC DEM 结果未写入当前项目。"));
-                return;
-            }
             if (!outcome.succeeded())
             {
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, outcome.errorMessage);
                 return;
             }
@@ -188,8 +187,12 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
                 const QString message = cancelled ? QStringLiteral("RPC 立体 DEM 生成已取消。") : run.error;
                 if (!cancelled)
                 {
-                    QMessageBox::warning(manager->_parentWidget, QStringLiteral("RPC 立体 DEM"), message);
+                    if (manager->_messages)
+                    {
+                        manager->_messages->warning(nullptr, QStringLiteral("RPC 立体 DEM"), message);
+                    }
                 }
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, message);
                 return;
             }
@@ -197,6 +200,7 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
             const QString dem_path = run.payload.value(QStringLiteral("dem_path")).toString();
             if (!QFileInfo::exists(dem_path))
             {
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(
                     false, QStringLiteral("RPC DEM 管线返回成功，但 DEM 文件不存在：%1").arg(dem_path));
                 return;
@@ -226,27 +230,50 @@ void ProjectTerrainProductsManager::startRpcStereoDemAsync(const xjw::gui::proje
             record[QStringLiteral("median_reprojection_error_px")] =
                 run.payload.value(QStringLiteral("median_reprojection_error_px"));
             record[QStringLiteral("rpc_result")] = run.payload;
-            if (!manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), record, true))
+            QString persistence_error;
+            if (!manager->_session->upsertResultRecordByPath(taskContext.session,
+                                                             QStringLiteral("dem_results"),
+                                                             QStringLiteral("dem_path"),
+                                                             record,
+                                                             true,
+                                                             &persistence_error))
             {
-                emit manager->demPipelineFinished(false, QStringLiteral("RPC DEM 已生成，但项目成果记录保存失败。"));
+                manager->clearDemContextIfMatches(taskContext);
+                emit manager->demPipelineFinished(
+                    false,
+                    QStringLiteral("RPC DEM 已生成，但项目成果记录保存失败。%1")
+                        .arg(persistence_error.isEmpty() ? QString()
+                                                        : QStringLiteral("\n%1").arg(persistence_error)));
                 return;
             }
-            manager->_owner->refreshReconstructionQualityReport();
+            if (!manager->demContextMatches(taskContext) ||
+                cancel_flag->load(std::memory_order_relaxed))
+            {
+                manager->clearDemContextIfMatches(taskContext);
+                emit manager->demPipelineFinished(false, QStringLiteral("RPC 立体 DEM 生成已取消。"));
+                return;
+            }
             emit manager->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+            manager->clearDemContextIfMatches(taskContext);
             emit manager->demPipelineFinished(true, QStringLiteral("RPC 立体 DEM 已生成：%1").arg(dem_path));
-        });
+        }));
 }
 
-void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::OrthoGenerationRequest& request)
+void ProjectTerrainProductsManager::startRpcDomAsync(
+    const xjw::gui::project::OrthoGenerationRequest& request,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
-    const auto session = _owner->currentSessionContext();
-    const QString project_root = xjw::common::project::ProjectIO::projectRootFromPlascan(session.projectPath);
-    const auto resolve_path = [&session](const QString& path)
-    { return xjw::common::project::ProjectIO::resolveProjectResourcePath(session.projectPath, path.trimmed()); };
+    const QString project_root =
+        xjw::common::project::ProjectIO::projectRootFromPlascan(taskContext.session.projectPath);
+    const auto resolve_path = [&taskContext](const QString& path)
+    {
+        return xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            taskContext.session.projectPath, path.trimmed());
+    };
     const QString dem_path = resolve_path(request.demPath);
     if (!QFileInfo::exists(dem_path))
     {
+        clearOrthoContextIfMatches(taskContext);
         emit orthoPipelineFinished(false, QStringLiteral("找不到地理正射所需的 DEM：%1").arg(dem_path), QJsonObject());
         return;
     }
@@ -264,6 +291,7 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
     }
     if (images.isEmpty())
     {
+        clearOrthoContextIfMatches(taskContext);
         emit orthoPipelineFinished(false, QStringLiteral("没有已选择且带有效地理定位模型的 GeoTIFF 影像。"), QJsonObject());
         return;
     }
@@ -278,8 +306,9 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
         output_path = QDir(project_root).filePath(output_path);
     }
     output_path = QDir::cleanPath(output_path);
-    if (samePath(output_path, dem_path) || samePath(output_path, session.projectPath))
+    if (samePath(output_path, dem_path) || samePath(output_path, taskContext.session.projectPath))
     {
+        clearOrthoContextIfMatches(taskContext);
         emit orthoPipelineFinished(
             false, QStringLiteral("正射影像输出路径不能覆盖输入 DEM 或项目文件。"), QJsonObject());
         return;
@@ -288,6 +317,7 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
     {
         if (samePath(output_path, image))
         {
+            clearOrthoContextIfMatches(taskContext);
             emit orthoPipelineFinished(
                 false, QStringLiteral("正射影像输出路径不能覆盖源影像：%1").arg(image), QJsonObject());
             return;
@@ -295,6 +325,7 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
     }
     if (!QDir().mkpath(QFileInfo(output_path).absolutePath()))
     {
+        clearOrthoContextIfMatches(taskContext);
         emit orthoPipelineFinished(false, QStringLiteral("无法创建地理正射输出目录。"), QJsonObject());
         return;
     }
@@ -302,16 +333,14 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
     xjw::RpcDomOptions options;
     options.blendAllImages = request.options.blendMode != xjw::OrthoBlendMode::FirstValid;
     options.writePreview = true;
-    const auto cancel_flag = std::make_shared<std::atomic_bool>(false);
-    const QString task_id = QStringLiteral("ortho-rpc:%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-    _orthoCancelFlag = cancel_flag;
-    _orthoTaskChunkId = session.chunkId;
+    const auto cancel_flag = taskContext.cancelFlag;
+    const QString task_id = taskContext.taskId;
     emit backgroundTaskProgressChanged(task_id, 0, 100);
     emit orthoPipelineStarted();
     emit orthoPipelineProgressChanged(QStringLiteral("准备地理正射影像"), 0);
 
     QPointer<ProjectTerrainProductsManager> self(this);
-    const auto progress_callback = [self, cancel_flag, session, task_id](const QString& stage, int percent)
+    const auto progress_callback = [self, cancel_flag, taskContext, task_id](const QString& stage, int percent)
     {
         if (!self)
         {
@@ -319,10 +348,10 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
         }
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancel_flag, session, task_id, stage, percent]()
+            [self, cancel_flag, taskContext, task_id, stage, percent]()
             {
-                if (!self || self->_orthoCancelFlag != cancel_flag || !self->_owner ||
-                    !self->_owner->isCurrentSession(session))
+                if (!self || !self->orthoContextMatches(taskContext) ||
+                    cancel_flag->load(std::memory_order_relaxed))
                 {
                     return;
                 }
@@ -333,7 +362,7 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
             Qt::QueuedConnection);
     };
 
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [images, dem_path, output_path, options, cancel_flag, progress_callback]()
         {
@@ -342,23 +371,22 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
                 images, dem_path, output_path, options, &run.payload, &run.error, progress_callback, cancel_flag.get());
             return run;
         },
-        [images, dem_path, output_path, project_root, session, cancel_flag, task_id](
+        [images, dem_path, output_path, project_root, taskContext, cancel_flag, task_id](
             ProjectTerrainProductsManager* manager, xjw::gui::tasks::TaskOutcome<RpcProductRun> outcome)
         {
-            emit manager->backgroundTaskFinished(task_id);
-            if (manager->_orthoCancelFlag == cancel_flag)
+            if (!manager->orthoContextMatches(taskContext, false))
             {
-                manager->_orthoCancelFlag.reset();
-                manager->_orthoTaskChunkId.clear();
-            }
-            if (!manager->_owner || !manager->_projectData || !manager->_owner->isCurrentSession(session))
-            {
-                emit manager->orthoPipelineFinished(
-                    false, QStringLiteral("项目已切换，正射结果未写入当前项目。"), QJsonObject());
                 return;
             }
+            if (!manager->_session || !manager->_session->isCurrent(taskContext.session))
+            {
+                manager->clearOrthoContextIfMatches(taskContext);
+                return;
+            }
+            emit manager->backgroundTaskFinished(task_id);
             if (!outcome.succeeded())
             {
+                manager->clearOrthoContextIfMatches(taskContext);
                 emit manager->orthoPipelineFinished(false, outcome.errorMessage, QJsonObject());
                 return;
             }
@@ -367,6 +395,7 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
             {
                 const QString message =
                     cancel_flag->load(std::memory_order_relaxed) ? QStringLiteral("地理正射影像生成已取消。") : run.error;
+                manager->clearOrthoContextIfMatches(taskContext);
                 emit manager->orthoPipelineFinished(false, message, run.payload);
                 return;
             }
@@ -394,20 +423,37 @@ void ProjectTerrainProductsManager::startRpcDomAsync(const xjw::gui::project::Or
                 projectStoragePath(project_root, run.payload.value(QStringLiteral("preview_path")).toString());
             record[QStringLiteral("quality_report")] =
                 projectStoragePath(project_root, run.payload.value(QStringLiteral("report_path")).toString());
-            if (!manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("ortho_results"), QStringLiteral("output_path"), record, true))
+            QString persistence_error;
+            if (!manager->_session->upsertResultRecordByPath(taskContext.session,
+                                                             QStringLiteral("ortho_results"),
+                                                             QStringLiteral("output_path"),
+                                                             record,
+                                                             true,
+                                                             &persistence_error))
             {
+                manager->clearOrthoContextIfMatches(taskContext);
                 emit manager->orthoPipelineFinished(
-                    false, QStringLiteral("地理正射影像已生成，但项目成果记录保存失败。"), record);
+                    false,
+                    QStringLiteral("地理正射影像已生成，但项目成果记录保存失败。%1")
+                        .arg(persistence_error.isEmpty() ? QString()
+                                                        : QStringLiteral("\n%1").arg(persistence_error)),
+                    record);
                 return;
             }
-            manager->_owner->refreshReconstructionQualityReport();
+            if (!manager->orthoContextMatches(taskContext) ||
+                cancel_flag->load(std::memory_order_relaxed))
+            {
+                manager->clearOrthoContextIfMatches(taskContext);
+                emit manager->orthoPipelineFinished(false, QStringLiteral("地理正射影像生成已取消。"), record);
+                return;
+            }
             emit manager->orthoPipelineProgressChanged(QStringLiteral("完成"), 100);
+            manager->clearOrthoContextIfMatches(taskContext);
             emit manager->orthoPipelineFinished(
                 true,
                 QStringLiteral("地理正射影像已生成：%1\n覆盖率：%2%")
                     .arg(output_path)
                     .arg(run.payload.value(QStringLiteral("coverage_fraction")).toDouble() * 100.0, 0, 'f', 1),
                 record);
-        });
+        }));
 }

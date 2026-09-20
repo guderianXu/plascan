@@ -17,9 +17,11 @@ namespace xjw::matchphotos
                 values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]);
         }
 
-        bool hasNegligibleDistortion(const FramePinholeCamera& camera)
+        bool hasNegligibleDistortion(
+            const camera_models::frame_pinhole::FramePinholeNumericState& camera)
         {
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             const double maximum = std::max({std::abs(distortion.radialK1),
                                              std::abs(distortion.radialK2),
                                              std::abs(distortion.radialK3),
@@ -47,20 +49,29 @@ namespace xjw::matchphotos
 
     } // namespace
 
-    ReferencePoseEpipolarGeometry fundamentalFromReferenceCameras(const FramePinholeCamera& camera0,
-                                                                  const FramePinholeCamera& camera1)
+    ReferencePoseEpipolarGeometry fundamentalFromReferenceCameras(
+        const camera_models::frame_pinhole::FramePinholeNumericState& camera0,
+        const camera_models::frame_pinhole::FramePinholeNumericState& camera1)
     {
         ReferencePoseEpipolarGeometry result;
-        if (!camera0.isValid() || !camera1.isValid() || !hasNegligibleDistortion(camera0) ||
-            !hasNegligibleDistortion(camera1))
+        if (!camera0.hasBoundIdentity() || !camera1.hasBoundIdentity() || !camera0.isValid() || !camera1.isValid() ||
+            !camera0.validateNumericalState() || !camera1.validateNumericalState() ||
+            !hasNegligibleDistortion(camera0) || !hasNegligibleDistortion(camera1))
         {
             return result;
         }
 
-        const FramePinholeCamera normalized0 = camera0.normalizedForPositiveDepth();
-        const FramePinholeCamera normalized1 = camera1.normalizedForPositiveDepth();
-        const FramePinholeCamera::Intrinsics intrinsics0 = normalized0.intrinsics();
-        const FramePinholeCamera::Intrinsics intrinsics1 = normalized1.intrinsics();
+        // A fundamental matrix is meaningful only when both poses are
+        // expressed in the same explicitly bound world frame.
+        if (camera0.worldFrame() != camera1.worldFrame())
+        {
+            return result;
+        }
+
+        const auto normalized0 = camera0.normalizedForPositiveDepth();
+        const auto normalized1 = camera1.normalizedForPositiveDepth();
+        const auto intrinsics0 = normalized0.intrinsics();
+        const auto intrinsics1 = normalized1.intrinsics();
         const bool validIntrinsics = std::isfinite(intrinsics0.focalX) && intrinsics0.focalX > 0.0 &&
                                      std::isfinite(intrinsics0.focalY) && intrinsics0.focalY > 0.0 &&
                                      std::isfinite(intrinsics0.principalX) && std::isfinite(intrinsics0.principalY) &&

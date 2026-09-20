@@ -68,6 +68,7 @@ TEST(MarkerDetectCliTest, WritesDeterministicObservationsAndAppliesMask)
     ASSERT_TRUE(circleImage().save(image_path));
 
     ProcessResult detected = runCli({QStringLiteral("--image"), image_path,
+                                     QStringLiteral("--image-id"), QStringLiteral("image-uuid"),
                                      QStringLiteral("--family"), QStringLiteral("noncoded-circle"),
                                      QStringLiteral("--output"), output_path});
     ASSERT_EQ(detected.exitCode, 0) << qPrintable(detected.output);
@@ -87,12 +88,29 @@ TEST(MarkerDetectCliTest, WritesDeterministicObservationsAndAppliesMask)
     ASSERT_TRUE(mask.save(mask_path));
 
     ProcessResult masked = runCli({QStringLiteral("--image"), image_path,
+                                   QStringLiteral("--image-id"), QStringLiteral("image-uuid"),
                                    QStringLiteral("--mask"), mask_path,
                                    QStringLiteral("--family"), QStringLiteral("noncoded-circle"),
                                    QStringLiteral("--output"), output_path});
     ASSERT_EQ(masked.exitCode, 0) << qPrintable(masked.output);
     output = readJson(output_path);
     EXPECT_TRUE(output.value(QStringLiteral("observations")).toArray().isEmpty());
+}
+
+TEST(MarkerDetectCliTest, RequiresCanonicalImageId)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString image_path = directory.filePath(QStringLiteral("circle.png"));
+    ASSERT_TRUE(circleImage().save(image_path));
+
+    const ProcessResult result = runCli({
+        QStringLiteral("--image"), image_path,
+        QStringLiteral("--family"), QStringLiteral("noncoded-circle"),
+        QStringLiteral("--output"), directory.filePath(QStringLiteral("output.json"))
+    });
+    EXPECT_NE(result.exitCode, 0);
+    EXPECT_TRUE(result.output.contains(QStringLiteral("--image-id")));
 }
 
 TEST(MarkerDetectCliTest, RejectsUnavailableCircularCompatibilityFamily)
@@ -103,6 +121,7 @@ TEST(MarkerDetectCliTest, RejectsUnavailableCircularCompatibilityFamily)
     ASSERT_TRUE(circleImage().save(image_path));
     const ProcessResult result = runCli({
         QStringLiteral("--image"), image_path,
+        QStringLiteral("--image-id"), QStringLiteral("image-uuid"),
         QStringLiteral("--family"), QStringLiteral("circular12"),
         QStringLiteral("--output"), directory.filePath(QStringLiteral("output.json"))
     });

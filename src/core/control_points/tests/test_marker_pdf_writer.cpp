@@ -1,4 +1,5 @@
 #include "detection/AprilTagDetector.h"
+#include "detection/MarkerImageAdapter.h"
 #include "print/MarkerPdfWriter.h"
 #include "print/MarkerSheetRenderer.h"
 
@@ -30,10 +31,10 @@ TEST(MarkerPdfWriterTest, RenderedAprilTagSheetDecodesRequestedIds)
     const auto rendered = MarkerSheetRenderer::render(request, 150);
     ASSERT_TRUE(rendered.ok) << qPrintable(rendered.error);
     ASSERT_EQ(rendered.pages.size(), 1);
-    const auto detections = AprilTagDetector(AprilTagFamily::Tag36h11)
-                                .detect(rendered.pages.front(), {}, {});
+    const auto detections =
+        xjw::app::markers::detectMarkers(AprilTagDetector(AprilTagFamily::Tag36h11), rendered.pages.front(), {}, {});
     QSet<int> ids;
-    for (const auto &detection : detections)
+    for (const auto& detection : detections)
     {
         ids.insert(detection.targetId);
     }
@@ -73,12 +74,12 @@ TEST(MarkerPdfWriterTest, RefusesCircularCodesWithoutCompatibilityCorpus)
     EXPECT_TRUE(rendered.error.contains(QStringLiteral("语料")));
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
-    const bool lists_tests = std::any_of(argv, argv + argc, [](const char *argument)
-    {
-        return argument && std::string_view(argument) == "--gtest_list_tests";
-    });
+    const bool lists_tests = std::any_of(argv,
+                                         argv + argc,
+                                         [](const char* argument)
+                                         { return argument && std::string_view(argument) == "--gtest_list_tests"; });
     ::testing::InitGoogleTest(&argc, argv);
     // CTest 的用例发现不执行渲染，无需在此阶段初始化 Qt 图形后端。
     if (lists_tests)

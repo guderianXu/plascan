@@ -21,8 +21,8 @@ namespace xjw
             std::vector<cv::Mat> sourceImages;
             std::vector<cv::Mat> sourceValidMasks;
             std::vector<cv::Mat> sourceDepthMaps;
-            FramePinholeCamera referenceCamera;
-            std::vector<FramePinholeCamera> sourceCameras;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState referenceCamera;
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> sourceCameras;
             float zNear = 0.0f;
             float zFar = 0.0f;
             DepthPyramidLevelConfig levelConfig;
@@ -46,8 +46,8 @@ namespace xjw
             std::vector<cv::Mat> sourceValidMasks;
             std::vector<cv::Mat> sourceDepthMaps;
             cv::Mat guideImage;
-            FramePinholeCamera referenceCamera;
-            std::vector<FramePinholeCamera> sourceCameras;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState referenceCamera;
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> sourceCameras;
             float zNear = 0.0f;
             float zFar = 0.0f;
             DepthPyramidConfig pyramidConfig;

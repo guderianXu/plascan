@@ -6,10 +6,18 @@
 #include <QObject>
 
 class ProjectDashboardWidget;
-class ProjectManager;
 class QStatusBar;
 class TaskStatusWidget;
 class QWidget;
+class ProjectLifecycleService;
+
+namespace xjw::gui::project
+{
+class ProjectResourceCleanupCoordinator;
+class ProjectResourceService;
+class ProjectSession;
+class ProjectTaskOrchestrator;
+}
 
 namespace xjw::gui::platform
 {
@@ -21,7 +29,11 @@ class ProjectTaskStatusController final : public QObject
     Q_OBJECT
 
 public:
-    explicit ProjectTaskStatusController(ProjectManager* projectManager,
+    explicit ProjectTaskStatusController(xjw::gui::project::ProjectTaskOrchestrator* tasks,
+                                         xjw::gui::project::ProjectResourceService* resources,
+                                         xjw::gui::project::ProjectResourceCleanupCoordinator* cleanup,
+                                         ProjectLifecycleService* lifecycle,
+                                         xjw::gui::project::ProjectSession* session,
                                          ProjectDashboardWidget* dashboard,
                                          QStatusBar* statusBar,
                                          QWidget* widgetParent,
@@ -75,7 +87,7 @@ private:
     void
     finishTaskActivity(const QString& taskId, bool success, bool cancelled, qint64 elapsedMs, const QString& summary);
 
-    ProjectManager* _projectManager = nullptr;
+    xjw::gui::project::ProjectTaskOrchestrator* _tasks = nullptr;
     ProjectDashboardWidget* _dashboard = nullptr;
     QStatusBar* _statusBar = nullptr;
     xjw::gui::platform::TaskbarProgressController* _taskbarProgress = nullptr;

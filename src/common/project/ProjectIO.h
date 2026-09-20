@@ -2,15 +2,15 @@
 // 文件名: ProjectIO.h
 // 描述:   项目路径约定与产物寻址工具类（纯静态工具函数集合）。
 //
-//         所有与 .plascan 相关的目录结构都在此处集中定义，
-//         保证路径规则只有一处，避免各模块硬编码路径字符串。
+//         物理目录结构由 common/plafs 的标准布局对象集中定义；本类保留
+//         Qt 兼容门面、运行时 Chunk 注册和资源寻址，避免各模块硬编码路径字符串。
 //
 // 工程约定（以 /path/to/proj.plascan 为例）：
 //   /path/to/proj.plascan             <- 轻量 XML 项目描述
 //   /path/to/proj.files/project.zip   <- 项目与 Chunk 索引
 //   /path/to/proj.files/1/            <- 当前 Chunk 数字目录
 //   ├── chunk.zip                     <- Chunk 元数据归档
-//   ├── assets/                       <- 按需创建：特征、匹配和导入资源
+//   ├── assets/                       <- 按需创建：特征、匹配、导入和打包资源
 //   ├── bundle_adjust/                <- 按需创建：BA 运行产物
 //   ├── reconstruction/               <- 按需创建：重建成果
 //   ├── reports/                      <- 按需创建：综合报告
@@ -64,7 +64,7 @@ public:
     static QString markerDetectionReviewPath(const QString &plascanPath);
 
     // 返回 assets/camera_references/ 目录及相机导航参考 sidecar 的标准路径。
-    // 该数据与 images[*].camera 解算结果相互独立。
+    // 该数据与 project_files.camera_instances 解算结果相互独立。
     static QString projectCameraReferencesDir(const QString &plascanPath);
     static QString cameraReferenceSetPath(const QString &plascanPath);
 

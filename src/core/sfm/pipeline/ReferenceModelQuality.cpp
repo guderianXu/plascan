@@ -139,7 +139,7 @@ namespace xjw
                 {
                     continue;
                 }
-                const FramePinholeCamera camera =
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
                     reconstruction.camera(observation.imageId).normalizedForPositiveDepth();
                 double local[3]{};
                 camera.worldToCamera(point.xyz.data(), local);
@@ -149,8 +149,10 @@ namespace xjw
                     continue;
                 }
 
-                const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-                const FramePinholeCamera::Distortion distortion = camera.distortion();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                    camera.intrinsics();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                    camera.distortion();
                 const double x = local[0] / local[2];
                 const double y = local[1] / local[2];
                 const double radius_squared = x * x + y * y;
@@ -223,7 +225,7 @@ namespace xjw
 
         double sensorResidualThreshold(const SfmReconstruction& reconstruction, ImageId imageId)
         {
-            const FramePinholeCamera& camera = reconstruction.camera(imageId);
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = reconstruction.camera(imageId);
             if (camera.imageSize() && camera.imageSize()->samples > 0 && camera.imageSize()->lines > 0)
             {
                 return 0.002 * 0.5 * static_cast<double>(camera.imageSize()->samples + camera.imageSize()->lines);

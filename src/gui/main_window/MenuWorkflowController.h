@@ -21,7 +21,7 @@
 #include <QPointer>
 #include <QStringList>
 #include "LayerRenderer.h"
-#include "ProjectSessionContext.h"
+#include "project/tasks/ProjectTaskContext.h"
 
 #include <atomic>
 #include <functional>
@@ -29,10 +29,16 @@
 
 class QMainWindow;
 class MainMenu;
-class ProjectManager;
 class DialogSettingStore;
 class FeatureVisualizationController;
 class CreateDemDialog;
+
+namespace xjw::gui::project
+{
+class ProjectResourceService;
+class ProjectSession;
+class ProjectTaskOrchestrator;
+}
 
 // MenuWorkflowController: 处理菜单触发后的业务流程（对话框、参数收集、任务发起）
 // MainMenu 只负责 GUI 动作定义，本类负责业务协调
@@ -46,9 +52,10 @@ public:
     /// @param parent QObject 父对象。
     explicit MenuWorkflowController(QMainWindow *mainWindow, QObject *parent = nullptr);
 
-    /// 注入项目管理器，供各菜单流程查询项目状态和发起任务。
-    /// @param projectManager 当前项目管理器指针，非拥有引用。
-    void setProjectManager(ProjectManager *projectManager);
+    /// 注入窄项目服务，供各菜单流程查询状态和发起任务。
+    void setProjectServices(xjw::gui::project::ProjectSession *session,
+                            xjw::gui::project::ProjectTaskOrchestrator *tasks,
+                            xjw::gui::project::ProjectResourceService *resources);
 
     /// 绑定 MainMenu 中由本控制器负责处理的菜单动作。
     /// @param mainMenu 主菜单管理器，提供各 QAction 访问器。
@@ -119,11 +126,10 @@ private:
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
     void runUnifiedAerialTriangulation(const QJsonObject &settings,
                                        const QStringList &images,
-                                       const xjw::gui::project::ProjectSessionContext &session,
+                                       const xjw::gui::project::ProjectTaskContext &taskContext,
                                        const QJsonObject &projectMeta,
                                        const QString &outputRoot,
-                                       bool fillMissingTiePoints,
-                                       const std::shared_ptr<std::atomic<bool>> &cancelFlag);
+                                       bool fillMissingTiePoints);
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
     DialogSettingStore *_mapSetting = nullptr;
     DialogSettingStore *_aerialTriangulationSetting = nullptr;
@@ -131,5 +137,7 @@ private:
     FeatureVisualizationController *_featureVisualizationController = nullptr;
     QPointer<CreateDemDialog> _createDemDialog;
     QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
-    ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
+    xjw::gui::project::ProjectSession *_session = nullptr;
+    xjw::gui::project::ProjectTaskOrchestrator *_tasks = nullptr;
+    xjw::gui::project::ProjectResourceService *_resources = nullptr;
 };

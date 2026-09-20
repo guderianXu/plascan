@@ -3,7 +3,8 @@
 #include "RpcGeospatialSupport.h"
 
 #include "DemDomIO.h"
-#include "RpcCameraIO.h"
+#include "RpcRasterIO.h"
+#include "camera/models/rpc/RpcProjection.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 
@@ -19,6 +20,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace xjw
@@ -29,7 +32,7 @@ namespace xjw
         struct RpcImage
         {
             QString path;
-            RpcCameraModel camera;
+            std::shared_ptr<const camera_models::rpc::RpcInstance> camera;
             cv::Mat bgr;
         };
 
@@ -54,14 +57,22 @@ namespace xjw
             return true;
         }
 
-        bool loadRpcImage(const QString& path, RpcImage* image, QString* errorMessage)
+        bool loadRpcImage(const QString& path, std::size_t index, RpcImage* image, QString* errorMessage)
         {
             if (!image)
             {
                 return false;
             }
             std::string cameraError;
-            if (!loadRpcCameraFromRaster(common::io::toUtf8Path(path), &image->camera, &cameraError))
+            const std::string suffix = std::to_string(index);
+            image->camera = camera_models::rpc::importRpcRasterInstance(
+                common::io::toUtf8Path(path),
+                camera_core::CameraDefinitionId("rpc-dom-definition-" + suffix),
+                camera_core::CameraInstanceId("rpc-dom-instance-" + suffix),
+                camera_core::ImageId("rpc-dom-image-" + suffix),
+                xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
+                &cameraError);
+            if (!image->camera)
             {
                 if (errorMessage)
                 {
@@ -171,14 +182,15 @@ namespace xjw
 
         std::vector<RpcImage> images;
         images.reserve(static_cast<std::size_t>(imagePaths.size()));
-        for (const QString& path : imagePaths)
+        for (int imageIndex = 0; imageIndex < imagePaths.size(); ++imageIndex)
         {
+            const QString& path = imagePaths.at(imageIndex);
             if (cancellationRequested(cancelFlag, errorMessage))
             {
                 return false;
             }
             RpcImage image;
-            if (!loadRpcImage(path, &image, errorMessage))
+            if (!loadRpcImage(path, static_cast<std::size_t>(imageIndex), &image, errorMessage))
             {
                 return false;
             }
@@ -198,7 +210,7 @@ namespace xjw
             {
                 return false;
             }
-            std::vector<RpcCameraModel::GeodeticCoordinate> geodetic;
+            std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate> geodetic;
             if (!stereo_dem::projectedRowToGeodetic(dem, row, &geodetic, errorMessage))
             {
                 return false;
@@ -213,9 +225,9 @@ namespace xjw
                 int contributors = 0;
                 for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex)
                 {
-                    CameraImageCoordinate pixel;
-                    if (!images[imageIndex].camera.groundToImageGeodetic(geodetic[static_cast<std::size_t>(col)],
-                                                                         &pixel))
+                    camera_models::rpc::ImagePoint pixel;
+                    if (!camera_models::rpc::RpcProjection::groundToImage(
+                            *images[imageIndex].camera, geodetic[static_cast<std::size_t>(col)], &pixel))
                     {
                         continue;
                     }

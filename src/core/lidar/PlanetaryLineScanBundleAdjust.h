@@ -3,9 +3,11 @@
 #include "BundleAdjustSolver.h"
 #include "IsisControlNetworkPvl.h"
 #include "PlanetaryLaserShot.h"
-#include "PlanetaryLineScanCamera.h"
+#include "camera/models/linescan/LineScanInstance.h"
+#include "camera/models/linescan/LineScanProjection.h"
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,7 +25,7 @@ enum class PlanetaryLaserLineScanTimeMode
 struct PlanetaryLineScanBaCamera
 {
     std::string serialNumber;
-    PlanetaryLineScanCamera model;
+    std::shared_ptr<const camera_models::linescan::LineScanInstance> instance;
 };
 
 struct PlanetaryLineScanBaOptions
@@ -120,8 +122,8 @@ struct PlanetaryLineScanBaResult
  * @brief Triangulate the midpoint of the shortest segment between two rays.
  */
 bool triangulatePlanetaryLineScanRays(
-    const PlanetaryLineScanCamera::ImagingRay &first,
-    const PlanetaryLineScanCamera::ImagingRay &second,
+    const camera_models::linescan::LineScanRay &first,
+    const camera_models::linescan::LineScanRay &second,
     std::array<double, 3> *pointBodyFixedMeters,
     double *raySeparationMeters = nullptr);
 

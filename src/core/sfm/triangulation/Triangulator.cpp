@@ -247,7 +247,7 @@ namespace xjw
             {
                 continue;
             }
-            const FramePinholeCamera& camera = _reconstruction.camera(imageId);
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _reconstruction.camera(imageId);
             double width = 0.0;
             double height = 0.0;
             if (camera.imageSize() && camera.imageSize()->samples > 0 && camera.imageSize()->lines > 0)
@@ -510,8 +510,8 @@ namespace xjw
             return false;
         }
 
-        const FramePinholeCamera& cam1 = _reconstruction.camera(imgId1);
-        const FramePinholeCamera& cam2 = _reconstruction.camera(imgId2);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam1 = _reconstruction.camera(imgId1);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam2 = _reconstruction.camera(imgId2);
 
         const ImageData& img1 = _reconstruction.image(imgId1);
         const ImageData& img2 = _reconstruction.image(imgId2);
@@ -562,7 +562,7 @@ namespace xjw
         {
             return 1e9;
         }
-        const FramePinholeCamera& cam = _reconstruction.camera(imageId);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
         const ImageData& img = _reconstruction.image(imageId);
 
         if (featureIdx >= img.keypoints.size())
@@ -856,7 +856,7 @@ namespace xjw
     {
         if (!_reconstruction.hasCamera(imageId))
             return false;
-        const FramePinholeCamera& cam = _reconstruction.camera(imageId);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
         const double world[3] = {xyz[0], xyz[1], xyz[2]};
         return cam.isPointInFront(world);
     }
@@ -873,7 +873,8 @@ namespace xjw
                 continue;
             }
 
-            const FramePinholeCamera& cameraI = _reconstruction.camera(observations[i].imageId);
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraI =
+                _reconstruction.camera(observations[i].imageId);
             const auto centerI = cameraI.cameraCenter();
 
             for (size_t j = i + 1; j < observations.size(); ++j)
@@ -883,7 +884,8 @@ namespace xjw
                     continue;
                 }
 
-                const FramePinholeCamera& cameraJ = _reconstruction.camera(observations[j].imageId);
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraJ =
+                    _reconstruction.camera(observations[j].imageId);
                 const auto centerJ = cameraJ.cameraCenter();
 
                 const double rayI[3] = {xyz[0] - centerI[0], xyz[1] - centerI[1], xyz[2] - centerI[2]};
@@ -938,9 +940,9 @@ namespace xjw
             }
 
             const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-            CameraImagingRay ray;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
             if (!_reconstruction.camera(element.imageId)
-                     .rayForPixel(CameraImageCoordinate{keypoint.x, keypoint.y}, &ray))
+                     .rayForPixel({static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)}, &ray))
             {
                 continue;
             }
@@ -973,9 +975,9 @@ namespace xjw
             g -= xz;
             h -= yz;
             i += oneMinusZz;
-            rhsX += (oneMinusXx * ray.originMeters[0] - xy * ray.originMeters[1]) - xz * ray.originMeters[2];
-            rhsY += (-xy * ray.originMeters[0] + oneMinusYy * ray.originMeters[1]) - yz * ray.originMeters[2];
-            rhsZ += (-xz * ray.originMeters[0] - yz * ray.originMeters[1]) + oneMinusZz * ray.originMeters[2];
+            rhsX += (oneMinusXx * ray.origin[0] - xy * ray.origin[1]) - xz * ray.origin[2];
+            rhsY += (-xy * ray.origin[0] + oneMinusYy * ray.origin[1]) - yz * ray.origin[2];
+            rhsZ += (-xz * ray.origin[0] - yz * ray.origin[1]) + oneMinusZz * ray.origin[2];
             ++rayCount;
         }
 

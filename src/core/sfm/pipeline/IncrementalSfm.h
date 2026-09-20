@@ -15,7 +15,7 @@
 //      e) 过滤低质量三维点和坏帧
 //   4. 输出最终重建结果
 //
-// 依赖模块：FramePinholeCamera, Intersection,
+// 依赖模块：FramePinholeNumericState, Intersection,
 //           BundleAdjust, PnpSolver, Triangulator
 // ============================================================
 
@@ -28,7 +28,8 @@
 #include "registration/PriorTrack.h"
 
 #include "BundleAdjustSolver.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "camera/reference/resolve/CameraReferencePosePrior.h"
 
 #include <array>
 #include <functional>
@@ -97,6 +98,14 @@ namespace xjw
         double knownPosePriorPositionSigmaScale = 1.0;
         /// 已知外参 soft prior 的旋转 sigma（deg）。
         double knownPosePriorRotationSigmaDegrees = 2.0;
+        /**
+         * 已解析、带 image UUID/frame/provenance 的外部姿态先验。
+         *
+         * 这是独立的软约束来源，不等价于 useKnownCameraPoses；只有在
+         * SfM 数值相机已经绑定显式 typed identity 后，协调器才会将其
+         * 对齐为 BACameraPosePrior。
+         */
+        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
         /// 自动选择初始像对时的最大候选对数量（参考 COLMAP 多候选重试策略）
         int maxInitPairCandidates = 40;
         /// 按完整输入轨迹共视数排序，并用三/五相机试算选择初始模型。
@@ -391,7 +400,7 @@ namespace xjw
          */
         void addImageWithCamera(ImageId id,
                                 const std::string& imagePath,
-                                const FramePinholeCamera& camera,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                 const std::vector<FeatureKeypoint>& keypoints,
                                 const std::string& sensorKey = {});
 
@@ -453,11 +462,12 @@ namespace xjw
         /// 输入的相机文件路径（imageId → cameraPath）
         std::unordered_map<ImageId, std::string> _cameraPaths;
 
-        /// 预设的相机对象（imageId → FramePinholeCamera），由 addImageWithCamera 填充
-        std::unordered_map<ImageId, FramePinholeCamera> _preloadedCameras;
+        /// 预设的相机对象（imageId → FramePinholeNumericState），由 addImageWithCamera 填充
+        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> _preloadedCameras;
 
         /// 整次增量重建生命周期内稳定的自标定参考；后续全局/重试 BA 不重新锚定已优化内参。
-        std::unordered_map<ImageId, FramePinholeCamera> _stableIntrinsicReferenceByImageId;
+        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+            _stableIntrinsicReferenceByImageId;
 
         /// 最近一次内部操作的错误描述（供 run() 写入 result.summary）
         std::string _lastErrorMessage;
@@ -566,21 +576,24 @@ namespace xjw
          * @param cam      输出相机对象
          * @return 成功返回 true
          */
-        bool getCamera(ImageId imageId, FramePinholeCamera& cam) const;
+        bool getCamera(ImageId imageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const;
 
         void materializePriorTracks();
         void rebuildInputTrackObservationIndex();
         void applyPriorTrackDiagnostics(IncrementalSfmResult* result) const;
         void applyControlNetworkDiagnostics(IncrementalSfmResult* result) const;
-        bool tryApplyControlNetwork(const std::vector<ImageId>& baImageIds, std::vector<FramePinholeCamera>* baCameras);
+        bool
+        tryApplyControlNetwork(const std::vector<ImageId>& baImageIds,
+                               std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras);
         const control_points::PriorTrack* priorTrack(const std::string& markerId) const;
         void tagPriorTrackSource(Track* track) const;
 
         std::vector<BACameraPosePrior>
         buildCameraPosePriorsFromInputCameras(const std::vector<ImageId>& imageIds) const;
 
-        void alignReconstructionToKnownPosePriors(const std::vector<ImageId>& imageIds,
-                                                  std::vector<FramePinholeCamera>* baCameras);
+        void alignReconstructionToKnownPosePriors(
+            const std::vector<ImageId>& imageIds,
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras);
 
         void refineKnownCameraPosesWithPnp();
 
@@ -598,7 +611,8 @@ namespace xjw
          * @param cam         输出相机对象
          * @return 成功返回 true
          */
-        bool loadCamera(const std::string& cameraPath, FramePinholeCamera& cam) const;
+        bool loadCamera(const std::string& cameraPath,
+                        xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const;
 
         /**
          * @brief 返回多个初始像对候选（按匹配数降序排序）。
@@ -623,10 +637,13 @@ namespace xjw
          */
         bool initializeFromPair(ImageId id1, ImageId id2);
 
-        bool
-        initializeFromPairPose(ImageId id1, ImageId id2, const FramePinholeCamera& secondCamera, int poseInliers = 0);
+        bool initializeFromPairPose(ImageId id1,
+                                    ImageId id2,
+                                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera,
+                                    int poseInliers = 0);
 
-        std::vector<FramePinholeCamera> initialPairPoseHypotheses(ImageId id1, ImageId id2) const;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+        initialPairPoseHypotheses(ImageId id1, ImageId id2) const;
 
         /**
          * @brief 初始像对已经注册后，执行后续增量注册、BA 和结果组装。
@@ -669,7 +686,7 @@ namespace xjw
         struct ImageRegistrationEvaluation
         {
             bool success = false;
-            FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
             int supportingInliers = 0;
             std::size_t observations = 0;
             std::size_t rawProposals = 0;
@@ -719,15 +736,18 @@ namespace xjw
         /**
          * @brief 检查 PnP 结果是否破坏照片序列的局部相机中心距离。
          */
-        bool validateSequencePoseConsistency(ImageId imageId,
-                                             const FramePinholeCamera& candidateCamera,
-                                             std::string* reason,
-                                             bool force = false) const;
+        bool validateSequencePoseConsistency(
+            ImageId imageId,
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& candidateCamera,
+            std::string* reason,
+            bool force = false) const;
 
         /**
          * @brief 使用已注册的序列相邻相机为 PnP 生成外参初值。
          */
-        bool makeSequenceInitialPoseGuess(ImageId imageId, FramePinholeCamera* guessCamera) const;
+        bool
+        makeSequenceInitialPoseGuess(ImageId imageId,
+                                     xjw::camera_models::frame_pinhole::FramePinholeNumericState* guessCamera) const;
 
         /**
          * @brief 执行光束法平差。
@@ -741,7 +761,8 @@ namespace xjw
          */
         void runBundleAdjust(bool localOnly = false,
                              const std::vector<ImageId>& anchorIds = {},
-                             const std::vector<FramePinholeCamera>* stableIntrinsicReferences = nullptr,
+                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>*
+                                 stableIntrinsicReferences = nullptr,
                              int maxIterationsOverride = 0,
                              SfmBundleAdjustmentStage stage = SfmBundleAdjustmentStage::Incremental);
 

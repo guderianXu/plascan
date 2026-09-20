@@ -7,7 +7,6 @@ add_library(qc STATIC
     ModelImageMetrics.cpp
     ModelGeometryComparator.cpp
     ModelImageQualityEvaluator.cpp
-    ProcessingBaselineManager.cpp
 )
 
 target_include_directories(qc PUBLIC
@@ -16,13 +15,17 @@ target_include_directories(qc PUBLIC
 
 target_link_libraries(qc PUBLIC
     plapoint::plapoint
-    camera
+    camera_models_frame_pinhole
     meshing_algorithms
     Qt6::Core
     ${OpenCV_LIBS}
 )
 
 target_compile_features(qc PUBLIC cxx_std_20)
+
+add_library(qc_baseline STATIC EXCLUDE_FROM_ALL ProcessingBaselineManager.cpp)
+target_link_libraries(qc_baseline PUBLIC qc)
+target_compile_features(qc_baseline PUBLIC cxx_std_20)
 
 if(BUILD_TESTS)
     include(GoogleTest)
@@ -114,7 +117,7 @@ if(BUILD_TESTS)
     )
 
     target_link_libraries(test_processing_baseline_manager PRIVATE
-        qc
+        qc_baseline
         model_workflow
         Qt6::Core
         GTest::gtest_main

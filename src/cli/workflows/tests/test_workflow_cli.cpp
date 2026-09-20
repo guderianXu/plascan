@@ -26,7 +26,9 @@ QString reportedPath(const CliResult &result, const QString &key)
     return match.hasMatch() ? match.captured(1).trimmed() : QString();
 }
 
-QJsonObject replayCameraModel(double centerX)
+QJsonObject replayCameraModel(double centerX,
+                              const QString &instanceId,
+                              const QString &imageId)
 {
     return QJsonObject{
         {QStringLiteral("fx"), 100.0},
@@ -37,7 +39,10 @@ QJsonObject replayCameraModel(double centerX)
          QJsonArray{1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
                     0.0, 0.0, 1.0}},
-        {QStringLiteral("camera_center"), QJsonArray{centerX, 0.0, 0.0}}
+        {QStringLiteral("camera_center"), QJsonArray{centerX, 0.0, 0.0}},
+        {QStringLiteral("instance_id"), instanceId},
+        {QStringLiteral("image_id"), imageId},
+        {QStringLiteral("world_frame"), QStringLiteral("test-world")}
     };
 }
 
@@ -69,14 +74,16 @@ QString writeReplayManifest(const QString &root, bool includeVerifiedSourcePlan)
             {QStringLiteral("ref_index"), 0},
             {QStringLiteral("ref_image"), image0},
             {QStringLiteral("source_plan"), sourcePlan},
-            {QStringLiteral("camera_model"), replayCameraModel(0.0)},
+            {QStringLiteral("camera_model"),
+             replayCameraModel(0.0, QStringLiteral("instance-0"), QStringLiteral("image-0"))},
             {QStringLiteral("status"), QStringLiteral("completed")}
         },
         QJsonObject{
             {QStringLiteral("ref_index"), 1},
             {QStringLiteral("ref_image"), image1},
             {QStringLiteral("source_plan"), QJsonArray{}},
-            {QStringLiteral("camera_model"), replayCameraModel(0.1)},
+            {QStringLiteral("camera_model"),
+             replayCameraModel(0.1, QStringLiteral("instance-1"), QStringLiteral("image-1"))},
             {QStringLiteral("status"), QStringLiteral("completed")}
         }
     };
@@ -118,13 +125,15 @@ QString writeRelativeReplayManifest(const QString &root)
                  {QStringLiteral("pair_total_matches"), 80},
                  {QStringLiteral("geometric_inliers"), 70},
                  {QStringLiteral("pair_coverage_score"), 0.75}}}},
-            {QStringLiteral("camera_model"), replayCameraModel(0.0)},
+            {QStringLiteral("camera_model"),
+             replayCameraModel(0.0, QStringLiteral("instance-0"), QStringLiteral("image-0"))},
             {QStringLiteral("status"), QStringLiteral("completed")}},
         QJsonObject{
             {QStringLiteral("ref_index"), 1},
             {QStringLiteral("ref_image"), storedImage1},
             {QStringLiteral("source_plan"), QJsonArray{}},
-            {QStringLiteral("camera_model"), replayCameraModel(0.1)},
+            {QStringLiteral("camera_model"),
+             replayCameraModel(0.1, QStringLiteral("instance-1"), QStringLiteral("image-1"))},
             {QStringLiteral("status"), QStringLiteral("completed")}}
     };
     const QString manifestPath =
@@ -238,16 +247,12 @@ TEST(MvsDepthReprocessCliContractTest,
     });
 }
 
-TEST(MvsDepthReprocessCliContractTest, SourceMaximumAngleCapCannotBeBypassedBySequenceFallback)
+TEST(MvsDepthReprocessCliContractTest, SourceAngleSafetyAndStandalonePlannerDiagnosticsRemainAvailable)
 {
     const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
     const QString planner = readSourceFile(QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
 
     expectContainsAll(generator, {
-        "if (angle_cap_enabled)",
-        "plannerOptions.allowSequenceFallback = false",
-        "mvsSourceAngleDiagnosticsToJson",
-        "safe_baseline_source_shortfall",
         "applySourceAngleCapShortfallSafety",
         "source_angle_cap_source_shortfall",
     });
@@ -264,7 +269,6 @@ TEST(MvsDepthReprocessCliContractTest,
      CompleteVisibilityPoolAndSoftRankingAreExplicitAndAudited)
 {
     const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
     const QString planner = readSourceFile(QStringLiteral("src/core/mvs/MvsSourcePlanner.cpp"));
 
     expectContainsAll(source, {
@@ -282,18 +286,6 @@ TEST(MvsDepthReprocessCliContractTest,
         "complete_evaluated_visibility_candidate_pool",
         "source_angle_soft_ranking_strength",
         "legacy_score*exp(-strength*t)",
-    });
-    expectContainsAll(generator, {
-        "legacyCandidatePoolClosed",
-        "evaluateCompleteVisibilityCandidatePool",
-        "plannerOptions.auditSourceRanking",
-        "legacyCandidateAngles.push_back(medianAngle)",
-        "legacyCandidateAngles)",
-        "if (legacy_evaluated_candidate && hasRequiredPairQuality",
-        "if (_config.evaluateCompleteVisibilityCandidatePool)",
-        "plannerOptions.softMaxTriangulationAngleDeg",
-        "plannerOptions.maxTriangulationAngleDeg",
-        "mvsSourceRankingDiagnosticsToJson",
     });
     expectContainsAll(planner, {
         "complete_evaluated_visibility_candidate_pool",
@@ -391,11 +383,11 @@ TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticO
     });
 }
 
-TEST(MvsDepthReprocessCliContractTest,
-     DepthLayerReliabilityAnchorGateIsExplicitAndDefaultOff)
+TEST(MvsDepthReprocessCliContractTest, ReliabilityAnchorConfigurationAndStandaloneAlgorithmsRemainAvailable)
 {
     const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    const QString reliability = readSourceFile(QStringLiteral("src/core/mvs/DepthLayerReliability.cpp"));
+    const QString repair = readSourceFile(QStringLiteral("src/core/mvs/DepthCrossViewHoleRepair.cpp"));
 
     expectContainsAll(source, {
         "--depth-layer-reliability-anchor-gate",
@@ -403,17 +395,14 @@ TEST(MvsDepthReprocessCliContractTest,
         "depth_layer_reliability_anchor_gate",
         "不直接删除深度，默认关闭",
     });
-    expectContainsAll(generator, {
-        "DepthLayerReliabilityClass::Reliable",
-        "native_interpolation_anchor_eligibility",
-    });
+    expectContainsAll(reliability, {"DepthLayerReliabilityClass::Reliable"});
+    expectContainsAll(repair, {"native_interpolation_anchor_eligibility_mask"});
 }
 
-TEST(MvsDepthReprocessCliContractTest,
-     DepthLayerReliabilityCorrectionIsIndependentAndDefaultOff)
+TEST(MvsDepthReprocessCliContractTest, ReliabilityCorrectionConfigurationAndStandaloneAlgorithmRemainAvailable)
 {
     const QString source = readSourceFile(QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
-    const QString generator = xjw::tests::readMvsPipelineImplementation(readSourceFile);
+    const QString repair = readSourceFile(QStringLiteral("src/core/mvs/DepthCrossViewHoleRepair.cpp"));
 
     expectContainsAll(source, {
         "--depth-layer-reliability-guided-correction",
@@ -422,11 +411,11 @@ TEST(MvsDepthReprocessCliContractTest,
         "至少三个独立投影来源",
         "默认关闭",
     });
-    expectContainsAll(generator, {
-        "enableReliabilityGuidedCorrection =",
-        "native_reliability_classes",
-        "depth_layer_reliability.result.classMap",
-    });
+    expectContainsAll(repair,
+                      {
+                          "options.enableReliabilityGuidedCorrection",
+                          "native_reliability_class_map",
+                      });
 }
 
 TEST(MvsDepthReprocessCliContractTest, StageSnapshotsAreSelectedBoundedAndConditionallyReported)
@@ -893,15 +882,16 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
     expectNotContainsAll(workflow, {
         R"(mvs_backend == "auto" ? device : mvs_backend)",
     });
-    expectContainsAll(mvs, {
-        "pointCloudProcessingDevice",
-        "_config.patchMatch.cudaFallbackToCpu = false",
-        "const bool probeOpenCl = false",
-        "acceleratorDeviceLeases",
-        "acquire_device_lease",
-        "runRecoveredDepthScene",
-        "CPU/OpenCL 不会回退到旧 PatchMatch",
-    });
+    expectContainsAll(mvs,
+                      {
+                          "pointCloudProcessingDevice",
+                          "_config.patchMatch.cudaFallbackToCpu = false",
+                          "_config.patchMatch.backend = PatchMatchBackend::Cuda",
+                          "acceleratorDeviceLeases",
+                          "acquire_device_lease",
+                          "runRecoveredDepthScene",
+                          "CPU/OpenCL 不会回退到旧 PatchMatch",
+                      });
     expectContainsAll(gui_workflow, {
         "loadTrackedSparseCloud",
         "sparsePointSidecarPath",
@@ -1459,16 +1449,37 @@ TEST(ThreeDReconstructionCliContractTest, StreamsFusionAndUsesRegisteredCameras)
     });
     expectContainsAll(source, {
         "registeredImagePaths",
-        "sfmResult.pendingCamUpdates",
+        "sfmResult.cameraInstanceUpdates",
     });
     expectNotContainsAll(source, {
         "cameraByImage.insert(item.imagePath, item.camera);",
     });
     expectContainsAll(gui, {
         "registeredImages",
-        "result.pendingCamUpdates.keys()",
+        "result.cameraInstanceUpdates",
         "pmGuard->replaceTiePointResult(",
         "result.sparseCloudPath",
+    });
+}
+
+TEST(ThreeDReconstructionCliContractTest, MvsUsesCanonicalPinholeRuntimeAfterSfmWriteback)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+
+    expectContainsAll(source, {
+        "CameraProjectRuntime::load",
+        "planOperationForImages",
+        "CameraOperation::DenseMvs",
+        "framePinholeStatesForImages",
+        "canonicalMvsCameras",
+        "states.size() != imagePaths.size()",
+        "updatedCameraCount",
+        "resolveCanonicalMvsImagePaths",
+        "cameraInstanceUpdates.size()",
+    });
+    expectNotContainsAll(source, {
+        "decodeFramePinholeNumericState(it.value(), &camera)",
+        "cameraByImage.insert(imagePath, camera)",
     });
 }
 

@@ -11,7 +11,7 @@
 // ============================================================
 
 #include "BundleAdjustSolver.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <string>
@@ -76,7 +76,7 @@ public:
      * @return 过滤后的初始稀疏点结果
      */
     static InitialSparseTriangulationResult filter(
-        const std::vector<FramePinholeCamera> &cameras,
+        const std::vector<camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
         const std::vector<BATrack> &tracks,
         const InitialSparseTriangulationOptions &options = InitialSparseTriangulationOptions());
 };

@@ -32,12 +32,16 @@ endif()
 if(TARGET terrain)
     add_plascan_cli(small_body_terrain_cli
         SOURCE cli_small_body_terrain.cpp
-        LIBRARIES terrain Qt6::Core Qt6::Gui
+        LIBRARIES terrain Qt6::Core
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/terrain
             ${OpenCV_INCLUDE_DIRS}
     )
+    if(TARGET terrain_report_qt)
+        target_link_libraries(small_body_terrain_cli PRIVATE terrain_report_qt)
+        target_compile_definitions(small_body_terrain_cli PRIVATE PLASCAN_HAS_TERRAIN_REPORT)
+    endif()
 endif()
 
 set(workflow_cli_base_targets

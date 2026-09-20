@@ -48,8 +48,20 @@ Metashape 导出的 PDF/栅格黄金集验证。未安装该语料时 GUI 会禁
 CLI 会返回明确错误。导入方法见
 `testData/photogrammetry_benchmarks/marker_targets/README.md`。
 
-打印 GUI 和 `marker_print_cli` 共用 `MarkerSheetRenderer` 与 `MarkerPdfWriter`，
-因此页面尺寸、物理直径、边距和标签布局一致。实际 PDF 可这样回读：
+打印 GUI 和 `marker_print_cli` 显式链接 `marker_print_qt`，共用 `MarkerSheetRenderer` 与 `MarkerPdfWriter`。
+实现位于 `src/adapters/qt/markers/print`，新 target 导出原 `print/` 包含路径，core 不再编译打印代码。
+检测 core 接受二维 `CV_8UC1` 灰度 `cv::Mat` 和可选同尺寸灰度蒙版，非零蒙版像素表示排除；
+支持带行填充的矩阵和 ROI，调用期间借用输入存储，不保留输入引用。
+非法类型或蒙版尺寸会抛出明确的 `std::invalid_argument`；空图像或预取消返回空检测结果。
+角点类型为 `QVector<QPointF>`，`control_points` 仅保留 QtCore 依赖。
+GUI/CLI 显式链接 `marker_detection_qt`，通过
+`xjw::app::markers::detectMarkers(detector, image, mask, options)` 保留原 QImage 转换行为。
+`marker_detect_cli` 必须为每幅输入显式提供 `--image-id`；工具不会再从文件路径哈希生成
+伪造的影像身份。独立验证脚本使用页码 ID，进入工程前仍需由项目影像的 canonical
+`image_uuid` 绑定检测结果。
+图像仍使用 Qt 的 Grayscale8 转换，蒙版仍按 `qGray(pixel)` 读取，避免彩色/调色板蒙版改变语义。
+外部 QImage 调用方需改用此适配入口；直接调用 core 时应自行提供灰度矩阵。
+页面尺寸、物理直径、边距和标签布局保持一致。实际 PDF 可这样回读：
 
 ```powershell
 marker_print_cli --family tag36h11 --ids 1,2,3 --diameter-mm 30 `
@@ -65,6 +77,11 @@ marker_print_cli --family tag36h11 --ids 1,2,3 --diameter-mm 30 `
 Agisoft 表头 `#Name, Lat, Lon, Ell.H(m)` 会明确映射为
 `id, y=Lat, x=Lon, z=Ell.H`；GUI 为该格式补充 `EPSG:4979`、经度/纬度轴序、
 椭球高和米单位，普通无 CRS CSV 仍要求调用方明确提供角色及坐标参考信息。
+这些字段作为 raw reference 保留，并不表示可以直接进入数值解算。BA 与空三入口会调用
+`resolveMetricReferenceCoordinate()`：无 context 时将投影/地心线性 CRS 的坐标与 sigma 规范轴序并换算为米；
+EPSG:4979 等角度坐标直接拒绝。有显式、米制 `CoordinateContext` 时，源 CRS 必须已经注册，再由
+`coordinate_system_gdal` 转换到唯一 solver reference，并用数值 Jacobian 传播对角标准差。同一次求解中的
+混合 context、solver reference 或垂直基准仍会拒绝。
 
 ## 目录
 
@@ -75,7 +92,7 @@ control_points/
 ├── commands/       可撤销 MarkerChangeSet
 ├── detection/      AprilTag、非编码检测、合并和复核队列
 ├── geometry/       三角化、预测和亚像素几何
-├── reference/      CRS 与坐标转换
+├── reference/      raw/Qt DTO、旧线性 CRS 归一化与 solver 前门禁；context-aware 变换来自 coordinate_system
 ├── registration/   PriorTrack 和控制网络解算
 ├── quality/        投影、控制点、检查点和比例尺报告
 ├── print/          共享页面渲染和 PDF 输出

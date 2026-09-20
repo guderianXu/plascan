@@ -12,7 +12,7 @@ namespace xjw::detail::plamatrix_ba
 
     struct OptimizationState
     {
-        std::vector<FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         std::vector<std::array<double, 3>> points;
         std::vector<std::array<double, 3>> laserPoints;
         std::vector<IntrinsicGroupState> intrinsicGroups;
@@ -30,26 +30,29 @@ namespace xjw::detail::plamatrix_ba
         int partitionThreadCount = 0;
     };
 
-    OptimizationState initializeState(const std::vector<FramePinholeCamera>& cameras,
-                                      const std::vector<BATrack>& tracks,
-                                      const BAOptions& options,
-                                      const ActiveProblem& active);
+    OptimizationState
+    initializeState(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                    const std::vector<BATrack>& tracks,
+                    const BAOptions& options,
+                    const ActiveProblem& active);
 
-    void buildNormalEquations(const std::vector<FramePinholeCamera>& input_cameras,
-                              const std::vector<BATrack>& tracks,
-                              const BAOptions& options,
-                              const ActiveProblem& active,
-                              const OptimizationState& state,
-                              int iteration,
-                              NormalEquationAssemblyWorkspace* workspace,
-                              double* objective_cost = nullptr);
+    void
+    buildNormalEquations(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                         const std::vector<BATrack>& tracks,
+                         const BAOptions& options,
+                         const ActiveProblem& active,
+                         const OptimizationState& state,
+                         int iteration,
+                         NormalEquationAssemblyWorkspace* workspace,
+                         double* objective_cost = nullptr);
 
-    double evaluateObjective(const std::vector<FramePinholeCamera>& input_cameras,
-                             const std::vector<BATrack>& tracks,
-                             const BAOptions& options,
-                             const ActiveProblem& active,
-                             const OptimizationState& state,
-                             int iteration);
+    double
+    evaluateObjective(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                      const std::vector<BATrack>& tracks,
+                      const BAOptions& options,
+                      const ActiveProblem& active,
+                      const OptimizationState& state,
+                      int iteration);
 
     double maximumStepNorm(const std::vector<double>& primary_step, const std::vector<double>& eliminated_step);
 

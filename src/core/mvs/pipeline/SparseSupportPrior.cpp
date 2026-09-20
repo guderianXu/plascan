@@ -60,7 +60,7 @@ namespace xjw::mvs
             return cv::Mat();
         }
 
-        const FramePinholeCamera cam = mvsPinholeCamera(views[refIdx].camera);
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState cam = mvsPinholeCamera(views[refIdx].camera);
         if (!cam.isValid())
         {
             return cv::Mat();
@@ -183,36 +183,4 @@ namespace xjw::mvs
         return support;
     }
 
-    cv::Mat MvsPipelineService::buildSparseSupportMaskFromVisiblePoints(
-        int refIdx, int W, int H, const std::vector<size_t>& visiblePointIndices) const
-    {
-        if (refIdx < 0 || refIdx >= static_cast<int>(_views.size()))
-        {
-            return cv::Mat();
-        }
-
-        return buildSparseSupportMaskForCamera(
-            refIdx, mvsPinholeCamera(_views[refIdx].camera), W, H, visiblePointIndices);
-    }
-
-    cv::Mat MvsPipelineService::buildSparseSupportMaskForCamera(int refIdx,
-                                                                const FramePinholeCamera& camera,
-                                                                int W,
-                                                                int H,
-                                                                const std::vector<size_t>& visiblePointIndices) const
-    {
-        if (W <= 0 || H <= 0 || refIdx < 0 || refIdx >= static_cast<int>(_views.size()) || _sparse.points.size() < 20)
-        {
-            return cv::Mat();
-        }
-
-        if (!camera.isValid() || visiblePointIndices.size() < 20)
-        {
-            return cv::Mat();
-        }
-
-        const std::vector<ProjectedSparseDepthSample> samples =
-            collectProjectedSparseDepthSamples(_sparse, camera, W, H, visiblePointIndices);
-        return buildSparseSupportMaskFromProjectedSamples(refIdx, W, H, samples);
-    }
 } // namespace xjw::mvs

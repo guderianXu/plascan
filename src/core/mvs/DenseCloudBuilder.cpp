@@ -34,7 +34,7 @@ namespace xjw
 
             std::vector<DensePoint> unprojectCpu(const cv::Mat& depth,
                                                  const cv::Mat& mask,
-                                                 const FramePinholeCamera& cam,
+                                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
                                                  const cv::Mat& colorImg,
                                                  const DenseCloudOptions& options);
         } // namespace
@@ -50,7 +50,7 @@ namespace xjw
 
             std::vector<DensePoint> unprojectCpu(const cv::Mat& depth,
                                                  const cv::Mat& mask,
-                                                 const FramePinholeCamera& cam,
+                                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
                                                  const cv::Mat& colorImg,
                                                  const DenseCloudOptions& options)
             {
@@ -147,7 +147,7 @@ namespace xjw
 
             bool validateUnprojectionInput(const cv::Mat& depth,
                                            const cv::Mat& mask,
-                                           const FramePinholeCamera& camera,
+                                           const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                            const cv::Mat& color,
                                            const DenseCloudOptions& options,
                                            std::string* errorMsg)
@@ -195,11 +195,12 @@ namespace xjw
 
         } // namespace
 
-        std::vector<DensePoint> DenseCloudBuilder::unproject(const cv::Mat& depth,
-                                                             const cv::Mat& mask,
-                                                             const FramePinholeCamera& cameraModel,
-                                                             const cv::Mat& colorImg,
-                                                             const DenseCloudOptions& options)
+        std::vector<DensePoint>
+        DenseCloudBuilder::unproject(const cv::Mat& depth,
+                                     const cv::Mat& mask,
+                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                                     const cv::Mat& colorImg,
+                                     const DenseCloudOptions& options)
         {
             std::vector<DensePoint> cloud;
             std::string error;
@@ -210,14 +211,15 @@ namespace xjw
             return cloud;
         }
 
-        bool DenseCloudBuilder::unprojectWithReport(const cv::Mat& depth,
-                                                    const cv::Mat& mask,
-                                                    const FramePinholeCamera& cameraModel,
-                                                    const cv::Mat& colorImg,
-                                                    const DenseCloudOptions& options,
-                                                    std::vector<DensePoint>* cloud,
-                                                    DenseCloudExecutionReport* report,
-                                                    std::string* errorMsg)
+        bool DenseCloudBuilder::unprojectWithReport(
+            const cv::Mat& depth,
+            const cv::Mat& mask,
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+            const cv::Mat& colorImg,
+            const DenseCloudOptions& options,
+            std::vector<DensePoint>* cloud,
+            DenseCloudExecutionReport* report,
+            std::string* errorMsg)
         {
             DenseCloudExecutionReport localReport;
             localReport.requestedBackend = options.useGPU ? options.computeBackend : DenseCloudComputeBackend::Cpu;

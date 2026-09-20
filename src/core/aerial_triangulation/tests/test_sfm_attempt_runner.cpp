@@ -1,7 +1,13 @@
 #include "reconstruction/SfmAttemptRunner.h"
 #include "reconstruction/MarkerPriorLoader.h"
+#include "reconstruction/SfmReconstruction.h"
+#include "camera/reference/resolve/CameraReferencePosePrior.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "coordinate_system/context/CoordinateContext.h"
+#include "coordinate_system/gdal/GdalCoordinateTransform.h"
+#include "ProjectCameraIO.h"
+#include "io/ImageIO.h"
 #include "io/MarkerSetStore.h"
 
 #include <gtest/gtest.h>
@@ -12,7 +18,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
-#include <QImage>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -20,6 +25,8 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace
@@ -32,10 +39,41 @@ namespace
         file.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
     }
 
+    xjw::coordinate_system::CoordinateContext makeEarthContext()
+    {
+        using namespace xjw::coordinate_system;
+        const auto normalize =
+            [](const char* id, const char* frameId, const char* definition, VerticalReference verticalReference)
+        {
+            GdalSpatialReferenceResult result = normalizeGdalSpatialReference(
+                SpatialReferenceId(id), CoordinateFrameId(frameId), definition, verticalReference);
+            if (!result.ok())
+            {
+                throw std::runtime_error(result.error);
+            }
+            return std::move(*result.reference);
+        };
+        const auto frame = [](const char* id, CoordinateFrameKind kind, AngleUnit angles)
+        {
+            return CoordinateFrame::create(
+                CoordinateFrameId(id), kind, LinearUnit::Metre, angles, std::nullopt, RigidTransform::identity());
+        };
+        return CoordinateContext::create(
+            CoordinateContextId("coordctx-sfm-earth"),
+            1,
+            {normalize("crs-epsg-4979", "frame-wgs84-geodetic", "EPSG:4979", VerticalReference::Ellipsoidal),
+             normalize("crs-epsg-4978", "frame-wgs84-ecef", "EPSG:4978", VerticalReference::NotApplicable)},
+            {frame("frame-wgs84-geodetic", CoordinateFrameKind::Geodetic, AngleUnit::Degree),
+             frame("frame-wgs84-ecef", CoordinateFrameKind::Ecef, AngleUnit::Radian)},
+            SpatialReferenceId("crs-epsg-4978"),
+            SolverFrameDefinition::create(
+                CoordinateFrameId("frame-wgs84-ecef"), SolverScaleStatus::Metric, "sfm-ecef-v1"));
+    }
+
     QJsonObject makeKnownPoseTiePoints(const QString& imageA,
                                        const QString& imageB,
-                                       const xjw::FramePinholeCamera& cameraA,
-                                       const xjw::FramePinholeCamera& cameraB)
+                                       const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraA,
+                                       const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraB)
     {
         QJsonArray tracks;
         int featureIndex = 0;
@@ -77,11 +115,113 @@ namespace
         };
     }
 
+    QJsonObject makeCanonicalPinholeProject(const QString& imageA, const QString& imageB)
+    {
+        const QJsonObject definition{{QStringLiteral("id"), QStringLiteral("canonical-definition")},
+                                     {QStringLiteral("model_type"), QStringLiteral("frame_pinhole")},
+                                     {QStringLiteral("schema_version"), 1},
+                                     {QStringLiteral("frame"), QStringLiteral("sfm-test-world")},
+                                     {QStringLiteral("parameters"),
+                                      QJsonObject{{QStringLiteral("intrinsics"),
+                                                   QJsonObject{{QStringLiteral("fx_px"), 700.0},
+                                                               {QStringLiteral("fy_px"), 700.0},
+                                                               {QStringLiteral("cx_px"), 320.0},
+                                                               {QStringLiteral("cy_px"), 240.0},
+                                                               {QStringLiteral("pixel_pitch_mm"), 0.01},
+                                                               {QStringLiteral("u_axis_sign"), 1},
+                                                               {QStringLiteral("v_axis_sign"), 1}}},
+                                                  {QStringLiteral("distortion"),
+                                                   QJsonObject{{QStringLiteral("k1"), 0.0},
+                                                               {QStringLiteral("k2"), 0.0},
+                                                               {QStringLiteral("k3"), 0.0},
+                                                               {QStringLiteral("p1"), 0.0},
+                                                               {QStringLiteral("p2"), 0.0}}},
+                                                  {QStringLiteral("pixel_convention"), QStringLiteral("center")},
+                                                  {QStringLiteral("depth_axis_flipped"), false}}}};
+        const auto instance = [](const QString& instanceId, const QString& imageId, const std::array<double, 3>& center)
+        {
+            return QJsonObject{{QStringLiteral("id"), instanceId},
+                               {QStringLiteral("image_uuid"), imageId},
+                               {QStringLiteral("definition_id"), QStringLiteral("canonical-definition")},
+                               {QStringLiteral("schema_version"), 1},
+                               {QStringLiteral("image_size"),
+                                QJsonObject{{QStringLiteral("samples"), 640}, {QStringLiteral("lines"), 480}}},
+                               {QStringLiteral("pose"),
+                                QJsonObject{{QStringLiteral("frame"), QStringLiteral("sfm-test-world")},
+                                            {QStringLiteral("center_m"), QJsonArray{center[0], center[1], center[2]}},
+                                            {QStringLiteral("camera_to_world_rotation"),
+                                             QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}}};
+        };
+        return QJsonObject{
+            {QStringLiteral("images"),
+             QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-a-uuid")},
+                                    {QStringLiteral("path"), imageA}},
+                        QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-b-uuid")},
+                                    {QStringLiteral("path"), imageB}}}},
+            {QStringLiteral("camera_definitions"), QJsonArray{definition}},
+            {QStringLiteral("camera_instances"),
+             QJsonArray{
+                 instance(QStringLiteral("canonical-instance-a"), QStringLiteral("image-a-uuid"), {-0.5, 0.0, 0.0}),
+                 instance(QStringLiteral("canonical-instance-b"), QStringLiteral("image-b-uuid"), {0.5, 0.0, 0.0})}}};
+    }
+
+    QJsonObject makeCanonicalRpcProject(const QString& imageA, const QString& imageB)
+    {
+        QJsonArray numerator;
+        QJsonArray denominator;
+        for (int index = 0; index < 20; ++index)
+        {
+            numerator.append(index == 0 ? 1.0 : 0.0);
+            denominator.append(index == 0 ? 1.0 : 0.0);
+        }
+
+        const QJsonObject definition{{QStringLiteral("id"), QStringLiteral("canonical-rpc-definition")},
+                                     {QStringLiteral("model_type"), QStringLiteral("rpc00b")},
+                                     {QStringLiteral("schema_version"), 1},
+                                     {QStringLiteral("frame"), QStringLiteral("wgs84-geodetic")},
+                                     {QStringLiteral("parameters"),
+                                      QJsonObject{{QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
+                                                  {QStringLiteral("line_offset"), 0.0},
+                                                  {QStringLiteral("sample_offset"), 0.0},
+                                                  {QStringLiteral("latitude_offset"), 0.0},
+                                                  {QStringLiteral("longitude_offset"), 0.0},
+                                                  {QStringLiteral("height_offset"), 0.0},
+                                                  {QStringLiteral("line_scale"), 1.0},
+                                                  {QStringLiteral("sample_scale"), 1.0},
+                                                  {QStringLiteral("latitude_scale"), 1.0},
+                                                  {QStringLiteral("longitude_scale"), 1.0},
+                                                  {QStringLiteral("height_scale"), 1.0},
+                                                  {QStringLiteral("line_numerator"), numerator},
+                                                  {QStringLiteral("line_denominator"), denominator},
+                                                  {QStringLiteral("sample_numerator"), numerator},
+                                                  {QStringLiteral("sample_denominator"), denominator}}}};
+        const auto instance = [](const QString& instanceId, const QString& imageId)
+        {
+            return QJsonObject{{QStringLiteral("id"), instanceId},
+                               {QStringLiteral("image_uuid"), imageId},
+                               {QStringLiteral("definition_id"), QStringLiteral("canonical-rpc-definition")},
+                               {QStringLiteral("schema_version"), 1},
+                               {QStringLiteral("image_size"),
+                                QJsonObject{{QStringLiteral("samples"), 640}, {QStringLiteral("lines"), 480}}}};
+        };
+        return QJsonObject{
+            {QStringLiteral("images"),
+             QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-a-uuid")},
+                                    {QStringLiteral("path"), imageA}},
+                        QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-b-uuid")},
+                                    {QStringLiteral("path"), imageB}}}},
+            {QStringLiteral("camera_definitions"), QJsonArray{definition}},
+            {QStringLiteral("camera_instances"),
+             QJsonArray{instance(QStringLiteral("canonical-rpc-instance-a"), QStringLiteral("image-a-uuid")),
+                        instance(QStringLiteral("canonical-rpc-instance-b"), QStringLiteral("image-b-uuid"))}}};
+    }
+
 } // namespace
 
 TEST(SfmAttemptRunnerTest, ReadsPersistedTiePointTracksIntoCompactObservationGraph)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
@@ -123,9 +263,9 @@ TEST(SfmAttemptRunnerTest, ReadsPersistedTiePointTracksIntoCompactObservationGra
         << qPrintable(errorMessage);
 
     EXPECT_EQ(graph.imagePaths.size(), 2);
-    EXPECT_EQ(graph.keypointsByImage.value(0).size(), 2u);
-    EXPECT_EQ(graph.keypointsByImage.value(1).size(), 2u);
-    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 1.0f);
+    EXPECT_EQ(graph.keypointsByImage.at(0).size(), 2u);
+    EXPECT_EQ(graph.keypointsByImage.at(1).size(), 2u);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.at(0).front().scale, 1.0f);
     ASSERT_EQ(graph.matchPairs.size(), 1u);
     EXPECT_EQ(graph.matchPairs.front().matches.size(), 2u);
     EXPECT_EQ(graph.trackCount, 2);
@@ -136,9 +276,138 @@ TEST(SfmAttemptRunnerTest, ReadsPersistedTiePointTracksIntoCompactObservationGra
     EXPECT_EQ(graph.synthesizedClosureEdgeCount, 2u);
 }
 
+TEST(SfmAttemptRunnerTest, RejectsIncompleteExplicitCameraBindingsBeforeReadingInputs)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
+    input.cameraBindings = {
+        {xjw::camera_core::CameraInstanceId("instance-a"),
+         xjw::camera_core::ImageId("image-a"),
+         xjw::coordinate_system::CoordinateFrameId("world")},
+    };
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("cameraBindings")), -1);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsExternalPoseReferencesWithoutCameraBindingsWithReason)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png")};
+
+    xjw::camera_reference::CameraReferenceObservation observation{xjw::camera_core::ImageId("image-a"),
+                                                                  xjw::camera_core::ReferenceSourceId("gnss"),
+                                                                  xjw::coordinate_system::CoordinateFrameId("world")};
+    xjw::camera_reference::ResolvedCameraReference resolved;
+    resolved.status = xjw::camera_reference::ReferenceResolutionStatus::Resolved;
+    resolved.targetFrame = xjw::coordinate_system::CoordinateFrameId("world");
+    resolved.pose =
+        xjw::camera_core::Pose::create(xjw::coordinate_system::CoordinateFrameId("world"),
+                                       {0.0, 0.0, 0.0},
+                                       xjw::camera_core::Rotation{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}});
+    resolved.transformProvenanceHash = "provenance-hash";
+    resolved.transformHash = "transform-hash";
+    const auto priorResult = xjw::camera_reference::makeResolvedCameraPosePrior(observation, resolved);
+    ASSERT_TRUE(priorResult.ok()) << priorResult.reason;
+    input.cameraReferencePosePriors.push_back(*priorResult.prior);
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_FALSE(result.result.errorMessage.isEmpty());
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("cameraBindings")), -1);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("外部相机姿态参考")), -1);
+    EXPECT_EQ(result.result.summary, result.result.errorMessage);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsDuplicateExplicitCameraBindings)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
+    input.cameraBindings = {
+        {xjw::camera_core::CameraInstanceId("instance-a"),
+         xjw::camera_core::ImageId("image-a"),
+         xjw::coordinate_system::CoordinateFrameId("world")},
+        {xjw::camera_core::CameraInstanceId("instance-a"),
+         xjw::camera_core::ImageId("image-b"),
+         xjw::coordinate_system::CoordinateFrameId("world")},
+    };
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("重复")), -1);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsCameraBindingOrderThatDisagreesWithImageIds)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
+    input.imageIds = {xjw::camera_core::ImageId("image-a"), xjw::camera_core::ImageId("image-b")};
+    input.cameraBindings = {
+        {xjw::camera_core::CameraInstanceId("instance-a"),
+         xjw::camera_core::ImageId("image-b"),
+         xjw::coordinate_system::CoordinateFrameId("world")},
+        {xjw::camera_core::CameraInstanceId("instance-b"),
+         xjw::camera_core::ImageId("image-a"),
+         xjw::coordinate_system::CoordinateFrameId("world")},
+    };
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("imageIds")), -1);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsExplicitBindingThatDisagreesWithCanonicalProjectIdentity)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
+    input.projectMeta = makeCanonicalPinholeProject(input.images.at(0), input.images.at(1));
+    input.cameraBindings = {
+        {xjw::camera_core::CameraInstanceId("wrong-instance-a"),
+         xjw::camera_core::ImageId("image-a-uuid"),
+         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+        {xjw::camera_core::CameraInstanceId("canonical-instance-b"),
+         xjw::camera_core::ImageId("image-b-uuid"),
+         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+    };
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("canonical")), -1);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("cameraBindings")), -1);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsCanonicalRpcBeforeStaticSfMNumericFallback)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
+    input.imageIds = {xjw::camera_core::ImageId("image-a-uuid"), xjw::camera_core::ImageId("image-b-uuid")};
+    input.projectMeta = makeCanonicalRpcProject(input.images.at(0), input.images.at(1));
+    input.preparedTiePointGraph = std::make_shared<const xjw::aerial_triangulation::PreparedTiePointGraph>();
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("static_sfm")), -1);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("static_pose")), -1);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsAmbiguousCanonicalImagePathBeforeCameraSelection)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("same.png")};
+    input.imageIds = {xjw::camera_core::ImageId("image-b-uuid")};
+    input.projectMeta = makeCanonicalPinholeProject(QStringLiteral("same.png"), QStringLiteral("same.png"));
+    input.preparedTiePointGraph = std::make_shared<const xjw::aerial_triangulation::PreparedTiePointGraph>();
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_NE(result.result.errorMessage.indexOf(QStringLiteral("ambiguous")), -1);
+}
+
 TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackClosure)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
@@ -193,8 +462,8 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
     EXPECT_EQ(graph.tracks.front().length(), 3u);
     EXPECT_EQ(graph.directEdgeCount, 2u);
     EXPECT_EQ(graph.synthesizedClosureEdgeCount, 0u);
-    ASSERT_FALSE(graph.keypointsByImage.value(0).empty());
-    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 2.5f);
+    ASSERT_FALSE(graph.keypointsByImage.at(0).empty());
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.at(0).front().scale, 2.5f);
     ASSERT_EQ(graph.matchPairs.size(), 2u);
     EXPECT_EQ(graph.matchPairs[0].matches.size(), 1u);
     EXPECT_EQ(graph.matchPairs[1].matches.size(), 1u);
@@ -203,7 +472,8 @@ TEST(SfmAttemptRunnerTest, PreservesVersion2DirectEdgesWithoutSynthesizingTrackC
 
 TEST(SfmAttemptRunnerTest, ReadsVersion3CompactObservations)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
@@ -242,16 +512,17 @@ TEST(SfmAttemptRunnerTest, ReadsVersion3CompactObservations)
     EXPECT_TRUE(graph.usesRawDirectEdges);
     ASSERT_EQ(graph.tracks.size(), 1u);
     EXPECT_EQ(graph.directEdgeCount, 1u);
-    ASSERT_EQ(graph.keypointsByImage.value(0).size(), 1u);
-    ASSERT_EQ(graph.keypointsByImage.value(1).size(), 1u);
-    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().x, 12.5f);
-    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(0).front().scale, 1.5f);
-    EXPECT_FLOAT_EQ(graph.keypointsByImage.value(1).front().scale, 2.5f);
+    ASSERT_EQ(graph.keypointsByImage.at(0).size(), 1u);
+    ASSERT_EQ(graph.keypointsByImage.at(1).size(), 1u);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.at(0).front().x, 12.5f);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.at(0).front().scale, 1.5f);
+    EXPECT_FLOAT_EQ(graph.keypointsByImage.at(1).front().scale, 2.5f);
 }
 
 TEST(SfmAttemptRunnerTest, RejectsTiePointFileFromAnotherImageSet)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
     const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
     writeJson(
@@ -275,7 +546,8 @@ TEST(SfmAttemptRunnerTest, RejectsTiePointFileFromAnotherImageSet)
 
 TEST(SfmAttemptRunnerTest, ResolvesUnicodeTiffSizeWithoutUsingKeypointBounds)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
     const QString unicodeDir = QDir(tempDir.path()).filePath(QStringLiteral("三维建模"));
     ASSERT_TRUE(QDir().mkpath(unicodeDir));
@@ -294,7 +566,8 @@ TEST(SfmAttemptRunnerTest, ResolvesUnicodeTiffSizeWithoutUsingKeypointBounds)
 
 TEST(SfmAttemptRunnerTest, LoadsMarkerTracksAndScaleBarsFromProjectSidecar)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
@@ -341,12 +614,12 @@ TEST(SfmAttemptRunnerTest, LoadsMarkerTracksAndScaleBarsFromProjectSidecar)
         xjw::control_points::MarkerSetStore(markerPath).save(markerSet);
     ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
 
-    QMap<QString, xjw::ImageId> imageIdByPath;
-    imageIdByPath.insert(QDir::cleanPath(QFileInfo(imageA).absoluteFilePath()), 5);
-    imageIdByPath.insert(QDir::cleanPath(QFileInfo(imageB).absoluteFilePath()), 8);
+    QMap<QString, xjw::ImageId> imageIdByCanonicalId;
+    imageIdByCanonicalId.insert(QStringLiteral("image-a"), 5);
+    imageIdByCanonicalId.insert(QStringLiteral("image-b"), 8);
 
     const xjw::aerial_triangulation::MarkerPriorLoadResult loaded =
-        xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, QJsonObject(), imageIdByPath);
+        xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, QJsonObject(), imageIdByCanonicalId);
 
     ASSERT_TRUE(loaded.ok) << qPrintable(loaded.errorMessage);
     ASSERT_EQ(loaded.tracks.size(), 2u);
@@ -361,27 +634,159 @@ TEST(SfmAttemptRunnerTest, LoadsMarkerTracksAndScaleBarsFromProjectSidecar)
     EXPECT_EQ(loaded.scaleBars.front().secondMarkerId, secondMarker.toStdString());
 }
 
+TEST(SfmAttemptRunnerTest, RejectsGeographicMarkerReferenceBeforeSfm)
+{
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString markerPath = QDir(tempDir.path()).filePath(QStringLiteral("geographic-markers.json"));
+    xjw::control_points::MarkerSet markerSet;
+    const xjw::control_points::MarkerId markerId =
+        markerSet.addMarker(QStringLiteral("geographic-gcp"), xjw::control_points::MarkerRole::ControlPoint);
+    xjw::control_points::ReferenceCoordinate reference;
+    reference.x = 116.391;
+    reference.y = 39.907;
+    reference.z = 50.0;
+    reference.sigmaX = 0.01;
+    reference.sigmaY = 0.01;
+    reference.sigmaZ = 0.02;
+    reference.sourceCrs = QStringLiteral("EPSG:4979");
+    reference.axisOrder = QStringLiteral("longitude_latitude");
+    reference.verticalDatum = QStringLiteral("ellipsoidal");
+    reference.verticalUnit = QStringLiteral("m");
+    markerSet.setReferenceCoordinate(markerId, reference);
+
+    for (const QString& imageId : {QStringLiteral("image-a"), QStringLiteral("image-b")})
+    {
+        xjw::control_points::MarkerProjection projection;
+        projection.imageId = imageId;
+        projection.xy = QPointF(100.0, 120.0);
+        projection.state = xjw::control_points::ProjectionState::ManualPinned;
+        markerSet.upsertProjection(markerId, projection);
+    }
+    const xjw::control_points::MarkerSetIoResult saved =
+        xjw::control_points::MarkerSetStore(markerPath).save(markerSet);
+    ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
+
+    const QMap<QString, xjw::ImageId> imageIds{{QStringLiteral("image-a"), 5}, {QStringLiteral("image-b"), 8}};
+    const xjw::aerial_triangulation::MarkerPriorLoadResult loaded =
+        xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, QJsonObject(), imageIds);
+
+    EXPECT_FALSE(loaded.ok);
+    EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("geographic-gcp")));
+    EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("地理角坐标")));
+}
+
+TEST(SfmAttemptRunnerTest, ResolvesGeographicMarkerReferenceWithCoordinateContext)
+{
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString markerPath = QDir(tempDir.path()).filePath(QStringLiteral("context-geographic-markers.json"));
+    xjw::control_points::MarkerSet markerSet;
+    const xjw::control_points::MarkerId markerId =
+        markerSet.addMarker(QStringLiteral("context-geographic-gcp"), xjw::control_points::MarkerRole::ControlPoint);
+    xjw::control_points::ReferenceCoordinate reference;
+    reference.x = 116.391;
+    reference.y = 39.907;
+    reference.z = 50.0;
+    reference.sigmaX = 1.0e-5;
+    reference.sigmaY = 1.0e-5;
+    reference.sigmaZ = 0.25;
+    reference.sourceCrs = QStringLiteral("EPSG:4979");
+    reference.axisOrder = QStringLiteral("longitude_latitude");
+    reference.verticalDatum = QStringLiteral("ellipsoidal");
+    reference.verticalUnit = QStringLiteral("m");
+    markerSet.setReferenceCoordinate(markerId, reference);
+
+    for (const QString& imageId : {QStringLiteral("image-a"), QStringLiteral("image-b")})
+    {
+        xjw::control_points::MarkerProjection projection;
+        projection.imageId = imageId;
+        projection.xy = QPointF(100.0, 120.0);
+        projection.state = xjw::control_points::ProjectionState::ManualPinned;
+        markerSet.upsertProjection(markerId, projection);
+    }
+    const xjw::control_points::MarkerSetIoResult saved =
+        xjw::control_points::MarkerSetStore(markerPath).save(markerSet);
+    ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
+
+    const QMap<QString, xjw::ImageId> imageIds{{QStringLiteral("image-a"), 5}, {QStringLiteral("image-b"), 8}};
+    const xjw::coordinate_system::CoordinateContext context = makeEarthContext();
+    const xjw::aerial_triangulation::MarkerPriorLoadResult loaded =
+        xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, QJsonObject(), imageIds, &context);
+
+    ASSERT_TRUE(loaded.ok) << qPrintable(loaded.errorMessage);
+    ASSERT_EQ(loaded.tracks.size(), 1U);
+    ASSERT_TRUE(loaded.tracks.front().hasReference);
+    const auto& point = loaded.tracks.front().referencePoint;
+    const double radius = std::sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2]);
+    EXPECT_GT(radius, 6.3e6);
+    EXPECT_LT(radius, 6.4e6);
+}
+
+TEST(SfmAttemptRunnerTest, RejectsMarkerPathFallbackWhenCanonicalImageIdIsUnknown)
+{
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString markerPath = QDir(tempDir.path()).filePath(QStringLiteral("markers.json"));
+    writeJson(markerPath,
+              QJsonObject{{QStringLiteral("schema_version"), 1},
+                          {QStringLiteral("project_image_revision"), QStringLiteral("revision")},
+                          {QStringLiteral("created_at"), QStringLiteral("2026-01-01T00:00:00.000Z")},
+                          {QStringLiteral("updated_at"), QStringLiteral("2026-01-01T00:00:00.000Z")},
+                          {QStringLiteral("markers"),
+                           QJsonArray{QJsonObject{
+                               {QStringLiteral("id"), QStringLiteral("marker-unknown")},
+                               {QStringLiteral("label"), QStringLiteral("unknown")},
+                               {QStringLiteral("role"), QStringLiteral("tie_marker")},
+                               {QStringLiteral("enabled"), true},
+                               {QStringLiteral("projections"),
+                                QJsonArray{QJsonObject{{QStringLiteral("image_id"), QStringLiteral("missing-image")},
+                                                       {QStringLiteral("image_path_snapshot"), QStringLiteral("a.png")},
+                                                       {QStringLiteral("x"), 10.0},
+                                                       {QStringLiteral("y"), 20.0},
+                                                       {QStringLiteral("state"), QStringLiteral("manual_pinned")},
+                                                       {QStringLiteral("sigma_px"), 1.0}}}}}}},
+                          {QStringLiteral("scale_bars"), QJsonArray{}}});
+
+    const QJsonObject projectMeta{{QStringLiteral("images"),
+                                   QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-a")},
+                                                          {QStringLiteral("path"), QStringLiteral("a.png")}}}}};
+    const QMap<QString, xjw::ImageId> imageIds{{QStringLiteral("image-a"), 0}};
+    const auto loaded = xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, projectMeta, imageIds);
+
+    EXPECT_FALSE(loaded.ok);
+    EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("canonical image_uuid")));
+    EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("missing-image")));
+}
+
 TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
     const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("b.png"));
-    ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageA));
-    ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageB));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageA, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageB, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
 
-    xjw::FramePinholeCamera cameraA;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraA;
     cameraA.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraA.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {-0.5, 0.0, 0.0});
-    xjw::FramePinholeCamera cameraB;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraB;
     cameraB.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraB.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.5, 0.0, 0.0});
 
     const QString cameraPathA = QDir(tempDir.path()).filePath(QStringLiteral("a.tsai"));
     const QString cameraPathB = QDir(tempDir.path()).filePath(QStringLiteral("b.tsai"));
-    ASSERT_TRUE(cameraA.saveToFile(cameraPathA.toStdString()));
-    ASSERT_TRUE(cameraB.saveToFile(cameraPathB.toStdString()));
+    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraA, cameraPathA.toStdString()));
+    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraB, cameraPathB.toStdString()));
 
     const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
     writeJson(tiePointPath, makeKnownPoseTiePoints(imageA, imageB, cameraA, cameraB));
@@ -401,13 +806,13 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     ASSERT_TRUE(cameraA.projectWorldPoint(markerPoint.data(), markerPixelA));
     ASSERT_TRUE(cameraB.projectWorldPoint(markerPoint.data(), markerPixelB));
     xjw::control_points::MarkerProjection markerProjectionA;
-    markerProjectionA.imageId = QStringLiteral("image-a");
+    markerProjectionA.imageId = QStringLiteral("image-a-uuid");
     markerProjectionA.imagePathSnapshot = imageA;
     markerProjectionA.xy = QPointF(markerPixelA[0], markerPixelA[1]);
     markerProjectionA.state = xjw::control_points::ProjectionState::ManualPinned;
     markerSet.upsertProjection(markerId, markerProjectionA);
     xjw::control_points::MarkerProjection markerProjectionB;
-    markerProjectionB.imageId = QStringLiteral("image-b");
+    markerProjectionB.imageId = QStringLiteral("image-b-uuid");
     markerProjectionB.imagePathSnapshot = imageB;
     markerProjectionB.xy = QPointF(markerPixelB[0], markerPixelB[1]);
     markerProjectionB.state = xjw::control_points::ProjectionState::ManualPinned;
@@ -418,6 +823,14 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
 
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {imageA, imageB};
+    input.cameraBindings = {
+        {xjw::camera_core::CameraInstanceId("camera-instance-a"),
+         xjw::camera_core::ImageId("image-a-uuid"),
+         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+        {xjw::camera_core::CameraInstanceId("camera-instance-b"),
+         xjw::camera_core::ImageId("image-b-uuid"),
+         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+    };
     input.cameraPaths = {cameraPathA, cameraPathB};
     input.tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("already_prepared.json"));
     input.preparedTiePointGraph = preparedGraph;
@@ -436,6 +849,16 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     ASSERT_TRUE(result.result.success) << qPrintable(result.result.errorMessage);
     ASSERT_NE(result.reconstruction, nullptr);
     EXPECT_EQ(result.graph, preparedGraph);
+    ASSERT_TRUE(result.reconstruction->hasCamera(0));
+    ASSERT_TRUE(result.reconstruction->hasCamera(1));
+    EXPECT_TRUE(result.reconstruction->camera(0).hasBoundIdentity());
+    EXPECT_TRUE(result.reconstruction->camera(1).hasBoundIdentity());
+    EXPECT_EQ(result.reconstruction->camera(0).imageId(), xjw::camera_core::ImageId("image-a-uuid"));
+    EXPECT_EQ(result.reconstruction->camera(1).imageId(), xjw::camera_core::ImageId("image-b-uuid"));
+    EXPECT_EQ(result.reconstruction->camera(0).worldFrame(),
+              xjw::coordinate_system::CoordinateFrameId("sfm-test-world"));
+    EXPECT_EQ(result.reconstruction->camera(1).worldFrame(),
+              xjw::coordinate_system::CoordinateFrameId("sfm-test-world"));
     EXPECT_EQ(result.result.numRegisteredImages, 2);
     EXPECT_GE(result.result.numPoints3D, 20);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("marker_prior_tracks_loaded")).toInt(), 1);
@@ -457,6 +880,28 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
         result.result.sfmDiagnostics.value(QStringLiteral("ba_adaptive_camera_model_fitting_applied")).toBool());
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("ba_refined_intrinsic_count")).toInt(), 0);
     EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("ba_shared_focal_scale")).toDouble(), 0.0);
+
+    // A production project already has canonical camera instances.  The
+    // runner must propagate those identities when the caller does not repeat
+    // the binding vector, while still using the external camera files for the
+    // numerical state.
+    auto autoBoundInput = input;
+    autoBoundInput.cameraBindings.clear();
+    autoBoundInput.projectMeta = makeCanonicalPinholeProject(imageA, imageB);
+    const auto autoBoundResult = xjw::aerial_triangulation::SfmAttemptRunner().run(autoBoundInput);
+    ASSERT_TRUE(autoBoundResult.result.success) << qPrintable(autoBoundResult.result.errorMessage);
+    ASSERT_NE(autoBoundResult.reconstruction, nullptr);
+    ASSERT_TRUE(autoBoundResult.reconstruction->hasCamera(0));
+    ASSERT_TRUE(autoBoundResult.reconstruction->hasCamera(1));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(0).instanceId(),
+              xjw::camera_core::CameraInstanceId("canonical-instance-a"));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(1).instanceId(),
+              xjw::camera_core::CameraInstanceId("canonical-instance-b"));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(0).imageId(), xjw::camera_core::ImageId("image-a-uuid"));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(1).imageId(), xjw::camera_core::ImageId("image-b-uuid"));
+    EXPECT_EQ(autoBoundResult.result.sfmDiagnostics.value(QStringLiteral("camera_binding_source")).toString(),
+              QStringLiteral("canonical_project_instances"));
+    EXPECT_EQ(autoBoundResult.result.sfmDiagnostics.value(QStringLiteral("camera_binding_count")).toInt(), 2);
     EXPECT_EQ(
         result.result.sfmDiagnostics.value(QStringLiteral("ba_intrinsic_parameter_reference_definition")).toString(),
         QStringLiteral("normalized_stable_calibration_group_reference"));

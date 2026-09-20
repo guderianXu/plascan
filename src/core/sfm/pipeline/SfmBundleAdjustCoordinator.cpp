@@ -7,6 +7,7 @@
 #include "geometry/SimilarityGaugeNormalizer.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
 #include "Intersection.h"
+#include "pose/CameraReferencePosePriorAdapter.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "triangulation/Triangulator.h"
 
@@ -115,7 +116,8 @@ namespace xjw
             return std::sqrt(squared_sum / static_cast<double>(residual_count));
         }
 
-        AerialCameraPlaneEstimate estimateAerialCameraPlane(const std::vector<FramePinholeCamera>& cameras)
+        AerialCameraPlaneEstimate estimateAerialCameraPlane(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras)
         {
             AerialCameraPlaneEstimate estimate;
             if (cameras.size() < 3)
@@ -124,9 +126,10 @@ namespace xjw
             }
 
             std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
-            for (const FramePinholeCamera& sourceCamera : cameras)
+            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera : cameras)
             {
-                const FramePinholeCamera camera = sourceCamera.normalizedForPositiveDepth();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                    sourceCamera.normalizedForPositiveDepth();
                 const auto center = camera.cameraCenter();
                 const auto rotation = camera.cameraToWorldRotation();
                 for (int axis = 0; axis < 3; ++axis)
@@ -145,7 +148,7 @@ namespace xjw
                 std::sqrt(meanAxis[0] * meanAxis[0] + meanAxis[1] * meanAxis[1] + meanAxis[2] * meanAxis[2]);
 
             cv::Matx33d covariance = cv::Matx33d::zeros();
-            for (const FramePinholeCamera& camera : cameras)
+            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : cameras)
             {
                 const auto center = camera.cameraCenter();
                 const cv::Vec3d delta(
@@ -181,8 +184,9 @@ namespace xjw
             return estimate;
         }
 
-        double cameraLayerReferenceDriftRms(const std::vector<FramePinholeCamera>& cameras,
-                                            const BACameraPlaneConstraint& constraint)
+        double cameraLayerReferenceDriftRms(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+            const BACameraPlaneConstraint& constraint)
         {
             if (cameras.empty() || constraint.referenceSignedDistances.size() != cameras.size())
             {
@@ -418,17 +422,18 @@ namespace xjw
         return result;
     }
 
-    std::vector<FramePinholeCamera> SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+    SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
         const std::vector<ImageId>& imageIds,
-        const std::vector<FramePinholeCamera>& current,
-        std::unordered_map<ImageId, FramePinholeCamera>* referencesByImageId)
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
+        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>* referencesByImageId)
     {
         if (!referencesByImageId || imageIds.size() != current.size())
         {
             return {};
         }
 
-        std::vector<FramePinholeCamera> references;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> references;
         references.reserve(current.size());
         for (std::size_t index = 0; index < imageIds.size(); ++index)
         {
@@ -439,10 +444,10 @@ namespace xjw
         return references;
     }
 
-    double
-    SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(const std::vector<FramePinholeCamera>& previous,
-                                                             const std::vector<FramePinholeCamera>& current,
-                                                             const std::vector<FramePinholeCamera>& stableReferences)
+    double SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& previous,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences)
     {
         if (previous.empty() || previous.size() != current.size() || previous.size() != stableReferences.size())
         {
@@ -452,11 +457,16 @@ namespace xjw
         double maximumChange = 0.0;
         for (std::size_t index = 0; index < current.size(); ++index)
         {
-            const FramePinholeCamera::Intrinsics before = previous[index].intrinsics();
-            const FramePinholeCamera::Intrinsics after = current[index].intrinsics();
-            const FramePinholeCamera::Intrinsics reference = stableReferences[index].intrinsics();
-            const FramePinholeCamera::Distortion beforeDistortion = previous[index].distortion();
-            const FramePinholeCamera::Distortion afterDistortion = current[index].distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics before =
+                previous[index].intrinsics();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics after =
+                current[index].intrinsics();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics reference =
+                stableReferences[index].intrinsics();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion beforeDistortion =
+                previous[index].distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion afterDistortion =
+                current[index].distortion();
             const double focalScale = std::max({1.0, std::abs(reference.focalX), std::abs(reference.focalY)});
             const double beforeAspect = before.focalX > 1.0e-12 ? before.focalY / before.focalX : 1.0;
             const double afterAspect = after.focalX > 1.0e-12 ? after.focalY / after.focalX : 1.0;
@@ -621,11 +631,12 @@ namespace xjw
         return accepted;
     }
 
-    void IncrementalSfm::runBundleAdjust(bool localOnly,
-                                         const std::vector<ImageId>& anchorIds,
-                                         const std::vector<FramePinholeCamera>* stableIntrinsicReferences,
-                                         int maxIterationsOverride,
-                                         SfmBundleAdjustmentStage stage)
+    void IncrementalSfm::runBundleAdjust(
+        bool localOnly,
+        const std::vector<ImageId>& anchorIds,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* stableIntrinsicReferences,
+        int maxIterationsOverride,
+        SfmBundleAdjustmentStage stage)
     {
         const char* scopeName = localOnly ? "local" : "global";
         const auto reportSkipped = [this, localOnly, scopeName](const std::string& reason)
@@ -791,7 +802,7 @@ namespace xjw
 
         // 构造 imageId → BA 内部相机索引的映射
         std::unordered_map<ImageId, int> idToIdx;
-        std::vector<FramePinholeCamera> baCameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> baCameras;
         for (size_t i = 0; i < baImageIds.size(); ++i)
         {
             idToIdx[baImageIds[i]] = static_cast<int>(i);
@@ -952,6 +963,31 @@ namespace xjw
 
         // 构造本次 BA 选项，并显式消除无绝对约束问题的 7 自由度 gauge。
         BAOptions baOpt = _sfmOptions.baOptions;
+        if (!_sfmOptions.cameraReferencePosePriors.empty())
+        {
+            if (_sfmOptions.useKnownCameraPoses || !baOpt.cameraPosePriors.empty())
+            {
+                reportSkipped("external_camera_reference_conflicts_with_known_pose_source");
+                return;
+            }
+
+            const CameraReferencePosePriorAdapterResult converted =
+                CameraReferencePosePriorAdapter::toBundleAdjustPriors(
+                    baCameras, _sfmOptions.cameraReferencePosePriors);
+            if (!converted.ok())
+            {
+                reportSkipped("external_camera_reference_alignment_failed: " + converted.error);
+                return;
+            }
+            if (converted.hasEnabledPriors())
+            {
+                baOpt.cameraPosePriors = converted.priors;
+                Logger::instance()->infof("[BA] external_camera_reference_priors matched=%zu ignored=%zu provenance=%s",
+                                          converted.matchedReferenceCount,
+                                          converted.ignoredReferenceCount,
+                                          converted.commonTransformProvenanceHash.c_str());
+            }
+        }
         baOpt.useReferenceOnlineSchur =
             _sfmOptions.executionProfile == SfmExecutionProfile::FullRefinement && !_sfmOptions.useKnownCameraPoses;
         // 普通增量/最终 BA 单次最多 10 次；初始像对 evaluator 通过显式覆盖使用 20 次。
@@ -1198,7 +1234,7 @@ namespace xjw
                 constraint.normal = cameraPlaneBefore.normal;
                 constraint.referenceSignedDistances.clear();
                 constraint.referenceSignedDistances.reserve(baCameras.size());
-                for (const FramePinholeCamera& camera : baCameras)
+                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : baCameras)
                 {
                     const auto center = camera.cameraCenter();
                     constraint.referenceSignedDistances.push_back(
@@ -1534,9 +1570,12 @@ namespace xjw
             {
                 // 未注册影像的 PnP 会从预载相机读取内参。单一镜头组完成全局自标定后，
                 // 将同一组内参同步过去，避免最终重试继续使用零畸变/旧焦距。
-                const FramePinholeCamera& calibratedCamera = baResult.refinedCameras.front();
-                const FramePinholeCamera::Intrinsics calibratedIntrinsics = calibratedCamera.intrinsics();
-                const FramePinholeCamera::Distortion calibratedDistortion = calibratedCamera.distortion();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& calibratedCamera =
+                    baResult.refinedCameras.front();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics calibratedIntrinsics =
+                    calibratedCamera.intrinsics();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion calibratedDistortion =
+                    calibratedCamera.distortion();
                 for (auto& [imageId, camera] : _preloadedCameras)
                 {
                     (void)imageId;
@@ -1589,7 +1628,8 @@ namespace xjw
                     if (!_reconstruction->hasCamera(elem.imageId))
                         continue;
 
-                    const FramePinholeCamera& cam = _reconstruction->camera(elem.imageId);
+                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam =
+                        _reconstruction->camera(elem.imageId);
                     const ImageData& imgData = _reconstruction->image(elem.imageId);
                     if (elem.featureIdx >= imgData.keypoints.size())
                         continue;
@@ -1835,13 +1875,13 @@ namespace xjw
         // IncrementalSfm 生命周期的首次影像标定，不能在周期/最终/重试 BA 间重新锚定。
         std::vector<ImageId> iterativeImageIds = _reconstruction->registeredImageIds();
         std::sort(iterativeImageIds.begin(), iterativeImageIds.end());
-        std::vector<FramePinholeCamera> currentIntrinsicCameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> currentIntrinsicCameras;
         currentIntrinsicCameras.reserve(iterativeImageIds.size());
         for (const ImageId imageId : iterativeImageIds)
         {
             currentIntrinsicCameras.push_back(_reconstruction->camera(imageId));
         }
-        std::vector<FramePinholeCamera> iterativeIntrinsicReferences =
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> iterativeIntrinsicReferences =
             _sfmOptions.baOptions.sharedIntrinsicReferenceCameras;
         if (iterativeIntrinsicReferences.size() != iterativeImageIds.size())
         {
@@ -1850,7 +1890,7 @@ namespace xjw
         }
 
         size_t prevNumPoints = _reconstruction->numPoints3D();
-        std::vector<FramePinholeCamera> previousRoundIntrinsicCameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> previousRoundIntrinsicCameras;
 
         for (int round = 0; round < maxRounds; ++round)
         {
@@ -2031,7 +2071,8 @@ namespace xjw
                 if (!_reconstruction->hasCamera(elem.imageId))
                     continue;
 
-                const FramePinholeCamera& cam = _reconstruction->camera(elem.imageId);
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam =
+                    _reconstruction->camera(elem.imageId);
                 const double world[3] = {xyz[0], xyz[1], xyz[2]};
                 if (!cam.isPointInFront(world))
                 {

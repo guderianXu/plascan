@@ -1,4 +1,4 @@
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthTsdfNarrowBandActivation.h"
 #include "DepthTsdfSurfaceBuilder.h"
 
@@ -26,9 +26,9 @@ xjw::mesh::DepthTsdfLayout makeLayout()
     return layout;
 }
 
-xjw::FramePinholeCamera makeCamera()
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(4.0, 4.0, 2.0, 2.0);
     camera.setPose(
         {1.0, 0.0, 0.0,
@@ -48,11 +48,11 @@ xjw::mesh::DepthTsdfNarrowBandActivationOptions makeOptions()
     return options;
 }
 
-xjw::mesh::DepthTsdfNarrowBandFrameView makeView(
-    const xjw::FramePinholeCamera &camera,
-    const cv::Mat &depth,
-    const cv::Mat *depth_valid,
-    const cv::Mat *support)
+xjw::mesh::DepthTsdfNarrowBandFrameView
+makeView(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+         const cv::Mat& depth,
+         const cv::Mat* depth_valid,
+         const cv::Mat* support)
 {
     xjw::mesh::DepthTsdfNarrowBandFrameView view;
     view.camera = &camera;
@@ -66,7 +66,7 @@ xjw::mesh::DepthTsdfNarrowBandFrameView makeView(
 
 TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -92,7 +92,7 @@ TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 
 TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -117,7 +117,7 @@ TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 
 TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     depth.at<float>(2, 2) = 2.0f;
@@ -143,7 +143,7 @@ TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 
 TEST(DepthTsdfNarrowBandActivationTest, CancellationLeavesNoPartialMask)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     cv::Mat depth(5, 5, CV_32FC1, cv::Scalar(2.0f));
     auto options = makeOptions();
     options.isCancelled = []()

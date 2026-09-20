@@ -4,8 +4,8 @@
 // 测试内容：
 //   1. PatchMatchConfig 默认值验证（优化后的参数）
 //   2. FusionConfig 默认值验证
-//   3. FramePinholeCamera 正深度归一化与投影
-//   4. FramePinholeCamera 投影-反投影一致性
+//   3. FramePinholeNumericState 正深度归一化与投影
+//   4. FramePinholeNumericState 投影-反投影一致性
 //   5. 深度图后处理参数验证
 // ============================================================
 
@@ -13,7 +13,8 @@
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
 #include "MvsViewSelection.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "ProjectCameraIO.h"
 
 #include <QJsonObject>
 
@@ -25,28 +26,25 @@ using namespace xjw::mvs;
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double fu,
-                       double fv,
-                       double cu,
-                       double cv,
-                       int uDir,
-                       int vDir,
-                       const double r_wc[9],
-                       const double center[3],
-                       bool depthAxisFlipped)
-{
-    xjw::FramePinholeCamera camera;
-    std::array<double, 9> rotation{{
-        r_wc[0], r_wc[1], r_wc[2],
-        r_wc[3], r_wc[4], r_wc[5],
-        r_wc[6], r_wc[7], r_wc[8]
-    }};
-    std::array<double, 3> cameraCenter{{center[0], center[1], center[2]}};
-    camera.setIntrinsics(fu, fv, cu, cv);
-    camera.setPose(rotation, cameraCenter);
-    camera.setAxisDirections(uDir, vDir);
-    camera.setDepthAxisFlipped(depthAxisFlipped);
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double fu,
+                                                                           double fv,
+                                                                           double cu,
+                                                                           double cv,
+                                                                           int uDir,
+                                                                           int vDir,
+                                                                           const double r_wc[9],
+                                                                           const double center[3],
+                                                                           bool depthAxisFlipped)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::array<double, 9> rotation{
+            {r_wc[0], r_wc[1], r_wc[2], r_wc[3], r_wc[4], r_wc[5], r_wc[6], r_wc[7], r_wc[8]}};
+        std::array<double, 3> cameraCenter{{center[0], center[1], center[2]}};
+        camera.setIntrinsics(fu, fv, cu, cv);
+        camera.setPose(rotation, cameraCenter);
+        camera.setAxisDirections(uDir, vDir);
+        camera.setDepthAxisFlipped(depthAxisFlipped);
+        return camera;
 }
 
 } // namespace
@@ -294,7 +292,7 @@ TEST(MvsQualityReportTest, DetectsLocalDepthSpikesEvenWithHighConfidence)
     EXPECT_TRUE(json.value(QStringLiteral("has_local_depth_outliers")).toBool(false));
 }
 
-// ─── FramePinholeCamera 正深度归一化测试 ────────────────────────────────
+// ─── FramePinholeNumericState 正深度归一化测试 ────────────────────────────────
 
 // 从显式 ASP/Tsai 语义参数构造正深度模型
 TEST(CameraPositiveDepthTest, FromCameraBasic)
@@ -303,13 +301,9 @@ TEST(CameraPositiveDepthTest, FromCameraBasic)
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1}; // identity
     double C[3] = {0, 0, 0};
 
-    xjw::FramePinholeCamera camera = makeCamera(
-        1000.0, 1000.0,
-        512.0, 384.0,
-        1, 1,
-        R_wc, C,
-        false);
-    const xjw::FramePinholeCamera cam = camera.normalizedForPositiveDepth();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeCamera(1000.0, 1000.0, 512.0, 384.0, 1, 1, R_wc, C, false);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState cam = camera.normalizedForPositiveDepth();
 
     EXPECT_TRUE(cam.isValid());
     EXPECT_DOUBLE_EQ(cam.focalX(), 1000.0);
@@ -414,7 +408,7 @@ TEST(CameraPositiveDepthTest, DepthFlippedZ)
 // 从真实 .tsai 构造正深度模型
 TEST(CameraPositiveDepthTest, FromRealTsaiCamera)
 {
-    xjw::FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     std::string path;
 #ifdef TEST_DATA_DIR
     path = std::string(TEST_DATA_DIR) + "/tsai/1.tsai";
@@ -422,13 +416,16 @@ TEST(CameraPositiveDepthTest, FromRealTsaiCamera)
     path = "../testData/tsai/1.tsai";
 #endif
 
-    if (!cam.loadFromFile(path)) {
-        GTEST_SKIP() << "Could not load test camera file";
+    QString error;
+    if (!xjw::common::project::loadFramePinholeNumericStateFromFile(
+            QString::fromStdString(path), &cam, &error))
+    {
+        GTEST_SKIP() << "Could not load test camera file: " << error.toStdString();
     }
 
     auto C = cam.cameraCenter();
 
-    const xjw::FramePinholeCamera ccam = cam.normalizedForPositiveDepth();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState ccam = cam.normalizedForPositiveDepth();
 
     EXPECT_TRUE(ccam.isValid());
     EXPECT_GT(ccam.focalX(), 0.0);

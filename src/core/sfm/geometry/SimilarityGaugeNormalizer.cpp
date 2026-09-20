@@ -47,11 +47,11 @@ std::array<double, 3> transformPoint(const std::array<double, 3> &point,
 } // namespace
 
 SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<FramePinholeCamera> &referenceCameras,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& referenceCameras,
     int anchorCameraIndex,
     int scaleCameraIndex,
-    std::vector<FramePinholeCamera> *refinedCameras,
-    std::vector<BARefinedPoint> *refinedPoints)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* refinedCameras,
+    std::vector<BARefinedPoint>* refinedPoints)
 {
     SimilarityGaugeNormalizationResult result;
     if (!refinedCameras || !refinedPoints)
@@ -111,8 +111,8 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
     }
 
     // 先在副本中完成全部变换，失败路径不会部分修改 BA 输出。
-    std::vector<FramePinholeCamera> normalizedCameras = *refinedCameras;
-    for (FramePinholeCamera &camera : normalizedCameras)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> normalizedCameras = *refinedCameras;
+    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : normalizedCameras)
     {
         const auto center = camera.cameraCenter();
         if (!finitePoint(center))

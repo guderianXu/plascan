@@ -3,7 +3,9 @@
 #include "CliJsonIO.h"
 #include "CliOutputPolicy.h"
 #include "CliPathUtils.h"
-#include "FramePinholeCamera.h"
+#include "camera/core/types/CameraIds.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "camera/reference/geometry/ReferenceCameraGeometry.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -24,7 +26,7 @@ namespace xjw::cli
         QString cameraPath;
         bool hasCameraPath = false;
         bool hasLoadedCamera = false;
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     };
 
     struct PhotogrammetryListOptions
@@ -46,12 +48,24 @@ namespace xjw::cli
 
     QStringList imagePaths(const std::vector<PhotogrammetryInputItem>& items);
     QStringList cameraPathsForService(const std::vector<PhotogrammetryInputItem>& items);
-    QMap<QString, xjw::FramePinholeCamera> referenceCameraMap(const std::vector<PhotogrammetryInputItem>& items);
+    bool resolveProjectImageIds(const QJsonObject& projectFiles,
+                                const QStringList& images,
+                                std::vector<xjw::camera_core::ImageId>* imageIds,
+                                QString* errorMessage);
+    bool buildReferenceCameraGeometries(const QJsonObject& projectFiles,
+                                        const std::vector<PhotogrammetryInputItem>& items,
+                                        const QStringList& images,
+                                        const std::vector<xjw::camera_core::ImageId>& imageIds,
+                                        xjw::camera_reference::ReferenceCameraGeometryMap* geometries,
+                                        QString* errorMessage);
     bool readReferencePositionCsv(const QString& csvPath,
-                                  QMap<QString, std::array<double, 3>>* positions,
+                                  const QJsonObject& projectFiles,
+                                  const QStringList& images,
+                                  const std::vector<xjw::camera_core::ImageId>& imageIds,
+                                  xjw::camera_reference::ReferenceCameraPositionMap* positions,
                                   QString* errorMessage);
 
-    QJsonObject cameraToJson(const xjw::FramePinholeCamera& camera);
+    QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
     QJsonArray inputItemsToJson(const std::vector<PhotogrammetryInputItem>& items);
     QJsonArray inputPairsToJson(const std::vector<PhotogrammetryInputItem>& items);
     QJsonObject projectMetaFromInputItems(const std::vector<PhotogrammetryInputItem>& items);

@@ -1,6 +1,5 @@
 #include "MvsWorkspaceManifest.h"
 
-#include "DepthFrameQualityGate.h"
 #include "MvsTypes.h"
 #include "io/PathIO.h"
 
@@ -11,12 +10,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
-#include <QThread>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <chrono>
+#include <thread>
 #include <limits>
 
 namespace xjw::mvs
@@ -798,7 +798,7 @@ bool MvsWorkspaceManifest::saveAtomic(const QString &path, QString *errorMsg) co
 
         if (attempt + 1 < maximum_attempts)
         {
-            QThread::msleep(static_cast<unsigned long>(20 * (attempt + 1)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(20 * (attempt + 1)));
         }
     }
 
@@ -1529,7 +1529,8 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         addHashValue(&hash, view.imageWidth);
         addHashValue(&hash, view.imageHeight);
 
-        const xjw::FramePinholeCamera::Intrinsics intrinsics = view.camera.intrinsics();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+            view.camera.intrinsics();
         addHashValue(&hash, intrinsics.focalX);
         addHashValue(&hash, intrinsics.focalY);
         addHashValue(&hash, intrinsics.principalX);
@@ -1538,7 +1539,8 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         addHashValue(&hash, intrinsics.uAxisSign);
         addHashValue(&hash, intrinsics.vAxisSign);
 
-        const xjw::FramePinholeCamera::Distortion distortion = view.camera.distortion();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+            view.camera.distortion();
         addHashValue(&hash, distortion.radialK1);
         addHashValue(&hash, distortion.radialK2);
         addHashValue(&hash, distortion.radialK3);
@@ -1557,6 +1559,17 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         }
         const bool depth_axis_flipped = view.camera.depthAxisFlipped();
         addHashValue(&hash, depth_axis_flipped);
+
+        // Numeric pose values alone do not identify the camera graph entry
+        // that produced this view.  Include the explicit binding whenever it
+        // is present (and the sentinel values otherwise) so two project
+        // cameras with identical numbers but different image/world identities
+        // cannot reuse one another's depth workspace.
+        const bool has_bound_identity = view.camera.hasBoundIdentity();
+        addHashValue(&hash, has_bound_identity);
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.instanceId().value()));
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.imageId().value()));
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.worldFrame().value()));
     }
 
     if (config.enableLearnedMvsCandidates)

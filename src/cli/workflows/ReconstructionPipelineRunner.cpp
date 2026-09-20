@@ -17,7 +17,9 @@
 #include "CliConsole.h"
 #include "CliJsonIO.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "camera/models/CameraModelFactories.h"
+#include "camera/project/CameraProjectRuntime.h"
 #include "DenseCloudQualityFilter.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
@@ -50,6 +52,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
+#include <QSet>
 #include <QtGlobal>
 
 #include <opencv2/core.hpp>
@@ -63,6 +67,8 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -70,6 +76,240 @@ namespace
 {
 
 using InputItem = xjw::cli::PhotogrammetryInputItem;
+
+struct CanonicalMvsCameraSet
+{
+    QMap<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
+    QString error;
+
+    bool ok() const noexcept
+    {
+        return error.isEmpty();
+    }
+};
+
+QStringList resolveCanonicalMvsImagePaths(const QJsonObject& projectMeta,
+                                          const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+                                          const std::vector<InputItem>& items,
+                                          QString* error)
+{
+    if (error)
+    {
+        error->clear();
+    }
+
+    QMap<QString, QString> projectPathsByNormalized;
+    QMap<QString, QStringList> projectPathsByFileName;
+    QMap<QString, QString> projectPathByImageId;
+    for (const QJsonValue& value : xjw::common::project::projectImageEntries(projectMeta))
+    {
+        const QJsonObject image = value.toObject();
+        const QString rawPath = image.value(QStringLiteral("path")).toString();
+        const QString normalized = xjw::common::project::normalizePath(rawPath);
+        if (normalized.isEmpty())
+        {
+            continue;
+        }
+        projectPathsByNormalized.insert(normalized, normalized);
+        projectPathsByFileName[QFileInfo(normalized).fileName().toCaseFolded()].append(normalized);
+        const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (!imageId.isEmpty())
+        {
+            projectPathByImageId.insert(imageId, normalized);
+        }
+    }
+
+    QSet<QString> selectedProjectPaths;
+    for (const InputItem& item : items)
+    {
+        if (item.imagePath.trimmed().isEmpty())
+        {
+            continue;
+        }
+        const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
+        QString projectPath;
+        const auto exactProject = projectPathsByNormalized.constFind(itemPath);
+        if (exactProject != projectPathsByNormalized.constEnd())
+        {
+            projectPath = exactProject.value();
+        }
+        else
+        {
+            const QString fileName = QFileInfo(itemPath).fileName().toCaseFolded();
+            const QStringList candidates = projectPathsByFileName.value(fileName);
+            if (candidates.size() == 1)
+            {
+                projectPath = candidates.front();
+            }
+        }
+        if (!projectPath.isEmpty())
+        {
+            selectedProjectPaths.insert(projectPath);
+        }
+    }
+
+    QSet<QString> updateImageIds;
+    for (const auto& update : cameraUpdates)
+    {
+        const QString imageId = QString::fromStdString(update.imageId.value()).trimmed();
+        if (imageId.isEmpty() || updateImageIds.contains(imageId))
+        {
+            if (error)
+            {
+                *error = QStringLiteral("SFM 相机写回包含空或重复 ImageId");
+            }
+            return {};
+        }
+        updateImageIds.insert(imageId);
+        const QString projectPath = projectPathByImageId.value(imageId);
+        if (projectPath.isEmpty())
+        {
+            if (error)
+            {
+                *error = QStringLiteral("SFM 相机写回引用了工程中不存在的 ImageId: %1").arg(imageId);
+            }
+            return {};
+        }
+        if (!selectedProjectPaths.contains(projectPath))
+        {
+            if (error)
+            {
+                *error = QStringLiteral("SFM 相机写回的 ImageId 不在本次输入影像中: %1").arg(imageId);
+            }
+            return {};
+        }
+    }
+
+    QStringList registered;
+    for (const InputItem& item : items)
+    {
+        const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
+        QString projectPath = projectPathsByNormalized.value(itemPath);
+        if (projectPath.isEmpty())
+        {
+            const QStringList candidates = projectPathsByFileName.value(QFileInfo(itemPath).fileName().toCaseFolded());
+            if (candidates.size() == 1)
+            {
+                projectPath = candidates.front();
+            }
+        }
+        QString imageId;
+        for (auto imageIt = projectPathByImageId.cbegin(); imageIt != projectPathByImageId.cend(); ++imageIt)
+        {
+            if (imageIt.value() == projectPath)
+            {
+                imageId = imageIt.key();
+                break;
+            }
+        }
+        if (!projectPath.isEmpty() && !imageId.isEmpty() && updateImageIds.contains(imageId))
+        {
+            registered.append(projectPath);
+        }
+    }
+
+    if (registered.size() != static_cast<int>(cameraUpdates.size()))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("SFM 相机写回后无法按 ImageId 绑定全部工程影像（已绑定 %1/%2）")
+                         .arg(registered.size())
+                         .arg(static_cast<int>(cameraUpdates.size()));
+        }
+        return {};
+    }
+    return registered;
+}
+
+CanonicalMvsCameraSet loadCanonicalMvsCameras(const QJsonObject& projectMeta,
+                                              const QStringList& imagePaths)
+{
+    CanonicalMvsCameraSet result;
+    const QJsonObject projectFiles = xjw::common::project::projectFilesRootObject(projectMeta);
+    if (!projectFiles.value(QStringLiteral("camera_definitions")).isArray() ||
+        !projectFiles.value(QStringLiteral("camera_instances")).isArray())
+    {
+        result.error = QStringLiteral("SFM 写回后缺少 canonical camera_definitions/camera_instances");
+        return result;
+    }
+
+    const xjw::camera_project::CameraProjectRuntimeResult runtime =
+        xjw::camera_project::CameraProjectRuntime::load(
+            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+    if (!runtime.ok())
+    {
+        result.error = QStringLiteral("SFM 写回后的 canonical 相机集合无效: %1")
+                           .arg(runtime.errors.join(QStringLiteral("; ")));
+        return result;
+    }
+
+    const QMap<QString, QJsonObject> imageMetadata =
+        xjw::common::project::projectImageMetaByPath(projectMeta, true);
+    std::vector<xjw::camera_core::ImageId> imageIds;
+    imageIds.reserve(static_cast<std::size_t>(imagePaths.size()));
+    for (const QString& imagePath : imagePaths)
+    {
+        const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
+        const auto imageIt = imageMetadata.constFind(normalizedPath);
+        if (imageIt == imageMetadata.constEnd())
+        {
+            result.error = QStringLiteral("canonical image entry is missing for MVS input: %1")
+                               .arg(imagePath);
+            result.cameras.clear();
+            return result;
+        }
+        const QString imageUuid = imageIt.value().value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (imageUuid.isEmpty())
+        {
+            result.error = QStringLiteral("canonical image entry has no image_uuid for MVS input: %1")
+                               .arg(imagePath);
+            result.cameras.clear();
+            return result;
+        }
+
+        try
+        {
+            imageIds.emplace_back(imageUuid.toStdString());
+        }
+        catch (const std::exception& exception)
+        {
+            result.error = QStringLiteral("MVS 输入影像 %1 的 canonical ImageId 无效: %2")
+                               .arg(imagePath, QString::fromUtf8(exception.what()));
+            return result;
+        }
+    }
+
+    const xjw::camera_core::CameraOperationPlan cameraPlan =
+        runtime.planOperationForImages(imageIds, xjw::camera_core::CameraOperation::DenseMvs);
+    if (!cameraPlan.ok())
+    {
+        result.error = QStringLiteral("MVS 相机能力校验失败：%1")
+                           .arg(QString::fromStdString(cameraPlan.failureMessage()));
+        return result;
+    }
+
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
+    std::string stateError;
+    if (!runtime.framePinholeStatesForImages(imageIds, &states, &stateError))
+    {
+        result.error = QStringLiteral("MVS 面阵针孔数值状态解析失败: %1")
+                           .arg(QString::fromStdString(stateError));
+        return result;
+    }
+    if (states.size() != imagePaths.size())
+    {
+        result.error = QStringLiteral("MVS 相机状态与输入影像数量不一致");
+        return result;
+    }
+
+    for (std::size_t index = 0; index < imagePaths.size(); ++index)
+    {
+        const QString& imagePath = imagePaths.at(static_cast<int>(index));
+        const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
+        result.cameras.insert(normalizedPath, std::move(states[index]));
+    }
+    return result;
+}
 
 QStringList criticalOutputRelativePaths()
 {
@@ -1031,10 +1271,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
 
 void limitMvsInputsForRegression(std::vector<xjw::mvs::CameraView> *views,
                                  QStringList *registeredImagePaths,
-                                 QJsonArray *imageMetaArray,
                                  int maxFrames)
 {
-    if (!views || !registeredImagePaths || !imageMetaArray || maxFrames <= 0)
+    if (!views || !registeredImagePaths || maxFrames <= 0)
     {
         return;
     }
@@ -1050,14 +1289,6 @@ void limitMvsInputsForRegression(std::vector<xjw::mvs::CameraView> *views,
     {
         registeredImagePaths->removeLast();
     }
-
-    QJsonArray limited;
-    const int metaCount = std::min(limit, static_cast<int>(imageMetaArray->size()));
-    for (int index = 0; index < metaCount; ++index)
-    {
-        limited.append(imageMetaArray->at(index));
-    }
-    *imageMetaArray = limited;
 }
 
 QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings &denseSettings,
@@ -1467,9 +1698,10 @@ xjw::cli::ReconstructionCliOptions options;
             QStringLiteral("aerial_triangulation_results"),
             sparseRecord);
     }
+    int updatedCameraCount = 0;
     if (sfmResult.success
-        && !projectSession.updateImageCameras(
-            sfmResult.pendingCamUpdates, nullptr, &error))
+        && !projectSession.updateCameraInstancesById(
+            sfmResult.cameraInstanceUpdates, &updatedCameraCount, &error))
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] =
@@ -1477,6 +1709,24 @@ xjw::cli::ReconstructionCliOptions options;
         QJsonObject finalReport;
         reportContext.writeFinalReport(&finalReport);
         return cli::EXIT_IO_ERR;
+    }
+    if (sfmResult.success && updatedCameraCount != sfmResult.cameraInstanceUpdates.size())
+    {
+        report[QStringLiteral("status")] = QStringLiteral("failed");
+        report[QStringLiteral("reason")] =
+            QStringLiteral("SFM 相机写回不完整：已更新 %1/%2 个相机实例")
+                .arg(updatedCameraCount)
+                .arg(sfmResult.cameraInstanceUpdates.size());
+        QJsonObject finalReport;
+        reportContext.writeFinalReport(&finalReport);
+        return cli::EXIT_IO_ERR;
+    }
+    if (sfmResult.success)
+    {
+        // SFM writes normalized camera instances into the active project files.
+        // Refresh the snapshot passed to later stages so DOM/terrain consumers
+        // resolve the same canonical records instead of a stale pre-SFM view.
+        projectMeta = projectSession.mergedMetadata();
     }
     if (!sfmResult.success || sfmResult.sparseCloudPath.isEmpty())
     {
@@ -1569,41 +1819,68 @@ xjw::cli::ReconstructionCliOptions options;
     }
 
     const auto sparsePreprocessStart = std::chrono::steady_clock::now();
-    QMap<QString, xjw::FramePinholeCamera> cameraByImage;
-    for (auto it = sfmResult.pendingCamUpdates.constBegin(); it != sfmResult.pendingCamUpdates.constEnd(); ++it)
+    QString registeredImagesError;
+    QStringList registeredImagePaths = resolveCanonicalMvsImagePaths(
+        projectMeta,
+        sfmResult.cameraInstanceUpdates,
+        items,
+        &registeredImagesError);
+    if (!registeredImagesError.isEmpty())
     {
-        xjw::FramePinholeCamera camera;
-        const QString imagePath = xjw::cli::cleanAbsolutePath(it.key());
-        if (xjw::common::project::cameraFromJson(it.value(), &camera) && camera.isValid())
+        report[QStringLiteral("status")] = QStringLiteral("failed");
+        report[QStringLiteral("reason")] = registeredImagesError;
+        QJsonObject finalReport;
+        if (!reportContext.writeFinalReport(&finalReport))
         {
-            cameraByImage.insert(imagePath, camera);
+            return cli::EXIT_IO_ERR;
         }
+        std::fprintf(stderr, "SFM 相机影像绑定失败: %s\n", qUtf8Printable(registeredImagesError));
+        return cli::EXIT_ALGO_ERR;
     }
 
-    QStringList registeredImagePaths;
-    for (const InputItem &item : items)
+    const CanonicalMvsCameraSet canonicalMvsCameras =
+        loadCanonicalMvsCameras(projectMeta, registeredImagePaths);
+    if (!canonicalMvsCameras.ok())
     {
-        const QString imagePath = xjw::cli::cleanAbsolutePath(item.imagePath);
-        if (cameraByImage.contains(imagePath))
+        report[QStringLiteral("status")] = QStringLiteral("failed");
+        report[QStringLiteral("reason")] = canonicalMvsCameras.error;
+        QJsonObject finalReport;
+        if (!reportContext.writeFinalReport(&finalReport))
         {
-            registeredImagePaths.append(imagePath);
+            return cli::EXIT_IO_ERR;
         }
+        std::fprintf(stderr, "MVS canonical 相机解析失败: %s\n", qUtf8Printable(canonicalMvsCameras.error));
+        std::fprintf(stderr,
+                     "report=%s\n",
+                     qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
+        return cli::EXIT_ALGO_ERR;
     }
+
     sfmJson[QStringLiteral("registered_image_paths")] = QJsonArray::fromStringList(registeredImagePaths);
     report[QStringLiteral("sfm")] = sfmJson;
     const int originalRegisteredImageCount = registeredImagePaths.size();
 
-    QJsonArray imageMetaArray;
     std::vector<xjw::mvs::CameraView> views;
     views.reserve(static_cast<size_t>(registeredImagePaths.size()));
     int project_mask_count = 0;
     for (const QString &imagePath : registeredImagePaths)
     {
-        const xjw::FramePinholeCamera camera = cameraByImage.value(imagePath);
-        if (!camera.isValid())
+        const auto cameraIt = canonicalMvsCameras.cameras.constFind(
+            xjw::common::project::normalizePath(imagePath));
+        if (cameraIt == canonicalMvsCameras.cameras.constEnd())
         {
-            continue;
+            report[QStringLiteral("status")] = QStringLiteral("failed");
+            report[QStringLiteral("reason")] =
+                QStringLiteral("MVS canonical 相机集合未覆盖已注册影像: %1").arg(imagePath);
+            QJsonObject finalReport;
+            if (!reportContext.writeFinalReport(&finalReport))
+            {
+                return cli::EXIT_IO_ERR;
+            }
+            std::fprintf(stderr, "MVS canonical 相机缺失: %s\n", qUtf8Printable(imagePath));
+            return cli::EXIT_ALGO_ERR;
         }
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameraIt.value();
 
         xjw::mvs::CameraView view;
         view.imagePath = xjw::common::io::toUtf8Path(imagePath);
@@ -1626,13 +1903,8 @@ xjw::cli::ReconstructionCliOptions options;
         }
         views.push_back(std::move(view));
 
-        imageMetaArray.append(QJsonObject{
-            {QStringLiteral("path"), imagePath},
-            {QStringLiteral("name"), QFileInfo(imagePath).fileName()},
-            {QStringLiteral("camera"), xjw::cli::cameraToJson(camera)}
-        });
     }
-    limitMvsInputsForRegression(&views, &registeredImagePaths, &imageMetaArray, mvsMaxFrames);
+    limitMvsInputsForRegression(&views, &registeredImagePaths, mvsMaxFrames);
     project_mask_count = static_cast<int>(std::count_if(
         views.cbegin(),
         views.cend(),
@@ -1659,7 +1931,6 @@ xjw::cli::ReconstructionCliOptions options;
         sfmJson[QStringLiteral("mvs_max_frames")] = mvsMaxFrames;
     }
     report[QStringLiteral("sfm")] = sfmJson;
-    projectMeta[QStringLiteral("images")] = imageMetaArray;
 
     if (views.size() < static_cast<size_t>(kMinimumRegisteredImagesForDenseWorkflow))
     {

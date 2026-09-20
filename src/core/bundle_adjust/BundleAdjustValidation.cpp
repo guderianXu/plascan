@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <set>
 
 namespace xjw::detail
@@ -107,9 +108,10 @@ namespace xjw::detail
             return squared_distance;
         }
 
-        bool hasPosePriorBaselineToFixedCamera(const std::vector<FramePinholeCamera>& cameras,
-                                               const BAOptions& options,
-                                               const std::set<int>& fixedCameras)
+        bool hasPosePriorBaselineToFixedCamera(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+            const BAOptions& options,
+            const std::set<int>& fixedCameras)
         {
             const size_t prior_count = std::min(cameras.size(), options.cameraPosePriors.size());
             for (size_t prior_index = 0; prior_index < prior_count; ++prior_index)
@@ -135,10 +137,11 @@ namespace xjw::detail
             return false;
         }
 
-        bool hasControlPointBaselineToFixedCamera(const std::vector<FramePinholeCamera>& cameras,
-                                                  const std::vector<BATrack>& tracks,
-                                                  const BAOptions& options,
-                                                  const std::set<int>& fixedCameras)
+        bool hasControlPointBaselineToFixedCamera(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+            const std::vector<BATrack>& tracks,
+            const BAOptions& options,
+            const std::set<int>& fixedCameras)
         {
             if (!options.enableControlPointConstraints)
             {
@@ -251,7 +254,7 @@ namespace xjw::detail
                                });
         }
 
-        int farthestCameraFrom(const std::vector<FramePinholeCamera>& cameras,
+        int farthestCameraFrom(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
                                int anchorIndex,
                                const std::set<int>& excluded)
         {
@@ -320,8 +323,9 @@ namespace xjw::detail
                sanitizedObservationWeight(observation) > 0.0;
     }
 
-    BAProblemStats summarizeUsableProblem(const std::vector<FramePinholeCamera>& cameras,
-                                          const std::vector<BATrack>& tracks)
+    BAProblemStats
+    summarizeUsableProblem(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                           const std::vector<BATrack>& tracks)
     {
         BAProblemStats stats;
         stats.cameraCount = static_cast<int>(cameras.size());
@@ -364,16 +368,43 @@ namespace xjw::detail
         return stats;
     }
 
-    BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(const std::vector<FramePinholeCamera>& cameras,
-                                                                         const std::vector<BATrack>& tracks,
-                                                                         const BAOptions& requestedOptions,
-                                                                         BAOptions* normalizedOptions)
+    BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& requestedOptions,
+        BAOptions* normalizedOptions)
     {
         if (!normalizedOptions)
         {
             return invalid(BASolveStatus::InvalidInput, "BA 输入验证失败: normalizedOptions 为空");
         }
         *normalizedOptions = requestedOptions;
+
+        // Every backend consumes the same solver-owned pinhole state.  Keep
+        // this check at the shared BA boundary so CPU/CUDA/OpenCL cannot
+        // disagree about malformed intrinsics, pose matrices, or frames.
+        std::optional<xjw::coordinate_system::CoordinateFrameId> commonFrame;
+        for (std::size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+        {
+            std::string cameraError;
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameras[cameraIndex];
+            if (!camera.isValid() || !camera.validateNumericalState(&cameraError))
+            {
+                return invalid(BASolveStatus::InvalidInput,
+                               "BA 输入验证失败: 相机[" + std::to_string(cameraIndex) +
+                                   "] 数值状态非法" +
+                                   (cameraError.empty() ? std::string() : ": " + cameraError));
+            }
+            if (!commonFrame.has_value())
+            {
+                commonFrame = camera.worldFrame();
+            }
+            else if (*commonFrame != camera.worldFrame())
+            {
+                return invalid(BASolveStatus::InvalidInput,
+                               "BA 输入验证失败: 相机集合混用 world frame；必须先显式归一化");
+            }
+        }
 
         // 第一阶段只验证后端通用的数值域和数组契约。这里提前拒绝可以避免不同后端
         // 对 NaN、负迭代次数或标定分组越界产生不一致行为。
@@ -461,10 +492,12 @@ namespace xjw::detail
         }
         if (std::any_of(requestedOptions.sharedIntrinsicReferenceCameras.begin(),
                         requestedOptions.sharedIntrinsicReferenceCameras.end(),
-                        [](const FramePinholeCamera& camera)
+                        [](const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
                         {
-                            const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-                            const FramePinholeCamera::Distortion distortion = camera.distortion();
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                                camera.intrinsics();
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                                camera.distortion();
                             return !camera.isValid() || !std::isfinite(intrinsics.focalX) ||
                                    !std::isfinite(intrinsics.focalY) || intrinsics.focalX <= 0.0 ||
                                    intrinsics.focalY <= 0.0 || !std::isfinite(intrinsics.principalX) ||
@@ -533,7 +566,8 @@ namespace xjw::detail
                     return invalid(BASolveStatus::InvalidInput,
                                    prefix + "必须包含有限落点/杆臂/时间以及正的 range、sigma 和 weight");
                 }
-                const FramePinholeCamera& camera = cameras[static_cast<size_t>(constraint.cameraIndex)];
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                    cameras[static_cast<size_t>(constraint.cameraIndex)];
                 const std::array<double, 3> cameraCenter = camera.cameraCenter();
                 const std::array<double, 9> cameraToWorld = camera.cameraToWorldRotation();
                 std::array<double, 3> emitter = cameraCenter;

@@ -1,6 +1,7 @@
 #include "ProjectLifecyclePresenter.h"
 
-#include "ProjectManager.h"
+#include "project/services/ProjectLifecycleService.h"
+#include "project/services/ProjectSession.h"
 
 #include <QFileInfo>
 #include <QMainWindow>
@@ -9,26 +10,28 @@
 
 #include <algorithm>
 
-ProjectLifecyclePresenter::ProjectLifecyclePresenter(ProjectManager *projectManager,
+ProjectLifecyclePresenter::ProjectLifecyclePresenter(ProjectLifecycleService *lifecycle,
+                                                     xjw::gui::project::ProjectSession *session,
                                                      QMainWindow *window,
                                                      QStatusBar *statusBar,
                                                      QObject *parent)
     : QObject(parent)
-    , _projectManager(projectManager)
+    , _lifecycle(lifecycle)
+    , _session(session)
     , _window(window)
     , _statusBar(statusBar)
 {
-    connect(_projectManager, &ProjectManager::saveStarted,
+    connect(_lifecycle, &ProjectLifecycleService::saveStarted,
             this, &ProjectLifecyclePresenter::showSaveProgress);
-    connect(_projectManager, &ProjectManager::saveFinished,
+    connect(_lifecycle, &ProjectLifecycleService::saveFinished,
             this, &ProjectLifecyclePresenter::finishSaveProgress);
-    connect(_projectManager, &ProjectManager::projectOpenStarted,
+    connect(_lifecycle, &ProjectLifecycleService::projectOpenStarted,
             this, &ProjectLifecyclePresenter::showOpenProgress);
-    connect(_projectManager, &ProjectManager::projectOpenProgressChanged,
+    connect(_lifecycle, &ProjectLifecycleService::projectOpenProgressChanged,
             this, &ProjectLifecyclePresenter::updateOpenProgress);
-    connect(_projectManager, &ProjectManager::projectOpenFinished,
+    connect(_lifecycle, &ProjectLifecycleService::projectOpenFinished,
             this, &ProjectLifecyclePresenter::finishOpenProgress);
-    connect(_projectManager, &ProjectManager::metadataDirtyChanged,
+    connect(_session, &xjw::gui::project::ProjectSession::dirtyStateChanged,
             this, &ProjectLifecyclePresenter::updateWindowTitle);
 }
 
@@ -40,7 +43,7 @@ bool ProjectLifecyclePresenter::isCloseSavePending() const
 void ProjectLifecyclePresenter::requestCloseAfterSave()
 {
     _closeSavePending = true;
-    _projectManager->saveProject();
+    _lifecycle->saveProject();
 }
 
 void ProjectLifecyclePresenter::showOpenProgress(const QString &projectPath)
@@ -114,7 +117,7 @@ void ProjectLifecyclePresenter::finishSaveProgress(bool success)
 
 void ProjectLifecyclePresenter::updateWindowTitle(bool dirty)
 {
-    const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString{};
+    const QString projectPath = _session ? _session->projectPath() : QString{};
     if (projectPath.trimmed().isEmpty())
     {
         _window->setWindowTitle(QStringLiteral("PlaScan"));

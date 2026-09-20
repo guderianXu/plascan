@@ -19,7 +19,8 @@
 #include <QTabBar>
 #include <QtConcurrent/QtConcurrentRun>
 
-namespace {
+namespace
+{
 
     constexpr int ModelTabIndex = 0;
     constexpr int ImageTabIndex = 1;
@@ -31,89 +32,85 @@ namespace {
         const QFileInfo info(path);
         const QString base = info.completeBaseName();
         return base.isEmpty() ? info.fileName() : base;
-}
+    }
 
-QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &images)
-{
-    QVector<CameraSceneWidget::CameraPose> poses;
-    poses.reserve(images.size());
-
-    for (const QJsonValue &value : images)
+    QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray& images)
     {
-        const QJsonObject imageObject = value.toObject();
-        xjw::FramePinholeCamera camera;
-        if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
-        {
-            continue;
-        }
+        QVector<CameraSceneWidget::CameraPose> poses;
+        poses.reserve(images.size());
 
-        const std::array<double, 3> cameraCenter = camera.cameraCenter();
-        const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
-        const xjw::FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-        const QJsonObject cameraObject = imageObject.value(QStringLiteral("camera")).toObject();
-
-        CameraSceneWidget::CameraPose pose;
-        pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
-        if (pose.imagePath.isEmpty())
+        for (const QJsonValue& value : images)
         {
-            pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
-        }
-        pose.name = QFileInfo(pose.imagePath).fileName();
-        pose.center = QVector3D(
-            float(cameraCenter[0]),
-            float(cameraCenter[1]),
-            float(cameraCenter[2]));
-        pose.focalX = static_cast<float>(intrinsics.focalX);
-        pose.focalY = static_cast<float>(intrinsics.focalY);
-        pose.principalX = static_cast<float>(intrinsics.principalX);
-        pose.principalY = static_cast<float>(intrinsics.principalY);
-        pose.imageWidth = cameraObject.value(QStringLiteral("image_width")).toInt();
-        pose.imageHeight = cameraObject.value(QStringLiteral("image_height")).toInt();
-        pose.uAxisSign = intrinsics.uAxisSign;
-        pose.vAxisSign = intrinsics.vAxisSign;
-        pose.depthAxisFlipped = camera.depthAxisFlipped();
-
-        QMatrix3x3 rotation;
-        for (int row = 0; row < 3; ++row)
-        {
-            for (int column = 0; column < 3; ++column)
+            const QJsonObject imageObject = value.toObject();
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+            const QJsonObject cameraObject = imageObject.value(QStringLiteral("model_parameters")).toObject();
+            if (!xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera))
             {
-                rotation(row, column) = float(cameraToWorldRotation[row * 3 + column]);
+                continue;
             }
+
+            const std::array<double, 3> cameraCenter = camera.cameraCenter();
+            const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                camera.intrinsics();
+            CameraSceneWidget::CameraPose pose;
+            pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
+            if (pose.imagePath.isEmpty())
+            {
+                pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
+            }
+            pose.name = QFileInfo(pose.imagePath).fileName();
+            pose.center = QVector3D(float(cameraCenter[0]), float(cameraCenter[1]), float(cameraCenter[2]));
+            pose.focalX = static_cast<float>(intrinsics.focalX);
+            pose.focalY = static_cast<float>(intrinsics.focalY);
+            pose.principalX = static_cast<float>(intrinsics.principalX);
+            pose.principalY = static_cast<float>(intrinsics.principalY);
+            pose.imageWidth = cameraObject.value(QStringLiteral("image_width")).toInt();
+            pose.imageHeight = cameraObject.value(QStringLiteral("image_height")).toInt();
+            pose.uAxisSign = intrinsics.uAxisSign;
+            pose.vAxisSign = intrinsics.vAxisSign;
+            pose.depthAxisFlipped = camera.depthAxisFlipped();
+
+            QMatrix3x3 rotation;
+            for (int row = 0; row < 3; ++row)
+            {
+                for (int column = 0; column < 3; ++column)
+                {
+                    rotation(row, column) = float(cameraToWorldRotation[row * 3 + column]);
+                }
+            }
+            pose.rotation = rotation;
+            poses.push_back(pose);
         }
-        pose.rotation = rotation;
-        poses.push_back(pose);
+
+        return poses;
     }
 
-    return poses;
-}
-
-QJsonArray cameraPoseMetadataFromImages(const QJsonArray &images)
-{
-    QJsonArray camera_metadata;
-    for (const QJsonValue &value : images)
+    QJsonArray cameraPoseMetadataFromImages(const QJsonObject& metadata)
     {
-        const QJsonObject image = value.toObject();
-        const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
-        if (camera.isEmpty())
+        const QJsonArray images = xjw::common::project::projectImageEntries(metadata);
+        QJsonArray camera_metadata;
+        for (const QJsonValue& value : images)
         {
-            continue;
-        }
+            const QJsonObject image = value.toObject();
+            const QJsonObject camera = xjw::common::project::projectCameraModelParameters(metadata, image);
+            if (camera.isEmpty())
+            {
+                continue;
+            }
 
-        QJsonObject camera_entry;
-        camera_entry[QStringLiteral("path")] = image.value(QStringLiteral("path"));
-        camera_entry[QStringLiteral("image_path")] = image.value(QStringLiteral("image_path"));
-        camera_entry[QStringLiteral("camera")] = camera;
-        camera_metadata.append(camera_entry);
+            QJsonObject camera_entry;
+            camera_entry[QStringLiteral("path")] = image.value(QStringLiteral("path"));
+            camera_entry[QStringLiteral("image_path")] = image.value(QStringLiteral("image_path"));
+            camera_entry[QStringLiteral("model_parameters")] = camera;
+            camera_metadata.append(camera_entry);
+        }
+        return camera_metadata;
     }
-    return camera_metadata;
-}
 
 } // namespace
 
-WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
-    : QWidget(parent)
-    , _ui(new Ui::WorkspaceCenterWidget)
+WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget* parent) : QWidget(parent), _ui(new Ui::WorkspaceCenterWidget)
 {
     _ui->setupUi(this);
 
@@ -185,12 +182,12 @@ QSize WorkspaceCenterWidget::sizeHint() const
     return QSize(960, 640);
 }
 
-CanvasWidget *WorkspaceCenterWidget::canvas() const
+CanvasWidget* WorkspaceCenterWidget::canvas() const
 {
     return _canvas;
 }
 
-CameraSceneWidget *WorkspaceCenterWidget::modelView() const
+CameraSceneWidget* WorkspaceCenterWidget::modelView() const
 {
     return _modelView;
 }
@@ -252,7 +249,7 @@ void WorkspaceCenterWidget::showModelView()
     activateView(ModelTabIndex);
 }
 
-void WorkspaceCenterWidget::showImageView(const QString &imagePath)
+void WorkspaceCenterWidget::showImageView(const QString& imagePath)
 {
     if (!_stack || !_canvas)
     {
@@ -269,7 +266,7 @@ void WorkspaceCenterWidget::showImageView(const QString &imagePath)
     }
 }
 
-void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath, const QString &sideImagePath)
+void WorkspaceCenterWidget::showSideBySideImages(const QString& primaryImagePath, const QString& sideImagePath)
 {
     if (!_stack || !_dualImageViewer)
     {
@@ -280,10 +277,7 @@ void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath
         return;
     }
 
-    _dualImageViewer->loadMatchPair(primaryImagePath,
-                                     sideImagePath,
-                                     QVector<QPointF>(),
-                                     QVector<QPointF>());
+    _dualImageViewer->loadMatchPair(primaryImagePath, sideImagePath, QVector<QPointF>(), QVector<QPointF>());
     _dualImageViewer->fitBothViews();
     activateView(CompareTabIndex);
 
@@ -294,7 +288,7 @@ void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath
                    QStringLiteral("%1\n%2").arg(primaryImagePath, sideImagePath));
 }
 
-void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
+void WorkspaceCenterWidget::showModelFile(const QString& modelPath)
 {
     if (!_modelView)
     {
@@ -319,7 +313,7 @@ void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
     showModelView();
 }
 
-void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
+void WorkspaceCenterWidget::showPointCloudFile(const QString& pointCloudPath)
 {
     if (!_modelView)
     {
@@ -343,8 +337,7 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
     showModelView();
 }
 
-void WorkspaceCenterWidget::showTiePointCloudFile(const QString &pointCloudPath,
-                                                  const QString &sidecarPath)
+void WorkspaceCenterWidget::showTiePointCloudFile(const QString& pointCloudPath, const QString& sidecarPath)
 {
     if (!_modelView)
     {
@@ -356,7 +349,7 @@ void WorkspaceCenterWidget::showTiePointCloudFile(const QString &pointCloudPath,
     showModelView();
 }
 
-void WorkspaceCenterWidget::highlightCameraForImage(const QString &imagePath)
+void WorkspaceCenterWidget::highlightCameraForImage(const QString& imagePath)
 {
     if (_modelView)
     {
@@ -433,7 +426,7 @@ void WorkspaceCenterWidget::clearProjectView()
     showModelView();
 }
 
-void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)
+void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork& net, const QString& title)
 {
     if (!_stack || !_obsNetView || !_documentTabs)
     {
@@ -447,10 +440,9 @@ void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork
     activateView(ObservationNetworkTabIndex);
 }
 
-void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
+void WorkspaceCenterWidget::setProjectMeta(const QJsonObject& meta)
 {
-    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
-    const QJsonArray camera_pose_metadata = cameraPoseMetadataFromImages(images);
+    const QJsonArray camera_pose_metadata = cameraPoseMetadataFromImages(meta);
     if (_cameraPoseMetadata == camera_pose_metadata)
     {
         return;
@@ -460,25 +452,22 @@ void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
     refreshModelFromMeta(meta);
 }
 
-void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
+void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject& meta)
 {
-    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
     const quint64 generation = ++_cameraPoseGeneration;
-    auto *watcher = new QFutureWatcher<QVector<CameraSceneWidget::CameraPose>>(this);
+    auto* watcher = new QFutureWatcher<QVector<CameraSceneWidget::CameraPose>>(this);
     QPointer<WorkspaceCenterWidget> self(this);
     connect(watcher,
             &QFutureWatcher<QVector<CameraSceneWidget::CameraPose>>::finished,
             this,
             [self, watcher, generation]()
-    {
-        if (self && generation == self->_cameraPoseGeneration && self->_modelView)
-        {
-            self->_modelView->setCameraPoses(watcher->result());
-        }
-        watcher->deleteLater();
-    });
-    watcher->setFuture(QtConcurrent::run([images]()
-    {
-        return cameraPosesFromImages(images);
-    }));
+            {
+                if (self && generation == self->_cameraPoseGeneration && self->_modelView)
+                {
+                    self->_modelView->setCameraPoses(watcher->result());
+                }
+                watcher->deleteLater();
+            });
+    const QJsonArray images = cameraPoseMetadataFromImages(meta);
+    watcher->setFuture(QtConcurrent::run([images]() { return cameraPosesFromImages(images); }));
 }

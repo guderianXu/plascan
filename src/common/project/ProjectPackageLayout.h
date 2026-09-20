@@ -5,7 +5,9 @@
 namespace xjw::common::project
 {
 
-// PlaScan projects follow the same split layout as Metashape projects:
+// PlaScan projects follow the same split layout as Metashape projects. Physical
+// path calculation is delegated to common/plafs; this class keeps the Qt
+// descriptor, archive and cleanup facade:
 //   project.plascan
 //   project.files/project.zip
 //   project.files/1/

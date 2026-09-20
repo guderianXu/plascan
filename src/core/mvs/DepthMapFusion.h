@@ -133,7 +133,7 @@ namespace xjw
                 float P[12];    ///< 3×4 投影矩阵 K * [R|T]
                 float invP[12]; ///< 3×4 逆投影矩阵
                 float invR[9];  ///< R_cw^T = R_wc
-                FramePinholeCamera cameraModel;
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraModel;
                 int W = 0;
                 int H = 0;
                 float maxReprojectionErrorSquared = 0.0f;

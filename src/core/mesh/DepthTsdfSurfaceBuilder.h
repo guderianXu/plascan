@@ -4,7 +4,7 @@
 
 #include "DepthGeometrySourceEncoding.h"
 #include "DepthFrameQualificationPolicy.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthMapMeshBuilder.h"
 #include "MeshTopologyQuality.h"
 #include "MeshTypes.h"
@@ -31,7 +31,7 @@ namespace xjw::mesh
         QString refImage;
         QString sceneProfile;
         int algorithmRevision = 0;
-        FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         cv::Mat depth;
         cv::Mat confidence;
         cv::Mat geometrySupportCount;

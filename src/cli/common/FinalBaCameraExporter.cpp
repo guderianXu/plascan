@@ -97,7 +97,7 @@ struct CameraToWrite
 {
     QString imagePath;
     QString fileName;
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
 };
 
 } // namespace
@@ -171,8 +171,8 @@ bool exportFinalBaCameras(const QStringList &images,
                 QStringLiteral("无法导出最终 BA 相机：正式模型没有影像对应的相机: %1").arg(image),
                 errorMessage);
         }
-        xjw::FramePinholeCamera camera;
-        if (!xjw::common::project::cameraFromJson(metadata.value(), &camera) || !camera.isValid())
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        if (!xjw::common::project::decodeFramePinholeNumericState(metadata.value(), &camera))
         {
             return fail(
                 QStringLiteral("无法导出最终 BA 相机：相机元数据无效: %1").arg(image),
@@ -216,7 +216,7 @@ bool exportFinalBaCameras(const QStringList &images,
     for (const CameraToWrite &entry : cameras)
     {
         const QString stagedPath = QDir(stagingCameraDir).filePath(entry.fileName);
-        if (!entry.camera.saveToFile(xjw::common::io::toUtf8Path(stagedPath)))
+        if (!xjw::common::project::saveFramePinholeNumericState(entry.camera, xjw::common::io::toUtf8Path(stagedPath)))
         {
             return fail(QStringLiteral("无法写入最终 BA 相机: %1").arg(stagedPath), errorMessage);
         }

@@ -3,10 +3,8 @@
 // 文件: MvsPipelineService.h
 // 模块: MVS - 同步深度流程服务
 // 说明:
-//   管理完整 MVS 流程：
-//     1. 对每个参考帧调用 PatchMatchCUDA::estimate
-//     2. DepthMapFusion::fuse (COLMAP BFS) → 直接输出 3D FusedPoint
-//     3. 通过回调暴露中间结果，不负责线程启动
+//   同步执行 recovered scene-wide CUDA 深度估计与三层投票，保存权威深度工件。
+//   通过回调暴露中间结果，不负责线程启动；融合由独立服务执行。
 // =============================================================================
 
 #include "WorkflowExecution.h"
@@ -169,12 +167,12 @@ namespace xjw
                                                   const std::vector<int>& sourceIndices = {});
 
             /// 将同一帧可见稀疏点投影一次，供 hint 与支撑掩码在不同工作分辨率复用
-            static std::vector<ProjectedSparseDepthSample>
-            collectProjectedSparseDepthSamples(const SparseCloud& sparse,
-                                               const FramePinholeCamera& camera,
-                                               int imageWidth,
-                                               int imageHeight,
-                                               const std::vector<size_t>& visiblePointIndices);
+            static std::vector<ProjectedSparseDepthSample> collectProjectedSparseDepthSamples(
+                const SparseCloud& sparse,
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                int imageWidth,
+                int imageHeight,
+                const std::vector<size_t>& visiblePointIndices);
 
             /// 基于已投影样本生成 PatchMatch hint 深度图
             static cv::Mat buildHintDepthFromProjectedSamples(int refIdx,
@@ -226,81 +224,11 @@ namespace xjw
             void finished(bool success);
 
         private:
-            struct FrameMvsCache
-            {
-                std::vector<size_t> visiblePointIndices;
-                std::vector<size_t> sourceSharedPointIndices;
-                std::vector<int> sourceViewIndices;
-                std::vector<MvsSourcePlanEntry> sourceViewScores;
-                int requestedSourceViewCount = 0;
-                int sourceViewShortfall = 0;
-                std::string sourceViewShortfallReason;
-                QJsonObject sourceAngleDiagnostics;
-                bool completeVisibilityCandidatePoolEnabled = false;
-                bool completePoolChangedLegacyPlan = false;
-            };
-
             /// 同步执行；调用方决定线程与生命周期
             void runInBackground();
             void runInBackgroundImpl();
             void clearRuntimeCachesAfterFailure();
             void emitFinishedOnce(bool success);
-
-            /// 计算单帧深度图
-            DepthFrameResult computeDepthForView(
-                int refIdx,
-                const DepthGenConfig* configOverride = nullptr,
-                const std::function<bool(const DepthLevelSummary&, std::string*)>& firstLevelCompletionGate = {},
-                const std::vector<cv::Mat>* frozenDepthMaps = nullptr);
-
-            /// 预计算 MVS 可见性与源视图候选，避免每帧重复全量扫描稀疏点
-            void prepareFrameCaches();
-            void clearFrameCaches();
-            std::vector<int> sourceViewIndicesForFrame(int refIdx, int maxSources) const;
-            std::vector<size_t> visibleSparsePointIndicesForFrame(int refIdx,
-                                                                  const std::vector<int>& sourceIndices,
-                                                                  int minSourceViews) const;
-            bool isSparsePointVisibleInFrame(int viewIdx, size_t pointIndex) const;
-
-            /// 将 DepthFrameResult 组装为 FusionFrameInput
-            FusionFrameInput buildFusionFrame(const DepthFrameResult& res);
-
-            /// 估计参考帧的深度范围
-            bool
-            estimateDepthRange(int refIdx, float& zNear, float& zFar, const std::vector<int>& sourceIndices = {}) const;
-            bool estimateDepthRangeFromVisiblePoints(int refIdx,
-                                                     const std::vector<size_t>& visiblePointIndices,
-                                                     float& zNear,
-                                                     float& zFar) const;
-
-            /// 从稀疏点云生成提示深度图
-            cv::Mat buildHintDepth(int refIdx, int W, int H, const std::vector<int>& sourceIndices = {}) const;
-            cv::Mat buildHintDepthFromVisiblePoints(int refIdx,
-                                                    int W,
-                                                    int H,
-                                                    const std::vector<size_t>& visiblePointIndices) const;
-            cv::Mat buildHintDepthForCamera(int refIdx,
-                                            const FramePinholeCamera& camera,
-                                            int W,
-                                            int H,
-                                            const std::vector<size_t>& visiblePointIndices) const;
-
-            cv::Mat buildSparseSupportMaskFromVisiblePoints(int refIdx,
-                                                            int W,
-                                                            int H,
-                                                            const std::vector<size_t>& visiblePointIndices) const;
-            cv::Mat buildSparseSupportMaskForCamera(int refIdx,
-                                                    const FramePinholeCamera& camera,
-                                                    int W,
-                                                    int H,
-                                                    const std::vector<size_t>& visiblePointIndices) const;
-
-            /// 双视图深度图左右一致性检查（剔除互不一致的深度像素）
-            void crossCheckDepthConsistency();
-            bool crossCheckDepthConsistencyStreaming();
-            void recoverResidualDepthAfterConsistency();
-            void applyLearnedDepthCandidatesAfterConsistency();
-            void runDepthPoseRefinementCandidateStage(bool residentDepthFrames);
 
             /// 保存单帧深度图预览、原始深度和置信图，并通知 GUI 更新项目结果树
             bool saveDepthFrameArtifacts(int frameIndex, const DepthFrameResult& result, const QString& stageLabel);
@@ -345,8 +273,6 @@ namespace xjw
             task_runtime::WorkflowOutcome _outcome;
             std::mutex _executionMutex;
             std::string _outputDir;
-            std::string _consistencyDepthDirectory;
-            bool _streamConsistencyStorageEnabled = false;
             std::unique_ptr<MvsStageSnapshotRecorder> _stageSnapshotRecorder;
 
             /// 缓存已估计的深度帧
@@ -358,13 +284,6 @@ namespace xjw
             MvsPipelineMemoryPolicyDecision _pipelineMemoryDecision;
             std::vector<MvsPreparedRasterArtifact> _preparedRasterArtifacts;
             std::mutex _preparedRasterArtifactsMutex;
-
-            /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
-            std::vector<FrameMvsCache> _frameCaches;
-            std::vector<uint64_t> _visibilityBits;
-            std::vector<std::vector<MvsVisibilityNeighbor>> _visibilityAdjacency;
-            size_t _visibilityWordCount = 0;
-            bool _frameCachesReady = false;
 
             QString _workspaceManifestPath;
             QString _depthConfigHash;

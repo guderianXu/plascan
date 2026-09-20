@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <opencv2/core.hpp>
 
@@ -21,7 +21,7 @@ namespace xjw::mvs
     {
         cv::Mat gray;
         cv::Mat preparedGray;
-        FramePinholeCamera preparedCamera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState preparedCamera;
         cv::Mat validMask;
         /// project is semantic; content/technical only delimit valid raster data.
         std::string validMaskSource;

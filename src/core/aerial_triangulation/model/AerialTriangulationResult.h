@@ -6,11 +6,13 @@
  */
 
 #include "model/AerialTriangulationResolvedConfig.h"
+#include "camera/project/CameraInstanceUpdate.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QMap>
 #include <QString>
+
+#include <vector>
 
 namespace xjw::aerial_triangulation
 {
@@ -24,7 +26,7 @@ struct AerialTriangulationReconstructionResult
     int numRegisteredImages = 0; ///< 最终有效相机位姿数。
     int numPoints3D = 0; ///< 最终稀疏点数。
     double meanReprojError = 0.0; ///< 最终点平均重投影误差，像素。
-    QMap<QString, QJsonObject> pendingCamUpdates; ///< 事务提交前的影像路径到相机 JSON。
+    camera_project::CameraInstanceUpdates cameraInstanceUpdates; ///< 按 ImageId 键控的事务相机更新。
     QString sparseCloudPath; ///< 正式 sfm_sparse.ply 路径。
     QString displaySparseCloudPath; ///< 可选的清理显示云，不替代正式算法点云。
     QJsonObject qualityMetadata; ///< MVS 门控和稀疏质量摘要。

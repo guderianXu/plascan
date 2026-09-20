@@ -5,9 +5,31 @@ set(CMAKE_AUTOMOC ON)
 
 # Shared data and synchronous processing must not depend on the Qt task adapter.
 add_library(mvs_contracts INTERFACE)
-target_include_directories(mvs_contracts INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(mvs_contracts INTERFACE camera plapoint::plapoint Qt6::Core ${OpenCV_LIBS})
+target_include_directories(mvs_contracts INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+target_link_libraries(mvs_contracts INTERFACE camera camera_models_frame_pinhole plapoint::plapoint Qt6::Core ${OpenCV_LIBS})
 target_compile_features(mvs_contracts INTERFACE cxx_std_20)
+
+# Persisted workspace and artifact IO depend only on data contracts, never the
+# computation backend, pipeline service or GUI task lifecycle.
+add_library(mvs_storage STATIC
+    DepthMatStorage.cpp
+    DepthMatStorage.h
+    DepthArtifactIO.cpp
+    DepthArtifactIO.h
+    MvsWorkspaceManifest.cpp
+    MvsWorkspaceManifest.h
+    MvsWorkspaceReplay.cpp
+    MvsWorkspaceReplay.h
+    PointCloudArtifactIO.cpp
+    PointCloudArtifactIO.h
+    DenseCloudArtifactValidation.cpp
+    DenseCloudArtifactValidation.h
+)
+set_target_properties(mvs_storage PROPERTIES AUTOMOC OFF)
+target_link_libraries(mvs_storage PUBLIC mvs_contracts plascan_common_io)
 
 add_library(mvs_depth_processing STATIC
     depth_processing/DepthNoiseFilters.cpp
@@ -46,7 +68,6 @@ endif()
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
     AdaptiveGeometryEvidencePolicy.cpp
-    DenseCloudArtifactValidation.cpp
     DenseCloudRefinementService.cpp
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
@@ -81,8 +102,6 @@ set(MVS_CXX_SOURCES
     MvsImageFrame.cpp
     MvsImageMetadataProbe.cpp
     MvsImagePreprocessor.cpp
-    MvsWorkspaceManifest.cpp
-    MvsWorkspaceReplay.cpp
     PatchMatchCPU.cpp
     PatchMatchEstimator.cpp
     PatchMatchHostUtils.cpp
@@ -90,7 +109,6 @@ set(MVS_CXX_SOURCES
     EpipolarRectifier.cpp
     SparseCloudPreprocessor.cpp
     DisparityTriangulator.cpp
-    PointCloudArtifactIO.cpp
     RecoveredDepthScene.cpp
     RecoveredModelInput.cpp
     StreamingDepthFusionService.cpp
@@ -112,7 +130,6 @@ set(MVS_HEADERS
     DepthFrameResult.h
     DepthPyramidTypes.h
     AdaptiveGeometryEvidencePolicy.h
-    DenseCloudArtifactValidation.h
     DenseCloudRefinementService.h
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
@@ -141,8 +158,6 @@ set(MVS_HEADERS
     MvsImageMetadataProbe.h
     MvsImagePreprocessor.h
     MvsViewSelection.h
-    MvsWorkspaceManifest.h
-    MvsWorkspaceReplay.h
     PatchMatchCUDA.h
     DepthMapFusion.h
     MvsStageSnapshot.h
@@ -163,7 +178,6 @@ set(MVS_HEADERS
     EpipolarRectifier.h
     SparseCloudPreprocessor.h
     DisparityTriangulator.h
-    PointCloudArtifactIO.h
     RecoveredDepthScene.h
     StreamingDepthFusionService.h
 )
@@ -272,6 +286,7 @@ target_link_libraries(mvs_backend
     PUBLIC
         mvs_contracts
         mvs_depth_processing
+        mvs_storage
         camera
         plascan_common_log
         plascan_common_io
@@ -301,30 +316,19 @@ set_target_properties(mvs_backend PROPERTIES AUTOMOC OFF)
 add_library(mvs_pipeline STATIC
     MvsPipelineService.h
     pipeline/DepthEvidenceRules.cpp
-    pipeline/DepthConsistencyVoting.cpp
     pipeline/DepthDiagnostics.cpp
     pipeline/SourcePlanningUtils.cpp
     pipeline/DepthResourcePolicy.cpp
-    pipeline/DepthArtifactIO.cpp
     pipeline/FrameBackend.cpp
     pipeline/FrameBackendBridge.cpp
     pipeline/DepthPublicationContract.cpp
     pipeline/ImageMasks.cpp
     pipeline/MvsPipelineService.cpp
-    pipeline/SparseVisibility.cpp
     pipeline/DepthWorkspace.cpp
     pipeline/PreparedRasterPublisher.cpp
-    pipeline/SourcePlanning.cpp
     pipeline/ImagePreparation.cpp
-    pipeline/SparseDepthRange.cpp
     pipeline/SparseDepthHints.cpp
     pipeline/SparseSupportPrior.cpp
-    pipeline/FrameEstimation.cpp
-    pipeline/FusionFrameAssembler.cpp
-    pipeline/DepthConsistency.cpp
-    pipeline/ExperimentalDepthStages.cpp
-    pipeline/DepthRecovery.cpp
-    pipeline/StreamingConsistency.cpp
     pipeline/DepthArtifactPublisher.cpp
     pipeline/MvsPipelineExecution.cpp
 )
@@ -340,6 +344,13 @@ if(BUILD_TESTS)
     find_package(GTest QUIET)
     if(GTest_FOUND)
         include(GoogleTest)
+        add_executable(test_mvs_storage tests/test_mvs_storage.cpp)
+        set_target_properties(test_mvs_storage PROPERTIES
+            AUTOMOC OFF RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+        target_link_libraries(test_mvs_storage PRIVATE mvs_storage GTest::gtest_main)
+        target_compile_definitions(test_mvs_storage PRIVATE
+            PLASCAN_MVS_STORAGE_TEST_TMP="${CMAKE_SOURCE_DIR}/build/tmp/mvs-storage-split")
+        gtest_discover_tests(test_mvs_storage)
         add_executable(test_mvs_pipeline_service tests/test_mvs_pipeline_service.cpp)
         set_target_properties(test_mvs_pipeline_service PROPERTIES AUTOMOC OFF)
         target_link_libraries(test_mvs_pipeline_service PRIVATE mvs_pipeline GTest::gtest_main)

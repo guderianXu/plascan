@@ -53,7 +53,6 @@ add_library(meshing_algorithms STATIC
     SparseSfmPointQualityReader.cpp
     SparseOrbitalScaffoldBuilder.cpp
     MeshVoxelTopologyRepair.cpp
-    OrbitalSparseScaffoldSurfaceBuilder.cpp
     StudioForegroundMask.cpp
     DepthMapMeshBuilder.cpp
     DepthAuxiliaryBridgeSelector.cpp

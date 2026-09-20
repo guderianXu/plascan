@@ -11,6 +11,7 @@
 #include "DepthGeometryConsistency.h"
 #include "DepthLayerReliability.h"
 #include "DepthFrameUtils.h"
+#include "DepthArtifactIO.h"
 #include "GpuDeviceLease.h"
 #include "DepthMemoryPolicy.h"
 #include "DepthPyramidPolicy.h"
@@ -101,17 +102,6 @@ namespace xjw::mvs::pipeline_detail
 
     using Clock = std::chrono::steady_clock;
 
-    struct FrameTiming
-    {
-        double sourceMs = 0.0;
-        double rangeMs = 0.0;
-        double hintMs = 0.0;
-        double rectifyMs = 0.0;
-        double patchmatchMs = 0.0;
-        double filterMs = 0.0;
-        double totalMs = 0.0;
-    };
-
     struct SystemMemorySnapshot
     {
         uint64_t totalPhysicalBytes = 0;
@@ -155,24 +145,6 @@ namespace xjw::mvs::pipeline_detail
         double meanConfidence = 0.0;
     };
 
-    struct DepthConsistencySourceInput
-    {
-        cv::Mat depth;
-        FramePinholeCamera camera;
-        cv::Mat confidence;
-        float reliabilityWeight = 1.0f;
-        int sourceOrdinal = -1;
-        int searchRadiusPixels = kFullRasterConsistencySearchRadiusPixels;
-        bool evaluateSubpixelFootprint = false;
-    };
-
-    struct DepthConsistencyVoteTotals
-    {
-        std::uint64_t consistent = 0;
-        std::uint64_t occluded = 0;
-        std::uint64_t contradicted = 0;
-        std::uint64_t unverifiable = 0;
-    };
     DepthPixelDomainScale pixelDomainScaleForResult(const DepthFrameResult& result, const cv::Size& grid_size);
 
     int effectiveMinimumSmallHoleArea(const DepthFrameResult& result, const cv::Size& grid_size);
@@ -205,11 +177,12 @@ namespace xjw::mvs::pipeline_detail
 
     QJsonArray doubleArrayToJson(const double* values, int count);
 
-    FramePinholeCamera mvsPinholeCamera(const FramePinholeCamera& camera);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    mvsPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
 
     cv::Mat restoreNativePyramidArtifact(const cv::Mat& artifact, const cv::Size& working_size);
 
-    QJsonObject cameraModelToJson(const FramePinholeCamera& camera);
+    QJsonObject cameraModelToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
 
     QJsonObject depthPoseRefinementCandidateToJson(const DepthPoseRefinementCandidate& candidate,
                                                    const DepthPoseRefinementStageResult& stage);
@@ -302,12 +275,6 @@ namespace xjw::mvs::pipeline_detail
 
     int preloadImagesWorkerCount(int viewCount, int requestedThreads);
 
-    bool writeFastDepthMatStorage(const std::string& path, const cv::Mat& matrix, std::string* errorMsg);
-
-    bool saveDepthPreviewPng(const std::string& path, const cv::Mat& depthMap, std::string* errorMsg);
-
-    QString manifestPathForOutput(const DepthGenConfig& config, const std::string& outputDir);
-
     int resolvedTotalCpuThreadBudget(const DepthGenConfig& config);
 
     cv::Size patchMatchWorkSize(const cv::Mat& image, const PatchMatchConfig& config);
@@ -327,81 +294,34 @@ namespace xjw::mvs::pipeline_detail
 
     PatchMatchConfig patchMatchConfigForRecordedWorker(PatchMatchConfig config, std::string_view workerId);
 
-    bool estimatePatchMatchWithAdaptiveCuda(const char* stageLabel,
-                                            int refIdx,
-                                            const cv::Mat& refGray,
-                                            const std::vector<cv::Mat>& srcGrays,
-                                            const FramePinholeCamera& refCam,
-                                            const std::vector<FramePinholeCamera>& srcCams,
-                                            float zNear,
-                                            float zFar,
-                                            const PatchMatchConfig& config,
-                                            cv::Mat& depthOut,
-                                            cv::Mat* confOut,
-                                            std::string* errorMsg,
-                                            const cv::Mat* hintDepth,
-                                            const cv::Mat* hintRadius,
-                                            const cv::Mat* referenceValidMask,
-                                            const std::vector<cv::Mat>* sourceValidMasks,
-                                            const PatchMatchAuxiliaryInput* auxiliaryInput = nullptr,
-                                            PatchMatchAuxiliaryOutput* auxiliaryOutput = nullptr);
+    bool estimatePatchMatchWithAdaptiveCuda(
+        const char* stageLabel,
+        int refIdx,
+        const cv::Mat& refGray,
+        const std::vector<cv::Mat>& srcGrays,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+        float zNear,
+        float zFar,
+        const PatchMatchConfig& config,
+        cv::Mat& depthOut,
+        cv::Mat* confOut,
+        std::string* errorMsg,
+        const cv::Mat* hintDepth,
+        const cv::Mat* hintRadius,
+        const cv::Mat* referenceValidMask,
+        const std::vector<cv::Mat>* sourceValidMasks,
+        const PatchMatchAuxiliaryInput* auxiliaryInput = nullptr,
+        PatchMatchAuxiliaryOutput* auxiliaryOutput = nullptr);
 
     float sourceGeometryReliabilityWeight(const DepthFrameResult& reference_frame, int source_view_index);
 
-    int cameraBaselineSector(const FramePinholeCamera& reference_camera, const FramePinholeCamera& source_camera);
-
-    void accumulateDepthConsistency(const cv::Mat& referenceDepth,
-                                    const FramePinholeCamera& referenceCamera,
-                                    const std::vector<DepthConsistencySourceInput>& sources,
-                                    float relativeThreshold,
-                                    float maximumRoundTripErrorPixels,
-                                    int rowWorkers,
-                                    const std::atomic<bool>& cancelled,
-                                    cv::Mat& consistentVotes,
-                                    cv::Mat& occludedVotes,
-                                    cv::Mat& contradictedVotes,
-                                    cv::Mat& unverifiableVotes,
-                                    cv::Mat& geometrySourceMask,
-                                    cv::Mat& sourceInverseDepthSum,
-                                    cv::Mat& sourceInverseDepthSquaredSum,
-                                    AdaptiveGeometryEvidenceAccumulatorMaps* adaptiveEvidence);
-
-    cv::Mat makeDepthConsistencyMask(const cv::Mat& referenceDepth,
-                                     int sourceViewCount,
-                                     int minimumSourceConfirmations,
-                                     const cv::Mat& consistentVotes,
-                                     const cv::Mat& occludedVotes,
-                                     const cv::Mat& contradictedVotes,
-                                     int rowWorkerCount,
-                                     const std::atomic<bool>* cancelled);
-
-    DepthConsistencyVoteTotals summarizeDepthConsistencyVotes(const cv::Mat& consistentVotes,
-                                                              const cv::Mat& occludedVotes,
-                                                              const cv::Mat& contradictedVotes,
-                                                              const cv::Mat& unverifiableVotes,
-                                                              int rowWorkerCount);
+    int cameraBaselineSector(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                             const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera);
 
     void updateDepthCompletenessAfterPostprocess(DepthFrameResult& result,
                                                  const cv::Mat& depth,
                                                  const DepthPostProcessStats& stats);
-
-    DepthAnchoredHoleInterpolationStats
-    repairPostprocessedInternalDepthHoles(DepthFrameResult& result,
-                                          cv::Mat& depth,
-                                          cv::Mat& confidence,
-                                          MvsSceneProfile sceneProfile,
-                                          cv::Mat* anchoredInterpolationMask = nullptr);
-
-    void updateDepthFrameQualityAfterConsistency(DepthFrameResult& result,
-                                                 const cv::Mat& depth,
-                                                 const cv::Mat& confidence,
-                                                 MvsSceneProfile scene_profile,
-                                                 DepthFilterMode filter_mode,
-                                                 bool consistency_stage_expected,
-                                                 const AdaptiveGeometryEvidenceSummary& adaptive_summary,
-                                                 const DiscreteGeometryCoreSummary& discrete_summary);
-
-    double det3(const double* R);
 
     template <typename Fn> void parallelForRows(int rowCount, int workerCount, Fn&& fn)
     {

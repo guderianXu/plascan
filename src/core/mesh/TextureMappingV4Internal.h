@@ -31,8 +31,8 @@ inline constexpr int kFallbackTileSize = 4;
 struct PreparedView
 {
     int sourceIndex = -1;
-    FramePinholeCamera evidenceCamera;
-    FramePinholeCamera colorCamera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState evidenceCamera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState colorCamera;
     cv::Mat colorBgr;
     cv::Mat gray;
     cv::Mat focusQuality;

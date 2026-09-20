@@ -107,6 +107,215 @@ doc.json
 `project_results` 中每条新结果记录都带独立的 `schema_version`，当前为 `1`。不同结果数组
 可独立升级，不再依赖整个 Chunk 格式一起变化。
 
+### Chunk 坐标上下文
+
+`chunk.coordinate_system` 使用独立 schema，权威值由 Qt-free `coordinate_system_json` 编解码。记录必须保存
+完整 canonical WKT2，不能只保存 EPSG code 或 hash；CRS 与 solver 都通过稳定 frame ID 关联，禁止在不同
+记录中复制一份可独立漂移的 frame。当前 schema 1 的核心形状如下（WKT 已缩写）：
+
+```json
+{
+  "coordinate_system": {
+    "schema_version": 1,
+    "context_id": "coordctx-earth-ecef",
+    "revision": 1,
+    "spatial_references": [
+      {
+        "id": "crs-epsg-4979",
+        "frame_id": "frame-wgs84-geodetic",
+        "authority": "EPSG",
+        "code": "4979",
+        "kind": "geographic_3d",
+        "axis_mapping": "canonical_lon_lat_height",
+        "vertical_reference": "ellipsoidal",
+        "linear_unit_to_metres": 0.0,
+        "canonical_definition": "GEOGCRS[...完整 WKT2:2019...]",
+        "canonical_definition_hash": "sha256:<64-hex>"
+      },
+      {
+        "id": "crs-epsg-4978",
+        "frame_id": "frame-wgs84-ecef",
+        "authority": "EPSG",
+        "code": "4978",
+        "kind": "geocentric_3d",
+        "axis_mapping": "canonical_xyz",
+        "vertical_reference": "not_applicable",
+        "linear_unit_to_metres": 1.0,
+        "canonical_definition": "GEODCRS[...完整 WKT2:2019...]",
+        "canonical_definition_hash": "sha256:<64-hex>"
+      }
+    ],
+    "frames": [
+      {
+        "id": "frame-wgs84-geodetic",
+        "kind": "geodetic",
+        "linear_unit": "metre",
+        "angle_unit": "degree",
+        "parent_frame_id": null,
+        "to_parent": {
+          "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+          "translation": [0.0, 0.0, 0.0]
+        }
+      },
+      {
+        "id": "frame-wgs84-ecef",
+        "kind": "ecef",
+        "linear_unit": "metre",
+        "angle_unit": "radian",
+        "parent_frame_id": null,
+        "to_parent": {
+          "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+          "translation": [0.0, 0.0, 0.0]
+        }
+      }
+    ],
+    "solver_frame_id": "frame-wgs84-ecef",
+    "solver_spatial_reference_id": "crs-epsg-4978",
+    "solver_scale_status": "metric",
+    "solver_normalization_hash": "ecef-normalization-v1",
+    "context_hash": "sha256:<64-hex>"
+  }
+}
+```
+
+读取时会重算每个 canonical definition hash 和整个 context hash，并拒绝未知字段、重复 ID、未注册 frame、
+CRS/frame 不匹配以及伪造的米制 solver。未定尺度工程使用 `solver_scale_status=unresolved`、
+`ProjectUnit` frame 且 `solver_spatial_reference_id=null`。当前 codec 已可嵌入/读取 Chunk；ProjectSession
+尚未自动创建或迁移 context，调用工作流必须显式提供不可变快照，缺失时地理角控制点继续 fail-closed。
+
+### 相机定义与影像实例
+
+相机几何保存在 `project_files.camera_definitions[]` 和
+`project_files.camera_instances[]` 两个规范化集合中。`images[]` 只保存影像身份、路径和
+尺寸等影像元数据，不嵌入相机对象；出现 `images[*].camera` 或 `images[*].camera_file` 会使工程打开和保存校验失败，当前写入路径不会自动删除或迁移这些字段。
+
+定义描述可由多幅影像共享的模型与标定参数，实例描述一幅影像的尺寸、采集时刻和模型状态：
+
+```json
+{
+  "camera_definitions": [
+    {
+      "id": "camdef-<stable-id>",
+      "model_type": "frame_pinhole",
+      "schema_version": 1,
+      "frame": "project-world",
+      "parameters": {
+        "intrinsics": {
+          "fx_px": 7000.0,
+          "fy_px": 7000.0,
+          "cx_px": 3600.0,
+          "cy_px": 2400.0,
+          "pixel_pitch_mm": 0.005,
+          "u_axis_sign": 1,
+          "v_axis_sign": 1
+        },
+        "distortion": {"k1": 0.0, "k2": 0.0, "k3": 0.0, "p1": 0.0, "p2": 0.0},
+        "pixel_convention": "center",
+        "depth_axis_flipped": false
+      }
+    }
+  ],
+  "camera_instances": [
+    {
+      "id": "caminst-<stable-id>",
+      "image_uuid": "<image-uuid>",
+      "definition_id": "camdef-<stable-id>",
+      "schema_version": 1,
+      "image_size": {"samples": 4096, "lines": 3072},
+      "pose": {
+        "frame": "project-world",
+        "center_m": [10.0, 20.0, 30.0],
+        "camera_to_world_rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "state": {
+        "metadata": {
+          "aligned": true,
+          "solution": "adjusted"
+        }
+      }
+    }
+  ]
+}
+```
+
+内置 `model_type` 使用字符串注册值：`frame_pinhole` 表示面阵针孔，`rpc00b` 表示 RPC00B，
+`planetary_linescan` 表示带轨迹和逐行时间的推扫线阵。RPC 实例可提供投影、反投影和近似射线，
+但没有静态光心；推扫实例通过 `trajectory` 和 `line_timing` 描述每一行的姿轨，也没有静态位姿
+能力。需要固定光心的 SfM、BA 或 MVS 阶段必须在调用边界请求 `static_pose` 能力，缺失时报告
+具体影像 UUID 和模型类型，而不是构造一个临时相机中心。
+
+写入 `camera_definitions`/`camera_instances` 前，项目服务使用唯一的模型更新 DTO。模型名和值均区分
+大小写，不执行 trim、别名映射、单位猜测或缺省 frame/姿态补全：
+
+- `frame_pinhole`：必须显式提供 `world_frame`、`intrinsics_unit=mm`、
+  `camera_center_unit=m`、`pixel_convention=center`、`pitch`、`fu/fv/cu/cv`、`C` 和 `R`；影像尺寸
+  使用 `image_width/image_height`。不接受 `fx/fy/cx/cy`、px 内参或嵌套 `intrinsics` 作为更新输入。
+- `rpc00b`：必须使用 `world_frame=EPSG:4978`、`rpc_spec=RPC00B`、`ground_crs=EPSG:4979`、
+  `height_datum=WGS84_ellipsoidal` 和 `pixel_convention=opencv_zero_based_center`，并提供标准 RPC00B
+  偏移、尺度、四组 20 项系数及 `image_samples/image_lines`。
+- `planetary_linescan`：必须提供显式 `world_frame`、`pixel_convention`、`image_samples/image_lines`，
+  以及嵌套 `optics`、`trajectory`、`line_timing`；不接受扁平焦距、像元、轨迹数组或单一行频字段。
+
+`tsai`、`pinhole`、`rpc`、`pushbroom`、`line_scan` 和 `linescan` 不是项目模型标识。外部 `.tsai`、
+RPC GeoTIFF 和 USGSCSM ISD 只能通过各自导入器生成上述 DTO，不能把外部格式字段直接写进工程。
+
+模型参数使用各模型自己的规范对象：面阵针孔使用 `intrinsics`、`distortion` 和显式像素约定，
+RPC00B 使用偏移、尺度和四组 20 项有理多项式系数，推扫使用 `optics`。只属于单幅影像的
+导入来源、对齐状态或解算方案放在对应实例的 `state.metadata`，不会混入可共享的定义。
+
+定义版本按模型独立演进：`frame_pinhole` 与 `rpc00b` 当前为参数 schema 1，
+`planetary_linescan` 为参数 schema 2；实例外层记录当前仍为 schema 1。内置模型版本必须与注册表
+声明完全一致。线阵 schema 1 及旧数组式轨迹不会转换或兼容读取。
+
+空三/BA 相机标定报告的 `camera_comparison[]` 只保存 `initial_camera` 和 `adjusted_camera` 完整快照。
+旧的 `fu_before`、`fu_after`、`k1_before`、`k1_after` 等扁平镜像字段不再写入或读取。
+只有诊断对象显式写出 `adaptive_camera_model_fitting_applied=true` 时，报告才会列出实际优化的内参；
+不会根据 `refined` 状态或旧诊断字段推断该结果。
+
+线阵 schema 2 的定义必须显式选择畸变和探元映射。`sample_geometry.type` 只接受
+`uniform_pitch` 或 `detector_affine`：
+
+```json
+{
+  "model_type": "planetary_linescan",
+  "schema_version": 2,
+  "frame": "MOON_ME",
+  "parameters": {
+    "optics": {
+      "focal_length_mm": 700.0,
+      "distortion_model": "lro_nac_focal_plane",
+      "distortion_k1": 0.001,
+      "sample_geometry": {
+        "type": "detector_affine",
+        "detector_sample_summing": 1.0,
+        "detector_line_summing": 1.0,
+        "detector_sample_origin": 512.0,
+        "detector_line_origin": 0.0,
+        "starting_detector_sample": 0.0,
+        "starting_detector_line": 0.0,
+        "focal_to_pixel_samples": [0.0, 0.0, 1.0],
+        "focal_to_pixel_lines": [0.0, 1.0, 0.0]
+      }
+    },
+    "pixel_convention": "pixel_center"
+  }
+}
+```
+
+线阵实例的 `state.trajectory` 是带 `time_scale` 的对象。`representation` 为
+`direct_pose_samples` 时保存世界系姿态采样；为 `frame_composed` 时分别保存惯性系位置/速度、
+惯性到世界的姿态表和惯性到传感器的姿态表。`line_timing` 始终保存 `segments[]`，每段包含
+`start_line`、`start_time_seconds` 和正的 `seconds_per_line`。恒定行频也使用一个分段记录，
+不再另设标量格式。
+
+外部 GNSS/IMU/POS 参考观测使用独立的 `camera_reference_set.json`，通过 `image_uuid` 关联
+相机实例。参考记录先经过坐标框架、姿态约定、时间尺度和杆臂方向解析，再由比较器与提供
+`static_pose` 的实例比较；参考数据不会写入 `camera_instances`，也不会反向修改模型定义。
+
+加载器严格检查每种模型的定义版本、实例版本、ID 唯一性、影像绑定唯一性、定义引用、坐标框架和有限数值；
+相机写入会先通过对应模型工厂验证定义和实例，参数不完整时保持项目文档不变。
+旧工程格式及缺少这两个集合的文档不自动升级，打开时直接报告错误。
+
 原始影像位于工程级共享影像库；逐影像匹配分片、最终多视图 track、深度图、点云、模型、
 纹理、DEM、DOM、参考数据和报告是对应 Chunk 数字目录中的普通文件。大文件不进入 ZIP。
 

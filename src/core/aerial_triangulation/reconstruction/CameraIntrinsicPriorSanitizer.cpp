@@ -1,12 +1,11 @@
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 
 #include "ProjectCameraIO.h"
-#include "project/ProjectCommonUtils.h"
-
-#include <FramePinholeCamera.h>
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace xjw::aerial_triangulation
@@ -42,9 +41,100 @@ double median(std::vector<double> values)
 
 struct CameraFocalRecord
 {
-    QString path;
+    camera_core::ImageId imageId;
     double focalPixels = 0.0;
 };
+
+template <typename CameraMap, typename FocalReader, typename FocalScaler>
+CameraIntrinsicPriorSanitizationResult sanitizeByFocalGroup(
+    const std::vector<camera_core::ImageId>& imageIds,
+    CameraMap* cameraByImageId,
+    FocalReader&& readFocal,
+    FocalScaler&& scaleFocal)
+{
+    CameraIntrinsicPriorSanitizationResult result;
+    if (!cameraByImageId || imageIds.size() < 4)
+    {
+        return result;
+    }
+
+    std::vector<CameraFocalRecord> cameras;
+    cameras.reserve(imageIds.size());
+    for (const camera_core::ImageId& imageId : imageIds)
+    {
+        const auto cameraIt = cameraByImageId->find(imageId);
+        if (cameraIt == cameraByImageId->end())
+        {
+            continue;
+        }
+
+        const std::optional<double> focalPixels = readFocal(cameraIt->second);
+        if (focalPixels.has_value() && std::isfinite(*focalPixels) && *focalPixels > 1.0)
+        {
+            cameras.push_back({imageId, *focalPixels});
+        }
+    }
+    result.inspectedCameraCount = static_cast<int>(cameras.size());
+    if (cameras.size() < 4)
+    {
+        return result;
+    }
+
+    std::vector<double> allFocals;
+    allFocals.reserve(cameras.size());
+    for (const CameraFocalRecord& camera : cameras)
+    {
+        allFocals.push_back(camera.focalPixels);
+    }
+    const double initialMedian = median(allFocals);
+    if (!(initialMedian > 1.0) || !std::isfinite(initialMedian))
+    {
+        return result;
+    }
+
+    std::vector<double> dominantFocals;
+    for (const CameraFocalRecord& camera : cameras)
+    {
+        const double ratio = camera.focalPixels / initialMedian;
+        if (ratio >= kDominantGroupLowerScale && ratio <= kDominantGroupUpperScale)
+        {
+            dominantFocals.push_back(camera.focalPixels);
+        }
+    }
+    const int requiredDominantCount = std::max(3, static_cast<int>(std::ceil(
+        static_cast<double>(cameras.size()) * kDominantGroupMinRatio)));
+    if (static_cast<int>(dominantFocals.size()) < requiredDominantCount)
+    {
+        return result;
+    }
+
+    const double dominantMedian = median(dominantFocals);
+    if (!(dominantMedian > 1.0) || !std::isfinite(dominantMedian))
+    {
+        return result;
+    }
+    result.dominantGroupCount = static_cast<int>(dominantFocals.size());
+    result.dominantMedianFocalPixels = dominantMedian;
+
+    for (const CameraFocalRecord& record : cameras)
+    {
+        const double ratio = record.focalPixels / dominantMedian;
+        if (ratio >= kOutlierLowerScale && ratio <= kOutlierUpperScale)
+        {
+            continue;
+        }
+
+        auto cameraIt = cameraByImageId->find(record.imageId);
+        if (cameraIt == cameraByImageId->end())
+        {
+            continue;
+        }
+        scaleFocal(cameraIt->second, dominantMedian / record.focalPixels);
+        result.normalizedImageIds.push_back(record.imageId);
+        ++result.normalizedCameraCount;
+    }
+    return result;
+}
 
 } // namespace
 
@@ -92,107 +182,58 @@ bool isTrustedProjectCameraIntrinsic(const QJsonObject &cameraObject)
 }
 
 CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
-    const QStringList &imagePaths,
-    QMap<QString, QJsonObject> *cameraByPath)
+    const std::vector<camera_core::ImageId> &imageIds,
+    CameraIntrinsicsByImageId *cameraByImageId)
 {
-    CameraIntrinsicPriorSanitizationResult result;
-    if (!cameraByPath || imagePaths.size() < 4)
-    {
-        return result;
-    }
-
-    std::vector<CameraFocalRecord> cameras;
-    cameras.reserve(static_cast<std::size_t>(imagePaths.size()));
-    for (const QString &imagePath : imagePaths)
-    {
-        const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
-        auto cameraIt = cameraByPath->constFind(normalizedPath);
-        if (cameraIt == cameraByPath->cend())
+    return sanitizeByFocalGroup(
+        imageIds,
+        cameraByImageId,
+        [](const QJsonObject& cameraObject) -> std::optional<double>
         {
-            // 兼容无头 CLI 或旧工程中未规范化的相对路径键。
-            cameraIt = cameraByPath->constFind(imagePath);
-        }
-        if (cameraIt == cameraByPath->cend())
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+            if (!xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) || !camera.isValid())
+            {
+                return std::nullopt;
+            }
+            const double focalPixels = std::sqrt(camera.focalX() * camera.focalY());
+            return std::isfinite(focalPixels) && focalPixels > 1.0
+                       ? std::optional<double>(focalPixels)
+                       : std::nullopt;
+        },
+        [](QJsonObject& cameraObject, double scale)
         {
-            continue;
-        }
+            cameraObject.insert(QStringLiteral("fu"), cameraObject.value(QStringLiteral("fu")).toDouble() * scale);
+            cameraObject.insert(QStringLiteral("fv"), cameraObject.value(QStringLiteral("fv")).toDouble() * scale);
+        });
+}
 
-        FramePinholeCamera camera;
-        if (!xjw::common::project::cameraFromJson(cameraIt.value(), &camera) || !camera.isValid())
+CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
+    const std::vector<camera_core::ImageId>& imageIds,
+    FramePinholeStatesByImageId* cameraByImageId)
+{
+    return sanitizeByFocalGroup(
+        imageIds,
+        cameraByImageId,
+        [](const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera) -> std::optional<double>
         {
-            continue;
-        }
-
-        const double focalPixels = std::sqrt(camera.focalX() * camera.focalY());
-        if (std::isfinite(focalPixels) && focalPixels > 1.0)
+            if (!camera.isValid())
+            {
+                return std::nullopt;
+            }
+            const double focalPixels = std::sqrt(camera.focalX() * camera.focalY());
+            return std::isfinite(focalPixels) && focalPixels > 1.0
+                       ? std::optional<double>(focalPixels)
+                       : std::nullopt;
+        },
+        [](xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera, double scale)
         {
-            cameras.push_back({cameraIt.key(), focalPixels});
-        }
-    }
-    result.inspectedCameraCount = static_cast<int>(cameras.size());
-    if (cameras.size() < 4)
-    {
-        return result;
-    }
-
-    std::vector<double> allFocals;
-    allFocals.reserve(cameras.size());
-    for (const CameraFocalRecord &camera : cameras)
-    {
-        allFocals.push_back(camera.focalPixels);
-    }
-    const double initialMedian = median(allFocals);
-    if (!(initialMedian > 1.0) || !std::isfinite(initialMedian))
-    {
-        return result;
-    }
-
-    std::vector<double> dominantFocals;
-    for (const CameraFocalRecord &camera : cameras)
-    {
-        const double ratio = camera.focalPixels / initialMedian;
-        if (ratio >= kDominantGroupLowerScale && ratio <= kDominantGroupUpperScale)
-        {
-            dominantFocals.push_back(camera.focalPixels);
-        }
-    }
-    const int requiredDominantCount = std::max(3, static_cast<int>(std::ceil(
-        static_cast<double>(cameras.size()) * kDominantGroupMinRatio)));
-    if (static_cast<int>(dominantFocals.size()) < requiredDominantCount)
-    {
-        return result;
-    }
-
-    const double dominantMedian = median(dominantFocals);
-    if (!(dominantMedian > 1.0) || !std::isfinite(dominantMedian))
-    {
-        return result;
-    }
-    result.dominantGroupCount = static_cast<int>(dominantFocals.size());
-    result.dominantMedianFocalPixels = dominantMedian;
-
-    for (const CameraFocalRecord &record : cameras)
-    {
-        const double ratio = record.focalPixels / dominantMedian;
-        if (ratio >= kOutlierLowerScale && ratio <= kOutlierUpperScale)
-        {
-            continue;
-        }
-
-        auto cameraIt = cameraByPath->find(record.path);
-        if (cameraIt == cameraByPath->end())
-        {
-            continue;
-        }
-        QJsonObject cameraObject = cameraIt.value();
-        const double scale = dominantMedian / record.focalPixels;
-        cameraObject.insert(QStringLiteral("fu"), cameraObject.value(QStringLiteral("fu")).toDouble() * scale);
-        cameraObject.insert(QStringLiteral("fv"), cameraObject.value(QStringLiteral("fv")).toDouble() * scale);
-        cameraIt.value() = cameraObject;
-        result.normalizedImagePaths.append(record.path);
-        ++result.normalizedCameraCount;
-    }
-    return result;
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                camera.intrinsics();
+            camera.setIntrinsics(intrinsics.focalX * scale,
+                                 intrinsics.focalY * scale,
+                                 intrinsics.principalX,
+                                 intrinsics.principalY);
+        });
 }
 
 } // namespace xjw::aerial_triangulation

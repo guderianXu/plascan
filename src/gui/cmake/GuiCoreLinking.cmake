@@ -35,6 +35,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     target_link_libraries(${PLASCAN_GUI_CORE_LINK_TARGET} PRIVATE camera_reference)
   endif()
 
+  if(TARGET camera_reference_geometry)
+    message(STATUS "plascan_gui: linking against camera_reference_geometry target")
+    target_link_libraries(${PLASCAN_GUI_CORE_LINK_TARGET} PRIVATE camera_reference_geometry)
+  endif()
+
   if(TARGET intersection)
     message(STATUS "plascan_gui: linking against intersection target")
     target_link_libraries(${PLASCAN_GUI_CORE_LINK_TARGET} PRIVATE intersection)

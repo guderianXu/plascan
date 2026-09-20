@@ -10,12 +10,12 @@
 
 #include "filtering/SparsePointCloudProcessor.h"
 #include "geometry/TriangulationQuality.h"
+#include "io/ImageIO.h"
 #include "project/SfmQualityJsonSerializer.h"
 #include "project/SparseResultQuality.h"
 #include "quality/SfmQualityMetrics.h"
 #include "reconstruction/SfmReconstruction.h"
 
-#include <QImageReader>
 #include <QJsonArray>
 #include <QSize>
 
@@ -168,7 +168,7 @@ namespace xjw::aerial_triangulation
         {
             for (const QString& path : input.images)
             {
-                const QSize size = QImageReader(path).size();
+                const QSize size = xjw::common::io::readImageSize(path);
                 if (size.isValid())
                 {
                     return size;
@@ -442,30 +442,37 @@ namespace xjw::aerial_triangulation
                         continue;
                     }
 
-                    QJsonArray observation{
-                        static_cast<int>(element.imageId),
-                        static_cast<int>(element.featureIdx),
-                        keypoint.x,
-                        keypoint.y,
-                        measurementScale,
+                    QString canonicalImageId;
+                    if (reconstruction.hasCamera(element.imageId) &&
+                        reconstruction.camera(element.imageId).hasBoundIdentity())
+                    {
+                        canonicalImageId = QString::fromStdString(
+                            reconstruction.camera(element.imageId).imageId().value());
+                    }
+                    QJsonObject observation{
+                        {QStringLiteral("camera_index"), static_cast<int>(element.imageId)},
+                        {QStringLiteral("image_id"), canonicalImageId},
+                        {QStringLiteral("feature_idx"), static_cast<int>(element.featureIdx)},
+                        {QStringLiteral("xy"), QJsonArray{keypoint.x, keypoint.y}},
+                        {QStringLiteral("scale"), measurementScale},
                     };
                     qualityCameraIds.push_back(element.imageId);
 
-                    const FramePinholeCamera* cleanCamera =
+                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* cleanCamera =
                         reconstruction.hasCamera(element.imageId) ? &reconstruction.camera(element.imageId) : nullptr;
                     cleanTiePointObservations.push_back({cleanCamera, rawMeasurementScale, {keypoint.x, keypoint.y}});
 
                     if (reconstruction.hasCamera(element.imageId))
                     {
                         double projected[2]{};
-                        const FramePinholeCamera& camera = reconstruction.camera(element.imageId);
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                            reconstruction.camera(element.imageId);
                         qualityObservations.push_back({&camera, measurementScale, {keypoint.x, keypoint.y}});
                         const bool projectedOk = camera.projectWorldPoint(point.xyz.data(), projected) ||
                                                  camera.projectWorldPointSigned(point.xyz.data(), projected);
                         if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))
                         {
-                            observation.append(projected[0]);
-                            observation.append(projected[1]);
+                            observation.insert(QStringLiteral("projected_xy"), QJsonArray{projected[0], projected[1]});
                         }
                     }
                     else
@@ -633,7 +640,19 @@ namespace xjw::aerial_triangulation
             const double residual = registered && error != collected.cameraErrors.end() && error->second.second > 0
                                         ? error->second.first / error->second.second
                                         : (registered ? result.meanReprojError : 0.0);
+            QString canonicalImageId;
+            if (static_cast<std::size_t>(index) < input.imageIds.size())
+            {
+                canonicalImageId = QString::fromStdString(input.imageIds.at(static_cast<std::size_t>(index)).value());
+            }
+            if (canonicalImageId.isEmpty() && registered && reconstruction.hasCamera(imageId) &&
+                reconstruction.camera(imageId).hasBoundIdentity())
+            {
+                canonicalImageId = QString::fromStdString(reconstruction.camera(imageId).imageId().value());
+            }
             report.perCameraResiduals.append(QJsonObject{
+                {QStringLiteral("camera_index"), index},
+                {QStringLiteral("image_id"), canonicalImageId},
                 {QStringLiteral("path"), input.images.at(index)},
                 {QStringLiteral("registered"), registered},
                 {QStringLiteral("residual_px"), residual},

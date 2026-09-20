@@ -17,7 +17,6 @@
 #include "MeshQuadricSimplifier.h"
 #include "MeshTopologyQuality.h"
 #include "NativeMeshSimplifier.h"
-#include "OrbitalSparseScaffoldSurfaceBuilder.h"
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
 #include "VisualHullDepthRefiner.h"

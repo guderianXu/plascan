@@ -7,9 +7,12 @@
 #include "widgets/ReferenceMarkerModels.h"
 
 #include "project/ProjectSessionModel.h"
-#include "io/CameraReferenceSetStore.h"
+#include "camera/reference/io/CameraReferenceSetStore.h"
 #include "io/MarkerSetJson.h"
 #include "project/ProjectIO.h"
+#include "ProjectCameraIO.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "camera/project/CameraProjectRecords.h"
 
 #include <gtest/gtest.h>
 
@@ -28,134 +31,132 @@ namespace reference = xjw::gui::reference;
 namespace
 {
 
-camera_reference::CameraReferenceSet makeCameraReferenceSet()
-{
-    camera_reference::CameraReferenceSet reference_set;
-    camera_reference::CameraReferenceSource source;
-    source.kind = QStringLiteral("agisoft_camera_reference");
-    source.displayName = QStringLiteral("Cameras_WGS84.txt");
-    source.sourceCrs = QStringLiteral("EPSG:4979");
-    source.axisOrder = QStringLiteral("longitude_latitude");
-    source.verticalDatum = QStringLiteral("ellipsoidal");
-    source.verticalUnit = QStringLiteral("m");
-    source.orientationConvention = QStringLiteral("metashape_ypr_unresolved");
-    source.angleUnit = QStringLiteral("deg");
-    reference_set.replaceSource(source);
+    camera_reference::CameraReferenceSet makeCameraReferenceSet()
+    {
+        camera_reference::CameraReferenceSet reference_set;
+        camera_reference::CameraReferenceSource source;
+        source.kind = QStringLiteral("agisoft_camera_reference");
+        source.displayName = QStringLiteral("Cameras_WGS84.txt");
+        source.sourceCrs = QStringLiteral("EPSG:4979");
+        source.axisOrder = QStringLiteral("longitude_latitude");
+        source.verticalDatum = QStringLiteral("ellipsoidal");
+        source.verticalUnit = QStringLiteral("m");
+        source.orientationConvention = QStringLiteral("metashape_ypr_unresolved");
+        source.angleUnit = QStringLiteral("deg");
+        reference_set.replaceSource(source);
 
-    camera_reference::CameraReferenceRecord matched;
-    matched.imageUuid = QStringLiteral("image-uuid-1");
-    matched.imagePathSnapshot = QStringLiteral("source/IMG_0001.JPG");
-    matched.sourceLabel = QStringLiteral("IMG_0001.JPG");
-    matched.raw.position = camera_reference::Vector3d{{31.4656473, 59.84424741, 54.454}};
-    matched.raw.positionSigma = camera_reference::Vector3d{{0.2, 0.3, 0.4}};
-    matched.raw.positionSigmaFrame = QStringLiteral("local_enu");
-    matched.raw.positionSigmaUnit = QStringLiteral("m");
-    matched.resolved.error = QStringLiteral("solver frame 尚未建立");
-    reference_set.addRecord(matched);
+        camera_reference::CameraReferenceRecord matched;
+        matched.imageUuid = QStringLiteral("image-uuid-1");
+        matched.imagePathSnapshot = QStringLiteral("source/IMG_0001.JPG");
+        matched.sourceLabel = QStringLiteral("IMG_0001.JPG");
+        matched.raw.position = camera_reference::Vector3d{{31.4656473, 59.84424741, 54.454}};
+        matched.raw.positionSigma = camera_reference::Vector3d{{0.2, 0.3, 0.4}};
+        matched.raw.positionSigmaFrame = QStringLiteral("local_enu");
+        matched.raw.positionSigmaUnit = QStringLiteral("m");
+        matched.resolved.error = QStringLiteral("solver frame 尚未建立");
+        reference_set.addRecord(matched);
 
-    camera_reference::UnmatchedCameraReferenceRecord unmatched;
-    unmatched.sourceLabel = QStringLiteral("IMG_MISSING.JPG");
-    unmatched.raw.position = camera_reference::Vector3d{{31.5, 59.9, 55.0}};
-    unmatched.reason = QStringLiteral("项目中未找到同名影像");
-    reference_set.addUnmatchedRecord(unmatched);
-    return reference_set;
-}
+        camera_reference::UnmatchedCameraReferenceRecord unmatched;
+        unmatched.sourceLabel = QStringLiteral("IMG_MISSING.JPG");
+        unmatched.raw.position = camera_reference::Vector3d{{31.5, 59.9, 55.0}};
+        unmatched.reason = QStringLiteral("项目中未找到同名影像");
+        reference_set.addUnmatchedRecord(unmatched);
+        return reference_set;
+    }
 
-QJsonObject makeProjectMetadata()
-{
-    const QJsonObject camera{
-        {QStringLiteral("C"), QJsonArray{101.0, 202.0, 303.0}},
-        {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
-                                         0.0, 1.0, 0.0,
-                                         0.0, 0.0, 1.0}}
+    QJsonObject makeProjectMetadata()
+    {
+        const QJsonObject image{{QStringLiteral("image_uuid"), QStringLiteral("image-uuid-1")},
+                                {QStringLiteral("path"), QStringLiteral("project/images/IMG_0001.JPG")},
+                                {QStringLiteral("samples"), 1024},
+                                {QStringLiteral("lines"), 768}};
+        QJsonObject files{{QStringLiteral("images"), QJsonArray{image}},
+                          {QStringLiteral("camera_definitions"), QJsonArray{}},
+                          {QStringLiteral("camera_instances"), QJsonArray{}}};
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {101.0, 202.0, 303.0});
+        camera.setImageSize(xjw::camera_core::ImageSize{1024, 768});
+        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
+            &files,
+            QMap<QString, QJsonObject>{{QStringLiteral("project/images/IMG_0001.JPG"),
+                                        xjw::common::project::serializeFramePinholeNumericState(camera)}});
+        if (!update.ok())
+        {
+            return {};
+        }
+        return QJsonObject{{QStringLiteral("project_files"), files}};
+    }
+
+    void addProjection(control_points::MarkerSet* marker_set,
+                       const control_points::MarkerId& marker_id,
+                       const QString& image_id,
+                       double residual)
+    {
+        control_points::MarkerProjection projection;
+        projection.imageId = image_id;
+        projection.imagePathSnapshot = image_id + QStringLiteral(".JPG");
+        projection.xy = QPointF(100.0, 200.0);
+        projection.state = control_points::ProjectionState::ManualPinned;
+        projection.residualPx = residual;
+        marker_set->upsertProjection(marker_id, projection);
+    }
+
+    void setReferenceCoordinate(
+        control_points::MarkerSet* marker_set, const control_points::MarkerId& marker_id, double x, double y, double z)
+    {
+        control_points::ReferenceCoordinate coordinate;
+        coordinate.x = x;
+        coordinate.y = y;
+        coordinate.z = z;
+        coordinate.sigmaX = 0.1;
+        coordinate.sigmaY = 0.2;
+        coordinate.sigmaZ = 0.3;
+        coordinate.sourceCrs = QStringLiteral("EPSG:4978");
+        coordinate.axisOrder = QStringLiteral("traditional_gis");
+        coordinate.verticalDatum = QStringLiteral("ellipsoidal");
+        coordinate.verticalUnit = QStringLiteral("m");
+        marker_set->setReferenceCoordinate(marker_id, coordinate);
+    }
+
+    struct MarkerFixture
+    {
+        control_points::MarkerSet markerSet;
+        control_points::MarkerId controlId;
+        control_points::MarkerId checkId;
+        control_points::MarkerId tieId;
+        control_points::ScaleBarId controlScaleId;
+        control_points::ScaleBarId checkScaleId;
     };
-    const QJsonObject image{
-        {QStringLiteral("image_uuid"), QStringLiteral("image-uuid-1")},
-        {QStringLiteral("path"), QStringLiteral("project/images/IMG_0001.JPG")},
-        {QStringLiteral("camera"), camera}
-    };
-    return QJsonObject{
-        {QStringLiteral("project_files"),
-         QJsonObject{{QStringLiteral("images"), QJsonArray{image}}}}
-    };
-}
 
-void addProjection(control_points::MarkerSet *marker_set,
-                   const control_points::MarkerId &marker_id,
-                   const QString &image_id,
-                   double residual)
-{
-    control_points::MarkerProjection projection;
-    projection.imageId = image_id;
-    projection.imagePathSnapshot = image_id + QStringLiteral(".JPG");
-    projection.xy = QPointF(100.0, 200.0);
-    projection.state = control_points::ProjectionState::ManualPinned;
-    projection.residualPx = residual;
-    marker_set->upsertProjection(marker_id, projection);
-}
+    MarkerFixture makeMarkerFixture()
+    {
+        MarkerFixture fixture;
+        fixture.controlId =
+            fixture.markerSet.addMarker(QStringLiteral("GCP-1"), control_points::MarkerRole::ControlPoint);
+        fixture.checkId = fixture.markerSet.addMarker(QStringLiteral("CHK-1"), control_points::MarkerRole::CheckPoint);
+        fixture.tieId = fixture.markerSet.addMarker(QStringLiteral("TIE-1"), control_points::MarkerRole::TieMarker);
 
-void setReferenceCoordinate(control_points::MarkerSet *marker_set,
-                            const control_points::MarkerId &marker_id,
-                            double x,
-                            double y,
-                            double z)
-{
-    control_points::ReferenceCoordinate coordinate;
-    coordinate.x = x;
-    coordinate.y = y;
-    coordinate.z = z;
-    coordinate.sigmaX = 0.1;
-    coordinate.sigmaY = 0.2;
-    coordinate.sigmaZ = 0.3;
-    coordinate.sourceCrs = QStringLiteral("EPSG:4978");
-    coordinate.axisOrder = QStringLiteral("traditional_gis");
-    coordinate.verticalDatum = QStringLiteral("ellipsoidal");
-    coordinate.verticalUnit = QStringLiteral("m");
-    marker_set->setReferenceCoordinate(marker_id, coordinate);
-}
+        setReferenceCoordinate(&fixture.markerSet, fixture.controlId, 10.0, 20.0, 30.0);
+        setReferenceCoordinate(&fixture.markerSet, fixture.checkId, 40.0, 50.0, 60.0);
+        addProjection(&fixture.markerSet, fixture.controlId, QStringLiteral("control-image"), 3.0);
+        addProjection(&fixture.markerSet, fixture.checkId, QStringLiteral("check-image"), 4.0);
+        addProjection(&fixture.markerSet, fixture.tieId, QStringLiteral("tie-image"), 100.0);
 
-struct MarkerFixture
-{
-    control_points::MarkerSet markerSet;
-    control_points::MarkerId controlId;
-    control_points::MarkerId checkId;
-    control_points::MarkerId tieId;
-    control_points::ScaleBarId controlScaleId;
-    control_points::ScaleBarId checkScaleId;
-};
-
-MarkerFixture makeMarkerFixture()
-{
-    MarkerFixture fixture;
-    fixture.controlId = fixture.markerSet.addMarker(
-        QStringLiteral("GCP-1"), control_points::MarkerRole::ControlPoint);
-    fixture.checkId = fixture.markerSet.addMarker(
-        QStringLiteral("CHK-1"), control_points::MarkerRole::CheckPoint);
-    fixture.tieId = fixture.markerSet.addMarker(
-        QStringLiteral("TIE-1"), control_points::MarkerRole::TieMarker);
-
-    setReferenceCoordinate(&fixture.markerSet, fixture.controlId, 10.0, 20.0, 30.0);
-    setReferenceCoordinate(&fixture.markerSet, fixture.checkId, 40.0, 50.0, 60.0);
-    addProjection(&fixture.markerSet, fixture.controlId, QStringLiteral("control-image"), 3.0);
-    addProjection(&fixture.markerSet, fixture.checkId, QStringLiteral("check-image"), 4.0);
-    addProjection(&fixture.markerSet, fixture.tieId, QStringLiteral("tie-image"), 100.0);
-
-    fixture.controlScaleId = fixture.markerSet.addScaleBar(
-        QStringLiteral("CONTROL-SCALE"),
-        fixture.controlId,
-        fixture.checkId,
-        10.0,
-        0.1,
-        control_points::ScaleBarRole::Control);
-    fixture.checkScaleId = fixture.markerSet.addScaleBar(
-        QStringLiteral("CHECK-SCALE"),
-        fixture.checkId,
-        fixture.tieId,
-        20.0,
-        0.2,
-        control_points::ScaleBarRole::Check);
-    return fixture;
-}
+        fixture.controlScaleId = fixture.markerSet.addScaleBar(QStringLiteral("CONTROL-SCALE"),
+                                                               fixture.controlId,
+                                                               fixture.checkId,
+                                                               10.0,
+                                                               0.1,
+                                                               control_points::ScaleBarRole::Control);
+        fixture.checkScaleId = fixture.markerSet.addScaleBar(QStringLiteral("CHECK-SCALE"),
+                                                             fixture.checkId,
+                                                             fixture.tieId,
+                                                             20.0,
+                                                             0.2,
+                                                             control_points::ScaleBarRole::Check);
+        return fixture;
+    }
 
 } // namespace
 
@@ -173,8 +174,7 @@ TEST(CameraReferenceTreeModelTest, ShowsSourceEstimatedErrorAndUnmatchedRoles)
     EXPECT_EQ(model.headerData(Model::YColumn, Qt::Horizontal).toString(), QStringLiteral("纬度 (°)"));
     const QModelIndex source_camera = model.index(1, Model::LabelColumn);
     ASSERT_TRUE(source_camera.isValid());
-    EXPECT_EQ(source_camera.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::Camera));
+    EXPECT_EQ(source_camera.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::Camera));
     EXPECT_EQ(source_camera.data(Model::ImageUuidRole).toString(), QStringLiteral("image-uuid-1"));
     EXPECT_EQ(model.index(1, Model::XColumn).data().toDouble(), 31.4656473);
     EXPECT_EQ(model.index(1, Model::YColumn).data().toDouble(), 59.84424741);
@@ -182,13 +182,11 @@ TEST(CameraReferenceTreeModelTest, ShowsSourceEstimatedErrorAndUnmatchedRoles)
 
     const QModelIndex unmatched_group = model.index(2, Model::LabelColumn);
     ASSERT_TRUE(unmatched_group.isValid());
-    EXPECT_EQ(unmatched_group.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::UnmatchedGroup));
+    EXPECT_EQ(unmatched_group.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::UnmatchedGroup));
     ASSERT_EQ(model.rowCount(unmatched_group), 1);
     const QModelIndex unmatched = model.index(0, Model::LabelColumn, unmatched_group);
     EXPECT_EQ(unmatched.data().toString(), QStringLiteral("IMG_MISSING.JPG"));
-    EXPECT_EQ(unmatched.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::UnmatchedRecord));
+    EXPECT_EQ(unmatched.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::UnmatchedRecord));
     EXPECT_EQ(model.index(0, Model::StatusColumn, unmatched_group).data().toString(),
               QStringLiteral("项目中未找到同名影像"));
     EXPECT_DOUBLE_EQ(model.index(0, Model::XColumn, unmatched_group).data().toDouble(), 31.5);
@@ -202,8 +200,7 @@ TEST(CameraReferenceTreeModelTest, ShowsSourceEstimatedErrorAndUnmatchedRoles)
     EXPECT_EQ(model.index(1, Model::StatusColumn).data().toString(), QStringLiteral("已解算"));
 
     model.setReferenceData(reference_set, metadata, reference::ReferenceDisplayMode::Error);
-    EXPECT_EQ(model.index(1, Model::StatusColumn).data().toString(),
-              QStringLiteral("待坐标/姿态转换"));
+    EXPECT_EQ(model.index(1, Model::StatusColumn).data().toString(), QStringLiteral("待坐标/姿态转换"));
     EXPECT_FALSE(model.index(1, Model::XColumn).data().isValid());
 }
 
@@ -237,28 +234,60 @@ TEST(CameraReferenceTreeModelTest, DisabledCameraDoesNotAffectTotalError)
     reference_set.addRecord(record);
 
     Model model;
-    model.setReferenceData(reference_set,
-                           makeProjectMetadata(),
-                           reference::ReferenceDisplayMode::Error);
+    model.setReferenceData(reference_set, makeProjectMetadata(), reference::ReferenceDisplayMode::Error);
 
     EXPECT_DOUBLE_EQ(model.index(1, Model::XColumn).data().toDouble(), 100.0);
     EXPECT_FALSE(model.index(0, Model::XColumn).data().isValid());
 }
 
-TEST(CameraReferenceTreeModelTest, ShowsEmbeddedRpcModelAsGeographicReference)
+TEST(CameraReferenceTreeModelTest, ShowsCanonicalRpcModelAsGeographicReference)
 {
     using Model = reference::CameraReferenceTreeModel;
-    const QJsonObject metadata{{QStringLiteral("images"), QJsonArray{
-        QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-1")},
-                    {QStringLiteral("path"), QStringLiteral("D:/images/rpc.tif")},
-                    {QStringLiteral("camera"), QJsonObject{
-                        {QStringLiteral("model"), QStringLiteral("rpc")},
-                        {QStringLiteral("long_off"), 113.5},
-                        {QStringLiteral("lat_off"), 34.5},
-                        {QStringLiteral("height_off"), 120.0}}}}}}};
+    const auto coefficients = [](double first)
+    {
+        QJsonArray values;
+        for (int index = 0; index < 20; ++index)
+        {
+            values.append(index == 0 ? first : 0.0);
+        }
+        return values;
+    };
+    const QString imagePath = QStringLiteral("D:/images/rpc.tif");
+    QJsonObject files{{QStringLiteral("images"),
+                       QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-1")},
+                                              {QStringLiteral("path"), imagePath},
+                                              {QStringLiteral("samples"), 1024},
+                                              {QStringLiteral("lines"), 768}}}},
+                      {QStringLiteral("camera_definitions"), QJsonArray{}},
+                      {QStringLiteral("camera_instances"), QJsonArray{}}};
+    const QJsonObject camera{{QStringLiteral("model"), QStringLiteral("rpc00b")},
+                             {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
+                             {QStringLiteral("world_frame"), QStringLiteral("EPSG:4978")},
+                             {QStringLiteral("ground_crs"), QStringLiteral("EPSG:4979")},
+                             {QStringLiteral("height_datum"), QStringLiteral("WGS84_ellipsoidal")},
+                             {QStringLiteral("pixel_convention"), QStringLiteral("opencv_zero_based_center")},
+                             {QStringLiteral("image_samples"), 1024},
+                             {QStringLiteral("image_lines"), 768},
+                             {QStringLiteral("line_off"), 383.5},
+                             {QStringLiteral("samp_off"), 511.5},
+                             {QStringLiteral("lat_off"), 34.5},
+                             {QStringLiteral("long_off"), 113.5},
+                             {QStringLiteral("height_off"), 120.0},
+                             {QStringLiteral("line_scale"), 384.0},
+                             {QStringLiteral("samp_scale"), 512.0},
+                             {QStringLiteral("lat_scale"), 0.1},
+                             {QStringLiteral("long_scale"), 0.1},
+                             {QStringLiteral("height_scale"), 500.0},
+                             {QStringLiteral("line_num_coeff"), coefficients(0.0)},
+                             {QStringLiteral("line_den_coeff"), coefficients(1.0)},
+                             {QStringLiteral("samp_num_coeff"), coefficients(0.0)},
+                             {QStringLiteral("samp_den_coeff"), coefficients(1.0)}};
+    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
+        &files, QMap<QString, QJsonObject>{{imagePath, camera}});
+    ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
+    const QJsonObject metadata{{QStringLiteral("project_files"), files}};
     Model model;
-    model.setReferenceData(camera_reference::CameraReferenceSet{}, metadata,
-                           reference::ReferenceDisplayMode::Source);
+    model.setReferenceData(camera_reference::CameraReferenceSet{}, metadata, reference::ReferenceDisplayMode::Source);
 
     ASSERT_EQ(model.rowCount(), 2);
     const QModelIndex group = model.index(1, Model::LabelColumn);
@@ -293,17 +322,16 @@ TEST(CameraReferenceBuilderTest, PreservesMatchedAndUnmatchedRawObservations)
     imported.leverArm = xjw::gui::reference_import::LeverArm{0.1, -0.2, 0.3};
 
     const camera_reference::CameraReferenceSet reference_set =
-        reference::buildMetashapeCameraReferenceSet(
-            imported,
-            makeProjectMetadata(),
-            QStringLiteral("C:\\Metadata\\Cameras_WGS84.txt"),
-            QStringLiteral("C:\\Metadata\\GNSS_offset.txt"),
-            QString(64, QLatin1Char('a')));
+        reference::buildMetashapeCameraReferenceSet(imported,
+                                                    makeProjectMetadata(),
+                                                    QStringLiteral("C:\\Metadata\\Cameras_WGS84.txt"),
+                                                    QStringLiteral("C:\\Metadata\\GNSS_offset.txt"),
+                                                    QString(64, QLatin1Char('a')));
 
     ASSERT_EQ(reference_set.records().size(), 1);
     ASSERT_EQ(reference_set.unmatchedRecords().size(), 1);
     EXPECT_EQ(reference_set.source().displayName, QStringLiteral("Cameras_WGS84.txt"));
-    const auto &raw = reference_set.records().front().raw;
+    const auto& raw = reference_set.records().front().raw;
     ASSERT_TRUE(raw.position);
     EXPECT_EQ(*raw.position, (camera_reference::Vector3d{{31.0, 59.0, 54.0}}));
     ASSERT_TRUE(raw.positionSigma);
@@ -311,13 +339,11 @@ TEST(CameraReferenceBuilderTest, PreservesMatchedAndUnmatchedRawObservations)
     EXPECT_EQ(raw.positionSigmaFrame, QStringLiteral("local_enu"));
     EXPECT_EQ(raw.positionSigmaUnit, QStringLiteral("m"));
     ASSERT_TRUE(raw.orientationYprDegrees);
-    EXPECT_EQ(*raw.orientationYprDegrees,
-              (camera_reference::Vector3d{{3.0, 2.0, 1.0}}));
-    const auto &unmatched_raw = reference_set.unmatchedRecords().front().raw;
+    EXPECT_EQ(*raw.orientationYprDegrees, (camera_reference::Vector3d{{3.0, 2.0, 1.0}}));
+    const auto& unmatched_raw = reference_set.unmatchedRecords().front().raw;
     ASSERT_TRUE(unmatched_raw.position);
     EXPECT_DOUBLE_EQ((*unmatched_raw.position)[0], 32.0);
-    EXPECT_EQ(reference_set.unmatchedRecords().front().leverArmId,
-              QStringLiteral("default_gnss_offset"));
+    EXPECT_EQ(reference_set.unmatchedRecords().front().leverArmId, QStringLiteral("default_gnss_offset"));
 }
 
 TEST(CameraReferenceCsvExporterTest, WritesMatchedAndUnmatchedRowsBeforeCommit)
@@ -326,8 +352,7 @@ TEST(CameraReferenceCsvExporterTest, WritesMatchedAndUnmatchedRowsBeforeCommit)
     ASSERT_TRUE(directory.isValid());
     const QString path = directory.filePath(QStringLiteral("camera_references.csv"));
     QString error;
-    ASSERT_TRUE(reference::exportCameraReferenceCsv(makeCameraReferenceSet(), path, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(reference::exportCameraReferenceCsv(makeCameraReferenceSet(), path, &error)) << qPrintable(error);
 
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -347,10 +372,8 @@ TEST(ProjectCameraReferenceRepositoryTest, ClearsPublishedStateWhenReloadFails)
     ProjectData projectData;
     ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("references")));
 
-    const QString sidecarPath = xjw::common::project::ProjectIO::cameraReferenceSetPath(
-        projectPath);
-    const auto saved = camera_reference::CameraReferenceSetStore(sidecarPath).save(
-        makeCameraReferenceSet());
+    const QString sidecarPath = xjw::common::project::ProjectIO::cameraReferenceSetPath(projectPath);
+    const auto saved = camera_reference::CameraReferenceSetStore(sidecarPath).save(makeCameraReferenceSet());
     ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
 
     reference::ProjectCameraReferenceRepository repository(&projectData);
@@ -379,8 +402,7 @@ TEST(ProjectCameraReferenceRepositoryTest, RejectsStaleImageSetFingerprint)
 
     camera_reference::CameraReferenceSet reference_set = makeCameraReferenceSet();
     reference_set.setImageSetFingerprint(QStringLiteral("stale-fingerprint"));
-    const QString sidecarPath = xjw::common::project::ProjectIO::cameraReferenceSetPath(
-        projectPath);
+    const QString sidecarPath = xjw::common::project::ProjectIO::cameraReferenceSetPath(projectPath);
     const auto saved = camera_reference::CameraReferenceSetStore(sidecarPath).save(reference_set);
     ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
 
@@ -396,10 +418,8 @@ TEST(CameraReferenceProjectIdentityTest, UsesStableUuidsAcrossPathRelocationAndO
     QJsonObject metadata = makeProjectMetadata();
     QJsonObject files = metadata.value(QStringLiteral("project_files")).toObject();
     QJsonArray images = files.value(QStringLiteral("images")).toArray();
-    QJsonObject second{
-        {QStringLiteral("image_uuid"), QStringLiteral("image-uuid-2")},
-        {QStringLiteral("path"), QStringLiteral("project/images/IMG_0002.JPG")}
-    };
+    QJsonObject second{{QStringLiteral("image_uuid"), QStringLiteral("image-uuid-2")},
+                       {QStringLiteral("path"), QStringLiteral("project/images/IMG_0002.JPG")}};
     images.append(second);
     files[QStringLiteral("images")] = images;
     metadata[QStringLiteral("project_files")] = files;
@@ -430,15 +450,13 @@ TEST(MarkerReferenceTreeModelTest, GroupsReferenceMarkersAndExcludesTieMarkers)
     ASSERT_EQ(model.rowCount(), 1);
     const QModelIndex total = model.index(0, Model::LabelColumn);
     ASSERT_EQ(model.rowCount(total), 2);
-    EXPECT_EQ(total.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::TotalError));
+    EXPECT_EQ(total.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::TotalError));
 
     const QModelIndex control_group = model.index(0, Model::LabelColumn, total);
     const QModelIndex check_group = model.index(1, Model::LabelColumn, total);
     EXPECT_EQ(control_group.data().toString(), QStringLiteral("控制点"));
     EXPECT_EQ(check_group.data().toString(), QStringLiteral("检查点"));
-    EXPECT_EQ(control_group.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::Group));
+    EXPECT_EQ(control_group.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::Group));
     ASSERT_EQ(model.rowCount(control_group), 1);
     ASSERT_EQ(model.rowCount(check_group), 1);
 
@@ -448,23 +466,18 @@ TEST(MarkerReferenceTreeModelTest, GroupsReferenceMarkersAndExcludesTieMarkers)
     EXPECT_EQ(check.data().toString(), QStringLiteral("CHK-1"));
     EXPECT_NE(control.data().toString(), QStringLiteral("TIE-1"));
     EXPECT_NE(check.data().toString(), QStringLiteral("TIE-1"));
-    EXPECT_EQ(control.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::Marker));
+    EXPECT_EQ(control.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::Marker));
     EXPECT_EQ(control.data(Model::MarkerIdRole).toString(), fixture.controlId);
-    EXPECT_EQ(control.data(Model::MarkerRoleRole).toInt(),
-              static_cast<int>(control_points::MarkerRole::ControlPoint));
+    EXPECT_EQ(control.data(Model::MarkerRoleRole).toInt(), static_cast<int>(control_points::MarkerRole::ControlPoint));
     EXPECT_EQ(check.data(Model::MarkerIdRole).toString(), fixture.checkId);
-    EXPECT_EQ(check.data(Model::MarkerRoleRole).toInt(),
-              static_cast<int>(control_points::MarkerRole::CheckPoint));
+    EXPECT_EQ(check.data(Model::MarkerRoleRole).toInt(), static_cast<int>(control_points::MarkerRole::CheckPoint));
 
     EXPECT_DOUBLE_EQ(model.index(0, Model::SourceXColumn, control_group).data().toDouble(), 10.0);
     EXPECT_DOUBLE_EQ(model.index(0, Model::SourceYColumn, control_group).data().toDouble(), 20.0);
     EXPECT_DOUBLE_EQ(model.index(0, Model::SourceZColumn, control_group).data().toDouble(), 30.0);
     EXPECT_DOUBLE_EQ(model.index(0, Model::ResidualColumn, control_group).data().toDouble(), 3.0);
     EXPECT_DOUBLE_EQ(model.index(0, Model::ResidualColumn, check_group).data().toDouble(), 4.0);
-    EXPECT_NEAR(model.index(0, Model::ResidualColumn).data().toDouble(),
-                std::sqrt(12.5),
-                1.0e-12);
+    EXPECT_NEAR(model.index(0, Model::ResidualColumn).data().toDouble(), std::sqrt(12.5), 1.0e-12);
 }
 
 TEST(ScaleBarReferenceTreeModelTest, GroupsScaleBarsAndExposesValuesResidualsAndRoles)
@@ -477,8 +490,7 @@ TEST(ScaleBarReferenceTreeModelTest, GroupsScaleBarsAndExposesValuesResidualsAnd
     for (int index = 0; index < scale_bars.size(); ++index)
     {
         QJsonObject scale_bar = scale_bars.at(index).toObject();
-        const bool is_control = scale_bar.value(QStringLiteral("id")).toString()
-            == fixture.controlScaleId;
+        const bool is_control = scale_bar.value(QStringLiteral("id")).toString() == fixture.controlScaleId;
         scale_bar.insert(QStringLiteral("estimated_distance"), is_control ? 10.4 : 19.5);
         scale_bar.insert(QStringLiteral("residual"), is_control ? 0.4 : -0.5);
         scale_bars[index] = scale_bar;
@@ -486,8 +498,7 @@ TEST(ScaleBarReferenceTreeModelTest, GroupsScaleBarsAndExposesValuesResidualsAnd
     encoded.insert(QStringLiteral("scale_bars"), scale_bars);
     control_points::MarkerSet marker_set;
     QString error;
-    ASSERT_TRUE(control_points::MarkerSetJson::decode(encoded, &marker_set, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(control_points::MarkerSetJson::decode(encoded, &marker_set, &error)) << qPrintable(error);
 
     Model model(marker_set);
 
@@ -503,29 +514,21 @@ TEST(ScaleBarReferenceTreeModelTest, GroupsScaleBarsAndExposesValuesResidualsAnd
 
     const QModelIndex control = model.index(0, Model::LabelColumn, control_group);
     const QModelIndex check = model.index(0, Model::LabelColumn, check_group);
-    EXPECT_EQ(control.data(Model::NodeTypeRole).toInt(),
-              static_cast<int>(Model::NodeType::ScaleBar));
+    EXPECT_EQ(control.data(Model::NodeTypeRole).toInt(), static_cast<int>(Model::NodeType::ScaleBar));
     EXPECT_EQ(control.data(Model::ScaleBarIdRole).toString(), fixture.controlScaleId);
-    EXPECT_EQ(control.data(Model::ScaleBarRoleRole).toInt(),
-              static_cast<int>(control_points::ScaleBarRole::Control));
+    EXPECT_EQ(control.data(Model::ScaleBarRoleRole).toInt(), static_cast<int>(control_points::ScaleBarRole::Control));
     EXPECT_EQ(control.data(Model::FirstMarkerIdRole).toString(), fixture.controlId);
     EXPECT_EQ(control.data(Model::SecondMarkerIdRole).toString(), fixture.checkId);
     EXPECT_EQ(check.data(Model::ScaleBarIdRole).toString(), fixture.checkScaleId);
-    EXPECT_EQ(check.data(Model::ScaleBarRoleRole).toInt(),
-              static_cast<int>(control_points::ScaleBarRole::Check));
+    EXPECT_EQ(check.data(Model::ScaleBarRoleRole).toInt(), static_cast<int>(control_points::ScaleBarRole::Check));
 
-    EXPECT_DOUBLE_EQ(model.index(0, Model::SourceValueColumn, control_group).data().toDouble(),
-                     10.0);
-    EXPECT_DOUBLE_EQ(model.index(0, Model::EstimatedValueColumn, control_group).data().toDouble(),
-                     10.4);
+    EXPECT_DOUBLE_EQ(model.index(0, Model::SourceValueColumn, control_group).data().toDouble(), 10.0);
+    EXPECT_DOUBLE_EQ(model.index(0, Model::EstimatedValueColumn, control_group).data().toDouble(), 10.4);
     EXPECT_DOUBLE_EQ(model.index(0, Model::ResidualColumn, control_group).data().toDouble(), 0.4);
     EXPECT_DOUBLE_EQ(model.index(0, Model::SourceValueColumn, check_group).data().toDouble(), 20.0);
-    EXPECT_DOUBLE_EQ(model.index(0, Model::EstimatedValueColumn, check_group).data().toDouble(),
-                     19.5);
+    EXPECT_DOUBLE_EQ(model.index(0, Model::EstimatedValueColumn, check_group).data().toDouble(), 19.5);
     EXPECT_DOUBLE_EQ(model.index(0, Model::ResidualColumn, check_group).data().toDouble(), -0.5);
-    EXPECT_NEAR(model.index(0, Model::ResidualColumn).data().toDouble(),
-                std::sqrt(0.205),
-                1.0e-12);
+    EXPECT_NEAR(model.index(0, Model::ResidualColumn).data().toDouble(), std::sqrt(0.205), 1.0e-12);
 }
 
 TEST(ReferenceMarkerModelsTest, DisabledItemsDoNotAffectTotalResiduals)
@@ -533,16 +536,14 @@ TEST(ReferenceMarkerModelsTest, DisabledItemsDoNotAffectTotalResiduals)
     MarkerFixture fixture = makeMarkerFixture();
     fixture.markerSet.setMarkerEnabled(fixture.controlId, false);
     reference::MarkerReferenceTreeModel marker_model(fixture.markerSet);
-    EXPECT_DOUBLE_EQ(marker_model.index(
-        0, reference::MarkerReferenceTreeModel::ResidualColumn).data().toDouble(), 4.0);
+    EXPECT_DOUBLE_EQ(marker_model.index(0, reference::MarkerReferenceTreeModel::ResidualColumn).data().toDouble(), 4.0);
 
     QJsonObject encoded = control_points::MarkerSetJson::encode(fixture.markerSet);
     QJsonArray scale_bars = encoded.value(QStringLiteral("scale_bars")).toArray();
     for (int index = 0; index < scale_bars.size(); ++index)
     {
         QJsonObject scale_bar = scale_bars.at(index).toObject();
-        const bool is_control = scale_bar.value(QStringLiteral("id")).toString()
-            == fixture.controlScaleId;
+        const bool is_control = scale_bar.value(QStringLiteral("id")).toString() == fixture.controlScaleId;
         scale_bar[QStringLiteral("enabled")] = !is_control;
         scale_bar[QStringLiteral("estimated_distance")] = is_control ? 10.4 : 19.5;
         scale_bar[QStringLiteral("residual")] = is_control ? 0.4 : -0.5;
@@ -551,10 +552,9 @@ TEST(ReferenceMarkerModelsTest, DisabledItemsDoNotAffectTotalResiduals)
     encoded[QStringLiteral("scale_bars")] = scale_bars;
     control_points::MarkerSet marker_set;
     QString error;
-    ASSERT_TRUE(control_points::MarkerSetJson::decode(encoded, &marker_set, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(control_points::MarkerSetJson::decode(encoded, &marker_set, &error)) << qPrintable(error);
 
     reference::ScaleBarReferenceTreeModel scale_model(marker_set);
-    EXPECT_DOUBLE_EQ(scale_model.index(
-        0, reference::ScaleBarReferenceTreeModel::ResidualColumn).data().toDouble(), 0.5);
+    EXPECT_DOUBLE_EQ(scale_model.index(0, reference::ScaleBarReferenceTreeModel::ResidualColumn).data().toDouble(),
+                     0.5);
 }

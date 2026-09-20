@@ -39,13 +39,14 @@ namespace xjw
         return _owner.initializeFromPair(id1, id2);
     }
 
-    bool InitialPairInitializer::initializeWithPose(ImageId id1, ImageId id2, const FramePinholeCamera& secondCamera)
+    bool InitialPairInitializer::initializeWithPose(
+        ImageId id1, ImageId id2, const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera)
     {
         return _owner.initializeFromPairPose(id1, id2, secondCamera);
     }
 
-    std::vector<FramePinholeCamera> InitialPairInitializer::enumerateFivePointPoseHypotheses(ImageId id1,
-                                                                                             ImageId id2) const
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+    InitialPairInitializer::enumerateFivePointPoseHypotheses(ImageId id1, ImageId id2) const
     {
         return _owner.initialPairPoseHypotheses(id1, id2);
     }
@@ -274,8 +275,8 @@ namespace xjw
 
             if (_sfmOptions.useReferenceInitialPairTrials)
             {
-                FramePinholeCamera camera1;
-                FramePinholeCamera camera2;
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2;
                 if (!getCamera(pair.id1, camera1) || !getCamera(pair.id2, camera2))
                 {
                     continue;
@@ -388,7 +389,7 @@ namespace xjw
     bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
     {
         // 加载两台相机内参
-        FramePinholeCamera cam1, cam2;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1, cam2;
         if (!getCamera(id1, cam1))
         {
             _lastErrorMessage = "getCamera(" + std::to_string(id1) + ") failed";
@@ -658,18 +659,19 @@ namespace xjw
         return initializeFromPairPose(id1, id2, cam2, poseInliers);
     }
 
-    bool IncrementalSfm::initializeFromPairPose(ImageId id1,
-                                                ImageId id2,
-                                                const FramePinholeCamera& secondCamera,
-                                                int poseInliers)
+    bool IncrementalSfm::initializeFromPairPose(
+        ImageId id1,
+        ImageId id2,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera,
+        int poseInliers)
     {
-        FramePinholeCamera cam1;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1;
         if (!getCamera(id1, cam1))
         {
             _lastErrorMessage = "getCamera(" + std::to_string(id1) + ") failed";
             return false;
         }
-        FramePinholeCamera cam2 = secondCamera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = secondCamera;
         cam1.setPose({1, 0, 0, 0, 1, 0, 0, 0, 1}, {0, 0, 0});
 
         const auto& matches = _correspondenceGraph.matchesBetween(id1, id2);
@@ -757,10 +759,11 @@ namespace xjw
         return true;
     }
 
-    std::vector<FramePinholeCamera> IncrementalSfm::initialPairPoseHypotheses(ImageId id1, ImageId id2) const
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+    IncrementalSfm::initialPairPoseHypotheses(ImageId id1, ImageId id2) const
     {
-        FramePinholeCamera camera1;
-        FramePinholeCamera camera2;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2;
         if (!getCamera(id1, camera1) || !getCamera(id2, camera2))
         {
             return {};
@@ -803,7 +806,7 @@ namespace xjw
         const double normalized_threshold_squared = 1.0 / std::pow(std::max(std::fabs(fx), std::fabs(fy)), 2.0);
         const int chirality_threshold = std::max(5, _sfmOptions.initMinChiralityInliers);
         const std::size_t subset_count = std::min<std::size_t>(16, points1.size());
-        std::vector<FramePinholeCamera> hypotheses;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> hypotheses;
 
         for (std::size_t subset = 0; subset < subset_count && hypotheses.size() < 32; ++subset)
         {
@@ -876,7 +879,7 @@ namespace xjw
                     }
                 }
                 bool duplicate = false;
-                for (const FramePinholeCamera& existing : hypotheses)
+                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& existing : hypotheses)
                 {
                     double squared_difference = 0.0;
                     const auto existing_rotation = existing.cameraToWorldRotation();
@@ -892,7 +895,7 @@ namespace xjw
                 }
                 if (!duplicate)
                 {
-                    FramePinholeCamera hypothesis = camera2;
+                    xjw::camera_models::frame_pinhole::FramePinholeNumericState hypothesis = camera2;
                     hypothesis.setPose(camera_to_world, center);
                     hypotheses.push_back(std::move(hypothesis));
                 }

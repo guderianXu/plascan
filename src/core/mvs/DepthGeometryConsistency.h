@@ -85,17 +85,17 @@ GeometrySourceOrdinalContract validateGeometrySourceOrdinalContract(
     int viewCount,
     cv::Size expectedSize = {});
 
-ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
-    const FramePinholeCamera &referenceCamera,
-    const cv::Point2f &referencePixel,
-    float referenceDepth,
-    const FramePinholeCamera &sourceCamera,
-    const cv::Mat &sourceDepth,
-    float relativeThreshold,
-    int searchRadius = 1,
-    float maximumRoundTripErrorPixels = 3.0f,
-    bool computeContinuousMetrics = true,
-    bool evaluateSubpixelFootprint = false);
+ProjectedDepthConsistencyResult
+evaluateProjectedDepthConsistency(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+                                  const cv::Point2f& referencePixel,
+                                  float referenceDepth,
+                                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                                  const cv::Mat& sourceDepth,
+                                  float relativeThreshold,
+                                  int searchRadius = 1,
+                                  float maximumRoundTripErrorPixels = 3.0f,
+                                  bool computeContinuousMetrics = true,
+                                  bool evaluateSubpixelFootprint = false);
 
 /**
  * @brief Evaluate one source view using an already unprojected reference point.
@@ -106,12 +106,12 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
  * order or vote accumulation semantics.
  */
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
-    const FramePinholeCamera &referenceCamera,
-    const cv::Point2f &referencePixel,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+    const cv::Point2f& referencePixel,
     float referenceDepth,
-    const std::array<double, 3> &referenceWorld,
-    const FramePinholeCamera &sourceCamera,
-    const cv::Mat &sourceDepth,
+    const std::array<double, 3>& referenceWorld,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+    const cv::Mat& sourceDepth,
     float relativeThreshold,
     int searchRadius = 1,
     float maximumRoundTripErrorPixels = 3.0f,

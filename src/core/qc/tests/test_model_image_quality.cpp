@@ -62,7 +62,7 @@ TEST(ModelMeshRendererTest, KeepsNearestTriangleInZBuffer)
     };
     mesh.faces = {{{0, 1, 2}}, {{3, 4, 5}}};
 
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -84,7 +84,7 @@ TEST(ModelMeshRendererTest, KeepsNearestTriangleInZBuffer)
 
 TEST(ModelMeshRendererTest, PerspectiveCorrectsDepthAndVertexColorAcrossSlantedTriangle)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -147,7 +147,7 @@ TEST(ModelMeshRendererTest, ClipsTriangleCrossingCameraPlaneInsteadOfDiscardingI
     };
     mesh.faces = {{{0, 1, 2}}};
 
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,

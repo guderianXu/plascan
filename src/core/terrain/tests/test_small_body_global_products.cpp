@@ -1,5 +1,9 @@
 #include "DemDomIO.h"
 #include "SmallBodyGlobalProductGenerator.h"
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
+#include "GlobalTerrainReportRenderer.h"
+#include <QImage>
+#endif
 #include "SmallBodyMeshRaycaster.h"
 
 #include <plapoint/io/ply_io.h>
@@ -7,8 +11,8 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
-#include <QImage>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -20,53 +24,66 @@
 namespace
 {
 
-xjw::TerrainMeshInput makeOctahedron(float radius = 10.0f, bool withColors = true)
-{
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(6, 3);
-    const float coordinates[6][3] = {
-        {radius, 0.0f, 0.0f}, {-radius, 0.0f, 0.0f},
-        {0.0f, radius, 0.0f}, {0.0f, -radius, 0.0f},
-        {0.0f, 0.0f, radius}, {0.0f, 0.0f, -radius}};
-    for (int row = 0; row < 6; ++row)
+    QString testTemporaryDirectoryTemplate()
     {
-        for (int col = 0; col < 3; ++col)
-        {
-            points(row, col) = coordinates[row][col];
-        }
+        const QString root = QString::fromUtf8(PLASCAN_TERRAIN_TEST_TMP_DIR);
+        EXPECT_TRUE(QDir().mkpath(root));
+        return QDir(root).filePath(QStringLiteral("run-XXXXXX"));
     }
 
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(8, 3);
-    const int indices[8][3] = {
-        {4, 0, 2}, {4, 2, 1}, {4, 1, 3}, {4, 3, 0},
-        {5, 2, 0}, {5, 1, 2}, {5, 3, 1}, {5, 0, 3}};
-    for (int row = 0; row < 8; ++row)
+    bool hasGeneratedFiles(const QString& directory)
     {
-        for (int col = 0; col < 3; ++col)
-        {
-            faces(row, col) = indices[row][col];
-        }
+        QDirIterator files(directory, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+        return files.hasNext();
     }
 
-    xjw::TerrainMeshInput input;
-    input.mesh = xjw::PlaPointCloud(std::move(points));
-    input.mesh.setFaces(std::move(faces));
-    if (withColors)
+    xjw::TerrainMeshInput makeOctahedron(float radius = 10.0f, bool withColors = true)
     {
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(6, 3);
-        const std::uint8_t rgb[6][3] = {
-            {255, 0, 0}, {0, 255, 0}, {0, 0, 255},
-            {255, 255, 0}, {255, 255, 255}, {0, 0, 0}};
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(6, 3);
+        const float coordinates[6][3] = {{radius, 0.0f, 0.0f},
+                                         {-radius, 0.0f, 0.0f},
+                                         {0.0f, radius, 0.0f},
+                                         {0.0f, -radius, 0.0f},
+                                         {0.0f, 0.0f, radius},
+                                         {0.0f, 0.0f, -radius}};
         for (int row = 0; row < 6; ++row)
         {
             for (int col = 0; col < 3; ++col)
             {
-                colors(row, col) = rgb[row][col];
+                points(row, col) = coordinates[row][col];
             }
         }
-        input.mesh.setColors(std::move(colors));
+
+        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(8, 3);
+        const int indices[8][3] = {
+            {4, 0, 2}, {4, 2, 1}, {4, 1, 3}, {4, 3, 0}, {5, 2, 0}, {5, 1, 2}, {5, 3, 1}, {5, 0, 3}};
+        for (int row = 0; row < 8; ++row)
+        {
+            for (int col = 0; col < 3; ++col)
+            {
+                faces(row, col) = indices[row][col];
+            }
+        }
+
+        xjw::TerrainMeshInput input;
+        input.mesh = xjw::PlaPointCloud(std::move(points));
+        input.mesh.setFaces(std::move(faces));
+        if (withColors)
+        {
+            plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(6, 3);
+            const std::uint8_t rgb[6][3] = {
+                {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 255, 255}, {0, 0, 0}};
+            for (int row = 0; row < 6; ++row)
+            {
+                for (int col = 0; col < 3; ++col)
+                {
+                    colors(row, col) = rgb[row][col];
+                }
+            }
+            input.mesh.setColors(std::move(colors));
+        }
+        return input;
     }
-    return input;
-}
 
 } // namespace
 
@@ -129,8 +146,7 @@ TEST(SmallBodyMeshRaycasterTest, RejectsUnsupportedRepeatingTextureCoordinates)
 
     xjw::SmallBodyMeshRaycaster raycaster;
     QString error;
-    EXPECT_FALSE(raycaster.initialize(
-        input, cv::Vec3d(0.0, 0.0, 0.0), &error));
+    EXPECT_FALSE(raycaster.initialize(input, cv::Vec3d(0.0, 0.0, 0.0), &error));
     EXPECT_TRUE(error.contains(QStringLiteral("[0,1]")));
 }
 
@@ -148,13 +164,24 @@ TEST(SmallBodyGlobalProductGeneratorTest, CreatesNativeRegisteredProducts)
     options.angularResolutionDeg = 60.0;
     options.centralMeridianDeg = -30.0;
     options.maximumPixelCount = 1000;
-    options.writeReportPreview = true;
+    xjw::SmallBodyPreviewWriter preview_writer;
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
+    preview_writer = xjw::GlobalTerrainReportRenderer::writePreview;
+#endif
+    options.writeReportPreview = static_cast<bool>(preview_writer);
 
     xjw::SmallBodyGlobalProducts products;
     QString error;
-    ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(), QStringLiteral("synthetic"), temporary_directory.path(),
-        options, &products, &error)) << qPrintable(error);
+    ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(),
+                                                                       QStringLiteral("synthetic"),
+                                                                       temporary_directory.path(),
+                                                                       options,
+                                                                       &products,
+                                                                       &error,
+                                                                       nullptr,
+                                                                       {},
+                                                                       preview_writer))
+        << qPrintable(error);
 
     ASSERT_EQ(products.radialDem.width, 6);
     ASSERT_EQ(products.radialDem.height, 3);
@@ -171,52 +198,55 @@ TEST(SmallBodyGlobalProductGeneratorTest, CreatesNativeRegisteredProducts)
     EXPECT_TRUE(QFileInfo::exists(products.reliabilityPath));
     EXPECT_TRUE(QFileInfo::exists(products.ambiguityPath));
     EXPECT_TRUE(QFileInfo::exists(products.reportPath));
+#ifdef PLASCAN_HAS_TERRAIN_REPORT
     EXPECT_TRUE(QFileInfo::exists(products.previewPath));
     const QImage preview(products.previewPath);
     EXPECT_EQ(preview.size(), QSize(2000, 1180));
+#else
+    EXPECT_TRUE(products.previewPath.isEmpty());
+#endif
     EXPECT_FALSE(products.report.value(QStringLiteral("difference_available")).toBool(true));
-    EXPECT_EQ(products.report.value(QStringLiteral("dom_color_source")).toString(),
-              QStringLiteral("vertex_color"));
+    EXPECT_EQ(products.report.value(QStringLiteral("dom_color_source")).toString(), QStringLiteral("vertex_color"));
 
     xjw::DemGridData metadata;
-    ASSERT_TRUE(xjw::DemDomIO::readDemMetadata(products.radialDemPath, &metadata, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(xjw::DemDomIO::readDemMetadata(products.radialDemPath, &metadata, &error)) << qPrintable(error);
     EXPECT_DOUBLE_EQ(metadata.minX - metadata.stepX * 0.5, 0.0);
     EXPECT_DOUBLE_EQ(metadata.minY - metadata.stepY * 0.5, -90.0);
-    EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("TARGET_NAME")),
-              QStringLiteral("SyntheticBody"));
+    EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("TARGET_NAME")), QStringLiteral("SyntheticBody"));
     EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("BODY_FIXED_FRAME")),
               QStringLiteral("SYNTHETIC_FIXED"));
     EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("LONGITUDE_DIRECTION")),
               QStringLiteral("positive_east"));
     EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("PRODUCT_TYPE")),
               QStringLiteral("small_body_global_radial_dem"));
-    EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("BAND_UNIT")),
-              QStringLiteral("m"));
+    EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("BAND_UNIT")), QStringLiteral("m"));
     EXPECT_EQ(metadata.projection.metadata.value(QStringLiteral("INTERSECTION_SELECTION")),
               QStringLiteral("nearest_positive"));
 
     xjw::DemGridData dom_metadata;
-    ASSERT_TRUE(xjw::DemDomIO::readDemMetadata(products.domPath, &dom_metadata, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(xjw::DemDomIO::readDemMetadata(products.domPath, &dom_metadata, &error)) << qPrintable(error);
     EXPECT_EQ(dom_metadata.projection.metadata.value(QStringLiteral("VERTICAL_REFERENCE")),
               QStringLiteral("not_applicable"));
     EXPECT_EQ(dom_metadata.projection.metadata.value(QStringLiteral("PRODUCT_TYPE")),
               QStringLiteral("surface_colour_dom"));
 
     xjw::DemGridData ambiguity;
-    ASSERT_TRUE(xjw::DemDomIO::readDemRaster(products.ambiguityPath, &ambiguity, &error))
-        << qPrintable(error);
+    ASSERT_TRUE(xjw::DemDomIO::readDemRaster(products.ambiguityPath, &ambiguity, &error)) << qPrintable(error);
     EXPECT_EQ(cv::countNonZero(ambiguity.elevation), 0);
     EXPECT_EQ(ambiguity.projection.metadata.value(QStringLiteral("PRODUCT_TYPE")),
               QStringLiteral("radial_multi_surface_ambiguity_mask"));
-    EXPECT_EQ(ambiguity.projection.metadata.value(QStringLiteral("BAND_UNIT")),
-              QStringLiteral("1"));
+    EXPECT_EQ(ambiguity.projection.metadata.value(QStringLiteral("BAND_UNIT")), QStringLiteral("1"));
 
     xjw::SmallBodyGlobalProducts duplicate_products;
-    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(), QStringLiteral("synthetic"), temporary_directory.path(),
-        options, &duplicate_products, &error));
+    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(),
+                                                                        QStringLiteral("synthetic"),
+                                                                        temporary_directory.path(),
+                                                                        options,
+                                                                        &duplicate_products,
+                                                                        &error,
+                                                                        nullptr,
+                                                                        {},
+                                                                        preview_writer));
     EXPECT_TRUE(error.contains(QStringLiteral("已存在")));
     EXPECT_TRUE(QFileInfo::exists(products.reportPath));
 }
@@ -226,11 +256,10 @@ TEST(SmallBodyGlobalProductGeneratorTest, ReportsStructuredProgressInLifecycleOr
     QTemporaryDir temporary_directory;
     ASSERT_TRUE(temporary_directory.isValid());
 
-    const QString surface_path = QDir(temporary_directory.path()).filePath(
-        QStringLiteral("octahedron.ply"));
+    const QString surface_path = QDir(temporary_directory.path()).filePath(QStringLiteral("octahedron.ply"));
     const xjw::TerrainMeshInput surface = makeOctahedron();
-    ASSERT_NO_THROW(plapoint::io::writePly<float>(
-        surface_path.toStdString(), surface.mesh, plapoint::io::PlyFormat::ASCII));
+    ASSERT_NO_THROW(
+        plapoint::io::writePly<float>(surface_path.toStdString(), surface.mesh, plapoint::io::PlyFormat::ASCII));
 
     xjw::SmallBodyGlobalOptions options;
     options.targetName = QStringLiteral("SyntheticBody");
@@ -243,11 +272,8 @@ TEST(SmallBodyGlobalProductGeneratorTest, ReportsStructuredProgressInLifecycleOr
     options.writeReportPreview = false;
 
     std::vector<xjw::SmallBodyGlobalProgress> progress_events;
-    const auto progress_callback = [&progress_events](
-                                       const xjw::SmallBodyGlobalProgress &progress)
-    {
-        progress_events.push_back(progress);
-    };
+    const auto progress_callback = [&progress_events](const xjw::SmallBodyGlobalProgress& progress)
+    { progress_events.push_back(progress); };
     xjw::SmallBodyGlobalProducts products;
     QString error;
     ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generate(
@@ -257,13 +283,14 @@ TEST(SmallBodyGlobalProductGeneratorTest, ReportsStructuredProgressInLifecycleOr
         &products,
         &error,
         nullptr,
-        progress_callback)) << qPrintable(error);
+        progress_callback))
+        << qPrintable(error);
 
     ASSERT_FALSE(progress_events.empty());
     std::vector<xjw::SmallBodyGlobalStage> stage_sequence;
     int previous_percent = -1;
     int previous_raster_rows = 0;
-    for (const xjw::SmallBodyGlobalProgress &progress : progress_events)
+    for (const xjw::SmallBodyGlobalProgress& progress : progress_events)
     {
         EXPECT_GE(progress.overallPercent, previous_percent);
         previous_percent = progress.overallPercent;
@@ -307,9 +334,12 @@ TEST(SmallBodyGlobalProductGeneratorTest, RejectsFakeDomForUncoloredMesh)
     options.maximumPixelCount = 1000;
     xjw::SmallBodyGlobalProducts products;
     QString error;
-    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(10.0f, false), QStringLiteral("synthetic"), temporary_directory.path(),
-        options, &products, &error));
+    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(10.0f, false),
+                                                                        QStringLiteral("synthetic"),
+                                                                        temporary_directory.path(),
+                                                                        options,
+                                                                        &products,
+                                                                        &error));
     EXPECT_TRUE(error.contains(QStringLiteral("不会用固定灰色")));
 }
 
@@ -328,14 +358,15 @@ TEST(SmallBodyGlobalProductGeneratorTest, ConvertsKilometerMeshCoordinatesToMete
     xjw::SmallBodyGlobalProducts products;
     QString error;
     ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(0.01f), QStringLiteral("synthetic_km"), temporary_directory.path(),
-        options, &products, &error)) << qPrintable(error);
+        makeOctahedron(0.01f), QStringLiteral("synthetic_km"), temporary_directory.path(), options, &products, &error))
+        << qPrintable(error);
     EXPECT_NEAR(products.referenceRadiusM, 10.0, 1.0e-5);
-    EXPECT_EQ(products.report.value(QStringLiteral("frame")).toObject()
-                  .value(QStringLiteral("source_surface_unit")).toString(),
+    EXPECT_EQ(products.report.value(QStringLiteral("frame"))
+                  .toObject()
+                  .value(QStringLiteral("source_surface_unit"))
+                  .toString(),
               QStringLiteral("km"));
-    EXPECT_EQ(products.radialDem.projection.metadata.value(
-                  QStringLiteral("SOURCE_SURFACE_UNIT")),
+    EXPECT_EQ(products.radialDem.projection.metadata.value(QStringLiteral("SOURCE_SURFACE_UNIT")),
               QStringLiteral("km"));
 }
 
@@ -355,13 +386,16 @@ TEST(SmallBodyGlobalProductGeneratorTest, PreservesValidMinus9999Elevation)
 
     xjw::SmallBodyGlobalProducts products;
     QString error;
-    ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(1.0f), QStringLiteral("synthetic_minus_9999"),
-        temporary_directory.path(), options, &products, &error)) << qPrintable(error);
+    ASSERT_TRUE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(1.0f),
+                                                                       QStringLiteral("synthetic_minus_9999"),
+                                                                       temporary_directory.path(),
+                                                                       options,
+                                                                       &products,
+                                                                       &error))
+        << qPrintable(error);
 
     xjw::DemGridData round_trip;
-    ASSERT_TRUE(xjw::DemDomIO::readDemRaster(
-        products.elevationDemPath, &round_trip, &error)) << qPrintable(error);
+    ASSERT_TRUE(xjw::DemDomIO::readDemRaster(products.elevationDemPath, &round_trip, &error)) << qPrintable(error);
     EXPECT_EQ(cv::countNonZero(round_trip.validMask), 18);
     EXPECT_FLOAT_EQ(round_trip.elevation.at<float>(1, 0), -9999.0f);
 }
@@ -380,19 +414,100 @@ TEST(SmallBodyGlobalProductGeneratorTest, HonorsPreCancelledRequest)
     xjw::SmallBodyGlobalProducts products;
     QString error;
     EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
-        makeOctahedron(), QStringLiteral("synthetic"), temporary_directory.path(),
-        options, &products, &error, &cancel_requested,
-        [&progress_events](const xjw::SmallBodyGlobalProgress &progress)
-        {
-            progress_events.push_back(progress);
-        }));
+        makeOctahedron(),
+        QStringLiteral("synthetic"),
+        temporary_directory.path(),
+        options,
+        &products,
+        &error,
+        &cancel_requested,
+        [&progress_events](const xjw::SmallBodyGlobalProgress& progress) { progress_events.push_back(progress); }));
     EXPECT_TRUE(error.contains(QStringLiteral("取消")));
-    EXPECT_TRUE(std::none_of(
-        progress_events.cbegin(), progress_events.cend(),
-        [](const xjw::SmallBodyGlobalProgress &progress)
-        {
-            return progress.stage == xjw::SmallBodyGlobalStage::Completed;
-        }));
-    EXPECT_TRUE(QDir(temporary_directory.path()).entryList(
-        QDir::Files | QDir::NoDotAndDotDot).isEmpty());
+    EXPECT_TRUE(std::none_of(progress_events.cbegin(),
+                             progress_events.cend(),
+                             [](const xjw::SmallBodyGlobalProgress& progress)
+                             { return progress.stage == xjw::SmallBodyGlobalStage::Completed; }));
+    EXPECT_TRUE(QDir(temporary_directory.path()).entryList(QDir::Files | QDir::NoDotAndDotDot).isEmpty());
+}
+
+TEST(SmallBodyGlobalProductGeneratorTest, RequestedPreviewRequiresWriterBeforeCreatingOutput)
+{
+    QTemporaryDir temporary_directory(testTemporaryDirectoryTemplate());
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString output_directory = QDir(temporary_directory.path()).filePath(QStringLiteral("output"));
+    xjw::SmallBodyGlobalOptions options;
+    options.angularResolutionDeg = 60.0;
+    options.maximumPixelCount = 1000;
+    options.writeReportPreview = true;
+    xjw::SmallBodyGlobalProducts products;
+    QString error;
+    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(
+        makeOctahedron(), QStringLiteral("synthetic"), output_directory, options, &products, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("未提供报告写入器")));
+    EXPECT_FALSE(QFileInfo::exists(output_directory));
+}
+
+TEST(SmallBodyGlobalProductGeneratorTest, PreviewFailureRollsBackEveryTemporaryProduct)
+{
+    QTemporaryDir temporary_directory(testTemporaryDirectoryTemplate());
+    ASSERT_TRUE(temporary_directory.isValid());
+    xjw::SmallBodyGlobalOptions options;
+    options.angularResolutionDeg = 60.0;
+    options.maximumPixelCount = 1000;
+    options.writeReportPreview = true;
+    xjw::SmallBodyGlobalProducts products;
+    QString error;
+    bool writer_called = false;
+    const xjw::SmallBodyPreviewWriter writer = [&](const auto&, const auto&, const QString& path, QString* message)
+    {
+        writer_called = true;
+        QFile preview(path);
+        EXPECT_TRUE(preview.open(QIODevice::WriteOnly));
+        preview.write("partial-preview");
+        *message = QStringLiteral("preview-writer-failed");
+        return false;
+    };
+    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(),
+                                                                        QStringLiteral("synthetic"),
+                                                                        temporary_directory.path(),
+                                                                        options,
+                                                                        &products,
+                                                                        &error,
+                                                                        nullptr,
+                                                                        {},
+                                                                        writer));
+    EXPECT_TRUE(writer_called);
+    EXPECT_EQ(error, QStringLiteral("preview-writer-failed"));
+    EXPECT_TRUE(products.report.isEmpty());
+    EXPECT_FALSE(hasGeneratedFiles(temporary_directory.path()));
+}
+
+TEST(SmallBodyGlobalProductGeneratorTest, CancellationAfterPreviewRollsBackEveryProduct)
+{
+    QTemporaryDir temporary_directory(testTemporaryDirectoryTemplate());
+    ASSERT_TRUE(temporary_directory.isValid());
+    xjw::SmallBodyGlobalOptions options;
+    options.angularResolutionDeg = 60.0;
+    options.maximumPixelCount = 1000;
+    options.writeReportPreview = true;
+    std::atomic_bool cancelled = false;
+    xjw::SmallBodyGlobalProducts products;
+    QString error;
+    const xjw::SmallBodyPreviewWriter writer = [&](const auto&, const auto&, const QString&, QString*)
+    {
+        cancelled = true;
+        return true;
+    };
+    EXPECT_FALSE(xjw::SmallBodyGlobalProductGenerator::generateFromMesh(makeOctahedron(),
+                                                                        QStringLiteral("synthetic"),
+                                                                        temporary_directory.path(),
+                                                                        options,
+                                                                        &products,
+                                                                        &error,
+                                                                        &cancelled,
+                                                                        {},
+                                                                        writer));
+    EXPECT_TRUE(error.contains(QStringLiteral("取消")));
+    EXPECT_TRUE(products.report.isEmpty());
+    EXPECT_FALSE(hasGeneratedFiles(temporary_directory.path()));
 }

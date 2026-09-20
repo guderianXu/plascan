@@ -77,8 +77,9 @@ struct OverlapImageInput
     // 影像文件路径（用于错误信息报告，不做实际读取）
     std::string imagePath;
 
-    // 该影像对应的相机标定参数（内参 + 外参）
-    FramePinholeCamera camera;
+    // 该影像对应的已校验数值相机状态（内参 + 外参）。
+    // 旧 IO/JSON 相机不得直接进入重叠几何。
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
 
     // 影像宽度（像素），用于计算中心像素坐标及四角坐标
     int width = 0;
@@ -138,14 +139,14 @@ public:
     // 功能：对输入影像集合执行地面重叠分析，输出所有重叠影像对及得分。
     // 参数：
     //   images         - 输入影像列表（影像路径 + 相机参数 + 分辨率）
-    //   dem            - DEM 曲面指针（可为 nullptr，useFixedZ=true 时不需要）
+    //   dem            - DEM 曲面指针（仅 useFixedZ=true 时可为 nullptr）
     //   useFixedZ      - true = 使用固定高程面，false = 使用 DEM
     //   fixedZ         - 固定高程值（useFixedZ=true 时使用）
     //   neighborFactor - 邻域搜索倍数系数（控制重叠判断的阈值宽松程度，典型值 1.5~3.0）
     //                    threshold = neighborFactor * (r_i + r_j)
     //   result         - 分析结果输出指针（非 nullptr）
     //   errorMsg       - 可选错误信息输出
-    // 返回值：成功返回 true，输入不足或反投影失败返回 false
+    // 返回值：成功返回 true；输入不足、模型参数缺失或反投影失败返回 false
     // --------------------------------------------------------
     static bool analyze(const std::vector<OverlapImageInput> &images,
                         const DemSurface *dem,

@@ -5,24 +5,25 @@ namespace xjw::mvs::pipeline_detail
     using namespace pipeline_detail;
     using common::string_utils::asciiLowerCopy;
 
-    bool estimatePatchMatchWithAdaptiveCuda(const char* stageLabel,
-                                            int refIdx,
-                                            const cv::Mat& refGray,
-                                            const std::vector<cv::Mat>& srcGrays,
-                                            const FramePinholeCamera& refCam,
-                                            const std::vector<FramePinholeCamera>& srcCams,
-                                            float zNear,
-                                            float zFar,
-                                            const PatchMatchConfig& config,
-                                            cv::Mat& depthOut,
-                                            cv::Mat* confOut,
-                                            std::string* errorMsg,
-                                            const cv::Mat* hintDepth,
-                                            const cv::Mat* hintRadius,
-                                            const cv::Mat* referenceValidMask,
-                                            const std::vector<cv::Mat>* sourceValidMasks,
-                                            const PatchMatchAuxiliaryInput* auxiliaryInput,
-                                            PatchMatchAuxiliaryOutput* auxiliaryOutput)
+    bool estimatePatchMatchWithAdaptiveCuda(
+        const char* stageLabel,
+        int refIdx,
+        const cv::Mat& refGray,
+        const std::vector<cv::Mat>& srcGrays,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+        float zNear,
+        float zFar,
+        const PatchMatchConfig& config,
+        cv::Mat& depthOut,
+        cv::Mat* confOut,
+        std::string* errorMsg,
+        const cv::Mat* hintDepth,
+        const cv::Mat* hintRadius,
+        const cv::Mat* referenceValidMask,
+        const std::vector<cv::Mat>* sourceValidMasks,
+        const PatchMatchAuxiliaryInput* auxiliaryInput,
+        PatchMatchAuxiliaryOutput* auxiliaryOutput)
     {
         const bool tryCuda = (config.backend == PatchMatchBackend::Cuda || config.backend == PatchMatchBackend::Auto) &&
                              PatchMatchDepthEstimator::isCudaAvailable();

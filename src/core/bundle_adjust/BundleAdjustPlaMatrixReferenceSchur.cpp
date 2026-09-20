@@ -229,16 +229,17 @@ namespace xjw::detail::plamatrix_ba
             }
         }
 
-        bool linearizeTrack(const std::vector<FramePinholeCamera>& input_cameras,
-                            const std::vector<BATrack>& tracks,
-                            const BAOptions& options,
-                            const ActiveProblem& active,
-                            const OptimizationState& state,
-                            int iteration,
-                            std::size_t track_index,
-                            ReducedAccumulator* accumulator,
-                            PointNormalBlock* point,
-                            double* cost)
+        bool
+        linearizeTrack(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                       const std::vector<BATrack>& tracks,
+                       const BAOptions& options,
+                       const ActiveProblem& active,
+                       const OptimizationState& state,
+                       int iteration,
+                       std::size_t track_index,
+                       ReducedAccumulator* accumulator,
+                       PointNormalBlock* point,
+                       double* cost)
         {
             point->clear();
             const bool eliminate_point = active.trackBlock[track_index] >= 0;
@@ -540,14 +541,15 @@ namespace xjw::detail::plamatrix_ba
                !options.cameraPlaneConstraint.enabled;
     }
 
-    ReferenceSchurBuildResult buildReferenceReducedNormalEquations(const std::vector<FramePinholeCamera>& input_cameras,
-                                                                   const std::vector<BATrack>& tracks,
-                                                                   const BAOptions& options,
-                                                                   const ActiveProblem& active,
-                                                                   const OptimizationState& state,
-                                                                   int iteration,
-                                                                   double damping,
-                                                                   ReferenceSchurWorkspace* workspace)
+    ReferenceSchurBuildResult buildReferenceReducedNormalEquations(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        double damping,
+        ReferenceSchurWorkspace* workspace)
     {
         if (!workspace || !std::isfinite(damping) || damping < 0.0)
         {
@@ -698,17 +700,17 @@ namespace xjw::detail::plamatrix_ba
         return result;
     }
 
-    ReferenceSchurBackSubstitutionResult
-    recoverReferencePointSteps(const std::vector<FramePinholeCamera>& input_cameras,
-                               const std::vector<BATrack>& tracks,
-                               const BAOptions& options,
-                               const ActiveProblem& active,
-                               const OptimizationState& state,
-                               int iteration,
-                               double damping,
-                               const std::vector<double>& primary_step,
-                               const std::vector<double>& direct_primary_rhs,
-                               std::vector<double>* eliminated_step)
+    ReferenceSchurBackSubstitutionResult recoverReferencePointSteps(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        double damping,
+        const std::vector<double>& primary_step,
+        const std::vector<double>& direct_primary_rhs,
+        std::vector<double>* eliminated_step)
     {
         ReferenceSchurBackSubstitutionResult result;
         eliminated_step->assign(static_cast<std::size_t>(active.trackBlockCount * kEliminatedBlockSize), 0.0);

@@ -76,18 +76,20 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn('saveObj[QStringLiteral("ba_valid_track_ratio")]', source)
 
     def test_bundle_adjust_execution_defaults_to_auto_backend(self):
-        project_manager = read_text("src/gui/project/manager/ProjectManager.cpp")
+        controller = read_text(
+            "src/gui/project/tasks/ProjectBundleAdjustController.cpp"
+        )
 
-        self.assertIn('toString(QStringLiteral("auto"))', project_manager)
-        self.assertIn('opts.baOpt.backend = xjw::BABackend::Auto;', project_manager)
-        self.assertIn('opts.baOpt.minPlaMatrixCudaObservations', project_manager)
-        self.assertIn('opts.baOpt.minPlaMatrixOpenClObservations', project_manager)
-        self.assertNotIn('kLegacyMinPlaMatrixGpuCameras', project_manager)
-        self.assertNotIn('kLegacyMinPlaMatrixGpuObservations', project_manager)
-        self.assertNotIn('legacy_cpu', project_manager)
-        self.assertIn('ProjectConfigManager::validateBundleAdjustSettings', project_manager)
-        self.assertIn('opts.baOpt.maxInitialTrackRms', project_manager)
-        self.assertIn('opts.baOpt.enableBackendQualityGate', project_manager)
+        self.assertIn('toString(QStringLiteral("auto"))', controller)
+        self.assertIn('options->baOpt.backend = xjw::BABackend::Auto;', controller)
+        self.assertIn('options->baOpt.minPlaMatrixCudaObservations', controller)
+        self.assertIn('options->baOpt.minPlaMatrixOpenClObservations', controller)
+        self.assertNotIn('kLegacyMinPlaMatrixGpuCameras', controller)
+        self.assertNotIn('kLegacyMinPlaMatrixGpuObservations', controller)
+        self.assertNotIn('legacy_cpu', controller)
+        self.assertIn('ProjectConfigManager::validateBundleAdjustSettings', controller)
+        self.assertIn('options->baOpt.maxInitialTrackRms', controller)
+        self.assertIn('options->baOpt.enableBackendQualityGate', controller)
 
     def test_plamatrix_backend_is_exposed_with_comparison_metrics(self):
         header = self.read_text("src/core/bundle_adjust/BundleAdjustTypes.h")

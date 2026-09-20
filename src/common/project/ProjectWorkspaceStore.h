@@ -33,7 +33,8 @@ public:
 
     bool stagePackedResource(const QString &sourcePath,
                              QString *stagedPath,
-                             QString *errorMessage = nullptr) const;
+                             QString *errorMessage = nullptr,
+                             bool *created = nullptr) const;
 
     QString runtimeRoot(QString *errorMessage = nullptr) const;
 

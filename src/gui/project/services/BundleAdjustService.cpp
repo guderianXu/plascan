@@ -7,7 +7,9 @@
 // =============================================================================
 #include "BundleAdjustService.h"
 
-#include "FramePinholeCamera.h"
+#include "pose/CameraReferencePosePriorAdapter.h"
+
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "BundleAdjustSolver.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
@@ -31,6 +33,7 @@
 #include <QTextStream>
 
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 namespace xjw
@@ -210,9 +213,10 @@ namespace xjw
         // ──────────────────────────────────────────────────────────────────────────────
         // BundleAdjustService::run  — 光束法平差核心流程
         // ──────────────────────────────────────────────────────────────────────────────
-        BaServiceResult BundleAdjustService::run(const std::vector<xjw::FramePinholeCamera>& cameras,
-                                                 std::vector<xjw::BATrack>& tracks,
-                                                 const BaServiceOptions& opts)
+        BaServiceResult BundleAdjustService::run(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+            std::vector<xjw::BATrack>& tracks,
+            const BaServiceOptions& opts)
         {
             BaServiceResult result;
 
@@ -231,6 +235,41 @@ namespace xjw
             {
                 result.errorMessage = QStringLiteral("输出目录未指定");
                 return result;
+            }
+
+            xjw::camera_project::CameraImageIds imageIds = opts.imageIdByIndex;
+            if (imageIds.empty())
+            {
+                imageIds.reserve(cameras.size());
+                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : cameras)
+                {
+                    if (!camera.hasBoundIdentity())
+                    {
+                        result.errorMessage = QStringLiteral("BA 相机缺少 canonical ImageId，拒绝按路径生成写回身份");
+                        return result;
+                    }
+                    imageIds.push_back(camera.imageId());
+                }
+            }
+            if (imageIds.size() != cameras.size())
+            {
+                result.errorMessage = QStringLiteral("BA 相机 ImageId 数量与数值相机数量不一致");
+                return result;
+            }
+            std::unordered_set<std::string> seenImageIds;
+            for (std::size_t index = 0; index < imageIds.size(); ++index)
+            {
+                const xjw::camera_core::ImageId& imageId = imageIds.at(index);
+                if (imageId.value().empty() || !seenImageIds.insert(imageId.value()).second)
+                {
+                    result.errorMessage = QStringLiteral("BA 相机 ImageId 为空或重复，拒绝写回");
+                    return result;
+                }
+                if (!cameras.at(index).hasBoundIdentity() || cameras.at(index).imageId() != imageId)
+                {
+                    result.errorMessage = QStringLiteral("BA 数值相机与 canonical ImageId 未绑定，拒绝写回");
+                    return result;
+                }
             }
 
             const QString outDir = QDir::cleanPath(opts.outputDir);
@@ -254,6 +293,30 @@ namespace xjw
                 return dryResult;
             };
 
+            xjw::BAOptions baOptions = opts.baOpt;
+            if (!opts.cameraReferencePosePriors.empty())
+            {
+                if (!baOptions.cameraPosePriors.empty())
+                {
+                    result.errorMessage = QStringLiteral(
+                        "外部相机姿态参考不能与手工 BACameraPosePrior 同时提供；请保留一个明确来源");
+                    return result;
+                }
+                const xjw::CameraReferencePosePriorAdapterResult converted =
+                    xjw::CameraReferencePosePriorAdapter::toBundleAdjustPriors(
+                        cameras, opts.cameraReferencePosePriors);
+                if (!converted.ok())
+                {
+                    result.errorMessage = QStringLiteral("外部相机姿态参考无法接入 BA: %1")
+                                               .arg(QString::fromStdString(converted.error));
+                    return result;
+                }
+                if (converted.hasEnabledPriors())
+                {
+                    baOptions.cameraPosePriors = converted.priors;
+                }
+            }
+
             // 行星测距 dry-run 仍需解析格式、检查传感器模型和完成严格影像关联。
             if (opts.dryRun && !opts.enablePlanetaryLaserRangeConstraints)
             {
@@ -261,7 +324,6 @@ namespace xjw
             }
 
             // ── LiDAR 点到面约束预处理 ────────────────────────────────────────────
-            xjw::BAOptions baOptions = opts.baOpt;
             xjw::lidar::LaserAssociationSummary laserAssociationSummary;
             int laserMapSampleCount = 0;
             double effectiveLaserWeight = 0.0;
@@ -856,7 +918,7 @@ namespace xjw
                         {
                             continue;
                         }
-                        const FramePinholeCamera& camera =
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
                             observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
                                 ? baResult.refinedCameras[static_cast<size_t>(observation.cameraIndex)]
                                 : cameras[static_cast<size_t>(observation.cameraIndex)];
@@ -870,7 +932,11 @@ namespace xjw
                         const double residualX = projected[0] - observation.u;
                         const double residualY = projected[1] - observation.v;
                         QJsonObject observationObject;
-                        observationObject[QStringLiteral("image_id")] = observation.cameraIndex;
+                        observationObject[QStringLiteral("camera_index")] = observation.cameraIndex;
+                        observationObject[QStringLiteral("image_id")] =
+                            QString::fromStdString(cameras.at(static_cast<std::size_t>(observation.cameraIndex))
+                                                        .imageId()
+                                                        .value());
                         observationObject[QStringLiteral("image_path")] =
                             opts.imagePathByIndex.at(observation.cameraIndex);
                         observationObject[QStringLiteral("xy")] = QJsonArray{observation.u, observation.v};
@@ -887,10 +953,11 @@ namespace xjw
 
             // ── 逐相机统计：位移量 + 欧拉角变化 + 每台相机 RMS ───────────────────
             // 同时构建：
-            //   - pendingCamUpdates：待确认写入项目的相机 JSON（由调用方决定是否应用）
+            //   - cameraInstanceUpdates：按 canonical ImageId 待确认写入项目的相机 JSON
             //   - cameraPreview：GUI 预览列表（显示给用户确认）
             //   - refinedCameras：输出到 JSON 的精化相机表
-            QMap<QString, QJsonObject> pendingCamUpdates;
+            xjw::camera_project::CameraInstanceUpdates cameraInstanceUpdates;
+            QJsonArray cameraInstanceUpdatesJson;
             QJsonArray refinedCameras;
             QJsonArray cameraPreview;
 
@@ -912,6 +979,14 @@ namespace xjw
             {
                 const auto& camBefore = cameras[i];
                 const auto& camAfter = baResult.refinedCameras[i];
+                if (!camBefore.hasBoundIdentity() || !camAfter.hasBoundIdentity() ||
+                    camAfter.instanceId() != camBefore.instanceId() || camAfter.imageId() != camBefore.imageId() ||
+                    camAfter.worldFrame() != camBefore.worldFrame())
+                {
+                    result.errorMessage = QStringLiteral(
+                        "BA 精化相机丢失或改变 canonical instance/ImageId/world frame，拒绝生成写回事务");
+                    return result;
+                }
                 const QString imgPath = opts.imagePathByIndex.at(static_cast<int>(i));
                 const QString imgName = QFileInfo(imgPath).fileName();
 
@@ -922,10 +997,16 @@ namespace xjw
                                             (c1[2] - c0[2]) * (c1[2] - c0[2]));
 
                 const QJsonObject beforeJson = opts.beforeCamMeta.value(imgPath);
-                const QJsonObject afterJson = xjw::common::project::cameraToJson(camAfter);
+                const QJsonObject afterJson = xjw::common::project::serializeFramePinholeNumericState(camAfter);
 
                 // 收集待提交的相机更新
-                pendingCamUpdates.insert(imgPath, afterJson);
+                cameraInstanceUpdates.push_back(xjw::camera_project::CameraInstanceUpdate{
+                    imageIds.at(i), camBefore.instanceId(), camBefore.worldFrame(), afterJson});
+                cameraInstanceUpdatesJson.append(QJsonObject{
+                    {QStringLiteral("image_id"), QString::fromStdString(imageIds.at(i).value())},
+                    {QStringLiteral("instance_id"), QString::fromStdString(camBefore.instanceId().value())},
+                    {QStringLiteral("world_frame"), QString::fromStdString(camBefore.worldFrame().value())},
+                    {QStringLiteral("metadata"), afterJson}});
 
                 // 从 JSON 读取欧拉角（BA 前，已在原始文件中计算存储）
                 const double yawBefore = beforeJson.value(QStringLiteral("yaw_deg")).toDouble();
@@ -983,6 +1064,7 @@ namespace xjw
 
                 // 构建 GUI 预览条目
                 QJsonObject preview;
+                preview[QStringLiteral("image_id")] = QString::fromStdString(imageIds.at(i).value());
                 preview[QStringLiteral("image_path")] = imgPath;
                 preview[QStringLiteral("image_name")] = imgName;
                 preview[QStringLiteral("delta_c_m")] = dC;
@@ -1002,12 +1084,14 @@ namespace xjw
                 {
                     tsaiPath =
                         QDir(tsaiDir).filePath(QFileInfo(imgPath).completeBaseName() + QStringLiteral(".ba.tsai"));
-                    camAfter.saveToFile(xjw::common::io::toUtf8Path(tsaiPath));
+                    xjw::common::project::saveFramePinholeNumericState(
+                        camAfter, xjw::common::io::toUtf8Path(tsaiPath));
                 }
 
                 // 追加到 JSON 精化相机列表
                 QJsonObject one;
                 one[QStringLiteral("index")] = static_cast<int>(i);
+                one[QStringLiteral("image_id")] = QString::fromStdString(imageIds.at(i).value());
                 one[QStringLiteral("image_path")] = imgPath;
                 one[QStringLiteral("tsai_path")] = tsaiPath;
                 one[QStringLiteral("camera")] = afterJson;
@@ -1106,6 +1190,7 @@ namespace xjw
             // ── 汇总文件路径字段 ───────────────────────────────────────────────────
             saveObj[QStringLiteral("refined_cameras")] = refinedCameras;
             saveObj[QStringLiteral("camera_preview")] = cameraPreview;
+            saveObj[QStringLiteral("camera_instance_updates")] = cameraInstanceUpdatesJson;
 
             QJsonObject filesObj;
             filesObj[QStringLiteral("summary_txt")] = summaryTxtPath;
@@ -1149,7 +1234,7 @@ namespace xjw
                 baResult.solutionUsable && !missingActiveLaserConstraints && !missingActivePlanetaryLaserConstraints;
             if (result.success)
             {
-                result.pendingCamUpdates = pendingCamUpdates;
+                result.cameraInstanceUpdates = std::move(cameraInstanceUpdates);
             }
             else if (missingActiveLaserConstraints)
             {

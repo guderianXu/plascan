@@ -35,17 +35,17 @@ bool linearizeScaleBar(const BAScaleBarConstraint& constraint,
                        const BAOptions& options,
                        ConstraintLinearization* output);
 
-bool linearizePosePrior(const FramePinholeCamera& camera,
+bool linearizePosePrior(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                         const BACameraPosePrior& prior,
                         const BAOptions& options,
                         ConstraintLinearization* output);
 
-bool linearizeCameraPlane(const FramePinholeCamera& camera,
+bool linearizeCameraPlane(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                           std::size_t camera_index,
                           const BAOptions& options,
                           ConstraintLinearization* output);
 
-bool linearizeLaserRange(const FramePinholeCamera& camera,
+bool linearizeLaserRange(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                          const BALaserRangeConstraint& constraint,
                          const std::array<double, 3>& point,
                          const BAOptions& options,

@@ -5,8 +5,8 @@
 #include "DemDomIO.h"
 #include "DemGenerator.h"
 #include "DemGridAggregator.h"
-#include "RpcCameraIO.h"
-#include "RpcStereoIntersection.h"
+#include "RpcRasterIO.h"
+#include "camera/models/rpc/RpcIntersectionService.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 
@@ -26,7 +26,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
 
 namespace xjw
@@ -36,7 +38,7 @@ namespace xjw
 
         struct StereoPoint
         {
-            RpcCameraModel::GeodeticCoordinate geodetic{};
+            camera_models::rpc::RpcDefinition::GeodeticCoordinate geodetic{};
             double reprojectionErrorPixels = 0.0;
             float intensity = 0.0f;
         };
@@ -95,19 +97,27 @@ namespace xjw
             return true;
         }
 
-        bool loadCamera(const QString& path, RpcCameraModel* camera, QString* errorMessage)
+        std::shared_ptr<const camera_models::rpc::RpcInstance>
+        loadCamera(const QString& path, const std::string& identity, QString* errorMessage)
         {
             std::string error;
-            if (!loadRpcCameraFromRaster(common::io::toUtf8Path(path), camera, &error))
+            auto camera = camera_models::rpc::importRpcRasterInstance(
+                common::io::toUtf8Path(path),
+                camera_core::CameraDefinitionId("rpc-stereo-definition-" + identity),
+                camera_core::CameraInstanceId("rpc-stereo-instance-" + identity),
+                camera_core::ImageId("rpc-stereo-image-" + identity),
+                xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
+                &error);
+            if (!camera)
             {
                 if (errorMessage)
                 {
                     *errorMessage =
                         QStringLiteral("读取 RPC 相机失败 (%1): %2").arg(path, QString::fromUtf8(error.c_str()));
                 }
-                return false;
+                return nullptr;
             }
-            return true;
+            return camera;
         }
 
         std::vector<cv::DMatch>
@@ -191,10 +201,9 @@ namespace xjw
             return false;
         }
         reportProgress(progress, QStringLiteral("读取 RPC 相机与影像"), 5);
-        RpcCameraModel leftCamera;
-        RpcCameraModel rightCamera;
-        if (!loadCamera(leftImagePath, &leftCamera, errorMessage) ||
-            !loadCamera(rightImagePath, &rightCamera, errorMessage))
+        const auto leftCamera = loadCamera(leftImagePath, "left", errorMessage);
+        const auto rightCamera = loadCamera(rightImagePath, "right", errorMessage);
+        if (!leftCamera || !rightCamera)
         {
             return false;
         }
@@ -265,7 +274,7 @@ namespace xjw
         }
 
         reportProgress(progress, QStringLiteral("执行 RPC 双像前方交会"), 35);
-        RpcStereoIntersectionOptions intersectionOptions;
+        camera_models::rpc::RpcIntersectionOptions intersectionOptions;
         intersectionOptions.pixelTolerance = 1.0e-4;
         intersectionOptions.positionToleranceMeters = 1.0e-3;
         intersectionOptions.maximumIterations = 40;
@@ -285,9 +294,14 @@ namespace xjw
             ++fundamentalInliers;
             const cv::Point2f& left = leftPoints[index];
             const cv::Point2f& right = rightPoints[index];
-            RpcStereoIntersectionResult intersection;
-            const bool converged = intersectRpcObservations(
-                leftCamera, {left.x, left.y}, rightCamera, {right.x, right.y}, &intersection, intersectionOptions);
+            camera_models::rpc::RpcIntersectionResult intersection;
+            const bool converged = camera_models::rpc::RpcIntersectionService::intersect(
+                *leftCamera,
+                {left.x, left.y},
+                *rightCamera,
+                {right.x, right.y},
+                &intersection,
+                intersectionOptions);
             if ((!converged && intersection.iterations <= 0) || !std::isfinite(intersection.reprojectionRmsPixels) ||
                 intersection.reprojectionRmsPixels > options.maximumReprojectionErrorPixels ||
                 std::hypot(intersection.ecefMeters[0],
@@ -346,7 +360,7 @@ namespace xjw
 
         std::vector<double> longitudes;
         std::vector<double> latitudes;
-        std::vector<RpcCameraModel::GeodeticCoordinate> geodetic;
+        std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate> geodetic;
         longitudes.reserve(stereoPoints.size());
         latitudes.reserve(stereoPoints.size());
         geodetic.reserve(stereoPoints.size());

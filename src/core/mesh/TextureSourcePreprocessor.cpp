@@ -104,9 +104,9 @@ bool cancelled(const TextureMappingConfig &config)
     return config.isCancelled && config.isCancelled();
 }
 
-bool hasNonzeroDistortion(const FramePinholeCamera &camera)
+bool hasNonzeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
 {
-    const FramePinholeCamera::Distortion distortion = camera.distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
     return std::fabs(distortion.radialK1) > 1.0e-15 ||
         std::fabs(distortion.radialK2) > 1.0e-15 ||
         std::fabs(distortion.radialK3) > 1.0e-15 ||
@@ -179,7 +179,7 @@ bool prepareInputs(const std::string &meshPath,
             continue;
         }
 
-        const FramePinholeCamera &source_color_camera =
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_color_camera =
             source.colorCamera.isValid() ? source.colorCamera : source.camera;
         if (hasNonzeroDistortion(source.camera) ||
             hasNonzeroDistortion(source_color_camera))

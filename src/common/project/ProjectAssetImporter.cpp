@@ -1,5 +1,6 @@
 #include "ProjectAssetImporter.h"
 #include "ProjectAssetInspection.h"
+#include "ProjectPathBridge.h"
 
 #include <QDir>
 #include <QDateTime>
@@ -129,8 +130,15 @@ ProjectAssetImportResult ProjectAssetImporter::importAsset(
     const QString typeDirectory = request.type == ProjectAssetType::PointCloud
         ? QStringLiteral("point_clouds")
         : QStringLiteral("models");
-    const QString importedRoot = QDir(request.projectRoot).filePath(
-        QStringLiteral("assets/imported/%1").arg(typeDirectory));
+    const auto chunk = path_bridge::chunkLayout(request.projectRoot);
+    const QString importedRoot = chunk
+        ? path_bridge::toQtPath(chunk->importedCategoryDirectory(typeDirectory.toUtf8().toStdString()))
+        : QString();
+    if (importedRoot.isEmpty())
+    {
+        result.errorMessage = QStringLiteral("无法计算项目导入目录: %1").arg(request.projectRoot);
+        return result;
+    }
     if (!QDir().mkpath(importedRoot))
     {
         result.errorMessage = QStringLiteral("无法创建项目导入目录: %1").arg(importedRoot);

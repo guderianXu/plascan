@@ -10,7 +10,7 @@ namespace xjw
 {
 
 InitialSparseTriangulationResult InitialSparsePointFilter::filter(
-    const std::vector<FramePinholeCamera> &cameras,
+    const std::vector<camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
     const std::vector<BATrack> &tracks,
     const InitialSparseTriangulationOptions &options)
 {

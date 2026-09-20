@@ -1,16 +1,15 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
 #include "MatchPhotosOptions.h"
 #include "PairTypes.h"
+#include "camera/reference/geometry/ReferenceCameraGeometry.h"
 #include "sift/SiftBackendType.h"
 
-#include <QMap>
 #include <QString>
 #include <QStringList>
 
 #include <atomic>
-#include <array>
+#include <vector>
 
 namespace xjw::matchphotos
 {
@@ -43,7 +42,8 @@ namespace xjw::matchphotos
         static bool select(const QStringList& images,
                            const MatchPhotosFeatureCache& featureCache,
                            const MatchPhotosOptions& options,
-                           const QMap<QString, FramePinholeCamera>& referenceCameras,
+                           const std::vector<camera_core::ImageId>& imageIds,
+                           const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
                            image_matching::SiftComputeBackend backend,
                            int deviceIndex,
                            PairSelectionResult* output,
@@ -54,8 +54,9 @@ namespace xjw::matchphotos
         static bool selectWithPositions(const QStringList& images,
                                         const MatchPhotosFeatureCache& featureCache,
                                         const MatchPhotosOptions& options,
-                                        const QMap<QString, FramePinholeCamera>& referenceCameras,
-                                        const QMap<QString, std::array<double, 3>>& referencePositions,
+                                        const std::vector<camera_core::ImageId>& imageIds,
+                                        const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                        const camera_reference::ReferenceCameraPositionMap& referencePositions,
                                         image_matching::SiftComputeBackend backend,
                                         int deviceIndex,
                                         PairSelectionResult* output,

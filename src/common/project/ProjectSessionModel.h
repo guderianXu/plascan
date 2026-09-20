@@ -22,6 +22,7 @@
 #include <QMutex>
 #include <QStringList>
 #include <QTimer>
+#include <QVector>
 #include <QtGlobal>
 
 #include <atomic>
@@ -31,8 +32,10 @@
 
 #include "project/ProjectDocumentModel.h"
 #include "project/ProjectConfigManager.h"
+#include "camera/project/CameraInstanceUpdate.h"
 
 class QThreadPool;
+class ProjectDataPersistenceTestPeer;
 namespace xjw::common::project
 {
     class ProjectLock;
@@ -78,6 +81,76 @@ struct ProjectResultsSnapshot
     QJsonObject resultsMeta;
     QString chunkId;
     bool hasResults = false;
+};
+
+struct ProjectResultRecordPathUpsert
+{
+    QString arrayKey;
+    QString pathKey;
+    QJsonObject record;
+    bool markDirty = true;
+};
+
+class ProjectData;
+
+enum class ProjectBundleAdjustMetadataStageDecision
+{
+    Commit,
+    Rollback
+};
+
+enum class ProjectBundleAdjustMetadataStageStatus
+{
+    Rejected,
+    Committed,
+    RolledBack,
+    ExternalCommit
+};
+
+struct ProjectBundleAdjustMetadataStageResolveResult
+{
+    ProjectBundleAdjustMetadataStageStatus status = ProjectBundleAdjustMetadataStageStatus::Rejected;
+    QString errorMessage;
+};
+
+class ProjectBundleAdjustMetadataStageToken final
+{
+public:
+    bool isValid() const noexcept
+    {
+        return _owner != nullptr && _stageId != 0;
+    }
+
+    int updatedCameraCount() const noexcept
+    {
+        return _updatedCameraCount;
+    }
+
+private:
+    friend class ProjectData;
+
+    const ProjectData* _owner = nullptr;
+    quint64 _stageId = 0;
+    quint64 _sessionGeneration = 0;
+    QString _projectPath;
+    QString _chunkId;
+    int _chunkDirectory = 0;
+    QJsonObject _beforeCore;
+    QJsonObject _beforeResults;
+    QJsonObject _stagedCore;
+    QJsonObject _stagedResults;
+    int _updatedCameraCount = 0;
+    int _archiveTimerRemainingMs = -1;
+    quint64 _persistenceGeneration = 0;
+    bool _wasDirty = false;
+    bool _resultsDirtyForArchive = false;
+    bool _coreFileDirtyForArchive = false;
+    bool _configDirtyForArchive = false;
+    bool _uiStateDirtyForArchive = false;
+    bool _workspaceDirtyForArchive = false;
+    bool _fullSavePending = false;
+    bool _archiveSyncPending = false;
+    bool _temporarySavePending = false;
 };
 
 class ProjectResourceCleanupPersistence final
@@ -160,7 +233,7 @@ public:
     // 保存项目(将运行时元数据写回.plascan归档)
     bool saveProject(QString* errorMsg = nullptr);
     // GUI 使用的异步保存入口；完成后发出 projectSaveCompleted。
-    void saveProjectAsync();
+    bool saveProjectAsync(QString* errorMsg = nullptr);
     // 将请求时的内存快照串行保存并导出为独立 ZIP；完成后发出 portableProjectExportCompleted。
     bool exportPortableProjectAsync(const QString& outputZipPath, QString* errorMsg = nullptr);
     // 关闭当前项目；仅在最新状态已同步到归档或临时恢复快照后释放项目锁。
@@ -187,6 +260,8 @@ public:
     }
     // 更新运行时元数据
     void updateMetadata(const QJsonObject& meta, bool markDirty = true);
+    // 原子应用元数据并登记临时恢复持久化，再对外发布变更通知。
+    void persistMetadata(const QJsonObject& meta, bool markDirty = true);
     // 更新配置数据
     void updateConfig(const QJsonObject& config, bool markDirty = true);
     std::optional<ProjectCameraModelPolicy> cameraModelPolicy() const;
@@ -229,29 +304,43 @@ public:
     // 移除资源引用；共享影像仅在全部 Chunk 都解除引用后删除。
     bool removeResource(const QString& resourcePath);
     bool removeResources(const QStringList& resourcePaths);
-    // 为指定影像写入相机元数据（写入 images[*].camera）
-    bool setImageCamera(const QString& imagePath, const QJsonObject& cameraMeta, QString* errorMsg = nullptr);
-    // 批量写入相机元数据，键为影像绝对路径，值为 camera 元数据
-    bool setImageCameras(const QMap<QString, QJsonObject>& cameraMetaByImage,
-                         int* updatedCount = nullptr,
-                         QString* errorMsg = nullptr);
-    /// 用一轮 SfM 的结果原子替换目标影像的相机集合；未出现在结果中的目标影像会清除旧相机。
-    bool replaceImageCameras(const QStringList& targetImagePaths,
-                             const QMap<QString, QJsonObject>& cameraMetaByImage,
-                             int* updatedCount = nullptr,
-                             int* clearedCount = nullptr,
-                             QString* errorMsg = nullptr);
-    /// 清除指定影像的相机参数（从元数据中移除 camera 字段）
-    bool clearImageCameras(const QStringList& imagePaths, int* clearedCount = nullptr, QString* errorMsg = nullptr);
+    // 新相机工程集合接口：定义与影像实例独立存储在 project_files 中。
+    bool setCameraInstance(const QString& imagePath, const QJsonObject& modelMetadata, QString* errorMsg = nullptr);
+    bool setCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
+                            int* updatedCount = nullptr,
+                            QString* errorMsg = nullptr);
+    bool setCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
+                                int* updatedCount = nullptr,
+                                QString* errorMsg = nullptr);
+    bool replaceCameraInstances(const QStringList& targetImagePaths,
+                                const QMap<QString, QJsonObject>& modelMetadataByImage,
+                                int* updatedCount = nullptr,
+                                int* clearedCount = nullptr,
+                                QString* errorMsg = nullptr);
+    bool replaceCameraInstancesById(const xjw::camera_project::CameraImageIds& targetImageIds,
+                                    const xjw::camera_project::CameraInstanceUpdates& updates,
+                                    int* updatedCount = nullptr,
+                                    int* clearedCount = nullptr,
+                                    QString* errorMsg = nullptr);
+    bool clearCameraInstances(const QStringList& imagePaths, int* clearedCount = nullptr, QString* errorMsg = nullptr);
     bool appendIntersectionResult(const QJsonObject& result, QString* errorMsg = nullptr);
     QJsonArray getIntersectionResults() const;
     bool appendBundleAdjustResult(const QJsonObject& result, QString* errorMsg = nullptr);
     QJsonArray getBundleAdjustResults() const;
+    bool stageBundleAdjustMetadata(const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+                                   const QJsonObject& bundleAdjustResult,
+                                   ProjectBundleAdjustMetadataStageToken* token,
+                                   QString* errorMsg = nullptr);
+    ProjectBundleAdjustMetadataStageResolveResult resolveBundleAdjustMetadataStage(
+        const ProjectBundleAdjustMetadataStageToken& token,
+        ProjectBundleAdjustMetadataStageDecision decision);
     bool appendResultRecord(const QString& arrayKey, const QJsonObject& record, bool markDirty = true);
     bool upsertResultRecordByPath(const QString& arrayKey,
                                   const QString& pathKey,
                                   const QJsonObject& record,
                                   bool markDirty = true);
+    bool upsertResultRecordsByPath(const QVector<ProjectResultRecordPathUpsert>& records,
+                                   QString* errorMsg = nullptr);
     bool upsertResultRecordByIndex(const QString& arrayKey,
                                    const QJsonObject& record,
                                    int replaceIndex,
@@ -282,8 +371,8 @@ public:
 
     // === 结果追加 ===
     // 追加逐影像匹配分片索引到元数据。
-    void appendImageMatchResult(const ProjectImageMatchResultRecord& record);
-    void appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records);
+    bool appendImageMatchResult(const ProjectImageMatchResultRecord& record, QString* errorMsg = nullptr);
+    bool appendImageMatchResults(const QVector<ProjectImageMatchResultRecord>& records, QString* errorMsg = nullptr);
 
 signals:
     // 项目状态变化
@@ -304,6 +393,8 @@ private Q_SLOTS:
     void syncToArchive();
 
 private:
+    friend class ProjectDataPersistenceTestPeer;
+
     enum class PersistenceMode
     {
         FullSave,
@@ -311,6 +402,11 @@ private:
         ArchiveSync,
         TemporaryOnly,
         CleanupCommit
+    };
+    enum class BundleAdjustArchiveTimerPolicy
+    {
+        RestoreSavedDeadline,
+        Suppress
     };
     struct PersistenceSnapshot;
     struct PersistenceResult;
@@ -325,7 +421,7 @@ private:
     mutable bool _resultsLoaded = false;       // project_results 字段是否已载入内存
     mutable bool _resultsLoading = false;      // 防止惰性加载重入，不把失败误标为已加载
 
-    // 防抖归档写入：每次 appendIpfind/appendIpmatch/setImageCameras 不再单次打开 ZIP，
+    // 防抖归档写入：每次 appendIpfind/appendIpmatch/setCameraInstances 不再单次打开 ZIP，
     // 而是启动 2s 单射定时器，到期一次性批量写入
     QTimer* _archiveSyncTimer{};          // 单射，2s防抖
     bool _resultsDirtyForArchive{false};  // project_results 字段需同步
@@ -343,6 +439,12 @@ private:
     std::unique_ptr<PersistenceSnapshot> _portableExportSnapshot;
     bool _archiveSyncPending{false};
     bool _temporarySavePending{false};
+    quint64 _nextBundleAdjustMetadataStageId{1};
+    quint64 _activeBundleAdjustMetadataStageId{0};
+    std::optional<ProjectBundleAdjustMetadataStageToken> _activeBundleAdjustMetadataStage;
+    bool _bundleAdjustPersistenceSuspended{false};
+    bool _bundleAdjustPersistenceGenerationAdvanceDeferred{false};
+    std::unique_ptr<PersistenceResult> _deferredPersistenceResult;
     quint64 _resourceCleanupPersistenceGeneration{0};
     bool _shuttingDown{false};
     std::shared_ptr<xjw::common::project::ProjectPersistenceCommitCoordinator> _persistenceCommitCoordinator;
@@ -350,6 +452,7 @@ private:
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
     bool ensureResultsLoaded() const;
+    bool applyMetadata(const QJsonObject& metadata);
     void markDirtyIfRequested(bool markDirty);
     void emitCurrentMetadataChanged();
     void scheduleArchiveSync(bool coreDirty,
@@ -362,7 +465,11 @@ private:
     static PersistenceResult persistSnapshot(PersistenceSnapshot snapshot);
     void startNextPersistence();
     void handlePersistenceFinished(PersistenceResult result);
-    bool drainPersistenceForClose(QString* errorMessage);
+    bool drainPersistenceForClose(QString* errorMessage, bool forceDrain = false);
+    void releaseBundleAdjustPersistenceBarrier(bool invalidateRunningPersistence);
+    void restoreBundleAdjustBeforeStateAndMergeResponsibilities(const ProjectBundleAdjustMetadataStageToken& token,
+                                                                BundleAdjustArchiveTimerPolicy timerPolicy);
+    void settleBundleAdjustMetadataStageForShutdown();
 
     // 辅助方法
     QString projectDir() const;      // 返回项目目录(.plascan文件所在目录)

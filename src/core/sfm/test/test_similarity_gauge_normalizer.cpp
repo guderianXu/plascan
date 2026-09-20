@@ -9,19 +9,16 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double x, double y, double z)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    camera.setPose(
-        {{1.0, 0.0, 0.0,
-          0.0, 1.0, 0.0,
-          0.0, 0.0, 1.0}},
-        {{x, y, z}});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double x, double y, double z)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{x, y, z}});
+        return camera;
 }
 
-double cameraDistance(const xjw::FramePinholeCamera &left, const xjw::FramePinholeCamera &right)
+double cameraDistance(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& left,
+                      const xjw::camera_models::frame_pinhole::FramePinholeNumericState& right)
 {
     const auto a = left.cameraCenter();
     const auto b = right.cameraCenter();
@@ -35,12 +32,12 @@ double cameraDistance(const xjw::FramePinholeCamera &left, const xjw::FramePinho
 
 TEST(SimilarityGaugeNormalizerTest, RestoresAnchorAndBaselineWithoutChangingShape)
 {
-    const std::vector<xjw::FramePinholeCamera> reference{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> reference{
         makeCamera(10.0, 20.0, 30.0),
         makeCamera(12.0, 20.0, 30.0),
         makeCamera(10.0, 24.0, 30.0),
     };
-    std::vector<xjw::FramePinholeCamera> refined{
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> refined{
         makeCamera(-1.0, -2.0, -3.0),
         makeCamera(3.0, -2.0, -3.0),
         makeCamera(-1.0, 6.0, -3.0),
@@ -64,15 +61,15 @@ TEST(SimilarityGaugeNormalizerTest, RestoresAnchorAndBaselineWithoutChangingShap
 
 TEST(SimilarityGaugeNormalizerTest, DegenerateRefinedBaselineDoesNotModifyOutput)
 {
-    const std::vector<xjw::FramePinholeCamera> reference{
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> reference{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
-    std::vector<xjw::FramePinholeCamera> refined{
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> refined{
         makeCamera(5.0, 6.0, 7.0),
         makeCamera(5.0, 6.0, 7.0),
     };
-    const std::vector<xjw::FramePinholeCamera> before = refined;
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> before = refined;
     std::vector<xjw::BARefinedPoint> points(1);
     points[0].point = {{1.0, 2.0, 3.0}};
 

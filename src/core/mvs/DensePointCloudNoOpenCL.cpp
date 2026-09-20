@@ -17,14 +17,15 @@ namespace xjw::mvs
         return {};
     }
 
-    std::vector<DensePoint> DensePointCloudOpenCL::unproject(const cv::Mat&,
-                                                             const cv::Mat&,
-                                                             const FramePinholeCamera&,
-                                                             const cv::Mat&,
-                                                             float,
-                                                             float,
-                                                             std::string* errorMsg,
-                                                             const DenseCloudOptions*)
+    std::vector<DensePoint>
+    DensePointCloudOpenCL::unproject(const cv::Mat&,
+                                     const cv::Mat&,
+                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+                                     const cv::Mat&,
+                                     float,
+                                     float,
+                                     std::string* errorMsg,
+                                     const DenseCloudOptions*)
     {
         if (errorMsg)
         {

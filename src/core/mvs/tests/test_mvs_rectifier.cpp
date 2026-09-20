@@ -1,6 +1,6 @@
 #include "EpipolarRectifier.h"
 #include "DisparityTriangulator.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <gtest/gtest.h>
 
@@ -20,9 +20,9 @@ void applyHomography(const cv::Mat &H, double u, double v, double &ox, double &o
     oy = (h[3] * u + h[4] * v + h[5]) / w;
 }
 
-FramePinholeCamera makeCamera(double cx, double cy, double tx)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double cx, double cy, double tx)
 {
-    FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     cam.setIntrinsics(2000.0, 2000.0, cx, cy);
     std::array<double, 9> R = {1.0, 0.0, 0.0,
                                0.0, 1.0, 0.0,
@@ -32,9 +32,10 @@ FramePinholeCamera makeCamera(double cx, double cy, double tx)
     return cam;
 }
 
-FramePinholeCamera makeYawedCamera(double cx, double cy, double tx, double yawDegrees)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState
+makeYawedCamera(double cx, double cy, double tx, double yawDegrees)
 {
-    FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     cam.setIntrinsics(2000.0, 2000.0, cx, cy);
     const double yaw = yawDegrees * M_PI / 180.0;
     const double c = std::cos(yaw);
@@ -47,9 +48,9 @@ FramePinholeCamera makeYawedCamera(double cx, double cy, double tx, double yawDe
     return cam;
 }
 
-FramePinholeCamera makeVerticalBaselineCamera(double cx, double cy, double ty)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeVerticalBaselineCamera(double cx, double cy, double ty)
 {
-    FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     cam.setIntrinsics(2000.0, 2000.0, cx, cy);
     std::array<double, 9> R = {1.0, 0.0, 0.0,
                                0.0, 1.0, 0.0,
@@ -59,10 +60,10 @@ FramePinholeCamera makeVerticalBaselineCamera(double cx, double cy, double ty)
     return cam;
 }
 
-FramePinholeCamera makeDinoRingCamera(const std::array<double, 9> &rotation_camera_to_world,
-                          const std::array<double, 3> &center)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState
+makeDinoRingCamera(const std::array<double, 9>& rotation_camera_to_world, const std::array<double, 3>& center)
 {
-    FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(3310.4, 3325.5, 316.73, 200.55);
     camera.setPose(rotation_camera_to_world, center);
     return camera;
@@ -73,8 +74,8 @@ FramePinholeCamera makeDinoRingCamera(const std::array<double, 9> &rotation_came
 
 TEST(EpipolarRectifier, RejectsImagesThatStillCarryLensDistortion)
 {
-    FramePinholeCamera left_camera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera right_camera = makeCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState left_camera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState right_camera = makeCamera(32.0, 24.0, 0.2);
     left_camera.setDistortion(0.1, 0.0, 0.0, 0.0, 0.0);
 
     cv::Mat left_image(48, 64, CV_8U, cv::Scalar(64));
@@ -92,16 +93,28 @@ TEST(EpipolarRectifier, RejectsImagesThatStillCarryLensDistortion)
 
 TEST(EpipolarRectifier, RejectsConvergentPairWithoutUsableRectifiedCanvas)
 {
-    const FramePinholeCamera left_camera = makeDinoRingCamera(
-        {-0.143964578361, -0.903665806035, -0.403315364598,
-         0.969652632813, -0.0474333525503, -0.239841305752,
-         0.197606171538, -0.425604192333, 0.883069362015},
-        {0.243378250328, 0.170140221186, -0.604858522898});
-    const FramePinholeCamera right_camera = makeDinoRingCamera(
-        {-0.231436872629, -0.658608111657, -0.716012081872,
-         0.96422332027, -0.0574942602048, -0.258781378564,
-         0.129269371656, -0.750286404865, 0.648350496196},
-        {0.447988592591, 0.182631346554, -0.449273743884});
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState left_camera =
+        makeDinoRingCamera({-0.143964578361,
+                            -0.903665806035,
+                            -0.403315364598,
+                            0.969652632813,
+                            -0.0474333525503,
+                            -0.239841305752,
+                            0.197606171538,
+                            -0.425604192333,
+                            0.883069362015},
+                           {0.243378250328, 0.170140221186, -0.604858522898});
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState right_camera =
+        makeDinoRingCamera({-0.231436872629,
+                            -0.658608111657,
+                            -0.716012081872,
+                            0.96422332027,
+                            -0.0574942602048,
+                            -0.258781378564,
+                            0.129269371656,
+                            -0.750286404865,
+                            0.648350496196},
+                           {0.447988592591, 0.182631346554, -0.449273743884});
 
     cv::Mat left_image(480, 640, CV_8U, cv::Scalar(64));
     cv::Mat right_image(480, 640, CV_8U, cv::Scalar(96));
@@ -119,8 +132,8 @@ TEST(EpipolarRectifier, RejectsConvergentPairWithoutUsableRectifiedCanvas)
 
 TEST(EpipolarRectifier, RectificationMakesEpipolarRowsMatchAcrossDepths)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -156,10 +169,44 @@ TEST(EpipolarRectifier, RectificationMakesEpipolarRowsMatchAcrossDepths)
     }
 }
 
+TEST(EpipolarRectifier, PreservesCameraIdentityOnDerivedRectifiedViews)
+{
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(32.0, 24.0, 0.2);
+    ASSERT_TRUE(leftCamera.bindIdentity(xjw::camera_core::CameraInstanceId("rect-instance-left"),
+                                        xjw::camera_core::ImageId("rect-image-left"),
+                                        xjw::coordinate_system::CoordinateFrameId("rect-frame")));
+    ASSERT_TRUE(rightCamera.bindIdentity(xjw::camera_core::CameraInstanceId("rect-instance-right"),
+                                         xjw::camera_core::ImageId("rect-image-right"),
+                                         xjw::coordinate_system::CoordinateFrameId("rect-frame")));
+    leftCamera.setImageSize(xjw::camera_core::ImageSize{64, 48});
+    rightCamera.setImageSize(xjw::camera_core::ImageSize{64, 48});
+
+    cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
+    cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
+    EpipolarRectifier::RectifiedPair rectified;
+    std::string error;
+    ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
+                                           rightImage,
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
+                                           rectified,
+                                           &error)) << error;
+
+    ASSERT_TRUE(rectified.rectCamLeft.hasBoundIdentity());
+    ASSERT_TRUE(rectified.rectCamRight.hasBoundIdentity());
+    EXPECT_EQ(rectified.rectCamLeft.imageId().value(), "rect-image-left");
+    EXPECT_EQ(rectified.rectCamRight.imageId().value(), "rect-image-right");
+    EXPECT_EQ(rectified.rectCamLeft.instanceId().value(), "rect-instance-left");
+    EXPECT_EQ(rectified.rectCamRight.instanceId().value(), "rect-instance-right");
+    EXPECT_EQ(rectified.rectCamLeft.worldFrame().value(), "rect-frame");
+    EXPECT_EQ(rectified.rectCamRight.worldFrame().value(), "rect-frame");
+}
+
 TEST(EpipolarRectifier, ParallelStereoKeepsPositiveRectifiedDisparity)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -192,8 +239,8 @@ TEST(EpipolarRectifier, ParallelStereoKeepsPositiveRectifiedDisparity)
 
 TEST(EpipolarRectifier, YawedStereoKeepsEpipolarRowsAlignedAcrossPoints)
 {
-    FramePinholeCamera leftCamera = makeCamera(512.0, 384.0, 0.0);
-    FramePinholeCamera rightCamera = makeYawedCamera(512.0, 384.0, 0.2, 15.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(512.0, 384.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeYawedCamera(512.0, 384.0, 0.2, 15.0);
 
     cv::Mat leftImage(768, 1024, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(768, 1024, CV_8U, cv::Scalar(96));
@@ -247,13 +294,13 @@ TEST(EpipolarRectifier, RotatedRectifiedDepthRoundTripsToOriginalCameraZ)
     const double angle = angle_degrees * M_PI / 180.0;
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    FramePinholeCamera original_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState original_camera;
     original_camera.setIntrinsics(focal, focal, principal_x, principal_y);
     original_camera.setPose({1.0, 0.0, 0.0,
                              0.0, 1.0, 0.0,
                              0.0, 0.0, 1.0},
                             {0.0, 0.0, 0.0});
-    FramePinholeCamera rectified_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rectified_camera;
     rectified_camera.setIntrinsics(focal, focal, principal_x, principal_y);
     // setPose receives camera-to-world. Its transpose is the +10 degree
     // world-to-rectified-camera rotation used by the homography below.
@@ -342,8 +389,9 @@ TEST(EpipolarRectifier, RotatedRectifiedDepthRoundTripsToOriginalCameraZ)
 
 TEST(EpipolarRectifier, VerticalBaselineSetsTransposedForHorizontalDisparity)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeVerticalBaselineCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera =
+        makeVerticalBaselineCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -363,8 +411,9 @@ TEST(EpipolarRectifier, VerticalBaselineSetsTransposedForHorizontalDisparity)
 
 TEST(EpipolarRectifier, TransposedRectifiedCamerasProjectIntoTransposedPixels)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeVerticalBaselineCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera =
+        makeVerticalBaselineCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -406,8 +455,9 @@ TEST(EpipolarRectifier, TransposedRectifiedCamerasProjectIntoTransposedPixels)
 
 TEST(EpipolarRectifier, TransposedRectifiedCameraRawFieldsMatchProjection)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeVerticalBaselineCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera =
+        makeVerticalBaselineCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -431,7 +481,8 @@ TEST(EpipolarRectifier, TransposedRectifiedCameraRawFieldsMatchProjection)
     double camera_point[3] = {0.0, 0.0, 0.0};
     rect.rectCamLeft.worldToCamera(world, camera_point);
     ASSERT_GT(cameraZ, 0.0);
-    const FramePinholeCamera::Intrinsics intrinsics = rect.rectCamLeft.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+        rect.rectCamLeft.intrinsics();
     const double rawX = intrinsics.focalX * camera_point[0] / cameraZ + intrinsics.principalX;
     const double rawY = intrinsics.focalY * camera_point[1] / cameraZ + intrinsics.principalY;
 
@@ -443,8 +494,9 @@ TEST(EpipolarRectifier, TransposedRectifiedCameraRawFieldsMatchProjection)
 
 TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReprojectionError)
 {
-    FramePinholeCamera leftCamera = makeCamera(32.0, 24.0, 0.0);
-    FramePinholeCamera rightCamera = makeVerticalBaselineCamera(32.0, 24.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(32.0, 24.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera =
+        makeVerticalBaselineCamera(32.0, 24.0, 0.2);
 
     cv::Mat leftImage(48, 64, CV_8U, cv::Scalar(64));
     cv::Mat rightImage(48, 64, CV_8U, cv::Scalar(96));
@@ -527,8 +579,8 @@ TEST(DisparityTriangulator, LeftReferenceDisparityReprojectsToRightAtXMinusD)
     constexpr int leftX = 128;
     constexpr int imageY = 128;
     constexpr float disparity = 80.0f;
-    FramePinholeCamera leftCamera = makeCamera(128.0, 128.0, 0.0);
-    FramePinholeCamera rightCamera = makeCamera(128.0, 128.0, 0.2);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(128.0, 128.0, 0.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(128.0, 128.0, 0.2);
     cv::Mat identityStorage = cv::Mat::zeros(3, 4, CV_64F);
     identityStorage.at<double>(0, 0) = 1.0;
     identityStorage.at<double>(1, 1) = 1.0;
@@ -572,8 +624,8 @@ TEST(DisparityTriangulator, LeftReferenceDisparityReprojectsToRightAtXMinusD)
 
 TEST(DisparityTriangulator, RejectsInvalidDisparityInputContractsBeforeWorkersStart)
 {
-    const FramePinholeCamera leftCamera = makeCamera(2.0, 2.0, 0.0);
-    const FramePinholeCamera rightCamera = makeCamera(2.0, 2.0, 0.2);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(2.0, 2.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(2.0, 2.0, 0.2);
     const cv::Mat identity = cv::Mat::eye(3, 3, CV_64F);
     const cv::Mat disparity(4, 4, CV_32FC1, cv::Scalar(1.0f));
     const cv::Mat validMask(4, 4, CV_8UC1, cv::Scalar(255));
@@ -608,21 +660,21 @@ TEST(DisparityTriangulator, RejectsInvalidDisparityInputContractsBeforeWorkersSt
     EXPECT_NE(wrongHomography.errorMessage.find("3x3"), std::string::npos);
     EXPECT_TRUE(wrongHomography.pointCloud.empty());
 
-    const TriangulationResult invalidCamera = DisparityTriangulator::triangulate(
-        disparity,
-        validMask,
-        identity,
-        identity,
-        FramePinholeCamera(),
-        rightCamera);
+    const TriangulationResult invalidCamera =
+        DisparityTriangulator::triangulate(disparity,
+                                           validMask,
+                                           identity,
+                                           identity,
+                                           xjw::camera_models::frame_pinhole::FramePinholeNumericState(),
+                                           rightCamera);
     EXPECT_NE(invalidCamera.errorMessage.find("左相机"), std::string::npos);
     EXPECT_TRUE(invalidCamera.pointCloud.empty());
 }
 
 TEST(DisparityTriangulator, RejectsInvalidDepthInputContractsBeforeWorkersStart)
 {
-    const FramePinholeCamera leftCamera = makeCamera(2.0, 2.0, 0.0);
-    const FramePinholeCamera rightCamera = makeCamera(2.0, 2.0, 0.2);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState leftCamera = makeCamera(2.0, 2.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState rightCamera = makeCamera(2.0, 2.0, 0.2);
     const cv::Mat identity = cv::Mat::eye(3, 3, CV_64F);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
     const cv::Mat validMask(4, 4, CV_8UC1, cv::Scalar(255));

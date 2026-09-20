@@ -347,7 +347,7 @@ namespace xjw
                   [](const BlockOutcome& left, const BlockOutcome& right)
                   { return left.blockIndex < right.blockIndex; });
         const GlobalReprojectionState global_before = evaluateGlobalReprojection(*_owner._reconstruction);
-        std::unordered_map<ImageId, FramePinholeCamera> camera_snapshots;
+        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> camera_snapshots;
         std::vector<PointSnapshot> point_snapshots;
         int candidate_applied_blocks = 0;
         int candidate_updated_cameras = 0;

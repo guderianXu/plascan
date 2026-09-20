@@ -5,7 +5,7 @@
 #include "MetashapeCameraReferenceSetBuilder.h"
 #include "project/ProjectSessionModel.h"
 #include "ProjectCameraReferenceRepository.h"
-#include "model/CameraReferenceSet.h"
+#include "camera/reference/model/CameraReferenceSet.h"
 
 #include <QCryptographicHash>
 #include <QDir>

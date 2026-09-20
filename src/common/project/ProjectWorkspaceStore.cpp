@@ -5,6 +5,7 @@
 #include "project/ProjectPackageLayout.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
+#include "project/ProjectPathBridge.h"
 
 #include <QByteArrayView>
 #include <QCryptographicHash>
@@ -17,6 +18,9 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QSet>
+#include <QUuid>
+
+#include <filesystem>
 
 namespace
 {
@@ -35,6 +39,23 @@ namespace
         {
             *errorMessage = message;
         }
+    }
+
+    QString appendPath(const std::filesystem::path& parent, const QString& child)
+    {
+        if (parent.empty() || child.isEmpty())
+        {
+            return {};
+        }
+        const std::filesystem::path component =
+            xjw::common::file::pathFromUtf8(child.toUtf8().toStdString());
+        if (component.empty() || component.is_absolute() || component.has_root_name() ||
+            component.has_parent_path())
+        {
+            return {};
+        }
+        return xjw::common::project::path_bridge::toQtPath(
+            parent / component);
     }
 
     QString fileSha256(const QString& path, QString* errorMessage)
@@ -242,8 +263,16 @@ namespace
         }
 
         const QString bucket = stableToken(sourceKey);
-        const QString destination =
-            QDir(runtimeRoot).filePath(QStringLiteral("assets/imported/%1/%2").arg(bucket, info.fileName()));
+        const auto layout = xjw::common::project::path_bridge::chunkLayout(runtimeRoot);
+        const auto importedDirectory = layout
+            ? layout->importedCategoryDirectory(bucket.toUtf8().toStdString())
+            : std::filesystem::path{};
+        const QString destination = appendPath(importedDirectory, info.fileName());
+        if (destination.isEmpty())
+        {
+            setError(errorMessage, QStringLiteral("无法计算外部资源导入路径: %1").arg(runtimeRoot));
+            return {};
+        }
         if (!copyTree(info.absoluteFilePath(), destination, errorMessage))
         {
             return {};
@@ -588,11 +617,16 @@ void ProjectWorkspaceStore::releaseRuntime() const
 
 bool ProjectWorkspaceStore::stagePackedResource(const QString& sourcePath,
                                                 QString* stagedPath,
-                                                QString* errorMessage) const
+                                                QString* errorMessage,
+                                                bool* created) const
 {
     if (stagedPath)
     {
         stagedPath->clear();
+    }
+    if (created)
+    {
+        *created = false;
     }
     const QFileInfo source(sourcePath);
     if (!source.isFile() && !source.isDir())
@@ -606,15 +640,88 @@ bool ProjectWorkspaceStore::stagePackedResource(const QString& sourcePath,
     {
         return false;
     }
-    const QString destination = QDir(root).filePath(
-        QStringLiteral("assets/packed/%1/%2").arg(stableToken(source.absoluteFilePath()), source.fileName()));
-    if (!copyTree(source.absoluteFilePath(), destination, errorMessage))
+    const auto layout = xjw::common::project::path_bridge::chunkLayout(root);
+    if (!layout)
     {
+        setError(errorMessage, QStringLiteral("无法计算当前 Chunk 的资源路径: %1").arg(root));
+        return false;
+    }
+    const QString destination = appendPath(
+        layout->packedDirectory() /
+            xjw::common::file::pathFromUtf8(stableToken(source.absoluteFilePath()).toUtf8().toStdString()),
+        source.fileName());
+    if (destination.isEmpty())
+    {
+        setError(errorMessage, QStringLiteral("无法计算待打包资源路径: %1").arg(sourcePath));
+        return false;
+    }
+    const QFileInfo finalDirectory(QFileInfo(destination).absolutePath());
+    if (QFileInfo::exists(destination))
+    {
+        // A deterministic destination means a repeated pack request already
+        // refers to the same logical resource.  Never replace it during a
+        // failed/stale request; the service decides whether its metadata is
+        // already registered.
+        if (stagedPath)
+        {
+            *stagedPath = QDir::cleanPath(destination);
+        }
+        return true;
+    }
+    if (finalDirectory.exists())
+    {
+        setError(errorMessage,
+                 QStringLiteral("工程资源目标目录已存在但资源缺失: %1").arg(finalDirectory.absoluteFilePath()));
+        return false;
+    }
+
+    const QString packedRoot = finalDirectory.absolutePath();
+    if (!QDir().mkpath(packedRoot))
+    {
+        setError(errorMessage, QStringLiteral("无法创建工程资源目录: %1").arg(packedRoot));
+        return false;
+    }
+    const QString packingDirectory = QDir(packedRoot).filePath(
+        QStringLiteral(".packing-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!QDir().mkpath(packingDirectory))
+    {
+        setError(errorMessage, QStringLiteral("无法创建工程资源临时目录: %1").arg(packingDirectory));
+        return false;
+    }
+    const QString packingDestination = QDir(packingDirectory).filePath(source.fileName());
+    if (!copyTree(source.absoluteFilePath(), packingDestination, errorMessage))
+    {
+        QDir(packingDirectory).removeRecursively();
+        return false;
+    }
+
+    // Both directories live under the same packed root, so this rename is an
+    // atomic publication on the supported local filesystems.  If another
+    // request won the race, retain its existing destination and discard only
+    // this request's private staging directory.
+    QDir packedRootDirectory(packedRoot);
+    if (!packedRootDirectory.rename(QFileInfo(packingDirectory).fileName(),
+                                    finalDirectory.fileName()))
+    {
+        QDir(packingDirectory).removeRecursively();
+        if (QFileInfo::exists(destination))
+        {
+            if (stagedPath)
+            {
+                *stagedPath = QDir::cleanPath(destination);
+            }
+            return true;
+        }
+        setError(errorMessage, QStringLiteral("无法提交工程资源: %1").arg(destination));
         return false;
     }
     if (stagedPath)
     {
         *stagedPath = QDir::cleanPath(destination);
+    }
+    if (created)
+    {
+        *created = true;
     }
     return true;
 }

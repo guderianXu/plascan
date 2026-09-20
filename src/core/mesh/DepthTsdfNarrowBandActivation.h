@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -7,11 +9,6 @@
 namespace cv
 {
 class Mat;
-}
-
-namespace xjw
-{
-class FramePinholeCamera;
 }
 
 namespace xjw::mesh
@@ -28,7 +25,7 @@ struct DepthTsdfLayout;
  */
 struct DepthTsdfNarrowBandFrameView
 {
-    const FramePinholeCamera *camera = nullptr;
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera = nullptr;
     const cv::Mat *depth = nullptr;
     const cv::Mat *depthValidMask = nullptr;
     const cv::Mat *supportMask = nullptr;

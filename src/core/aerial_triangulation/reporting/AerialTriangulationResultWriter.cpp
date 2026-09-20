@@ -2,28 +2,32 @@
  * @file AerialTriangulationResultWriter.cpp
  * @brief 胜出 SfM 模型的稀疏点云、质量 sidecar 和工程记录构建实现。
  *
- * PLY 使用 QSaveFile 原子提交；质量 JSON 使用通用原子 IO。相机更新仍保留在
- * pendingCamUpdates，由工程服务在本函数完全成功后统一应用。
+ * PLY 使用标准文件模块原子提交；质量 JSON 使用通用原子 IO。相机更新仍保留在
+ * cameraInstanceUpdates，由工程服务在本函数完全成功后统一应用。
  */
 
 #include "reporting/AerialTriangulationResultWriter.h"
 
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
+#include "log/Logger.h"
+
 #include "project/SparseResultQuality.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "reporting/QualityReportWriter.h"
 
-#include <QColor>
-#include <QDataStream>
+#include <opencv2/imgcodecs.hpp>
+
 #include <QDir>
 #include <QFileInfo>
-#include <QImage>
 #include <QJsonDocument>
-#include <QSaveFile>
+#include "reporting/SparsePlyWriter.h"
+#include "file/FileIO.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <unordered_set>
 #include <vector>
 
 namespace xjw::aerial_triangulation
@@ -46,6 +50,43 @@ namespace xjw::aerial_triangulation
                 *errorMessage = message;
             }
             return false;
+        }
+
+        bool validateCanonicalOutputIdentity(const PreparedAerialTriangulationInput& input,
+                                             const SfmReconstruction& reconstruction,
+                                             QString* errorMessage)
+        {
+            if (input.images.size() != static_cast<qsizetype>(input.imageIds.size()))
+            {
+                return fail(QStringLiteral("SfM 正式 sidecar 写出要求 images 与 canonical ImageId 一一对应"),
+                            errorMessage);
+            }
+
+            std::unordered_set<std::string> imageIds;
+            imageIds.reserve(input.imageIds.size());
+            for (const camera_core::ImageId& imageId : input.imageIds)
+            {
+                if (imageId.value().empty() || !imageIds.insert(imageId.value()).second)
+                {
+                    return fail(QStringLiteral("SfM 正式 sidecar 写出发现空或重复的 canonical ImageId"), errorMessage);
+                }
+            }
+
+            for (const ImageId imageIndex : reconstruction.registeredImageIds())
+            {
+                if (imageIndex >= input.imageIds.size() || !reconstruction.hasCamera(imageIndex))
+                {
+                    return fail(QStringLiteral("SfM 注册相机超出 canonical ImageId 输入范围"), errorMessage);
+                }
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                    reconstruction.camera(imageIndex);
+                if (!camera.hasBoundIdentity() || camera.imageId() != input.imageIds.at(imageIndex))
+                {
+                    return fail(QStringLiteral("SfM 注册相机缺少与输入一致的 canonical ImageId，拒绝写出 sidecar"),
+                                errorMessage);
+                }
+            }
+            return true;
         }
 
         /**
@@ -128,9 +169,26 @@ namespace xjw::aerial_triangulation
                     continue;
                 }
                 const ImageData& imageData = reconstruction.image(request.key());
-                const QImage image(QString::fromStdString(imageData.imagePath));
-                if (image.isNull())
+                cv::Mat image;
+                QString read_error;
+                try
                 {
+                    image = xjw::common::io::readImage(QString::fromStdString(imageData.imagePath),
+                                                       cv::IMREAD_COLOR | cv::IMREAD_IGNORE_ORIENTATION,
+                                                       &read_error);
+                }
+                catch (const cv::Exception& exception)
+                {
+                    read_error = QString::fromUtf8(exception.what());
+                }
+                if (image.empty() || image.type() != CV_8UC3)
+                {
+                    if (read_error.isEmpty())
+                    {
+                        read_error = QStringLiteral("预期非空 8 位三通道影像");
+                    }
+                    LOG_WARN(QStringLiteral("空三点云颜色读取失败 %1: %2")
+                                 .arg(QString::fromStdString(imageData.imagePath), read_error));
                     continue;
                 }
                 for (const ColorRequest& colorRequest : request.value())
@@ -141,12 +199,10 @@ namespace xjw::aerial_triangulation
                         continue;
                     }
                     const FeatureKeypoint& keypoint = imageData.keypoints[point.colorFeatureIndex];
-                    const int x = std::clamp(qRound(keypoint.x), 0, image.width() - 1);
-                    const int y = std::clamp(qRound(keypoint.y), 0, image.height() - 1);
-                    const QColor color = image.pixelColor(x, y);
-                    point.color = {static_cast<quint8>(color.red()),
-                                   static_cast<quint8>(color.green()),
-                                   static_cast<quint8>(color.blue())};
+                    const int x = std::clamp(qRound(keypoint.x), 0, image.cols - 1);
+                    const int y = std::clamp(qRound(keypoint.y), 0, image.rows - 1);
+                    const cv::Vec3b color = image.at<cv::Vec3b>(y, x);
+                    point.color = {color[2], color[1], color[0]};
                 }
             }
         }
@@ -154,41 +210,18 @@ namespace xjw::aerial_triangulation
         /// 原子写入 little-endian binary PLY，失败时旧文件保持不变。
         bool writeBinaryPly(const QString& path, const std::vector<ExportPoint>& points, QString* errorMessage)
         {
-            QSaveFile file(path);
-            if (!file.open(QIODevice::WriteOnly))
+            std::string error;
+            const bool ok = writeSparsePly(
+                xjw::common::file::pathFromUtf8(xjw::common::io::toUtf8Path(path)),
+                points.size(),
+                [&points](std::size_t index) { return SparsePlyVertex{points[index].xyz, points[index].color}; },
+                "PlaScan aerial triangulation",
+                &error);
+            if (errorMessage)
             {
-                return fail(QStringLiteral("无法写入稀疏点云文件: %1").arg(path), errorMessage);
+                *errorMessage = QString::fromStdString(error);
             }
-
-            const QByteArray header =
-                QByteArrayLiteral("ply\nformat binary_little_endian 1.0\ncomment PlaScan aerial triangulation\n") +
-                QByteArray("element vertex ") + QByteArray::number(points.size()) +
-                QByteArrayLiteral("\nproperty float x\nproperty float y\nproperty float z\n"
-                                  "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n");
-            if (file.write(header) != header.size())
-            {
-                return fail(QStringLiteral("写入稀疏点云头失败: %1").arg(path), errorMessage);
-            }
-
-            QDataStream stream(&file);
-            stream.setByteOrder(QDataStream::LittleEndian);
-            stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-            for (const ExportPoint& point : points)
-            {
-                stream << point.xyz[0] << point.xyz[1] << point.xyz[2];
-                const char colors[3]{static_cast<char>(point.color[0]),
-                                     static_cast<char>(point.color[1]),
-                                     static_cast<char>(point.color[2])};
-                if (stream.writeRawData(colors, 3) != 3)
-                {
-                    return fail(QStringLiteral("写入稀疏点云数据失败: %1").arg(path), errorMessage);
-                }
-            }
-            if (stream.status() != QDataStream::Ok || !file.commit())
-            {
-                return fail(QStringLiteral("提交稀疏点云文件失败: %1").arg(path), errorMessage);
-            }
-            return true;
+            return ok;
         }
 
     } // namespace
@@ -209,9 +242,15 @@ namespace xjw::aerial_triangulation
         {
             return fail(QStringLiteral("空三输出目录为空"), errorMessage);
         }
-        if (!QDir().mkpath(input.outputDir))
+        if (!validateCanonicalOutputIdentity(input, *execution->reconstruction, errorMessage))
         {
-            return fail(QStringLiteral("无法创建空三输出目录: %1").arg(input.outputDir), errorMessage);
+            return false;
+        }
+        std::string directory_error;
+        if (!xjw::common::file::ensureDirectory(
+                xjw::common::file::pathFromUtf8(xjw::common::io::toUtf8Path(input.outputDir)), &directory_error))
+        {
+            return fail(QString::fromStdString(directory_error), errorMessage);
         }
 
         // 主 PLY 和 sidecar 保存全部算法有效点；清理策略只生成独立显示云，不能再覆盖
@@ -253,32 +292,34 @@ namespace xjw::aerial_triangulation
         {
             const QString& imagePath = input.images.at(imageId);
             images.append(QJsonObject{
-                {QStringLiteral("image_id"), imageId},
+                {QStringLiteral("camera_index"), imageId},
+                {QStringLiteral("image_id"), QString::fromStdString(input.imageIds.at(imageId).value())},
                 {QStringLiteral("image_path"), imagePath},
                 {QStringLiteral("image_name"), QFileInfo(imagePath).fileName()},
             });
         }
-        sidecar.insert(QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v2"));
+        sidecar.insert(QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v3"));
         sidecar.insert(QStringLiteral("observation_fields"),
                        QJsonArray{
+                           QStringLiteral("camera_index"),
                            QStringLiteral("image_id"),
                            QStringLiteral("feature_idx"),
-                           QStringLiteral("x"),
-                           QStringLiteral("y"),
+                           QStringLiteral("xy"),
                            QStringLiteral("scale"),
-                           QStringLiteral("projected_x"),
-                           QStringLiteral("projected_y"),
+                           QStringLiteral("projected_xy"),
                        });
         sidecar.insert(QStringLiteral("images"), images);
         sidecar.insert(QStringLiteral("clean_tie_points_metric_contract"),
                        QStringLiteral("metashape-2.3.2-build-22956"));
         sidecar.insert(QStringLiteral("sfm_diagnostics"), report.diagnostics);
-        QString writeError;
-        if (!xjw::common::io::writeFileBytesAtomic(sidecarPath,
-                                                   // 稀疏点逐观测 sidecar 可能达到数十 MiB；消费者均按 JSON 解析，
-                                                   // 无需在关键路径为人工缩进额外分配和写盘。
-                                                   QJsonDocument(sidecar).toJson(QJsonDocument::Compact),
-                                                   &writeError))
+        const QByteArray sidecar_bytes = QJsonDocument(sidecar).toJson(QJsonDocument::Compact);
+        std::string file_error;
+        const bool sidecar_written = xjw::common::file::writeFileAtomic(
+            xjw::common::file::pathFromUtf8(xjw::common::io::toUtf8Path(sidecarPath)),
+            std::string_view(sidecar_bytes.constData(), static_cast<std::size_t>(sidecar_bytes.size())),
+            &file_error);
+        const QString writeError = QString::fromStdString(file_error);
+        if (!sidecar_written)
         {
             return fail(writeError.isEmpty() ? QStringLiteral("无法写入稀疏点云质量文件: %1").arg(sidecarPath)
                                              : writeError,

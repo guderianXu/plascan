@@ -29,7 +29,6 @@ class CanvasWidget;
 class LogPanel;
 class MainMenu;
 class AppConfigManager;
-class ProjectManager;
 class ProjectData;
 class MenuWorkflowController;
 class ReconstructionWorkflowController;
@@ -52,6 +51,11 @@ class ProjectUiHydrator;
 class TiePointWorkflowController;
 class ProjectTaskStatusController;
 class ProjectLifecyclePresenter;
+
+namespace xjw::gui::project
+{
+    class ProjectServiceContainer;
+}
 
 namespace xjw::gui::markers
 {
@@ -162,7 +166,7 @@ private:
     ProjectData* _projectData{};                          // 项目数据模型（元数据 + 文件索引）
     MenuWorkflowController* _menuWorkflowController{};    // 菜单业务流程控制器（对话框调用协调）
     ReconstructionWorkflowController* _reconController{}; // 模型与纹理工作流程控制器
-    ProjectManager* _projectManager{};                    // 项目生命周期管理（新建/打开/保存/关闭）
+    xjw::gui::project::ProjectServiceContainer* _projectServices{}; // 项目业务边界（会话/生命周期/任务/资源）
     xjw::gui::markers::MarkerWorkspaceController* _markerWorkspaceController{};
     xjw::gui::reference::CameraReferenceController* _cameraReferenceController{};
     xjw::gui::reference::ProjectCameraReferenceRepository* _cameraReferenceRepository{};

@@ -1,7 +1,6 @@
 #include "SmallBodyGlobalProductGenerator.h"
 
 #include "DemDomIO.h"
-#include "GlobalTerrainReportRenderer.h"
 #include "ObjMtlLoader.h"
 #include "SmallBodyMeshRaycaster.h"
 #include "io/PathIO.h"
@@ -527,13 +526,14 @@ bool writeJson(const QString &path, const QJsonObject &object, QString *errorMes
 
 } // namespace
 
-bool SmallBodyGlobalProductGenerator::generate(const QString &surfacePath,
-                                                const QString &outputDirectory,
-                                                const SmallBodyGlobalOptions &options,
-                                                SmallBodyGlobalProducts *products,
-                                                QString *errorMessage,
-                                                const std::atomic_bool *cancelFlag,
-                                                const SmallBodyProgressCallback &progressCallback)
+bool SmallBodyGlobalProductGenerator::generate(const QString& surfacePath,
+                                               const QString& outputDirectory,
+                                               const SmallBodyGlobalOptions& options,
+                                               SmallBodyGlobalProducts* products,
+                                               QString* errorMessage,
+                                               const std::atomic_bool* cancelFlag,
+                                               const SmallBodyProgressCallback& progressCallback,
+                                               const SmallBodyPreviewWriter& previewWriter)
 {
     if (failIfCancelled(cancelFlag, errorMessage))
     {
@@ -559,19 +559,27 @@ bool SmallBodyGlobalProductGenerator::generate(const QString &surfacePath,
     {
         return false;
     }
-    return generateFromMesh(surface, absolute_surface_path, outputDirectory, options, products,
-                            errorMessage, cancelFlag, progressCallback);
+    return generateFromMesh(surface,
+                            absolute_surface_path,
+                            outputDirectory,
+                            options,
+                            products,
+                            errorMessage,
+                            cancelFlag,
+                            progressCallback,
+                            previewWriter);
 }
 
-bool SmallBodyGlobalProductGenerator::generateFromMesh(
-    const TerrainMeshInput &surface,
-    const QString &sourceLabel,
-    const QString &outputDirectory,
-    const SmallBodyGlobalOptions &options,
-    SmallBodyGlobalProducts *products,
-    QString *errorMessage,
-    const std::atomic_bool *cancelFlag,
-    const SmallBodyProgressCallback &progressCallback) try
+bool SmallBodyGlobalProductGenerator::generateFromMesh(const TerrainMeshInput& surface,
+                                                       const QString& sourceLabel,
+                                                       const QString& outputDirectory,
+                                                       const SmallBodyGlobalOptions& options,
+                                                       SmallBodyGlobalProducts* products,
+                                                       QString* errorMessage,
+                                                       const std::atomic_bool* cancelFlag,
+                                                       const SmallBodyProgressCallback& progressCallback,
+                                                       const SmallBodyPreviewWriter& previewWriter)
+try
 {
     if (!products)
     {
@@ -618,6 +626,14 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
             *errorMessage = QStringLiteral(
                 "生成真实 DOM 需要网格包含 RGB 顶点颜色，或 OBJ 包含可读取的纹理与 UV；"
                 "PlaScan 不会用固定灰色占位图冒充 DOM。");
+        }
+        return false;
+    }
+    if (options.writeReportPreview && !previewWriter)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("请求生成全球地形报告预览，但未提供报告写入器；请由应用层提供或关闭预览。");
         }
         return false;
     }
@@ -977,10 +993,12 @@ bool SmallBodyGlobalProductGenerator::generateFromMesh(
     {
         return false;
     }
-    if (options.writeReportPreview
-        && !GlobalTerrainReportRenderer::writePreview(
-            generated, options, preview_temporary, errorMessage))
+    if (options.writeReportPreview && !previewWriter(generated, options, preview_temporary, errorMessage))
     {
+        if (errorMessage && errorMessage->isEmpty())
+        {
+            *errorMessage = QStringLiteral("全球地形报告预览写入失败：%1").arg(preview_temporary);
+        }
         return false;
     }
     generated.report = makeReport(generated, options, minimum_elevation, maximum_elevation);

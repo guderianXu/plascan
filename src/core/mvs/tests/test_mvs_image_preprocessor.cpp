@@ -17,15 +17,12 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera()
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+        return camera;
 }
 
 cv::Mat makeGradientImage()
@@ -47,7 +44,7 @@ cv::Mat makeGradientImage()
 TEST(MvsImagePreprocessor, RejectsEmptyImageAndInvalidCamera)
 {
     cv::Mat prepared;
-    xjw::FramePinholeCamera prepared_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
     std::string error;
 
     EXPECT_FALSE(xjw::mvs::prepareMvsImage(
@@ -55,20 +52,23 @@ TEST(MvsImagePreprocessor, RejectsEmptyImageAndInvalidCamera)
     EXPECT_FALSE(error.empty());
 
     error.clear();
-    EXPECT_FALSE(xjw::mvs::prepareMvsImage(
-        makeGradientImage(), xjw::FramePinholeCamera(), &prepared, &prepared_camera, &error));
+    EXPECT_FALSE(xjw::mvs::prepareMvsImage(makeGradientImage(),
+                                           xjw::camera_models::frame_pinhole::FramePinholeNumericState(),
+                                           &prepared,
+                                           &prepared_camera,
+                                           &error));
     EXPECT_FALSE(error.empty());
 }
 
 TEST(MvsImagePreprocessor, ZeroDistortionOnlyNormalizesCameraAxes)
 {
-    xjw::FramePinholeCamera source_camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = makeCamera();
     source_camera.setAxisDirections(-1, 1);
     source_camera.setDepthAxisFlipped(true);
     const cv::Mat source = makeGradientImage();
 
     cv::Mat prepared;
-    xjw::FramePinholeCamera prepared_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImage(
         source, source_camera, &prepared, &prepared_camera, &error)) << error;
@@ -81,12 +81,12 @@ TEST(MvsImagePreprocessor, ZeroDistortionOnlyNormalizesCameraAxes)
 
 TEST(MvsImagePreprocessor, BrownDistortionRemapsPixelsAndClearsOutputDistortion)
 {
-    xjw::FramePinholeCamera source_camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = makeCamera();
     source_camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
     const cv::Mat source = makeGradientImage();
 
     cv::Mat prepared;
-    xjw::FramePinholeCamera prepared_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImage(
         source, source_camera, &prepared, &prepared_camera, &error)) << error;
@@ -94,7 +94,8 @@ TEST(MvsImagePreprocessor, BrownDistortionRemapsPixelsAndClearsOutputDistortion)
     EXPECT_EQ(prepared.size(), source.size());
     EXPECT_EQ(prepared.type(), source.type());
     EXPECT_GT(cv::norm(source, prepared, cv::NORM_INF), 0.0);
-    const xjw::FramePinholeCamera::Distortion distortion = prepared_camera.distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+        prepared_camera.distortion();
     EXPECT_DOUBLE_EQ(distortion.radialK1, 0.0);
     EXPECT_DOUBLE_EQ(distortion.radialK2, 0.0);
     EXPECT_DOUBLE_EQ(distortion.radialK3, 0.0);
@@ -104,7 +105,7 @@ TEST(MvsImagePreprocessor, BrownDistortionRemapsPixelsAndClearsOutputDistortion)
 
 TEST(MvsImagePreprocessor, BrownDistortionUsesOneMapForImageAndValidMask)
 {
-    xjw::FramePinholeCamera source_camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = makeCamera();
     source_camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
     cv::Mat source_valid_mask(48, 64, CV_8UC1, cv::Scalar(255));
     cv::rectangle(source_valid_mask, cv::Rect(22, 17, 16, 14), cv::Scalar(0), cv::FILLED);
@@ -112,7 +113,7 @@ TEST(MvsImagePreprocessor, BrownDistortionUsesOneMapForImageAndValidMask)
 
     cv::Mat prepared;
     cv::Mat prepared_valid_mask;
-    xjw::FramePinholeCamera prepared_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImageAndMask(source,
                                                 source_valid_mask,
@@ -196,7 +197,7 @@ TEST(MvsImagePreprocessor,
     QTemporaryDir temporary_directory;
     ASSERT_TRUE(temporary_directory.isValid());
 
-    xjw::FramePinholeCamera source_camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = makeCamera();
     source_camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
     cv::Mat source_color;
     cv::cvtColor(makeGradientImage(), source_color, cv::COLOR_GRAY2BGR);
@@ -206,7 +207,7 @@ TEST(MvsImagePreprocessor,
     ASSERT_TRUE(xjw::common::io::writeImage(source_path, source_color));
 
     cv::Mat expected_color;
-    xjw::FramePinholeCamera expected_camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState expected_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImage(
         source_color,

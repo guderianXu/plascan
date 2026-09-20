@@ -1,7 +1,5 @@
 #include "SurveyControlBaAdapter.h"
 
-#include "project/ProjectMatchInputReader.h"
-
 #include <QJsonArray>
 #include <QSet>
 
@@ -90,10 +88,19 @@ bool measuredDistanceFromScaleBarRecord(const QJsonObject &record, double *dista
     return false;
 }
 
+void recordControlInputError(BaInputBuildResult *result,
+                             const QString &message)
+{
+    if (result && result->firstControlInputError.isEmpty())
+    {
+        result->firstControlInputError = message;
+    }
+}
+
 } // namespace
 
 void appendSurveyControlBaInput(const QJsonObject &meta,
-                                const QMap<QString, int> &cameraIndexByPath,
+                                const QMap<QString, int> &cameraIndexByImageId,
                                 BaInputBuildResult *result)
 {
     if (!result)
@@ -136,10 +143,40 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
         for (const QJsonValue &value : observations)
         {
             const QJsonObject observation = value.toObject();
-            const int cameraIndex = cameraIndexForImageToken(
-                observation.value(QStringLiteral("image_path")).toString(
-                    observation.value(QStringLiteral("image")).toString()),
-                cameraIndexByPath);
+            const QString image_uuid = observation.value(QStringLiteral("image_uuid")).toString().trimmed();
+            const QString image_id = observation.value(QStringLiteral("image_id")).toString().trimmed();
+            int cameraIndex = -1;
+            if (!image_uuid.isEmpty() || !image_id.isEmpty())
+            {
+                if (!image_uuid.isEmpty() && !image_id.isEmpty() && image_uuid != image_id)
+                {
+                    recordControlInputError(
+                        result,
+                        QStringLiteral("survey control point %1 observation has conflicting image_uuid=%2 "
+                                       "and image_id=%3")
+                            .arg(record.value(QStringLiteral("id")).toString(), image_uuid, image_id));
+                    continue;
+                }
+                const QString canonical_image_id = image_uuid.isEmpty() ? image_id : image_uuid;
+                const auto by_id = cameraIndexByImageId.constFind(canonical_image_id);
+                cameraIndex = by_id == cameraIndexByImageId.constEnd() ? -1 : by_id.value();
+                if (cameraIndex < 0)
+                {
+                    recordControlInputError(
+                        result,
+                        QStringLiteral("survey control point %1 references unknown canonical image_uuid %2; "
+                                       "image_path cannot be used as a fallback")
+                            .arg(record.value(QStringLiteral("id")).toString(), canonical_image_id));
+                }
+            }
+            else
+            {
+                recordControlInputError(
+                    result,
+                    QStringLiteral("survey control point %1 observation has no canonical image_uuid; "
+                                   "image_path/image cannot identify a camera")
+                        .arg(record.value(QStringLiteral("id")).toString()));
+            }
             if (cameraIndex < 0 || usedCameras.contains(cameraIndex))
             {
                 continue;

@@ -27,7 +27,6 @@ add_library(terrain STATIC
     SmallBodyGlobalProducts.cpp
     SmallBodyGlobalProductGenerator.cpp
     SmallBodyMeshRaycaster.cpp
-    GlobalTerrainReportRenderer.cpp
     OrthoGenerationOptions.cpp
     OrthoProjector.cpp
     OrthoProjectorGrid.cpp
@@ -35,8 +34,6 @@ add_library(terrain STATIC
     PointCloudDomGenerator.cpp
     PointCloudDomSupport.cpp
     DemGridAggregator.cpp
-    DemMosaic.cpp
-    TerrainProductManifest.cpp
     DemGenerator.cpp
     DemGeneratorFromDepth.cpp
     DomGenerator.cpp
@@ -70,12 +67,12 @@ endif()
 
 target_link_libraries(terrain
     PUBLIC
-        camera
+        camera_project
         plapoint::plapoint
         plascan_common_io
     PRIVATE
         Qt6::Core
-        Qt6::Gui
+        plascan_common_project
         ${PLASCAN_GDAL_TARGET}
         ${OpenCV_LIBS}
 )
@@ -83,6 +80,15 @@ target_link_libraries(terrain
 if(OpenMP_CXX_FOUND)
     target_link_libraries(terrain PRIVATE OpenMP::OpenMP_CXX)
 endif()
+
+# Standalone capabilities without a production workflow consumer.
+# They are built only when explicitly requested or linked by their tests.
+add_library(terrain_utilities STATIC EXCLUDE_FROM_ALL
+    DemMosaic.cpp
+    TerrainProductManifest.cpp
+)
+target_link_libraries(terrain_utilities PUBLIC terrain PRIVATE Qt6::Core ${OpenCV_LIBS})
+target_compile_features(terrain_utilities PUBLIC cxx_std_20)
 
 if(BUILD_TESTS)
     include(GoogleTest)
@@ -109,6 +115,7 @@ if(BUILD_TESTS)
 
     target_link_libraries(terrain_dem_dom_tool PRIVATE
         terrain
+        camera
         Qt6::Core
         Qt6::Gui
     )
@@ -159,7 +166,7 @@ if(BUILD_TESTS)
     )
 
     target_link_libraries(test_dem_mosaic PRIVATE
-        terrain
+        terrain_utilities
         Qt6::Core
         ${OpenCV_LIBS}
         GTest::gtest_main
@@ -176,7 +183,7 @@ if(BUILD_TESTS)
     )
 
     target_link_libraries(test_terrain_product_manifest PRIVATE
-        terrain
+        terrain_utilities
         Qt6::Core
         GTest::gtest_main
     )
@@ -207,14 +214,20 @@ if(BUILD_TESTS)
     add_executable(test_small_body_global_products
         tests/test_small_body_global_products.cpp
     )
+    target_compile_definitions(test_small_body_global_products PRIVATE
+        PLASCAN_TERRAIN_TEST_TMP_DIR="${CMAKE_SOURCE_DIR}/build/tmp/terrain-preview-tests")
 
     target_link_libraries(test_small_body_global_products PRIVATE
         terrain
         Qt6::Core
-        Qt6::Gui
         ${OpenCV_LIBS}
         GTest::gtest_main
     )
+
+    if(PLASCAN_BUILD_QT_PRESENTATION)
+        target_link_libraries(test_small_body_global_products PRIVATE terrain_report_qt)
+        target_compile_definitions(test_small_body_global_products PRIVATE PLASCAN_HAS_TERRAIN_REPORT)
+    endif()
 
     target_include_directories(test_small_body_global_products PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

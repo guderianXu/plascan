@@ -144,9 +144,10 @@ namespace xjw::detail
 
     } // namespace
 
-    BAResult optimizePointsWithPlaMatrix(const std::vector<FramePinholeCamera>& cameras,
-                                         const std::vector<BATrack>& tracks,
-                                         const BAOptions& options)
+    BAResult
+    optimizePointsWithPlaMatrix(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                                const std::vector<BATrack>& tracks,
+                                const BAOptions& options)
     {
         BAResult result;
         result.requestedBackend = options.backend;

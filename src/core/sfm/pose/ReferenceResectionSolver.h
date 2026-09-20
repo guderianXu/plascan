@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <vector>
@@ -19,9 +19,10 @@ namespace xjw
         int ransacIterations = 0;
     };
 
-    ReferenceResectionResult solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
-                                                     const std::vector<std::array<double, 2>>& imagePoints,
-                                                     const FramePinholeCamera& camera,
-                                                     double resectionThresholdPixels);
+    ReferenceResectionResult
+    solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
+                            const std::vector<std::array<double, 2>>& imagePoints,
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                            double resectionThresholdPixels);
 
 } // namespace xjw

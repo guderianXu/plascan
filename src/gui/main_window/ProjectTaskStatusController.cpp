@@ -1,7 +1,11 @@
 #include "ProjectTaskStatusController.h"
 
 #include "ProjectDashboardWidget.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectLifecycleService.h"
+#include "project/services/ProjectResourceCleanupCoordinator.h"
+#include "project/services/ProjectResourceService.h"
+#include "project/services/ProjectSession.h"
+#include "project/tasks/ProjectTaskOrchestrator.h"
 #include "TaskStatusWidget.h"
 #include "TaskbarProgressController.h"
 #include "Logger.h"
@@ -13,12 +17,17 @@
 
 #include <algorithm>
 
-ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager* projectManager,
+ProjectTaskStatusController::ProjectTaskStatusController(
+                                                         xjw::gui::project::ProjectTaskOrchestrator* tasks,
+                                                         xjw::gui::project::ProjectResourceService* resources,
+                                                         xjw::gui::project::ProjectResourceCleanupCoordinator* cleanup,
+                                                         ProjectLifecycleService* lifecycle,
+                                                         xjw::gui::project::ProjectSession* session,
                                                          ProjectDashboardWidget* dashboard,
                                                          QStatusBar* statusBar,
                                                          QWidget* widgetParent,
                                                          QObject* parent)
-    : QObject(parent), _projectManager(projectManager), _dashboard(dashboard), _statusBar(statusBar),
+    : QObject(parent), _tasks(tasks), _dashboard(dashboard), _statusBar(statusBar),
       _taskbarProgress(new xjw::gui::platform::TaskbarProgressController(widgetParent, this))
 {
     _meshStatus = createStatus(QStringLiteral("meshTaskStatus"), 220, tr("正在取消模型生成..."), widgetParent);
@@ -33,80 +42,120 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager* project
     _photoListStatus = createStatus(QStringLiteral("photoListTaskStatus"), 180, QString(), widgetParent);
     _photoListStatus->setCancellable(false);
 
-    connect(_meshStatus, &TaskStatusWidget::cancelRequested, _projectManager, &ProjectManager::cancelModelGeneration);
+    connect(_meshStatus,
+            &TaskStatusWidget::cancelRequested,
+            _tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cancelModelGeneration);
     connect(_pointCloudStatus,
             &TaskStatusWidget::cancelRequested,
-            _projectManager,
-            &ProjectManager::cancelPointCloudGeneration);
-    connect(_aerialTriangulationStatus, &TaskStatusWidget::cancelRequested, _projectManager, &ProjectManager::cancelAt);
+            _tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cancelPointCloudGeneration);
+    connect(_aerialTriangulationStatus,
+            &TaskStatusWidget::cancelRequested,
+            _tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cancelActiveTask);
     connect(_tiePointStatus,
             &TaskStatusWidget::cancelRequested,
             this,
             &ProjectTaskStatusController::tiePointCancelRequested);
-    connect(_maskStatus, &TaskStatusWidget::cancelRequested, _projectManager, &ProjectManager::cancelMaskGeneration);
+    connect(_maskStatus,
+            &TaskStatusWidget::cancelRequested,
+            _tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cancelMaskGeneration);
 
-    connect(_projectManager, &ProjectManager::meshProgressChanged, this, &ProjectTaskStatusController::updateMesh);
-    connect(_projectManager, &ProjectManager::meshProgressFinished, this, &ProjectTaskStatusController::finishMesh);
-    connect(_projectManager,
-            &ProjectManager::pointCloudProgressChanged,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::meshProgressChanged,
+            this,
+            &ProjectTaskStatusController::updateMesh);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::meshProgressFinished,
+            this,
+            &ProjectTaskStatusController::finishMesh);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::pointCloudProgressChanged,
             this,
             &ProjectTaskStatusController::updatePointCloud);
-    connect(_projectManager,
-            &ProjectManager::pointCloudProgressFinished,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::pointCloudProgressFinished,
             this,
             &ProjectTaskStatusController::finishPointCloud);
-    connect(_projectManager,
-            &ProjectManager::atProgressChanged,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::sparseProgressChanged,
             this,
             &ProjectTaskStatusController::updateAerialTriangulation);
-    connect(_projectManager,
-            &ProjectManager::atComputeDeviceChanged,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::bundleAdjustProgressChanged,
+            this,
+            &ProjectTaskStatusController::updateAerialTriangulation);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::sparseComputeDeviceChanged,
             this,
             &ProjectTaskStatusController::updateAerialTriangulationDevice);
-    connect(_projectManager,
-            &ProjectManager::atProgressFinished,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::sparseFinished,
             this,
             &ProjectTaskStatusController::finishAerialTriangulation);
-    connect(_projectManager,
-            &ProjectManager::maskGenerationProgressChanged,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::bundleAdjustFinished,
+            this,
+            &ProjectTaskStatusController::finishAerialTriangulation);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::maskGenerationProgressChanged,
             this,
             &ProjectTaskStatusController::updateMask);
-    connect(_projectManager, &ProjectManager::maskGenerationFinished, this, &ProjectTaskStatusController::finishMask);
-    connect(_projectManager,
-            &ProjectManager::imageImportProgressChanged,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::maskGenerationFinished,
+            this,
+            &ProjectTaskStatusController::finishMask);
+    connect(resources,
+            &xjw::gui::project::ProjectResourceService::imageImportProgressChanged,
             this,
             &ProjectTaskStatusController::updateImageImport);
     connect(
-        _projectManager, &ProjectManager::imageImportFinished, this, &ProjectTaskStatusController::finishImageImport);
-    connect(_projectManager,
-            &ProjectManager::backgroundTaskProgressChanged,
+        resources,
+        &xjw::gui::project::ProjectResourceService::imageImportFinished,
+        this,
+        &ProjectTaskStatusController::finishImageImport);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::backgroundTaskProgressChanged,
             _taskbarProgress,
             &xjw::gui::platform::TaskbarProgressController::updateTask);
-    connect(_projectManager,
-            &ProjectManager::backgroundTaskFinished,
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::backgroundTaskFinished,
             _taskbarProgress,
             &xjw::gui::platform::TaskbarProgressController::finishTask);
-    connect(_projectManager,
-            &ProjectManager::projectOpenStarted,
+    connect(cleanup,
+            &xjw::gui::project::ProjectResourceCleanupCoordinator::progressChanged,
+            _taskbarProgress,
+            &xjw::gui::platform::TaskbarProgressController::updateTask);
+    connect(cleanup,
+            &xjw::gui::project::ProjectResourceCleanupCoordinator::finished,
+            _taskbarProgress,
+            &xjw::gui::platform::TaskbarProgressController::finishTask);
+    connect(lifecycle,
+            &ProjectLifecycleService::projectOpenStarted,
             this,
             [this](const QString&) { _taskbarProgress->updateTask(QStringLiteral("project_open"), 0, 100); });
-    connect(_projectManager,
-            &ProjectManager::projectOpenProgressChanged,
+    connect(lifecycle,
+            &ProjectLifecycleService::projectOpenProgressChanged,
             this,
             [this](const QString&, int percent)
             { _taskbarProgress->updateTask(QStringLiteral("project_open"), percent, 100); });
-    connect(_projectManager,
-            &ProjectManager::projectOpenFinished,
+    connect(lifecycle,
+            &ProjectLifecycleService::projectOpenFinished,
             this,
             [this](bool, const QString&) { _taskbarProgress->finishTask(QStringLiteral("project_open")); });
     connect(
-        _projectManager, &ProjectManager::projectSessionChanged, this, &ProjectTaskStatusController::resetTaskProgress);
-    connect(_projectManager,
-            &ProjectManager::saveStarted,
+        session,
+        &xjw::gui::project::ProjectSession::sessionChanged,
+        this,
+        &ProjectTaskStatusController::resetTaskProgress);
+    connect(lifecycle,
+            &ProjectLifecycleService::saveStarted,
             this,
             [this]() { _taskbarProgress->updateTask(QStringLiteral("project_save"), 0, 0); });
-    connect(_projectManager,
-            &ProjectManager::saveFinished,
+    connect(lifecycle,
+            &ProjectLifecycleService::saveFinished,
             this,
             [this](bool) { _taskbarProgress->finishTask(QStringLiteral("project_save")); });
     refreshDashboard();
@@ -361,7 +410,7 @@ void ProjectTaskStatusController::finishTask(TaskStatusWidget* status,
 
 void ProjectTaskStatusController::resetTaskProgress()
 {
-    const bool keepModelCancellationVisible = _projectManager && _projectManager->isModelGenerationRunning();
+    const bool keepModelCancellationVisible = _tasks && _tasks->isModelGenerationRunning();
     for (TaskStatusWidget* status : {_meshStatus,
                                      _pointCloudStatus,
                                      _aerialTriangulationStatus,

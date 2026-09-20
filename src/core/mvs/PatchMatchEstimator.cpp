@@ -44,21 +44,22 @@ bool isUsableOpenClPatchMatchDevice(bool availabilityQuerySucceeded,
 }
 
 bool PatchMatchDepthEstimator::estimate(
-    const cv::Mat                &refGray,
-    const std::vector<cv::Mat>   &srcGrays,
-    const FramePinholeCamera                   &refCam,
-    const std::vector<FramePinholeCamera>      &srcCams,
-    float zNear, float zFar,
-    const PatchMatchConfig       &config,
-    cv::Mat                      &depthOut,
-    cv::Mat                      *confOut,
-    std::string                  *errorMsg,
-    const cv::Mat                *hintDepth,
-    const cv::Mat                *hintRadius,
-    const cv::Mat                *refValidMask,
-    const std::vector<cv::Mat>   *srcValidMasks,
-    const PatchMatchAuxiliaryInput *auxiliaryInput,
-    PatchMatchAuxiliaryOutput *auxiliaryOutput)
+    const cv::Mat& refGray,
+    const std::vector<cv::Mat>& srcGrays,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+    float zNear,
+    float zFar,
+    const PatchMatchConfig& config,
+    cv::Mat& depthOut,
+    cv::Mat* confOut,
+    std::string* errorMsg,
+    const cv::Mat* hintDepth,
+    const cv::Mat* hintRadius,
+    const cv::Mat* refValidMask,
+    const std::vector<cv::Mat>* srcValidMasks,
+    const PatchMatchAuxiliaryInput* auxiliaryInput,
+    PatchMatchAuxiliaryOutput* auxiliaryOutput)
 {
     if (config.numIterations <= 0)
     {

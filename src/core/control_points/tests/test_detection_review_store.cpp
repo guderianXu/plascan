@@ -22,7 +22,7 @@ DetectionReviewEntry reviewEntry()
     entry.observation.detection.family = MarkerTargetFamily::NonCodedCircle;
     entry.observation.detection.targetId = -1;
     entry.observation.detection.center = QPointF(123.25, 456.75);
-    entry.observation.detection.corners = QPolygonF{
+    entry.observation.detection.corners = QVector<QPointF>{
         QPointF(120.0, 450.0),
         QPointF(130.0, 450.0),
         QPointF(130.0, 460.0),

@@ -1,6 +1,14 @@
 #include "cli_photogrammetry_common.h"
 
+#include "FramePinholeTsaiIO.h"
+#include "ProjectCameraIO.h"
+#include "camera/project/CameraProjectRuntime.h"
+#include "camera/models/CameraModelFactories.h"
+#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
+#include "camera/models/frame_pinhole/FramePinholeInstance.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
+#include "project/ProjectMetadata.h"
 
 #include <QDir>
 #include <QFile>
@@ -13,6 +21,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <set>
+#include <unordered_set>
 
 namespace xjw::cli
 {
@@ -433,12 +444,16 @@ namespace xjw::cli
             }
             if (item.hasCameraPath && options.loadCameras)
             {
-                if (!item.camera.loadFromFile(xjw::common::io::toUtf8Path(item.cameraPath)) || !item.camera.isValid())
+                std::string camera_error;
+                if (!xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(
+                        xjw::common::io::toUtf8Path(item.cameraPath), &item.camera, &camera_error))
                 {
                     if (errorMessage)
                     {
-                        *errorMessage =
-                            QStringLiteral("%1:%2 相机读取失败: %3").arg(listPath).arg(lineNumber).arg(item.cameraPath);
+                        *errorMessage = QStringLiteral("%1:%2 相机读取失败: %3 (%4)")
+                                            .arg(listPath)
+                                            .arg(lineNumber)
+                                            .arg(item.cameraPath, QString::fromStdString(camera_error));
                     }
                     return false;
                 }
@@ -491,30 +506,294 @@ namespace xjw::cli
         return paths;
     }
 
-    QMap<QString, xjw::FramePinholeCamera> referenceCameraMap(const std::vector<PhotogrammetryInputItem>& items)
+    bool resolveProjectImageIds(const QJsonObject& projectFiles,
+                                const QStringList& images,
+                                std::vector<xjw::camera_core::ImageId>* imageIds,
+                                QString* errorMessage)
     {
-        QMap<QString, xjw::FramePinholeCamera> cameras;
-        for (const PhotogrammetryInputItem& item : items)
+        if (errorMessage)
         {
-            if (!item.hasLoadedCamera || !item.camera.isValid())
-            {
-                continue;
-            }
-            cameras.insert(item.imagePath, item.camera);
-            cameras.insert(cleanAbsolutePath(item.imagePath), item.camera);
+            errorMessage->clear();
         }
-        return cameras;
-    }
-
-    bool readReferencePositionCsv(const QString& csvPath,
-                                  QMap<QString, std::array<double, 3>>* positions,
-                                  QString* errorMessage)
-    {
-        if (!positions)
+        if (!imageIds)
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("内部错误：参考位置输出对象为空");
+                *errorMessage = QStringLiteral("内部错误：ImageId 输出对象为空");
+            }
+            return false;
+        }
+        const QMap<QString, QJsonObject> imageMetaByPath =
+            xjw::common::project::projectImageMetaByPath(projectFiles, true);
+        imageIds->clear();
+        imageIds->reserve(static_cast<std::size_t>(images.size()));
+        std::unordered_set<std::string> seen;
+        for (const QString& image : images)
+        {
+            const QString id = imageMetaByPath.value(cleanAbsolutePath(image))
+                                   .value(QStringLiteral("image_uuid"))
+                                   .toString()
+                                   .trimmed();
+            if (id.isEmpty())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("工程中找不到影像身份：%1").arg(image);
+                }
+                return false;
+            }
+            try
+            {
+                xjw::camera_core::ImageId typedId(id.toStdString());
+                if (!seen.insert(typedId.value()).second)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("输入影像重复使用 ImageId：%1").arg(id);
+                    }
+                    return false;
+                }
+                imageIds->push_back(std::move(typedId));
+            }
+            catch (const std::exception& exception)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage =
+                        QStringLiteral("工程影像 ImageId 无效：%1 (%2)").arg(id, QString::fromUtf8(exception.what()));
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    namespace
+    {
+
+        std::optional<std::size_t> imageIndexForReferenceName(const QString& name, const QStringList& images)
+        {
+            const QFileInfo inputInfo(name);
+            const QStringList keys = {
+                name, cleanAbsolutePath(name), inputInfo.fileName(), inputInfo.completeBaseName()};
+            for (const QString& key : keys)
+            {
+                std::optional<std::size_t> match;
+                for (int index = 0; index < images.size(); ++index)
+                {
+                    const QFileInfo candidate(images.at(index));
+                    if (key == images.at(index) || key == cleanAbsolutePath(images.at(index)) ||
+                        key == candidate.fileName() || key == candidate.completeBaseName())
+                    {
+                        if (match)
+                        {
+                            return std::nullopt;
+                        }
+                        match = static_cast<std::size_t>(index);
+                    }
+                }
+                if (match)
+                {
+                    return match;
+                }
+            }
+            return std::nullopt;
+        }
+
+        bool makeExternalReferenceGeometry(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+                                           const std::shared_ptr<const xjw::camera_core::CameraInstance>& canonical,
+                                           const xjw::camera_core::ImageId& imageId,
+                                           std::optional<xjw::camera_reference::ReferenceCameraGeometry>* geometry,
+                                           QString* errorMessage)
+        {
+            if (!canonical || !geometry || !source.validateNumericalState())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("外部参考相机缺少有效的 canonical 相机身份或数值");
+                }
+                return false;
+            }
+            if (dynamic_cast<const xjw::camera_models::frame_pinhole::FramePinholeInstance*>(canonical.get()) ==
+                nullptr)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("外部 Tsai 参考相机只能绑定 canonical 面阵针孔实例：%1")
+                                        .arg(QString::fromStdString(imageId.value()));
+                }
+                return false;
+            }
+            xjw::camera_core::ImageSize imageSize = canonical->imageSize();
+            if (!imageSize.isValid())
+            {
+                const auto sourceSize = source.imageSize();
+                if (!sourceSize || sourceSize->samples <= 0 || sourceSize->lines <= 0)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("外部参考相机 %1 没有有效影像尺寸")
+                                            .arg(QString::fromStdString(imageId.value()));
+                    }
+                    return false;
+                }
+                imageSize = {sourceSize->samples, sourceSize->lines};
+            }
+
+            try
+            {
+                const auto definition = xjw::camera_models::frame_pinhole::FramePinholeDefinition::create(
+                    xjw::camera_core::CameraDefinitionId("external-reference-" + canonical->instanceId().value()),
+                    source.intrinsics(),
+                    source.distortion(),
+                    xjw::camera_models::frame_pinhole::PixelConvention::PixelCenter,
+                    canonical->definition().worldFrame(),
+                    source.depthAxisFlipped());
+                const auto pose = xjw::camera_core::Pose::create(
+                    canonical->definition().worldFrame(), source.cameraCenter(), source.cameraToWorldRotation());
+                const auto instance = xjw::camera_models::frame_pinhole::FramePinholeInstance::create(
+                    canonical->instanceId(), imageId, definition, imageSize, pose);
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
+                std::string conversionError;
+                if (!xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(
+                        instance, &state, &conversionError))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("外部参考相机转换失败：%1").arg(QString::fromStdString(conversionError));
+                    }
+                    return false;
+                }
+                const auto resolved =
+                    xjw::camera_reference::ReferenceCameraGeometry::create(std::move(state), &conversionError);
+                if (!resolved)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("外部参考相机几何无效：%1").arg(QString::fromStdString(conversionError));
+                    }
+                    return false;
+                }
+                *geometry = std::move(*resolved);
+                return true;
+            }
+            catch (const std::exception& exception)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("外部参考相机转换失败：%1").arg(QString::fromUtf8(exception.what()));
+                }
+                return false;
+            }
+        }
+
+    } // namespace
+
+    bool buildReferenceCameraGeometries(const QJsonObject& projectFiles,
+                                        const std::vector<PhotogrammetryInputItem>& items,
+                                        const QStringList& images,
+                                        const std::vector<xjw::camera_core::ImageId>& imageIds,
+                                        xjw::camera_reference::ReferenceCameraGeometryMap* geometries,
+                                        QString* errorMessage)
+    {
+        if (!geometries || images.size() != static_cast<qsizetype>(imageIds.size()) ||
+            images.size() != static_cast<qsizetype>(items.size()))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("参考相机输入的影像、ImageId 和相机列表长度不一致");
+            }
+            return false;
+        }
+        geometries->clear();
+        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
+            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        if (!runtime.ok())
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    QStringLiteral("canonical 相机运行时加载失败：%1").arg(runtime.errors.join(QStringLiteral("; ")));
+            }
+            return false;
+        }
+        for (std::size_t index = 0; index < imageIds.size(); ++index)
+        {
+            const auto lookup = runtime.instances.forImage(imageIds[index]);
+            if (!lookup.ok())
+            {
+                if (items[index].hasLoadedCamera)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("外部参考相机 %1 没有 canonical camera instance，拒绝合成身份")
+                                            .arg(images.at(static_cast<int>(index)));
+                    }
+                    return false;
+                }
+                continue;
+            }
+            std::optional<xjw::camera_reference::ReferenceCameraGeometry> geometry;
+            if (items[index].hasLoadedCamera)
+            {
+                if (!makeExternalReferenceGeometry(
+                        items[index].camera, lookup.instance, imageIds[index], &geometry, errorMessage))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
+                std::string conversionError;
+                if (!runtime.framePinholeStateForImage(imageIds[index], &state, &conversionError))
+                {
+                    continue;
+                }
+                const auto resolved =
+                    xjw::camera_reference::ReferenceCameraGeometry::create(std::move(state), &conversionError);
+                if (!resolved)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("工程参考相机几何无效：%1").arg(QString::fromStdString(conversionError));
+                    }
+                    return false;
+                }
+                geometry = std::move(*resolved);
+            }
+            geometries->emplace(imageIds[index], std::move(*geometry));
+        }
+        std::string validationError;
+        const auto commonFrame = xjw::camera_reference::commonReferenceWorldFrame(
+            *geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &validationError);
+        if (!xjw::camera_reference::validateReferenceCameraGeometryMap(*geometries, &validationError) ||
+            (!geometries->empty() && !commonFrame))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("参考相机几何无效：%1").arg(QString::fromStdString(validationError));
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool readReferencePositionCsv(const QString& csvPath,
+                                  const QJsonObject& projectFiles,
+                                  const QStringList& images,
+                                  const std::vector<xjw::camera_core::ImageId>& imageIds,
+                                  xjw::camera_reference::ReferenceCameraPositionMap* positions,
+                                  QString* errorMessage)
+    {
+        if (!positions || images.size() != static_cast<qsizetype>(imageIds.size()))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("内部错误：参考位置输出对象或 ImageId 输入无效");
             }
             return false;
         }
@@ -528,8 +807,20 @@ namespace xjw::cli
             }
             return false;
         }
+        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
+            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        if (!runtime.ok())
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    QStringLiteral("canonical 相机运行时加载失败：%1").arg(runtime.errors.join(QStringLiteral("; ")));
+            }
+            return false;
+        }
 
         positions->clear();
+        bool hasRecord = false;
         QTextStream stream(&file);
         int lineNumber = 0;
         while (!stream.atEnd())
@@ -556,11 +847,11 @@ namespace xjw::cli
             const double x = fields.at(1).toDouble(&xOk);
             const double y = fields.at(2).toDouble(&yOk);
             const double z = fields.at(3).toDouble(&zOk);
+            const QString first = fields.at(0).trimmed().toLower();
             if (!xOk || !yOk || !zOk)
             {
-                const QString first = fields.at(0).trimmed().toLower();
-                if (positions->isEmpty() && (first == QStringLiteral("name") || first == QStringLiteral("image") ||
-                                             first == QStringLiteral("label")))
+                if (!hasRecord && (first == QStringLiteral("name") || first == QStringLiteral("image") ||
+                                   first == QStringLiteral("label")))
                 {
                     continue;
                 }
@@ -580,9 +871,59 @@ namespace xjw::cli
                 }
                 return false;
             }
-            positions->insert(name, position);
+            const auto imageIndex = imageIndexForReferenceName(name, images);
+            if (!imageIndex)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("%1:%2 无法把参考位置绑定到唯一输入影像：%3")
+                                        .arg(csvPath)
+                                        .arg(lineNumber)
+                                        .arg(name);
+                }
+                return false;
+            }
+            const auto lookup = runtime.instances.forImage(imageIds[*imageIndex]);
+            if (!lookup.ok())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("%1:%2 影像没有 canonical 相机 frame，无法解释参考位置：%3")
+                                        .arg(csvPath)
+                                        .arg(lineNumber)
+                                        .arg(name);
+                }
+                return false;
+            }
+            std::string positionError;
+            const auto reference = xjw::camera_reference::ReferenceCameraPosition::create(
+                imageIds[*imageIndex], lookup.instance->definition().worldFrame(), position, &positionError);
+            if (!reference)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("%1:%2 参考位置无效：%3")
+                                        .arg(csvPath)
+                                        .arg(lineNumber)
+                                        .arg(QString::fromStdString(positionError));
+                }
+                return false;
+            }
+            if (positions->find(imageIds[*imageIndex]) != positions->cend())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("%1:%2 为同一 ImageId 提供了重复参考位置：%3")
+                                        .arg(csvPath)
+                                        .arg(lineNumber)
+                                        .arg(name);
+                }
+                return false;
+            }
+            positions->emplace(imageIds[*imageIndex], std::move(*reference));
+            hasRecord = true;
         }
-        if (positions->isEmpty())
+        if (!hasRecord)
         {
             if (errorMessage)
             {
@@ -590,53 +931,27 @@ namespace xjw::cli
             }
             return false;
         }
+        std::string frameError;
+        if (!xjw::camera_reference::validateReferenceCameraPositionMap(*positions, &frameError) ||
+            !xjw::camera_reference::commonReferenceWorldFrame(
+                xjw::camera_reference::ReferenceCameraGeometryMap{}, *positions, &frameError))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("参考位置坐标系无效：%1").arg(QString::fromStdString(frameError));
+            }
+            return false;
+        }
         return true;
     }
 
-    QJsonObject cameraToJson(const xjw::FramePinholeCamera& camera)
+    QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
     {
-        QJsonObject object;
-        if (!camera.isValid())
+        if (!camera.validateNumericalState())
         {
-            return object;
+            return {};
         }
-
-        const auto intrinsics = camera.intrinsics();
-        const auto distortion = camera.distortion();
-        const auto center = camera.cameraCenter();
-        const auto rotation = camera.cameraToWorldRotation();
-
-        object[QStringLiteral("model")] = QStringLiteral("tsai");
-        object[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
-        object[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
-        object[QStringLiteral("pitch")] = camera.pixelPitch();
-        object[QStringLiteral("fu")] = camera.focalXMillimeters();
-        object[QStringLiteral("fv")] = camera.focalYMillimeters();
-        object[QStringLiteral("cu")] = camera.principalXMillimeters();
-        object[QStringLiteral("cv")] = camera.principalYMillimeters();
-        object[QStringLiteral("k1")] = distortion.radialK1;
-        object[QStringLiteral("k2")] = distortion.radialK2;
-        object[QStringLiteral("k3")] = distortion.radialK3;
-        object[QStringLiteral("p1")] = distortion.tangentialP1;
-        object[QStringLiteral("p2")] = distortion.tangentialP2;
-        object[QStringLiteral("u_direction")] = intrinsics.uAxisSign;
-        object[QStringLiteral("v_direction")] = intrinsics.vAxisSign;
-        object[QStringLiteral("depth_axis_flipped")] = camera.depthAxisFlipped();
-
-        QJsonArray centerArray;
-        for (const double value : center)
-        {
-            centerArray.append(value);
-        }
-        object[QStringLiteral("C")] = centerArray;
-
-        QJsonArray rotationArray;
-        for (const double value : rotation)
-        {
-            rotationArray.append(value);
-        }
-        object[QStringLiteral("R")] = rotationArray;
-        return object;
+        return xjw::common::project::serializeFramePinholeNumericState(camera);
     }
 
     QJsonArray inputItemsToJson(const std::vector<PhotogrammetryInputItem>& items)
@@ -650,10 +965,6 @@ namespace xjw::cli
             if (item.hasCameraPath)
             {
                 imageObject[QStringLiteral("camera_path")] = item.cameraPath;
-            }
-            if (item.hasLoadedCamera && item.camera.isValid())
-            {
-                imageObject[QStringLiteral("camera")] = cameraToJson(item.camera);
             }
             array.append(imageObject);
         }

@@ -10,7 +10,7 @@
  */
 
 #include "BundleAdjustSolver.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <string>
 #include <vector>
@@ -32,10 +32,10 @@ struct SimilarityGaugeNormalizationResult
  * 做同一尺度变换。相机旋转和内参保持不变，因此不会改变重投影几何。
  */
 SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<FramePinholeCamera> &referenceCameras,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& referenceCameras,
     int anchorCameraIndex,
     int scaleCameraIndex,
-    std::vector<FramePinholeCamera> *refinedCameras,
-    std::vector<BARefinedPoint> *refinedPoints);
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* refinedCameras,
+    std::vector<BARefinedPoint>* refinedPoints);
 
 } // namespace xjw

@@ -7,32 +7,33 @@
 #include "BundleAdjustSolver.h"
 #include "BundleAdjustPlaMatrixProblem.h"
 #include "BundleAdjustPlaMatrixProjection.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 namespace
 {
 
-    xjw::FramePinholeCamera makeExtendedCamera()
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeExtendedCamera()
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(930.0, 905.0, 510.0, 386.0);
         camera.setDistortion(-0.02, 0.0015, -0.0002, 0.0005, -0.0004);
         camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{-1.2, 0.7, 0.1}});
         return camera;
     }
 
-    xjw::FramePinholeCamera cameraWithSharedIntrinsics(const xjw::FramePinholeCamera& pose_camera,
-                                                       const xjw::FramePinholeCamera& reference_camera,
-                                                       const std::array<double, 9>& parameters)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    cameraWithSharedIntrinsics(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& pose_camera,
+                               const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                               const std::array<double, 9>& parameters)
     {
-        xjw::FramePinholeCamera camera = pose_camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = pose_camera;
         const double focal_x = parameters[0];
         const double focal_y = focal_x * std::exp(parameters[1]);
         camera.setIntrinsics(focal_x,
                              focal_y,
                              reference_camera.principalX() + parameters[2],
                              reference_camera.principalY() + parameters[3]);
-        xjw::FramePinholeCamera::Distortion distortion;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion;
         distortion.radialK1 = parameters[4];
         distortion.radialK2 = parameters[5];
         distortion.radialK3 = parameters[6];
@@ -42,10 +43,11 @@ namespace
         return camera;
     }
 
-    std::array<double, 2> projectShared(const xjw::FramePinholeCamera& pose_camera,
-                                        const xjw::FramePinholeCamera& reference_camera,
-                                        const std::array<double, 9>& parameters,
-                                        const std::array<double, 3>& point)
+    std::array<double, 2>
+    projectShared(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& pose_camera,
+                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                  const std::array<double, 9>& parameters,
+                  const std::array<double, 3>& point)
     {
         const auto camera = cameraWithSharedIntrinsics(pose_camera, reference_camera, parameters);
         const double world[3] = {point[0], point[1], point[2]};
@@ -54,9 +56,10 @@ namespace
         return {{pixel[0], pixel[1]}};
     }
 
-    xjw::FramePinholeCamera makeCalibrationCamera(double center_x, double center_y, bool truth)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeCalibrationCamera(double center_x, double center_y, bool truth)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(
             truth ? 1040.0 : 900.0, truth ? 998.4 : 900.0, truth ? 516.0 : 512.0, truth ? 381.5 : 384.0);
         camera.setDistortion(truth ? -0.035 : 0.0,
@@ -68,7 +71,8 @@ namespace
         return camera;
     }
 
-    std::vector<xjw::BATrack> makeCalibrationTracks(const std::vector<xjw::FramePinholeCamera>& truth_cameras)
+    std::vector<xjw::BATrack>
+    makeCalibrationTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truth_cameras)
     {
         std::vector<xjw::BATrack> tracks;
         for (int row = -4; row <= 4; ++row)
@@ -122,8 +126,8 @@ namespace
 
 TEST(BundleAdjustPlaMatrixExtendedProjectionTest, SharedBrownIntrinsicJacobiansMatchFiniteDifference)
 {
-    const xjw::FramePinholeCamera camera = makeExtendedCamera();
-    xjw::FramePinholeCamera reference = camera;
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeExtendedCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState reference = camera;
     reference.setIntrinsics(950.0, 920.0, 512.0, 384.0);
     const std::array<double, 9> parameters{
         {940.0, std::log(0.985), 1.5, -2.0, -0.018, 0.0012, -0.00015, 0.00045, -0.00035}};
@@ -163,14 +167,16 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, FullSharedBrownModelMatchesAcross
     {
         GTEST_SKIP() << "PlaMatrix backend is unavailable";
     }
-    const std::vector<xjw::FramePinholeCamera> truth_cameras{makeCalibrationCamera(-3.0, 0.0, true),
-                                                             makeCalibrationCamera(3.0, 0.0, true),
-                                                             makeCalibrationCamera(0.0, -2.5, true),
-                                                             makeCalibrationCamera(0.0, 2.5, true)};
-    const std::vector<xjw::FramePinholeCamera> initial_cameras{makeCalibrationCamera(-3.0, 0.0, false),
-                                                               makeCalibrationCamera(3.0, 0.0, false),
-                                                               makeCalibrationCamera(0.0, -2.5, false),
-                                                               makeCalibrationCamera(0.0, 2.5, false)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truth_cameras{
+        makeCalibrationCamera(-3.0, 0.0, true),
+        makeCalibrationCamera(3.0, 0.0, true),
+        makeCalibrationCamera(0.0, -2.5, true),
+        makeCalibrationCamera(0.0, 2.5, true)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initial_cameras{
+        makeCalibrationCamera(-3.0, 0.0, false),
+        makeCalibrationCamera(3.0, 0.0, false),
+        makeCalibrationCamera(0.0, -2.5, false),
+        makeCalibrationCamera(0.0, 2.5, false)};
     const auto tracks = makeCalibrationTracks(truth_cameras);
 
     auto options = makeFullBrownOptions();
@@ -215,14 +221,16 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, FullSharedBrownModelMatchesAcross
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest, FullBrownRefinementUsesSingleReferenceStage)
 {
-    const std::vector<xjw::FramePinholeCamera> truth_cameras{makeCalibrationCamera(-3.0, 0.0, true),
-                                                             makeCalibrationCamera(3.0, 0.0, true),
-                                                             makeCalibrationCamera(0.0, -2.5, true),
-                                                             makeCalibrationCamera(0.0, 2.5, true)};
-    const std::vector<xjw::FramePinholeCamera> initial_cameras{makeCalibrationCamera(-3.0, 0.0, false),
-                                                               makeCalibrationCamera(3.0, 0.0, false),
-                                                               makeCalibrationCamera(0.0, -2.5, false),
-                                                               makeCalibrationCamera(0.0, 2.5, false)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truth_cameras{
+        makeCalibrationCamera(-3.0, 0.0, true),
+        makeCalibrationCamera(3.0, 0.0, true),
+        makeCalibrationCamera(0.0, -2.5, true),
+        makeCalibrationCamera(0.0, 2.5, true)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initial_cameras{
+        makeCalibrationCamera(-3.0, 0.0, false),
+        makeCalibrationCamera(3.0, 0.0, false),
+        makeCalibrationCamera(0.0, -2.5, false),
+        makeCalibrationCamera(0.0, 2.5, false)};
     auto options = makeFullBrownOptions();
     options.backend = xjw::BABackend::PlaMatrixCpu;
     const auto result =
@@ -238,14 +246,16 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, FullBrownRefinementUsesSingleRefe
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceOnlineSchurMatchesFullBrownGeneralSchurPath)
 {
-    const std::vector<xjw::FramePinholeCamera> truth_cameras{makeCalibrationCamera(-3.0, 0.0, true),
-                                                             makeCalibrationCamera(3.0, 0.0, true),
-                                                             makeCalibrationCamera(0.0, -2.5, true),
-                                                             makeCalibrationCamera(0.0, 2.5, true)};
-    const std::vector<xjw::FramePinholeCamera> initial_cameras{makeCalibrationCamera(-3.0, 0.0, false),
-                                                               makeCalibrationCamera(3.0, 0.0, false),
-                                                               makeCalibrationCamera(0.0, -2.5, false),
-                                                               makeCalibrationCamera(0.0, 2.5, false)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truth_cameras{
+        makeCalibrationCamera(-3.0, 0.0, true),
+        makeCalibrationCamera(3.0, 0.0, true),
+        makeCalibrationCamera(0.0, -2.5, true),
+        makeCalibrationCamera(0.0, 2.5, true)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> initial_cameras{
+        makeCalibrationCamera(-3.0, 0.0, false),
+        makeCalibrationCamera(3.0, 0.0, false),
+        makeCalibrationCamera(0.0, -2.5, false),
+        makeCalibrationCamera(0.0, 2.5, false)};
     auto tracks = makeCalibrationTracks(truth_cameras);
     for (auto& track : tracks)
     {
@@ -287,8 +297,8 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceDriverReleasesRequestedI
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceCalibrationTransitionUsesRecoveredSensorWeights)
 {
-    xjw::FramePinholeCamera camera = makeExtendedCamera();
-    camera.setImageSize(xjw::CameraImageSize{1020, 772});
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeExtendedCamera();
+    camera.setImageSize(xjw::camera_core::ImageSize{1020, 772});
     xjw::BAOptions options;
     options.backend = xjw::BABackend::PlaMatrixCpu;
     options.useReferenceCalibrationTransitionPrior = true;
@@ -316,7 +326,7 @@ TEST(BundleAdjustPlaMatrixExtendedBackendTest, ReferenceCalibrationTransitionUse
 
 TEST(BundleAdjustPlaMatrixExtendedBackendTest, FocalStateAndStepUsePhysicalPixelUnits)
 {
-    const xjw::FramePinholeCamera camera = makeExtendedCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeExtendedCamera();
     xjw::BAOptions options;
     options.refineSharedFocalLength = true;
 

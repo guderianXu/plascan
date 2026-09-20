@@ -110,67 +110,208 @@ void applyAgisoftWgs84Defaults(const QString &path,
 SurveyControlProjectImportResult publishMarkerSet(ProjectData *projectData,
                                                   const control_points::MarkerSet &markerSet)
 {
-    SurveyControlProjectImportResult result;
-    const QString sidecar_path = xjw::common::project::ProjectIO::markerSetPath(projectData->currentProjectPath());
-    const bool sidecar_existed = QFile::exists(sidecar_path);
-    QByteArray previous_bytes;
-    if (sidecar_existed)
+    const QString sidecarPath =
+        xjw::common::project::ProjectIO::markerSetPath(projectData->currentProjectPath());
+    SurveyControlSidecarSnapshot previous;
+    QString snapshotError;
+    if (!captureSurveyControlSidecar(sidecarPath, &previous, &snapshotError))
     {
-        QFile previous(sidecar_path);
-        if (!previous.open(QIODevice::ReadOnly))
+        return {false, snapshotError, 0, 0, 0};
+    }
+    const auto written = writeSurveyControlMarkerSet(sidecarPath, markerSet);
+    if (!written.imported)
+    {
+        return written;
+    }
+    auto committed = commitSurveyControlMarkerSet(projectData, markerSet);
+    if (!committed.imported)
+    {
+        QString restoreError;
+        if (!restoreSurveyControlSidecar(previous, &restoreError))
         {
-            result.errorMessage = QStringLiteral("无法读取现有标记 sidecar，已取消导入: %1")
-                                      .arg(previous.errorString());
-            return result;
+            committed.errorMessage += QStringLiteral("；且旧 sidecar 恢复失败: %1").arg(restoreError);
         }
-        previous_bytes = previous.readAll();
+    }
+    return committed;
+}
+
+} // namespace
+
+PreparedSurveyControlImport prepareSurveyControlCsv(
+    const QHash<QString, QString>& imageIdentityByPath,
+    const QString& csvPath,
+    const QString& defaultRole)
+{
+    PreparedSurveyControlImport result;
+    control_points::MarkerCsvImportOptions options;
+    options.defaultRole = defaultRole;
+    options.imageIdentityByPath = imageIdentityByPath;
+    applyAgisoftWgs84Defaults(csvPath, &options);
+    const auto imported = control_points::readMarkerCsvFile(csvPath, options);
+    if (!imported.ok)
+    {
+        result.errorMessage = imported.error;
+        return result;
+    }
+    result.prepared = true;
+    result.markerSet = imported.markerSet;
+    return result;
+}
+
+bool captureSurveyControlSidecar(const QString& sidecarPath,
+                                 SurveyControlSidecarSnapshot* snapshot,
+                                 QString* errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (!snapshot || sidecarPath.trimmed().isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("标记 sidecar 路径为空");
+        }
+        return false;
     }
 
-    const control_points::MarkerSetStore store(sidecar_path);
+    snapshot->path = sidecarPath;
+    snapshot->existed = QFile::exists(sidecarPath);
+    snapshot->bytes.clear();
+    if (!snapshot->existed)
+    {
+        return true;
+    }
+
+    QFile previous(sidecarPath);
+    if (!previous.open(QIODevice::ReadOnly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法读取现有标记 sidecar: %1").arg(previous.errorString());
+        }
+        return false;
+    }
+    snapshot->bytes = previous.readAll();
+    if (previous.error() != QFileDevice::NoError)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("读取现有标记 sidecar 失败: %1").arg(previous.errorString());
+        }
+        snapshot->bytes.clear();
+        return false;
+    }
+    return true;
+}
+
+bool restoreSurveyControlSidecar(const SurveyControlSidecarSnapshot& snapshot,
+                                 QString* errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (snapshot.path.trimmed().isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("标记 sidecar 恢复路径为空");
+        }
+        return false;
+    }
+    if (restoreSidecar(snapshot.path, snapshot.existed, snapshot.bytes))
+    {
+        return true;
+    }
+    if (errorMessage)
+    {
+        *errorMessage = QStringLiteral("无法恢复旧标记 sidecar: %1").arg(snapshot.path);
+    }
+    return false;
+}
+
+SurveyControlProjectImportResult writeSurveyControlMarkerSet(
+    const QString& sidecarPath,
+    const control_points::MarkerSet& markerSet)
+{
+    SurveyControlProjectImportResult result;
+    SurveyControlSidecarSnapshot previous;
+    QString snapshotError;
+    if (!captureSurveyControlSidecar(sidecarPath, &previous, &snapshotError))
+    {
+        result.errorMessage = QStringLiteral("无法读取现有标记 sidecar，已取消导入: %1")
+                                  .arg(snapshotError);
+        return result;
+    }
+
+    const control_points::MarkerSetStore store(sidecarPath);
     const auto saved = store.save(markerSet);
     if (!saved.ok)
     {
         result.errorMessage = saved.error;
         return result;
     }
-
     const auto verified = store.load();
     if (!verified.ok || !(verified.markerSet == markerSet))
     {
-        const bool restored = restoreSidecar(sidecar_path, sidecar_existed, previous_bytes);
+        QString restoreError;
+        const bool restored = restoreSurveyControlSidecar(previous, &restoreError);
         result.errorMessage = QStringLiteral("标记 sidecar 写后校验失败，metadata 未修改%1: %2")
-                                  .arg(restored ? QString() : QStringLiteral("，且旧 sidecar 恢复失败"),
+                                  .arg(restored ? QString() : QStringLiteral("，且旧 sidecar 恢复失败: %1").arg(restoreError),
                                        verified.error);
+        return result;
+    }
+    result.imported = true;
+    return result;
+}
+
+SurveyControlProjectImportResult commitSurveyControlMarkerSet(
+    ProjectData* projectData,
+    const control_points::MarkerSet& markerSet)
+{
+    SurveyControlProjectImportResult result;
+    if (!projectData || !projectData->hasProject())
+    {
+        result.errorMessage = QStringLiteral("项目未打开，无法写入测绘控制 metadata");
         return result;
     }
 
     QJsonObject metadata = projectData->coreFilesMeta();
-    int control_count = 0;
-    int check_count = 0;
-    for (const control_points::Marker &marker : markerSet.markers())
+    int controlCount = 0;
+    int checkCount = 0;
+    for (const control_points::Marker& marker : markerSet.markers())
     {
-        if (marker.role == control_points::MarkerRole::ControlPoint) ++control_count;
-        else if (marker.role == control_points::MarkerRole::CheckPoint) ++check_count;
+        if (marker.role == control_points::MarkerRole::ControlPoint)
+        {
+            ++controlCount;
+        }
+        else if (marker.role == control_points::MarkerRole::CheckPoint)
+        {
+            ++checkCount;
+        }
     }
     metadata[QStringLiteral("marker_set")] = QJsonObject{
         {QStringLiteral("path"), QStringLiteral("assets/control_points/marker_set.json")},
         {QStringLiteral("schema_version"), markerSet.schemaVersion()},
         {QStringLiteral("marker_count"), markerSet.markers().size()},
-        {QStringLiteral("control_point_count"), control_count},
-        {QStringLiteral("check_point_count"), check_count},
+        {QStringLiteral("control_point_count"), controlCount},
+        {QStringLiteral("check_point_count"), checkCount},
         {QStringLiteral("scale_bar_count"), markerSet.scaleBars().size()},
-        {QStringLiteral("updated_at"), markerSet.updatedAt().toString(Qt::ISODateWithMs)}
-    };
+        {QStringLiteral("updated_at"), markerSet.updatedAt().toString(Qt::ISODateWithMs)}};
     projectData->updateMetadata(metadata, true);
-
-    result.controlPointCount = control_count;
-    result.checkPointCount = check_count;
+    if (projectData->coreFilesMeta().value(QStringLiteral("marker_set")) !=
+        metadata.value(QStringLiteral("marker_set")))
+    {
+        result.errorMessage = QStringLiteral("测绘控制 metadata 写回校验失败");
+        return result;
+    }
+    result.controlPointCount = controlCount;
+    result.checkPointCount = checkCount;
     result.scaleBarCount = markerSet.scaleBars().size();
     result.imported = true;
     return result;
 }
-
-} // namespace
 
 SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData,
                                                         const QString &csvPath,
@@ -183,17 +324,13 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
         return result;
     }
 
-    control_points::MarkerCsvImportOptions options;
-    options.defaultRole = defaultRole;
-    options.imageIdentityByPath = imageIdentityMap(*projectData);
-    applyAgisoftWgs84Defaults(csvPath, &options);
-    const auto imported = control_points::readMarkerCsvFile(csvPath, options);
-    if (!imported.ok)
+    const auto prepared = prepareSurveyControlCsv(imageIdentityMap(*projectData), csvPath, defaultRole);
+    if (!prepared.prepared)
     {
-        result.errorMessage = imported.error;
+        result.errorMessage = prepared.errorMessage;
         return result;
     }
-    return publishMarkerSet(projectData, imported.markerSet);
+    return publishMarkerSet(projectData, prepared.markerSet);
 }
 
 QJsonObject surveyControlDialogMetadata(ProjectData *projectData, QString *errorMessage)

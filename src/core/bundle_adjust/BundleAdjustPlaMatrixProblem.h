@@ -51,9 +51,10 @@ namespace xjw::detail::plamatrix_ba
 
     bool hasSharedIntrinsics(const BAOptions& options);
 
-    std::vector<IntrinsicGroupState> initializeIntrinsicGroups(const std::vector<FramePinholeCamera>& cameras,
-                                                               const BAOptions& options,
-                                                               const ActiveProblem& active);
+    std::vector<IntrinsicGroupState>
+    initializeIntrinsicGroups(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                              const BAOptions& options,
+                              const ActiveProblem& active);
 
     BAIntrinsicParameterMask
     activeIntrinsicParameters(const BAOptions& options, const BAIntrinsicParameterMask& enabled, int iteration);
@@ -64,15 +65,17 @@ namespace xjw::detail::plamatrix_ba
                             const std::vector<double>& primary_step,
                             std::vector<IntrinsicGroupState>* groups);
 
-    void publishIntrinsics(const std::vector<FramePinholeCamera>& input_cameras,
-                           const BAOptions& options,
-                           const ActiveProblem& active,
-                           const std::vector<IntrinsicGroupState>& groups,
-                           const BAIntrinsicParameterMask& committed_parameters,
-                           BAResult* result);
+    void
+    publishIntrinsics(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                      const BAOptions& options,
+                      const ActiveProblem& active,
+                      const std::vector<IntrinsicGroupState>& groups,
+                      const BAIntrinsicParameterMask& committed_parameters,
+                      BAResult* result);
 
-    ActiveProblem prepareActiveProblem(const std::vector<FramePinholeCamera>& cameras,
-                                       const std::vector<BATrack>& tracks,
-                                       const BAOptions& options);
+    ActiveProblem
+    prepareActiveProblem(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                         const std::vector<BATrack>& tracks,
+                         const BAOptions& options);
 
 } // namespace xjw::detail::plamatrix_ba

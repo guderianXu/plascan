@@ -1,6 +1,7 @@
 #include "MarkerTaskRunner.h"
 
 #include "detection/MarkerDetectorFactory.h"
+#include "detection/MarkerImageAdapter.h"
 
 #include <QtConcurrent>
 
@@ -44,7 +45,7 @@ QVector<control_points::MarkerDetection> detectFamily(
 {
     const std::unique_ptr<control_points::MarkerDetector> detector =
         control_points::MarkerDetectorFactory::create(family);
-    return detector->detect(image, mask, options);
+    return xjw::app::markers::detectMarkers(*detector, image, mask, options);
 }
 
 QImage readImage(const QString &path)

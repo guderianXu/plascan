@@ -1,5 +1,7 @@
 #pragma once
 
+#include "coordinate_system/context/CoordinateContext.h"
+
 /**
  * @file AerialTriangulationOptions.h
  * @brief “对齐照片/空中三角测量”工作流的外部参数和已准备输入契约。
@@ -9,7 +11,9 @@
  * PreparedAerialTriangulationInput。SfM 管线不得重新解释特征/匹配参数。
  */
 
-#include "FramePinholeCamera.h"
+#include "camera/core/types/CameraIds.h"
+#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "camera/reference/resolve/CameraReferencePosePrior.h"
 #include "common/SfmTypes.h"
 
 #include <QJsonObject>
@@ -21,19 +25,43 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace xjw::aerial_triangulation
 {
 
-    struct PreparedTiePointGraph;
+    /**
+     * Explicit identity/frame binding for one numerical solver camera.
+     *
+     * Aerial input must provide one binding per image when it wants typed
+     * identity or external pose references.  No path, file name, or numeric
+     * SfM index is promoted to a persistent camera identity here.
+     */
+    struct SolverCameraBinding
+    {
+        camera_core::CameraInstanceId instanceId;
+        camera_core::ImageId imageId;
+        xjw::coordinate_system::CoordinateFrameId worldFrame;
+    };
+
+    namespace engine
+    {
+        struct TiePointGraph;
+    }
+    using PreparedTiePointGraph = engine::TiePointGraph;
 
     // 面向 GUI/CLI 的“对齐照片”参数。连接点前端参数在 Workflow 中转换为
     // MatchPhotosOptions，不允许继续传入纯 SfM 重建管线。
     struct AerialTriangulationOptions
     {
         // 当前处理集合和工程上下文。
-        QStringList images;      ///< 参与本次空三的影像绝对路径，顺序定义 ImageId。
+        QStringList images; ///< 参与本次空三的影像绝对路径，顺序定义 ImageId。
+        std::vector<camera_core::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
+        /// 可选的显式相机身份/frame 绑定；提供时必须与 images 一一对应。
+        std::vector<SolverCameraBinding> cameraBindings;
         QStringList cameraPaths; ///< 可选外部相机文件；完整时必须与 images 一一对应。
+        /// 已解析的外部姿态软先验；只允许通过 resolver/factory 产生。
+        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
         QString projectPath;     ///< .plascan 工程路径，用于标记 sidecar 和项目根目录。
         QString outputDir;       ///< 空三资产根目录，管线会在其下创建 sfm_sparse。
         QJsonObject projectMeta; ///< 调用时工程元数据快照。
@@ -93,10 +121,11 @@ namespace xjw::aerial_triangulation
         QString assetsDir;                ///< 可覆盖工程 assets 根目录。
         QString matchDir;                 ///< 可覆盖逐影像 `.pimatch` 分片目录。
         QMap<QString, QString> maskPaths; ///< 影像规范路径到蒙版路径。
-        QMap<QString, FramePinholeCamera> referenceCameras;      ///< 影像路径到可信参考相机。
-        QMap<QString, std::array<double, 3>> referencePositions; ///< 影像路径到参考相机中心。
-        float featureGrayscaleMin = 5.0f / 255.0f;               ///< 特征前端灰度有效下限。
-        float featureGrayscaleMax = 1.0f;                        ///< 特征前端灰度有效上限。
+        /// 参考相机和位置均按 ImageId 键控；images/cameraBindings 只负责输入顺序。
+        camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
+        camera_reference::ReferenceCameraPositionMap referencePositions;
+        float featureGrayscaleMin = 5.0f / 255.0f; ///< 特征前端灰度有效下限。
+        float featureGrayscaleMax = 1.0f;          ///< 特征前端灰度有效上限。
 
         std::shared_ptr<std::atomic<bool>> cancelFlag; ///< 跨连接点/SfM 阶段共享取消标志。
         /// 阶段文本和整体百分比回调；Workflow 占 0-94%，上层在导出、登记和保存后提交 95-100%。
@@ -111,11 +140,18 @@ namespace xjw::aerial_triangulation
     // 已完成连接点准备后的 SfM/BA 输入。该类型刻意不包含任何特征提取和匹配参数。
     struct PreparedAerialTriangulationInput
     {
-        QStringList images;      ///< 稳定 ImageId 顺序。
+        QStringList images;                         ///< 稳定 ImageId 顺序。
+        std::vector<camera_core::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
+        /// 与 images 对齐的显式 camera instance/image/frame 绑定。
+        std::vector<SolverCameraBinding> cameraBindings;
         QStringList cameraPaths; ///< 可选一一对应外部相机文件。
-        QString projectPath;     ///< 工程路径，仅供标记/结果回写上下文。
-        QString markerSetPath;   ///< 完整标记系统 sidecar。
-        QString tiePointPath;    ///< matchphototask 生成的多视连接点 JSON。
+        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
+        camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
+        camera_reference::ReferenceCameraPositionMap referencePositions;
+        QString projectPath;   ///< 工程路径，仅供标记/结果回写上下文。
+        QString markerSetPath; ///< 完整标记系统 sidecar。
+        std::shared_ptr<const xjw::coordinate_system::CoordinateContext> coordinateContext; ///< 权威坐标快照。
+        QString tiePointPath; ///< matchphototask 生成的多视连接点 JSON。
         /// 同一次焦距搜索中由所有候选共享的只读连接点图。
         std::shared_ptr<const PreparedTiePointGraph> preparedTiePointGraph;
         QString outputDir;       ///< 正式稀疏结果目录。

@@ -96,7 +96,6 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_SOURCE_DIR}/src/core/intersection
   ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
   ${CMAKE_SOURCE_DIR}/src/core/camera
-  ${CMAKE_SOURCE_DIR}/src/core/camera_reference
   ${CMAKE_SOURCE_DIR}/src/core/lidar
   ${CMAKE_SOURCE_DIR}/src/core/mask
   ${CMAKE_SOURCE_DIR}/src/core/qc
@@ -158,7 +157,16 @@ target_link_libraries(gui_project PRIVATE
   Qt6::Concurrent
   plascan_common_project
   project_workflows
+  project_recovery_qt
 )
+
+if(TARGET terrain_report_qt)
+  target_link_libraries(gui_project PRIVATE terrain_report_qt)
+endif()
+if(TARGET marker_print_qt AND TARGET gui_runtime)
+  target_link_libraries(gui_runtime PRIVATE marker_print_qt)
+  target_link_libraries(gui_runtime PRIVATE marker_detection_qt)
+endif()
 
 # GUI project services own these workflow calls, so the library declares the
 # corresponding core dependencies instead of relying on final executable link order.
@@ -180,6 +188,10 @@ endif()
 
 if(TARGET aerial_triangulation)
   target_link_libraries(gui_project PRIVATE aerial_triangulation)
+endif()
+
+if(TARGET sfm_core)
+  target_link_libraries(gui_project PRIVATE sfm_core)
 endif()
 
 if(TARGET stereo_dem)

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "DepthFrameQualificationPolicy.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "MeshTypes.h"
 #include "VisualHullReconstructor.h"
 
@@ -56,7 +56,7 @@ struct DepthFrameArtifact
     QStringList qualityReasons;
     int gridWidth = 0;
     int gridHeight = 0;
-    FramePinholeCamera cameraModel;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraModel;
     bool hasCameraModel = false;
     bool pyramidFallback = false;
     bool auxiliaryBridgeSelected = false;

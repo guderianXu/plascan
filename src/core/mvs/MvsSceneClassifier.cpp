@@ -267,7 +267,8 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
 
     for (const CameraView &view : views)
     {
-        const FramePinholeCamera camera = view.camera.normalizedForPositiveDepth();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+            view.camera.normalizedForPositiveDepth();
         if (!camera.isValid())
         {
             continue;

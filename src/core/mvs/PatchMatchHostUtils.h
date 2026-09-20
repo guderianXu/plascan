@@ -15,10 +15,10 @@ namespace mvs
 /// Relative translation is formed from double-precision camera centres before
 /// the local result is converted to float, preserving small baselines at large
 /// world-coordinate origins.
-std::array<float, 16> buildPatchMatchSourceCameraData(
-    const FramePinholeCamera &reference,
-    const FramePinholeCamera &source,
-    int downsampleFactor);
+std::array<float, 16>
+buildPatchMatchSourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+                                int downsampleFactor);
 
 /// Applies the shared host-side PatchMatch depth filters.
 /// Invalid pixels never participate in a neighbourhood and remain invalid.

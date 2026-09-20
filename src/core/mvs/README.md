@@ -40,9 +40,25 @@ regenerated because consistency filtering and repaired coverage can change.
 
 ## Runtime State
 
+The one-click reconstruction CLI writes refined SfM cameras to the canonical project instance graph before it
+starts MVS. It refreshes that graph and resolves each selected `image_uuid` through `CameraProjectRuntime`; MVS
+receives only the resulting bound frame-pinhole numeric states. Pending SfM JSON is a writeback payload, not an
+MVS camera source. RPC and pushbroom instances therefore fail at this boundary with an explicit model error.
+
 - `MvsWorkspaceManifest` is the disk record for depth estimation. Each frame stores the reference image,
   selected source images, `source plan`, status, device, elapsed time, `depth_png`, raw depth, raw
   `confidence`, `valid mask`, and a config hash.
+- Workspace replay treats the persisted camera object as a strict numeric boundary: required intrinsics,
+  center, and rotation fields must be present finite JSON numbers, present distortion fields must also be
+  finite, and the reconstructed state must pass the shared pinhole numerical validator before any raster or
+  depth artifact is opened. Missing Brown coefficients alone mean zero; malformed fields are rejected. Current
+  manifests also persist `instance_id`, `image_id`, and `world_frame` in every replayable camera object. Replay
+  requires all three fields, rejects duplicate image/instance identities and mixed world frames, and invalidates
+  older workspace revisions instead of guessing a binding from a path or frame index.
+- Stored-depth fusion applies the same rule when it reloads a prepared or grid camera: the artifact binding must
+  match the current canonical image/instance/frame, otherwise the frame is rejected before depth data is consumed.
+- Derived raster cameras from epipolar rectification retain the source image/instance/frame binding while their pixel
+  pose and intrinsics are transformed, so replayable artifacts do not lose provenance at the rectification boundary.
 - `MvsPipelineService` writes initial frame artifacts as non-publishable `running` checkpoints. It marks a frame
   `completed` and emits project metadata only after the final required artifact set has been written and verified;
   completed frames with a matching config hash can be reused, while failed or interrupted checkpoints are retried.
@@ -111,6 +127,9 @@ regenerated because consistency filtering and repaired coverage can change.
   or directional propagation pass after random refinement. The shared scale-invariant depth bilateral filter also
   supports optional normalized reference-image guidance, but it remains default-off because the initial building
   A/B increased texture-scale depth discontinuities. Revision-50 batches are regenerated.
+- Revision 56 makes replay camera identity part of the artifact contract and the depth-input fingerprint. Existing
+  workspaces without a complete typed image/instance/world-frame binding are stale and are regenerated instead of
+  being interpreted through a path or frame-index guess.
 - Downstream geometry consumers use one fail-closed frame-role contract. Only a `completed` frame with explicit
   `acceptance=accepted` and `fusion_eligible=true` is `Primary`; a completed `validation_only` frame with explicit
   eligibility metadata is `CoverageAuxiliary`; rejected, failed, incomplete, and manifestless frames are `Excluded`.

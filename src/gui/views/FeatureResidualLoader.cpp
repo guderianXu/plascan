@@ -85,6 +85,22 @@ namespace
         QString name;
     };
 
+    bool readNonNegativeInteger(const QJsonValue& value, int* output)
+    {
+        if (!output || !value.isDouble())
+        {
+            return false;
+        }
+        const double number = value.toDouble(std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(number) || number < 0.0 || std::floor(number) != number ||
+            number > static_cast<double>(std::numeric_limits<int>::max()))
+        {
+            return false;
+        }
+        *output = static_cast<int>(number);
+        return true;
+    }
+
     struct SidecarObservationIndex
     {
         QHash<QString, IndexedImageDiagnostics> diagnosticsByPath;
@@ -118,75 +134,152 @@ namespace
         return cache;
     }
 
-    std::shared_ptr<SidecarObservationIndex> buildSidecarObservationIndex(const QJsonDocument& document)
+    std::shared_ptr<SidecarObservationIndex> buildSidecarObservationIndex(const QJsonDocument& document,
+                                                                           QString* error)
     {
+        const auto fail = [error](const QString& message) -> std::shared_ptr<SidecarObservationIndex>
+        {
+            if (error)
+            {
+                *error = message;
+            }
+            return {};
+        };
+
         auto index = std::make_shared<SidecarObservationIndex>();
         index->diagnosticsByPath.reserve(512);
         index->pathsByImageName.reserve(512);
         QHash<QString, QString> normalizedPathCache;
         normalizedPathCache.reserve(512);
         const QJsonObject root = document.object();
-        QHash<int, SidecarImageIdentity> imagesById;
+        if (root.value(QStringLiteral("schema")).toString() !=
+            QStringLiteral("plascan.sfm_sparse_points.v3"))
+        {
+            return fail(QStringLiteral(
+                "连接点观测文件必须使用 plascan.sfm_sparse_points.v3；旧 schema 不再兼容"));
+        }
+        QHash<int, SidecarImageIdentity> imagesByIndex;
+        QHash<QString, int> imageIndexByCanonicalId;
         const QJsonArray images = root.value(QStringLiteral("images")).toArray();
-        imagesById.reserve(images.size());
+        if (images.isEmpty())
+        {
+            return fail(QStringLiteral("v3 连接点观测文件缺少非空 images 表"));
+        }
+        imagesByIndex.reserve(images.size());
+        imageIndexByCanonicalId.reserve(images.size());
         for (const QJsonValue& imageValue : images)
         {
-            const QJsonObject image = imageValue.toObject();
-            const int imageId = image.value(QStringLiteral("image_id")).toInt(-1);
-            if (imageId >= 0)
+            if (!imageValue.isObject())
             {
-                imagesById.insert(imageId,
-                                  {image.value(QStringLiteral("image_path")).toString(),
-                                   image.value(QStringLiteral("image_name")).toString()});
+                return fail(QStringLiteral("v3 连接点观测文件的 images 行必须是对象"));
             }
+            const QJsonObject image = imageValue.toObject();
+            int cameraIndex = -1;
+            if (!readNonNegativeInteger(image.value(QStringLiteral("camera_index")), &cameraIndex))
+            {
+                return fail(QStringLiteral("v3 连接点观测文件的 images.camera_index 无效"));
+            }
+            const QJsonValue imageIdValue = image.value(QStringLiteral("image_id"));
+            const QJsonValue imagePathValue = image.value(QStringLiteral("image_path"));
+            if (!imageIdValue.isString() || !imagePathValue.isString())
+            {
+                return fail(QStringLiteral("v3 连接点观测文件的 images 必须包含字符串 image_id 和 image_path"));
+            }
+            const QString canonicalImageId = imageIdValue.toString().trimmed();
+            const QString imagePath = imagePathValue.toString().trimmed();
+            if (canonicalImageId.isEmpty() || imagePath.isEmpty() || imagesByIndex.contains(cameraIndex) ||
+                imageIndexByCanonicalId.contains(canonicalImageId))
+            {
+                return fail(QStringLiteral("v3 连接点观测文件的 images 身份重复或为空"));
+            }
+            const SidecarImageIdentity identity{imagePath, image.value(QStringLiteral("image_name")).toString()};
+            imagesByIndex.insert(cameraIndex, identity);
+            imageIndexByCanonicalId.insert(canonicalImageId, cameraIndex);
         }
 
+        if (root.value(QStringLiteral("points")).isUndefined() || !root.value(QStringLiteral("points")).isArray())
+        {
+            return fail(QStringLiteral("v3 连接点观测文件缺少 points 数组"));
+        }
         const QJsonArray points = root.value(QStringLiteral("points")).toArray();
         for (const QJsonValue& pointValue : points)
         {
+            if (!pointValue.isObject())
+            {
+                return fail(QStringLiteral("v3 连接点观测文件的 points 行必须是对象"));
+            }
             const QJsonObject pointObject = pointValue.toObject();
             const double pointResidual = pointObject.value(QStringLiteral("rms_reproj_px")).toDouble(0.0);
             const float response =
                 std::isfinite(pointResidual) ? static_cast<float>(1.0 / (1.0 + std::max(0.0, pointResidual))) : 0.0f;
-            const QJsonArray observations = pointObject.value(QStringLiteral("observations")).toArray();
+            const QJsonValue observationsValue = pointObject.value(QStringLiteral("observations"));
+            if (!observationsValue.isArray())
+            {
+                return fail(QStringLiteral("v3 连接点观测文件的 points.observations 必须是数组"));
+            }
+            const QJsonArray observations = observationsValue.toArray();
             for (const QJsonValue& observationValue : observations)
             {
-                QString rawImagePath;
-                QString imageName;
+                if (!observationValue.isObject())
+                {
+                    return fail(QStringLiteral("v3 连接点观测文件的 observations 行必须是对象"));
+                }
+                const QJsonObject observation = observationValue.toObject();
+                int cameraIndex = -1;
+                const QJsonValue imageIdValue = observation.value(QStringLiteral("image_id"));
+                if (!readNonNegativeInteger(observation.value(QStringLiteral("camera_index")), &cameraIndex) ||
+                    !imageIdValue.isString())
+                {
+                    return fail(QStringLiteral("v3 连接点观测文件的 observation 身份字段无效"));
+                }
+                const QString canonicalImageId = imageIdValue.toString().trimmed();
+                const auto imageIndexIt = imageIndexByCanonicalId.constFind(canonicalImageId);
+                const auto imageIt = imagesByIndex.constFind(cameraIndex);
+                if (canonicalImageId.isEmpty() || imageIndexIt == imageIndexByCanonicalId.cend() ||
+                    imageIt == imagesByIndex.cend() || imageIndexIt.value() != cameraIndex)
+                {
+                    return fail(QStringLiteral(
+                        "v3 连接点观测文件的 observation 的 image_id 与 camera_index 不一致"));
+                }
+                const QJsonValue observationPathValue = observation.value(QStringLiteral("image_path"));
+                if (!observationPathValue.isUndefined() && !observationPathValue.isString())
+                {
+                    return fail(QStringLiteral("v3 连接点观测文件的 observation.image_path 必须是字符串"));
+                }
+                if (observationPathValue.isString() && !observationPathValue.toString().trimmed().isEmpty() &&
+                    normalizedPath(observationPathValue.toString()) != normalizedPath(imageIt.value().path))
+                {
+                    bool pointsToAnotherImage = false;
+                    for (auto candidate = imagesByIndex.cbegin(); candidate != imagesByIndex.cend(); ++candidate)
+                    {
+                        if (normalizedPath(observationPathValue.toString()) == normalizedPath(candidate.value().path))
+                        {
+                            pointsToAnotherImage = candidate.key() != cameraIndex;
+                            break;
+                        }
+                    }
+                    if (pointsToAnotherImage)
+                    {
+                        return fail(QStringLiteral(
+                            "v3 连接点观测文件的 observation.image_path 指向另一 camera_index"));
+                    }
+                }
+
+                const QString rawImagePath = imageIt.value().path;
+                QString imageName = observationImageName(observation);
+                if (imageName.isEmpty())
+                {
+                    imageName = imageIt.value().name;
+                }
                 QPointF observed;
                 QPointF projected;
                 double scaleValue = 1.0;
-                qint64 featureIndex = -1;
+                qint64 featureIndex = observation.value(QStringLiteral("feature_idx")).toInteger(-1);
                 bool hasObserved = false;
                 bool hasProjected = false;
-                if (observationValue.isArray())
-                {
-                    const QJsonArray observation = observationValue.toArray();
-                    if (observation.size() < 5)
-                    {
-                        continue;
-                    }
-                    const SidecarImageIdentity identity = imagesById.value(observation.at(0).toInt(-1));
-                    rawImagePath = identity.path;
-                    imageName = identity.name;
-                    featureIndex = observation.at(1).toInteger(-1);
-                    hasObserved = finitePoint(QJsonArray{observation.at(2), observation.at(3)}, &observed);
-                    scaleValue = observation.at(4).toDouble(1.0);
-                    if (observation.size() >= 7)
-                    {
-                        hasProjected = finitePoint(QJsonArray{observation.at(5), observation.at(6)}, &projected);
-                    }
-                }
-                else
-                {
-                    const QJsonObject observation = observationValue.toObject();
-                    rawImagePath = observation.value(QStringLiteral("image_path")).toString();
-                    imageName = observationImageName(observation);
-                    featureIndex = observation.value(QStringLiteral("feature_idx")).toInteger(-1);
-                    hasObserved = finitePoint(observation.value(QStringLiteral("xy")).toArray(), &observed);
-                    scaleValue = observation.value(QStringLiteral("scale")).toDouble(1.0);
-                    hasProjected = finitePoint(observation.value(QStringLiteral("projected_xy")).toArray(), &projected);
-                }
+                hasObserved = finitePoint(observation.value(QStringLiteral("xy")).toArray(), &observed);
+                scaleValue = observation.value(QStringLiteral("scale")).toDouble(1.0);
+                hasProjected = finitePoint(observation.value(QStringLiteral("projected_xy")).toArray(), &projected);
                 auto normalizedIt = normalizedPathCache.constFind(rawImagePath);
                 if (normalizedIt == normalizedPathCache.cend())
                 {
@@ -286,13 +379,13 @@ namespace
         {
             QJsonParseError parseError;
             const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
-            if (!document.isObject())
+            if (parseError.error != QJsonParseError::NoError || !document.isObject())
             {
                 error = QStringLiteral("连接点观测文件格式无效（%1）: %2").arg(parseError.errorString(), sidecarPath);
             }
             else
             {
-                index = buildSidecarObservationIndex(document);
+                index = buildSidecarObservationIndex(document, &error);
             }
         }
         const qint64 loadMilliseconds = timer.elapsed();

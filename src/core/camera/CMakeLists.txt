@@ -1,29 +1,53 @@
-# 生产静态库：面阵/线阵相机、Tsai I/O、坐标归一化和外部格式转换器。
+add_subdirectory(core)
+add_subdirectory(models/frame_pinhole)
+add_subdirectory(models/rpc)
+add_subdirectory(models/linescan)
+
+add_library(camera_models_registry STATIC
+    models/CameraModelFactories.cpp
+    models/CameraModelFactories.h
+    models/LineScanModelJsonDecode.cpp
+    models/LineScanModelJsonEncode.cpp
+    models/LineScanModelJson.h
+)
+target_include_directories(camera_models_registry PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_compile_features(camera_models_registry PUBLIC cxx_std_20)
+target_link_libraries(camera_models_registry PUBLIC
+    camera_core
+    camera_models_frame_pinhole
+    camera_models_rpc
+    camera_models_linescan
+    Qt6::Core
+)
+
+add_subdirectory(project)
+add_subdirectory(reference)
+
+# 生产静态库：相机外部格式导入、转换和通用摄影测量辅助能力。
 add_library(camera STATIC
-	CameraModel.cpp
-	FramePinholeCamera.cpp
-	FramePinholeCameraModel.cpp
-	PlanetaryLineScanCamera.cpp
-	PlanetaryLineScanCameraIsd.cpp
-	PlanetaryLineScanProjection.cpp
-	PlanetaryLineScanCameraModel.cpp
-	RpcCameraModel.cpp
-	RpcCameraCoordinates.cpp
-	RpcCameraImageCorrection.cpp
-	RpcCameraIO.cpp
-	RpcBiasAdjustment.cpp
-	RpcStereoIntersection.cpp
+	FramePinholeTsaiIO.cpp
+	PlanetaryLineScanIsdIO.cpp
+	PlanetaryLineScanIsdIO.h
+	RpcRasterIO.cpp
 	CameraBaseline.cpp
 	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
 	ColmapImageUndistorter.cpp
 	ProjectCameraIO.cpp
+	ProjectLineScanCameraIO.cpp
 	ProjectRpcCameraIO.cpp
 )
-target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(camera PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/core
+)
 target_compile_features(camera PUBLIC cxx_std_20)
 target_link_libraries(camera
 	PUBLIC plascan_common_io
+	        camera_models_frame_pinhole
+		        camera_models_linescan
+		        camera_models_registry
+		        camera_models_rpc
 	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET} ${OpenCV_LIBS} ${PLASCAN_GDAL_TARGET}
 )
 
@@ -38,9 +62,7 @@ if(BUILD_TESTS)
 		include(GoogleTest)
 		# 纯合成内参与投影测试；include 指向模块根以保持公共相机头路径稳定。
 		add_executable(test_camera_unit
-			test/FramePinholeCamera_tests.cpp
-			test/CameraModel_tests.cpp
-			test/RpcCameraModel_tests.cpp
+			 test/RpcRasterIO_tests.cpp
 		)
 		target_link_libraries(test_camera_unit PRIVATE
 			camera
@@ -52,7 +74,7 @@ if(BUILD_TESTS)
 
 		# USGSCSM ISD 推扫相机的时间、姿轨、焦平面和投影回归测试。
 		add_executable(test_planetary_line_scan_camera
-			test/PlanetaryLineScanCamera_tests.cpp
+			test/PlanetaryLineScanIsdIO_tests.cpp
 		)
 		target_link_libraries(test_planetary_line_scan_camera PRIVATE
 			camera

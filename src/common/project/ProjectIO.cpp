@@ -2,11 +2,14 @@
 
 #include "ProjectChunkStore.h"
 #include "ProjectPackageLayout.h"
+#include "ProjectPathBridge.h"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
 #include <QReadWriteLock>
+
+#include <filesystem>
 
 namespace xjw::common::project
 {
@@ -16,6 +19,14 @@ namespace
 
 QReadWriteLock runtimeRootsLock;
 QHash<QString, QString> runtimeRoots;
+
+using ChunkPathMember = std::filesystem::path (xjw::common::plafs::PlaChunkLayout::*)() const;
+
+QString chunkPath(const QString &root, ChunkPathMember member)
+{
+    const auto layout = path_bridge::chunkLayout(root);
+    return layout ? path_bridge::toQtPath((layout.value().*member)()) : QString();
+}
 
 QString normalizedProjectKey(const QString &plascanPath)
 {
@@ -121,16 +132,14 @@ QString ProjectIO::resolveProjectResourcePath(const QString &plascanPath,
 
 QString ProjectIO::projectAssetsDir(const QString &plascanPath)
 {
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("assets"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::assetsDirectory);
 }
 
 QString ProjectIO::projectBundleAdjustDir(const QString &plascanPath)
 {
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("bundle_adjust"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::bundleAdjustDirectory);
 }
 
 QString ProjectIO::projectImagesDir(const QString &plascanPath)
@@ -140,86 +149,74 @@ QString ProjectIO::projectImagesDir(const QString &plascanPath)
 
 QString ProjectIO::projectControlPointsDir(const QString &plascanPath)
 {
-    const QString assets = projectAssetsDir(plascanPath);
-    if (assets.isEmpty()) return QString();
-    return QDir(assets).filePath(QStringLiteral("control_points"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::controlPointsDirectory);
 }
 
 QString ProjectIO::markerSetPath(const QString &plascanPath)
 {
-    const QString directory = projectControlPointsDir(plascanPath);
-    if (directory.isEmpty()) return QString();
-    return QDir(directory).filePath(QStringLiteral("marker_set.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::markerSetPath);
 }
 
 QString ProjectIO::markerDetectionReviewPath(const QString &plascanPath)
 {
-    const QString directory = projectControlPointsDir(plascanPath);
-    if (directory.isEmpty()) return QString();
-    return QDir(directory).filePath(QStringLiteral("detection_review.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::markerDetectionReviewPath);
 }
 
 QString ProjectIO::projectCameraReferencesDir(const QString &plascanPath)
 {
-    const QString assets = projectAssetsDir(plascanPath);
-    if (assets.isEmpty()) return QString();
-    return QDir(assets).filePath(QStringLiteral("camera_references"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::cameraReferencesDirectory);
 }
 
 QString ProjectIO::cameraReferenceSetPath(const QString &plascanPath)
 {
-    const QString directory = projectCameraReferencesDir(plascanPath);
-    if (directory.isEmpty()) return QString();
-    return QDir(directory).filePath(QStringLiteral("camera_reference_set.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::cameraReferenceSetPath);
 }
 
 QString ProjectIO::tmpDir(const QString &plascanPath)
 {
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral(".plascan_tmp"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::temporaryDirectory);
 }
 
 QString ProjectIO::tempFilesPath(const QString &plascanPath)
 {
-    const QString tmp = tmpDir(plascanPath);
-    if (tmp.isEmpty()) return QString();
-    return QDir(tmp).filePath(QStringLiteral("project_files.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::temporaryFilesPath);
 }
 
 QString ProjectIO::tempConfigPath(const QString &plascanPath)
 {
-    const QString tmp = tmpDir(plascanPath);
-    if (tmp.isEmpty()) return QString();
-    return QDir(tmp).filePath(QStringLiteral("project_config.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::temporaryConfigPath);
 }
 
 QString ProjectIO::tempUiStatePath(const QString &plascanPath)
 {
-    const QString tmp = tmpDir(plascanPath);
-    if (tmp.isEmpty()) return QString();
-    return QDir(tmp).filePath(QStringLiteral("project_ui_state.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::temporaryUiStatePath);
 }
 
 QString ProjectIO::tempResultsPath(const QString &plascanPath)
 {
-    const QString tmp = tmpDir(plascanPath);
-    if (tmp.isEmpty()) return QString();
-    return QDir(tmp).filePath(QStringLiteral("project_results.json"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::temporaryResultsPath);
 }
 
 QString ProjectIO::imageMatchOutputDir(const QString &plascanPath)
 {
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("assets/image_matches"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::imageMatchesDirectory);
 }
 
 QString ProjectIO::maskOutputDir(const QString &plascanPath)
 {
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("assets/masks"));
+    return chunkPath(projectRootFromPlascan(plascanPath),
+                     &xjw::common::plafs::PlaChunkLayout::masksDirectory);
 }
 
 } // namespace xjw::common::project

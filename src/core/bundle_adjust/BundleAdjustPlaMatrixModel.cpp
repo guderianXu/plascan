@@ -30,7 +30,9 @@ namespace xjw::detail::plamatrix_ba
             std::vector<double> imageHeights;
         };
 
-        void appendSamples(const FramePinholeCamera& camera, const FramePinholeCamera& reference, GroupSamples* samples)
+        void appendSamples(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                           const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
+                           GroupSamples* samples)
         {
             const auto intrinsics = camera.intrinsics();
             const auto reference_intrinsics = reference.intrinsics();
@@ -80,9 +82,10 @@ namespace xjw::detail::plamatrix_ba
         return false;
     }
 
-    std::vector<IntrinsicGroupState> initializeIntrinsicGroups(const std::vector<FramePinholeCamera>& cameras,
-                                                               const BAOptions& options,
-                                                               const ActiveProblem& active)
+    std::vector<IntrinsicGroupState>
+    initializeIntrinsicGroups(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                              const BAOptions& options,
+                              const ActiveProblem& active)
     {
         std::vector<IntrinsicGroupState> groups(static_cast<std::size_t>(active.intrinsicBlockCount));
         if (groups.empty())
@@ -250,12 +253,13 @@ namespace xjw::detail::plamatrix_ba
         }
     }
 
-    void publishIntrinsics(const std::vector<FramePinholeCamera>& input_cameras,
-                           const BAOptions& options,
-                           const ActiveProblem& active,
-                           const std::vector<IntrinsicGroupState>& groups,
-                           const BAIntrinsicParameterMask& committed_parameters,
-                           BAResult* result)
+    void
+    publishIntrinsics(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                      const BAOptions& options,
+                      const ActiveProblem& active,
+                      const std::vector<IntrinsicGroupState>& groups,
+                      const BAIntrinsicParameterMask& committed_parameters,
+                      BAResult* result)
     {
         if (groups.empty())
         {

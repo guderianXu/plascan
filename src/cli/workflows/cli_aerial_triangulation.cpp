@@ -132,12 +132,16 @@ namespace
         object[QStringLiteral("duration_seconds")] = result.durationSeconds;
         object[QStringLiteral("per_camera_residuals")] = result.perCameraResiduals;
 
-        QJsonObject cameraUpdates;
-        for (auto it = result.pendingCamUpdates.constBegin(); it != result.pendingCamUpdates.constEnd(); ++it)
+        QJsonArray cameraUpdates;
+        for (const auto& update : result.cameraInstanceUpdates)
         {
-            cameraUpdates.insert(it.key(), it.value());
+            cameraUpdates.append(QJsonObject{
+                {QStringLiteral("image_id"), QString::fromStdString(update.imageId.value())},
+                {QStringLiteral("instance_id"), QString::fromStdString(update.instanceId.value())},
+                {QStringLiteral("world_frame"), QString::fromStdString(update.worldFrame.value())},
+                {QStringLiteral("metadata"), update.modelMetadata}});
         }
-        object[QStringLiteral("pending_camera_updates")] = cameraUpdates;
+        object[QStringLiteral("camera_instance_updates")] = cameraUpdates;
         return object;
     }
 
@@ -205,8 +209,10 @@ namespace
         object[QStringLiteral("working_dir")] = config.tiePointContext.workingDirectory;
         object[QStringLiteral("match_dir")] = config.tiePointContext.matchDirectory;
         object[QStringLiteral("mask_count")] = config.tiePointContext.maskPaths.size();
-        object[QStringLiteral("reference_camera_count")] = config.tiePointContext.referenceCameras.size();
-        object[QStringLiteral("reference_position_count")] = config.tiePointContext.referencePositions.size();
+        object[QStringLiteral("reference_camera_count")] =
+            static_cast<int>(config.tiePointContext.referenceCameraGeometries.size());
+        object[QStringLiteral("reference_position_count")] =
+            static_cast<int>(config.tiePointContext.referencePositions.size());
         return object;
     }
 
@@ -581,16 +587,6 @@ int main(int argc, char* argv[])
     options.device = xjw::cli::normalizedToken(deviceArg, QStringLiteral("auto"));
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;
-    options.referenceCameras = xjw::cli::referenceCameraMap(items);
-    if (!referenceCsvArg.empty())
-    {
-        const QString referenceCsv = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(referenceCsvArg));
-        if (!xjw::cli::readReferencePositionCsv(referenceCsv, &options.referencePositions, &errorMessage))
-        {
-            std::fprintf(stderr, "参考位置读取失败: %s\n", qUtf8Printable(errorMessage));
-            return cli::EXIT_IO_ERR;
-        }
-    }
     options.maskPaths = xjw::cli::maskPathsFromDirectory(xjw::cli::fromStdString(maskDirArg), options.images);
     options.cancelFlag = cancelFlag;
     options.progressFn = [](const QString& stage, int percent)
@@ -651,6 +647,35 @@ int main(int argc, char* argv[])
         return cli::EXIT_IO_ERR;
     }
     options.projectMeta = projectSession.mergedMetadata();
+    if (!xjw::cli::resolveProjectImageIds(options.projectMeta, options.images, &options.imageIds, &errorMessage))
+    {
+        std::fprintf(stderr, "工程影像身份解析失败: %s\n", qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!xjw::cli::buildReferenceCameraGeometries(options.projectMeta,
+                                                  items,
+                                                  options.images,
+                                                  options.imageIds,
+                                                  &options.referenceCameraGeometries,
+                                                  &errorMessage))
+    {
+        std::fprintf(stderr, "参考相机几何解析失败: %s\n", qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!referenceCsvArg.empty())
+    {
+        const QString referenceCsv = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(referenceCsvArg));
+        if (!xjw::cli::readReferencePositionCsv(referenceCsv,
+                                                options.projectMeta,
+                                                options.images,
+                                                options.imageIds,
+                                                &options.referencePositions,
+                                                &errorMessage))
+        {
+            std::fprintf(stderr, "参考位置读取失败: %s\n", qUtf8Printable(errorMessage));
+            return cli::EXIT_IO_ERR;
+        }
+    }
 
     // 阶段 5：共享 workflow 先按需生成/复用连接点，再执行初始像对、增量注册、三角化和 BA。
     QElapsedTimer timer;
@@ -664,8 +689,21 @@ int main(int argc, char* argv[])
     bool cameraExportPerformed = false;
     if (result.reconstructionResult.success && !requestedCameraExportDir.isEmpty())
     {
+        QMap<QString, QJsonObject> exportMetadata;
+        for (std::size_t index = 0; index < options.imageIds.size(); ++index)
+        {
+            const auto updateIt = std::find_if(
+                result.reconstructionResult.cameraInstanceUpdates.cbegin(),
+                result.reconstructionResult.cameraInstanceUpdates.cend(),
+                [&options, index](const auto& update)
+                { return update.imageId == options.imageIds.at(index); });
+            if (updateIt != result.reconstructionResult.cameraInstanceUpdates.cend())
+            {
+                exportMetadata.insert(options.images.at(static_cast<int>(index)), updateIt->modelMetadata);
+            }
+        }
         cameraExportPerformed = xjw::cli::exportFinalBaCameras(options.images,
-                                                               result.reconstructionResult.pendingCamUpdates,
+                                                               exportMetadata,
                                                                requestedCameraExportDir,
                                                                &cameraExport,
                                                                &cameraExportError);
@@ -727,7 +765,8 @@ int main(int argc, char* argv[])
     options.progressFn(QStringLiteral("空三产物已登记"), 97);
     int updatedCameraCount = 0;
     if (reconstruction.success &&
-        !projectSession.updateImageCameras(reconstruction.pendingCamUpdates, &updatedCameraCount, &errorMessage))
+        !projectSession.updateCameraInstancesById(
+            reconstruction.cameraInstanceUpdates, &updatedCameraCount, &errorMessage))
     {
         std::fprintf(stderr, "空三已完成，但相机写回失败: %s\n", qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;

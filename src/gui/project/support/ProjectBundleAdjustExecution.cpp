@@ -73,16 +73,6 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
         }
         markerSet = loaded.markerSet;
         markerInput.markerSet = &markerSet;
-        for (const QJsonValue &value : meta.value(QStringLiteral("images")).toArray())
-        {
-            const QJsonObject image = value.toObject();
-            const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-            const QString imagePath = image.value(QStringLiteral("path")).toString().trimmed();
-            if (!imageId.isEmpty() && !imagePath.isEmpty())
-            {
-                markerInput.imagePathById.insert(imageId, imagePath);
-            }
-        }
     }
 
     BaInputBuildResult baInput;
@@ -91,11 +81,23 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
         markerInput.markerSet ? &markerInput : nullptr);
     if (result.buildStatus != BaInputBuildStatus::Ok)
     {
+        const QString inputError = !baInput.firstControlInputError.isEmpty()
+            ? baInput.firstControlInputError
+            : (!baInput.matchDiagnostics.firstInputError.isEmpty()
+            ? baInput.matchDiagnostics.firstInputError
+            : (!baInput.matchDiagnostics.firstCameraError.isEmpty()
+                   ? baInput.matchDiagnostics.firstCameraError
+                   : baInput.matchDiagnostics.firstShardReadError));
+        if (!inputError.isEmpty())
+        {
+            result.serviceResult.errorMessage = QStringLiteral("相机/影像输入检查失败: %1").arg(inputError);
+        }
         return result;
     }
 
     result.beforeCamMeta = baInput.beforeCamMeta;
     options.imagePathByIndex = baInput.imagePathByIndex;
+    options.imageIdByIndex = baInput.imageIdByIndex;
     options.beforeCamMeta = baInput.beforeCamMeta;
     if (options.enablePlanetaryLaserRangeConstraints)
     {

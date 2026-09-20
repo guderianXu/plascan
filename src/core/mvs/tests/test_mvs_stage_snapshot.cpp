@@ -55,10 +55,10 @@ namespace
             static_cast<std::uint8_t>(xjw::mvs::DepthGeometryHypothesisAction::Refine));
         result.depthMap->at<float>(0, 0) = 0.0f;
 
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(800.0, 810.0, 3.5, 1.5);
         camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-        camera.setImageSize(xjw::CameraImageSize{width, height});
+        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
         result.cameraModel = camera;
         result.qualityMetrics.width = width;
         result.qualityMetrics.height = height;

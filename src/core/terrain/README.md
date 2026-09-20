@@ -3,6 +3,10 @@
 `src/core/terrain` 把密集点云、网格、深度产品和已解算相机转换为正式 DEM/DOM 地形成果。
 DEM/DOM、质量栅格、有效参数和覆盖统计都会进入项目结果记录，而不是只作为临时导出文件。
 
+`DemMosaic` 和 `TerrainProductManifest` 位于可选静态库 `terrain_utilities`，头文件路径保持不变。
+生产 `terrain` 不依赖该库；使用这些 API 必须显式链接 `terrain_utilities`。目标采用 `EXCLUDE_FROM_ALL`，
+启用测试时由各自测试构建，也可显式运行 `cmake --build build/linux-source-release --target terrain_utilities`。
+
 ## DEM Aggregation
 
 - `DemGridAggregator` 将样本聚合到规则网格，支持 mean、median、min、max、count、standard
@@ -12,7 +16,7 @@ DEM/DOM、质量栅格、有效参数和覆盖统计都会进入项目结果记�
 
 ## Product Manifest
 
-- `TerrainProductManifest` 保存 GUI 和项目元数据消费的地形产品路径与属性。
+- `TerrainProductManifest` 提供地形产品路径与属性的独立记录格式；当前生产持久化尚未接入此 API。
 - 一次 DEM 任务可写出 `dem.tif`、`dem_error.tif`、`dem_count.tif`、
   `dem_confidence.tif` 和 `dem_coverage.tif`。
 - 产品记录包含 `dem_path`、`dom_path`、`error_path`、`count_path`、
@@ -139,3 +143,22 @@ ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R 
 ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainDemDom|DemGridAggregator|DemMosaic|TerrainProductManifest|DemQualityRasters" --output-on-failure
 ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DataTreeWidgetTest\.DemSectionShowsQualityRasterProducts" --output-on-failure
 ```
+
+
+## Qt Report Presentation Boundary
+
+`GlobalTerrainReportRenderer` 已移至 `src/adapters/qt/terrain`，由 `terrain_report_qt` 提供；
+计算库 `terrain` 不再直接链接 QtGui。GUI 和 `small_body_terrain_cli` 显式链接呈现库，
+通过 `SmallBodyPreviewWriter` 传入 `GlobalTerrainReportRenderer::writePreview`。
+
+`generate()`、`generateFromMesh()` 和 `TerrainPipeline::generateSmallBodyGlobalProducts()` 的最后一个参数
+接受该回调。`writeReportPreview=true` 时缺少写入器会在创建输出目录前失败；
+`writeReportPreview=false` 时无需回调。写入器只写提供的事务临时路径，不自行发布成果；
+返回失败时应填写错误信息。预览失败或其后取消会回滚全部临时成果，GeoTIFF/JSON/PNG 保持共同发布。
+QtCore 数据/IO 依赖仍保留，Qt 呈现库保留原字体和绘制行为。
+
+`PLASCAN_BUILD_QT_PRESENTATION=OFF` 时不构建呈现库；小天体 CLI 仍提供 GeoTIFF/JSON 生成，
+默认不生成 PNG，显式 `--preview` 返回构建能力错误。呈现开启时仍默认生成 PNG，
+`--no-preview` 路径仅初始化 QCoreApplication，不加载 Qt 图形平台插件。
+三个 `<platform>-source-headless-release` CPU preset 已关闭呈现库和桌面 GUI；
+地形产品和预览失败/取消事务测试保留，实际 PNG 测试只在呈现开启时执行。

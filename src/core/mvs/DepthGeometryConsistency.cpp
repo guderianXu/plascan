@@ -86,18 +86,16 @@ GeometrySourceOrdinalContract validateGeometrySourceOrdinalContract(
 namespace
 {
 
-float worldPixelFootprint(const FramePinholeCamera &camera, double positive_depth)
-{
-    const double focal_product =
-        std::fabs(camera.focalX() * camera.focalY());
-    if (!std::isfinite(positive_depth) || positive_depth <= 0.0 ||
-        !std::isfinite(focal_product) ||
-        focal_product <= std::numeric_limits<double>::epsilon())
+    float worldPixelFootprint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                              double positive_depth)
     {
-        return 0.0f;
-    }
-    return static_cast<float>(
-        positive_depth / std::sqrt(focal_product));
+        const double focal_product = std::fabs(camera.focalX() * camera.focalY());
+        if (!std::isfinite(positive_depth) || positive_depth <= 0.0 || !std::isfinite(focal_product) ||
+            focal_product <= std::numeric_limits<double>::epsilon())
+        {
+            return 0.0f;
+        }
+        return static_cast<float>(positive_depth / std::sqrt(focal_product));
 }
 
 float worldDistance(const double first[3], const double second[3])
@@ -131,11 +129,10 @@ bool normalizeVector(double value[3])
     return true;
 }
 
-float referenceHorizontalPixelFootprint(
-    const FramePinholeCamera &camera,
-    const cv::Point2f &pixel,
-    double positive_depth,
-    const double world[3])
+float referenceHorizontalPixelFootprint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                        const cv::Point2f& pixel,
+                                        double positive_depth,
+                                        const double world[3])
 {
     const double shifted_pixel[2] = {
         static_cast<double>(pixel.x) + 1.0,
@@ -176,10 +173,10 @@ float referenceHorizontalPixelFootprint(
 }
 
 bool triangulatedEpipolarPixelFootprint(
-    const FramePinholeCamera &reference_camera,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
     const double reference_world[3],
-    const FramePinholeCamera &source_camera,
-    float *footprint)
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+    float* footprint)
 {
     if (!footprint)
     {
@@ -330,13 +327,12 @@ bool triangulatedEpipolarPixelFootprint(
     return true;
 }
 
-float jointWorldPixelFootprint(
-    const FramePinholeCamera &reference_camera,
-    const cv::Point2f &reference_pixel,
-    float reference_depth,
-    const double reference_world[3],
-    const FramePinholeCamera &source_camera,
-    float source_depth)
+float jointWorldPixelFootprint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                               const cv::Point2f& reference_pixel,
+                               float reference_depth,
+                               const double reference_world[3],
+                               const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+                               float source_depth)
 {
     const float reference_fallback =
         worldPixelFootprint(reference_camera, reference_depth);
@@ -366,15 +362,14 @@ float jointWorldPixelFootprint(
         : fallback;
 }
 
-void assignContinuousMetrics(
-    const FramePinholeCamera &reference_camera,
-    const cv::Point2f &reference_pixel,
-    float reference_depth,
-    const double reference_world[3],
-    const FramePinholeCamera &source_camera,
-    const cv::Point &source_pixel,
-    float source_depth,
-    ProjectedDepthConsistencyResult *result)
+void assignContinuousMetrics(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                             const cv::Point2f& reference_pixel,
+                             float reference_depth,
+                             const double reference_world[3],
+                             const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+                             const cv::Point& source_pixel,
+                             float source_depth,
+                             ProjectedDepthConsistencyResult* result)
 {
     if (!result || !std::isfinite(source_depth) || source_depth <= 0.0f)
     {
@@ -425,17 +420,17 @@ void assignContinuousMetrics(
 
 } // namespace
 
-ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
-    const FramePinholeCamera &referenceCamera,
-    const cv::Point2f &referencePixel,
-    float referenceDepth,
-    const FramePinholeCamera &sourceCamera,
-    const cv::Mat &sourceDepth,
-    float relativeThreshold,
-    int searchRadius,
-    float maximumRoundTripErrorPixels,
-    bool computeContinuousMetrics,
-    bool evaluateSubpixelFootprint)
+ProjectedDepthConsistencyResult
+evaluateProjectedDepthConsistency(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+                                  const cv::Point2f& referencePixel,
+                                  float referenceDepth,
+                                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                                  const cv::Mat& sourceDepth,
+                                  float relativeThreshold,
+                                  int searchRadius,
+                                  float maximumRoundTripErrorPixels,
+                                  bool computeContinuousMetrics,
+                                  bool evaluateSubpixelFootprint)
 {
     ProjectedDepthConsistencyResult result;
     if (!referenceCamera.isValid() || !sourceCamera.isValid() ||
@@ -468,12 +463,12 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
 }
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
-    const FramePinholeCamera &referenceCamera,
-    const cv::Point2f &referencePixel,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+    const cv::Point2f& referencePixel,
     float referenceDepth,
-    const std::array<double, 3> &referenceWorld,
-    const FramePinholeCamera &sourceCamera,
-    const cv::Mat &sourceDepth,
+    const std::array<double, 3>& referenceWorld,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+    const cv::Mat& sourceDepth,
     float relativeThreshold,
     int searchRadius,
     float maximumRoundTripErrorPixels,

@@ -191,8 +191,9 @@ namespace xjw
         return false;
     }
 
-    BAProblemStats BundleAdjust::summarizeProblem(const std::vector<FramePinholeCamera>& cameras,
-                                                  const std::vector<BATrack>& tracks)
+    BAProblemStats BundleAdjust::summarizeProblem(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const std::vector<BATrack>& tracks)
     {
         return detail::summarizeUsableProblem(cameras, tracks);
     }
@@ -280,9 +281,10 @@ namespace xjw
         return decideBackendForProblem(stats, options).backend;
     }
 
-    BAResult BundleAdjust::optimizePoints(const std::vector<FramePinholeCamera>& cameras,
-                                          const std::vector<BATrack>& tracks,
-                                          const BAOptions& requestedOptions)
+    BAResult BundleAdjust::optimizePoints(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& requestedOptions)
     {
         BAOptions normalizedOptions;
         const detail::BundleAdjustValidationResult validation =

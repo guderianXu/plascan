@@ -226,16 +226,16 @@ bool DepthGeometryHypothesisRerankMaps::compatible(const cv::Size &size) const
 }
 
 ProjectedDepthEvidence projectSourceDepthEvidenceToReference(
-    const cv::Mat &source_depth,
-    const cv::Mat &source_confidence,
-    const FramePinholeCamera &source_camera,
-    const FramePinholeCamera &reference_camera,
-    const cv::Size &reference_size,
+    const cv::Mat& source_depth,
+    const cv::Mat& source_confidence,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+    const cv::Size& reference_size,
     float maximum_projection_distance_pixels,
     int baseline_sector,
-    std::uint64_t *projected_candidate_count,
+    std::uint64_t* projected_candidate_count,
     int row_worker_count,
-    const std::atomic<bool> *cancelled)
+    const std::atomic<bool>* cancelled)
 {
     if (projected_candidate_count) *projected_candidate_count = 0;
     ProjectedDepthEvidence result;

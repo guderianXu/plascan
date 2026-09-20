@@ -5,16 +5,16 @@
  * @brief BA 残差块共享的可微投影与局部位姿参数化。
  *
  * 坐标约定：
- * - FramePinholeCamera 存储 camera-to-world 旋转 Rcw 和世界坐标相机中心 C；
+ * - FramePinholeNumericState 存储 camera-to-world 旋转 Rcw 和世界坐标相机中心 C；
  * - 世界点到相机坐标使用 `Rcw^T * (X - C)`；
  * - `depthAxisFlipped` 决定相机前方是局部 +Z 还是 -Z；
  * - 像素投影包含 u/v 轴符号和 Brown-Conrady 畸变。
  *
  * 模板函数支持标量类型复用，禁止在此处加入破坏连续性的非模板数学调用或与
- * FramePinholeCamera::projectWorldPoint 不一致的坐标变换。
+ * FramePinholeNumericState::projectWorldPoint 不一致的坐标变换。
  */
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 #include <cmath>
@@ -25,7 +25,7 @@ namespace xjw::ba
     /**
      * @brief 联合 BA 使用的轻量相机参数快照。
      *
-     * 这里复制 FramePinholeCamera 的运行态内外参，使残差函数可以用模板标量 T
+     * 这里复制 FramePinholeNumericState 的运行态内外参，使残差函数可以用模板标量 T
      * 完成投影计算，避免固定相机场景仍走 NumericDiff。
      */
     struct ProjectionCamera
@@ -46,8 +46,8 @@ namespace xjw::ba
         bool depthAxisFlipped = false;
     };
 
-    /// 从运行态 FramePinholeCamera 复制一个不持有资源、可安全捕获进残差 functor 的快照。
-    ProjectionCamera makeProjectionCamera(const FramePinholeCamera& camera);
+    /// 从运行态 FramePinholeNumericState 复制一个不持有资源、可安全捕获进残差 functor 的快照。
+    ProjectionCamera makeProjectionCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
 
     /**
      * @brief 投影一个已经位于相机坐标系的点。

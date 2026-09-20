@@ -1,6 +1,6 @@
 #include "DepthRayMetric.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,11 +47,10 @@ std::array<double, 3> cross(
         left[0] * right[1] - left[1] * right[0]};
 }
 
-bool unproject(
-    const FramePinholeCamera &camera,
-    const std::array<double, 2> &pixel,
-    double depth,
-    std::array<double, 3> *world)
+bool unproject(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+               const std::array<double, 2>& pixel,
+               double depth,
+               std::array<double, 3>* world)
 {
     if (!world)
     {
@@ -73,28 +72,21 @@ bool unproject(
     return true;
 }
 
-bool makeUnitRay(
-    const FramePinholeCamera &camera,
-    const std::array<double, 2> &pixel,
-    const std::array<double, 3> &center,
-    std::array<double, 3> *unit_ray)
+bool makeUnitRay(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                 const std::array<double, 2>& pixel,
+                 std::array<double, 3>* unit_ray)
 {
-    std::array<double, 3> world{};
-    if (!unit_ray || !unproject(camera, pixel, 1.0, &world))
+    if (!unit_ray)
     {
         return false;
     }
-    const std::array<double, 3> ray = subtract(world, center);
-    const double ray_length = norm(ray);
-    if (!(ray_length > kMinimumRayScale) || !std::isfinite(ray_length))
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
+    if (!camera.rayForPixel(pixel, &ray) || !isFinite(ray.direction))
     {
         return false;
     }
-    *unit_ray = {
-        ray[0] / ray_length,
-        ray[1] / ray_length,
-        ray[2] / ray_length};
-    return isFinite(*unit_ray);
+    *unit_ray = ray.direction;
+    return true;
 }
 
 double pointToRayDistance(
@@ -105,13 +97,12 @@ double pointToRayDistance(
     return norm(cross(subtract(point, ray_origin), unit_ray));
 }
 
-bool footprintForAxis(
-    const FramePinholeCamera &camera,
-    const std::array<double, 2> &pixel,
-    const std::array<double, 3> &center,
-    const std::array<double, 3> &world_point,
-    int axis,
-    double *footprint)
+bool footprintForAxis(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                      const std::array<double, 2>& pixel,
+                      const std::array<double, 3>& center,
+                      const std::array<double, 3>& world_point,
+                      int axis,
+                      double* footprint)
 {
     if (!footprint || axis < 0 || axis > 1)
     {
@@ -124,8 +115,8 @@ bool footprintForAxis(
 
     std::array<double, 3> negative_ray{};
     std::array<double, 3> positive_ray{};
-    if (!makeUnitRay(camera, negative_pixel, center, &negative_ray) ||
-        !makeUnitRay(camera, positive_pixel, center, &positive_ray))
+    if (!makeUnitRay(camera, negative_pixel, &negative_ray) ||
+        !makeUnitRay(camera, positive_pixel, &positive_ray))
     {
         return false;
     }
@@ -184,10 +175,9 @@ bool pointAtDistances(
 
 } // namespace
 
-DepthRayMetricSample DepthRayMetric::evaluate(
-    const FramePinholeCamera &camera,
-    const std::array<double, 2> &pixel,
-    double positive_camera_z_depth)
+DepthRayMetricSample DepthRayMetric::evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                              const std::array<double, 2>& pixel,
+                                              double positive_camera_z_depth)
 {
     DepthRayMetricSample result;
     if (!camera.isValid() ||

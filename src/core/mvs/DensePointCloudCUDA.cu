@@ -115,9 +115,10 @@ namespace xjw::mvs
             valid[index] = 1;
         }
 
-        bool hasZeroDistortion(const FramePinholeCamera& camera)
+        bool hasZeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
         {
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             return distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
                    distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
         }
@@ -167,14 +168,15 @@ namespace xjw::mvs
         return properties.name;
     }
 
-    std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(const cv::Mat& depth,
-                                                              const cv::Mat& mask,
-                                                              const FramePinholeCamera& camera,
-                                                              const cv::Mat& colorImage,
-                                                              float minimumDepth,
-                                                              float maximumDepth,
-                                                              std::string* errorMsg,
-                                                              const DenseCloudOptions* options)
+    std::vector<DensePoint>
+    DensePointCloudCUDA::unprojectGPU(const cv::Mat& depth,
+                                      const cv::Mat& mask,
+                                      const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                      const cv::Mat& colorImage,
+                                      float minimumDepth,
+                                      float maximumDepth,
+                                      std::string* errorMsg,
+                                      const DenseCloudOptions* options)
     {
         if (errorMsg)
         {
@@ -313,8 +315,8 @@ namespace xjw::mvs
         }
 
         CameraParameters parameters;
-        const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
-        const FramePinholeCamera::Pose pose = camera.pose();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = camera.pose();
         parameters.focalX = static_cast<float>(intrinsics.focalX);
         parameters.focalY = static_cast<float>(intrinsics.focalY);
         parameters.principalX = static_cast<float>(intrinsics.principalX);

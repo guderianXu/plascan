@@ -244,14 +244,14 @@ cv::Mat normalizedFilterGuidance(const cv::Mat &referenceGuide,
 
 } // namespace
 
-std::array<float, 16> buildPatchMatchSourceCameraData(
-    const FramePinholeCamera &reference,
-    const FramePinholeCamera &source,
-    int downsampleFactor)
+std::array<float, 16>
+buildPatchMatchSourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+                                int downsampleFactor)
 {
     const float scale = 1.0f /
         static_cast<float>(std::max(1, downsampleFactor));
-    const FramePinholeCamera::Intrinsics intrinsics = source.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = source.intrinsics();
     const std::array<double, 9> reference_rotation =
         reference.worldToCameraRotation();
     const std::array<double, 9> source_rotation =

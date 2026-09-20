@@ -239,6 +239,24 @@ namespace xjw
         {
             MatchPhotosResult result;
             MatchPhotosContext runtimeContext = context;
+            std::string referenceError;
+            if (!camera_reference::validateReferenceCameraInputs(runtimeContext.imageIds,
+                                                                 static_cast<std::size_t>(runtimeContext.pairInput.images.size()),
+                                                                 runtimeContext.referenceCameraGeometries,
+                                                                 runtimeContext.referencePositions,
+                                                                 &referenceError))
+            {
+                result.errorMessage = QStringLiteral("参考几何输入无效：%1").arg(QString::fromStdString(referenceError));
+                return result;
+            }
+            if (!camera_reference::commonReferenceWorldFrame(
+                    runtimeContext.referenceCameraGeometries, runtimeContext.referencePositions, &referenceError) &&
+                (!runtimeContext.referenceCameraGeometries.empty() || !runtimeContext.referencePositions.empty()))
+            {
+                result.errorMessage = QStringLiteral("参考几何坐标系无效：%1")
+                                          .arg(QString::fromStdString(referenceError));
+                return result;
+            }
             if (!runtimeContext.featureCache)
             {
                 runtimeContext.featureCache = std::make_shared<MatchPhotosFeatureCache>();
@@ -358,7 +376,8 @@ namespace xjw
                     !PlaMatchHctPairPreselector::selectWithPositions(pairInput.images,
                                                                      *runtimeContext.featureCache,
                                                                      effectiveOptions,
-                                                                     runtimeContext.referenceCameras,
+                                                                     runtimeContext.imageIds,
+                                                                     runtimeContext.referenceCameraGeometries,
                                                                      runtimeContext.referencePositions,
                                                                      preselectionPlan.executionBackend,
                                                                      effectiveOptions.cudaDevice,

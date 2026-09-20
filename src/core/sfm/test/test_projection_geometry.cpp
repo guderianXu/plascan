@@ -5,23 +5,20 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera()
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
-    camera.setAxisDirections(-1, 1);
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+        camera.setAxisDirections(-1, 1);
+        return camera;
 }
 
 } // namespace
 
 TEST(ProjectionGeometryTest, ProjectsPhysicalFrontPointWithAxisDirections)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     const xjw::ProjectionResult result =
         xjw::projectForReprojection(camera, {1.0, 2.0, 10.0});
 
@@ -33,7 +30,7 @@ TEST(ProjectionGeometryTest, ProjectsPhysicalFrontPointWithAxisDirections)
 
 TEST(ProjectionGeometryTest, SignedFallbackMatchesCurrentCameraProjection)
 {
-    const xjw::FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     const xjw::ProjectionResult result =
         xjw::projectForReprojection(camera, {1.0, 2.0, -10.0});
 
@@ -48,7 +45,7 @@ TEST(ProjectionGeometryTest, SignedFallbackMatchesCurrentCameraProjection)
 
 TEST(ProjectionGeometryTest, FlippedDepthUsesNegativeCameraZAsPhysicalFront)
 {
-    xjw::FramePinholeCamera camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     camera.setDepthAxisFlipped(true);
 
     const xjw::ProjectionResult result =

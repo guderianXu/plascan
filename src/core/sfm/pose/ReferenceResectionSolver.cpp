@@ -39,7 +39,7 @@ namespace xjw
             return {values[0], values[1], values[2]};
         }
 
-        bool project(const FramePinholeCamera& camera,
+        bool project(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                      const ReferenceWorldToCameraPose& pose,
                      const std::array<double, 3>& world,
                      cv::Vec2d* pixel,
@@ -64,7 +64,8 @@ namespace xjw
             const double x = local[0] * inverse_z;
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
-            const FramePinholeCamera::Distortion distortion = camera.distortion();
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                camera.distortion();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r2 * r2 + distortion.radialK3 * r2 * r2 * r2;
             const double distorted_x =
@@ -76,7 +77,7 @@ namespace xjw
             return std::isfinite((*pixel)[0]) && std::isfinite((*pixel)[1]);
         }
 
-        double squaredReprojectionError(const FramePinholeCamera& camera,
+        double squaredReprojectionError(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                         const ReferenceWorldToCameraPose& pose,
                                         const std::array<double, 3>& world,
                                         const std::array<double, 2>& observed)
@@ -91,8 +92,9 @@ namespace xjw
             return dx * dx + dy * dy;
         }
 
-        std::array<double, 9> restoreOriginalCameraAxes(const std::array<double, 9>& normalizedCameraToWorld,
-                                                        const FramePinholeCamera& originalCamera)
+        std::array<double, 9>
+        restoreOriginalCameraAxes(const std::array<double, 9>& normalizedCameraToWorld,
+                                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalCamera)
         {
             const double z_sign = originalCamera.depthAxisFlipped() ? -1.0 : 1.0;
             const cv::Matx33d axis(z_sign * static_cast<double>(originalCamera.uAxisSign()),
@@ -109,10 +111,11 @@ namespace xjw
 
     } // namespace
 
-    ReferenceResectionResult solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
-                                                     const std::vector<std::array<double, 2>>& imagePoints,
-                                                     const FramePinholeCamera& camera,
-                                                     double resectionThresholdPixels)
+    ReferenceResectionResult
+    solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
+                            const std::vector<std::array<double, 2>>& imagePoints,
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                            double resectionThresholdPixels)
     {
         ReferenceResectionResult result;
         const std::size_t count = worldPoints.size();
@@ -122,7 +125,8 @@ namespace xjw
             return result;
         }
 
-        const FramePinholeCamera normalized_camera = camera.normalizedForPositiveDepth();
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState normalized_camera =
+            camera.normalizedForPositiveDepth();
         std::vector<std::array<double, 3>> bearing_vectors(count);
         for (std::size_t index = 0; index < count; ++index)
         {

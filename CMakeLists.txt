@@ -102,6 +102,10 @@ endif()
 option(BUILD_TESTS "Build unit tests" ON)
 option(PLASCAN_BUILD_GUI "Build the Qt GUI application" ON)
 option(PLASCAN_BUILD_GUI_TESTS "Build tests that require the Qt GUI stack" ON)
+option(PLASCAN_BUILD_QT_PRESENTATION "Build Qt marker PDF and terrain report rendering" ON)
+if(PLASCAN_BUILD_GUI AND NOT PLASCAN_BUILD_QT_PRESENTATION)
+  message(FATAL_ERROR "The desktop GUI requires PLASCAN_BUILD_QT_PRESENTATION=ON")
+endif()
 if(BUILD_TESTS)
   enable_testing()
 endif()
@@ -171,6 +175,9 @@ add_subdirectory(src/common)
 
 # 核心模块
 add_subdirectory(src/core)
+
+# Qt presentation and session event bindings, shared by GUI and CLI consumers.
+add_subdirectory(src/adapters/qt)
 
 # GUI模块
 if(PLASCAN_BUILD_GUI)

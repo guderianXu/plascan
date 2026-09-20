@@ -60,10 +60,10 @@ int enabledIntrinsicParameterCount(const BAIntrinsicParameterMask &mask);
 std::string adaptiveCameraModelName(const BAIntrinsicParameterMask &mask);
 
 /// 从粗略相机/点解评估各共享内参的可观测性与可靠性。
-BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
-    const std::vector<FramePinholeCamera> &cameras,
-    const std::vector<BATrack> &tracks,
-    const BAOptions *options = nullptr);
+BAAdaptiveCameraModelAssessment
+assessAdaptiveCameraModel(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                          const std::vector<BATrack>& tracks,
+                          const BAOptions* options = nullptr);
 
 /**
  * @brief 将可靠性评估与调用方最大模型求交，写入逐参数掩码，并为弱平行几何收紧低阶参数先验。
@@ -78,8 +78,8 @@ bool applyAdaptiveCameraModel(
  * @return 输入尺寸有效且完成恢复时返回 true。
  */
 bool restoreInactiveAdaptiveIntrinsics(
-    std::vector<FramePinholeCamera> *cameras,
-    const std::vector<FramePinholeCamera> &stableReferences,
-    const BAIntrinsicParameterMask &activeMask);
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* cameras,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences,
+    const BAIntrinsicParameterMask& activeMask);
 
 } // namespace xjw

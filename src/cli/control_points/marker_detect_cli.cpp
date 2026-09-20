@@ -1,6 +1,7 @@
 #include "cli_common.h"
 
 #include "detection/MarkerDetectorFactory.h"
+#include "detection/MarkerImageAdapter.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -47,13 +48,6 @@ QString fileSha256(const QString &path)
         hash.addData(file.read(1024 * 1024));
     }
     return QStringLiteral("sha256:%1").arg(QString::fromLatin1(hash.result().toHex()));
-}
-
-QString fallbackImageId(const QString &path)
-{
-    const QByteArray digest = QCryptographicHash::hash(
-        QFileInfo(path).absoluteFilePath().toUtf8(), QCryptographicHash::Sha256).toHex();
-    return QStringLiteral("cli-%1").arg(QString::fromLatin1(digest.left(20)));
 }
 
 QJsonArray point(const QPointF &value)
@@ -109,7 +103,8 @@ int main(int argc, char *argv[])
 
     app.add_option("--image", imagePaths, "输入影像，可重复指定")->required();
     app.add_option("--mask", maskPaths, "与 --image 按顺序对应的蒙版，非零像素表示排除");
-    app.add_option("--image-id", imageIds, "与 --image 对应的稳定影像 ID；省略时按绝对路径生成");
+    app.add_option("--image-id", imageIds, "与 --image 对应的 canonical 稳定影像 ID，必须显式提供")
+        ->required();
     app.add_option("--family", familyName, "标靶族，例如 tag36h11 或 noncoded-circle")->required();
     app.add_option("--output", outputPath, "输出检测观测 JSON")->required();
     app.add_option("--min-decision-margin", minimumDecisionMargin, "AprilTag 最小判决裕量");
@@ -122,9 +117,9 @@ int main(int argc, char *argv[])
     {
         cli::fatal("--mask 数量必须为 0 或与 --image 数量一致", cli::EXIT_ARG_ERR);
     }
-    if (!imageIds.empty() && imageIds.size() != imagePaths.size())
+    if (imageIds.size() != imagePaths.size())
     {
-        cli::fatal("--image-id 数量必须为 0 或与 --image 数量一致", cli::EXIT_ARG_ERR);
+        cli::fatal("--image-id 数量必须与 --image 数量一致", cli::EXIT_ARG_ERR);
     }
 
     const auto family = xjw::control_points::MarkerDetectorFactory::parseFamily(
@@ -174,7 +169,7 @@ int main(int argc, char *argv[])
         QVector<xjw::control_points::MarkerDetection> detections;
         try
         {
-            detections = detector->detect(image, mask, options);
+            detections = xjw::app::markers::detectMarkers(*detector, image, mask, options);
         }
         catch (const std::exception &exception)
         {
@@ -187,9 +182,12 @@ int main(int argc, char *argv[])
             return left.center.x() < right.center.x();
         });
 
-        const QString image_id = imageIds.empty()
-            ? fallbackImageId(image_path)
-            : QString::fromUtf8(imageIds[index].data(), static_cast<qsizetype>(imageIds[index].size()));
+        const QString image_id =
+            QString::fromUtf8(imageIds[index].data(), static_cast<qsizetype>(imageIds[index].size())).trimmed();
+        if (image_id.isEmpty())
+        {
+            cli::fatal("--image-id 不能包含空的 canonical 影像 ID", cli::EXIT_ARG_ERR);
+        }
         const QString signature = fileSha256(image_path);
         for (const auto &detection : detections)
         {

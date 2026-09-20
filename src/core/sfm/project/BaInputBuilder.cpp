@@ -15,6 +15,8 @@ namespace
 void resetBuildResult(BaInputBuildResult *result)
 {
     result->cameras.clear();
+    result->cameraInstances.clear();
+    result->imageIdByIndex.clear();
     result->imagePathByIndex.clear();
     result->beforeCamMeta.clear();
     result->tracks.clear();
@@ -22,6 +24,7 @@ void resetBuildResult(BaInputBuildResult *result)
     result->indexedObservationCount = 0;
     result->multiViewTrackCount = 0;
     result->matchDiagnostics = {};
+    result->firstControlInputError.clear();
     result->surveyControlTrackCount = 0;
     result->surveyControlObservationCount = 0;
     result->rejectedSurveyControlPointCount = 0;
@@ -58,8 +61,10 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     // 该索引，禁止各适配器再次按文件名自行排序相机。
     if (!readProjectMatchInput(meta, selectedImages, minMatches, &matchInput))
     {
+        result->matchDiagnostics = matchInput.diagnostics;
         return BaInputBuildStatus::NoTracks;
     }
+    result->matchDiagnostics = matchInput.diagnostics;
     if (matchInput.cameras.size() < 2)
     {
         return BaInputBuildStatus::NotEnoughCameras;
@@ -71,13 +76,39 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     result->indexedObservationCount = matchInput.indexedObservationCount;
     result->matchDiagnostics = matchInput.diagnostics;
     result->cameras = std::move(matchInput.cameras);
+    result->cameraInstances = std::move(matchInput.cameraInstances);
+    result->imageIdByIndex = std::move(matchInput.imageIdByIndex);
+    if (result->imageIdByIndex.size() != result->cameras.size()
+        || result->cameraInstances.size() != result->cameras.size())
+    {
+        result->matchDiagnostics.firstInputError =
+            QStringLiteral("相机数值状态、实例身份和 ImageId 索引长度不一致");
+        return BaInputBuildStatus::NoTracks;
+    }
+    for (std::size_t index = 0; index < result->cameras.size(); ++index)
+    {
+        const auto& camera = result->cameras[index];
+        if (!camera.hasBoundIdentity() || !result->cameraInstances[index]
+            || camera.imageId() != result->imageIdByIndex[index]
+            || result->cameraInstances[index]->imageId() != result->imageIdByIndex[index])
+        {
+            result->matchDiagnostics.firstInputError =
+                QStringLiteral("相机数值状态与 typed instance/ImageId 身份不一致（索引 %1）")
+                    .arg(static_cast<qulonglong>(index));
+            return BaInputBuildStatus::NoTracks;
+        }
+    }
     result->imagePathByIndex = std::move(matchInput.imagePathByIndex);
     result->beforeCamMeta = std::move(matchInput.beforeCamMeta);
 
     // 第三阶段追加物方约束。人工标记可能先估计控制网 Sim(3) 并同时变换已有
     // 自动轨迹与相机，因此必须在全部自动轨迹完成后执行。
-    appendSurveyControlBaInput(meta, matchInput.cameraIndexByPath, result);
-    appendMarkerBaInput(markerInput, matchInput.cameraIndexByPath, result);
+    appendSurveyControlBaInput(meta, matchInput.cameraIndexByImageId, result);
+    appendMarkerBaInput(markerInput, matchInput.cameraIndexByImageId, result);
+    if (!result->firstControlInputError.isEmpty())
+    {
+        return BaInputBuildStatus::InvalidInput;
+    }
     return result->tracks.empty()
         ? BaInputBuildStatus::NoTracks
         : BaInputBuildStatus::Ok;

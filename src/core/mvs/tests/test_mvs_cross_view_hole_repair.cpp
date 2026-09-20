@@ -6,15 +6,12 @@
 namespace
 {
 
-xjw::FramePinholeCamera cameraAt(double x)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {x, 0.0, 0.0});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraAt(double x)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {x, 0.0, 0.0});
+        return camera;
 }
 
 std::vector<xjw::mvs::ProjectedDepthEvidence> evidenceFor(
@@ -40,8 +37,8 @@ std::vector<xjw::mvs::ProjectedDepthEvidence> evidenceFor(
 
 TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
 {
-    const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
-    const xjw::FramePinholeCamera source_camera = cameraAt(0.08);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = cameraAt(0.08);
     cv::Mat source_depth(96, 128, CV_32FC1);
     for (int row = 0; row < source_depth.rows; ++row)
     {
@@ -78,7 +75,7 @@ TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
 
 TEST(DepthCrossViewHoleRepairTest, ParallelProjectionHonorsPreexistingCancellation)
 {
-    const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
     cv::Mat source_depth(96, 128, CV_32FC1, cv::Scalar(2.0f));
     std::atomic<bool> cancelled{true};
     std::uint64_t candidate_count = 99;
@@ -100,8 +97,8 @@ TEST(DepthCrossViewHoleRepairTest, ParallelProjectionHonorsPreexistingCancellati
 TEST(DepthCrossViewHoleRepairTest,
      ProjectedEvidenceIsDeterministicAcrossWorkerCounts)
 {
-    const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
-    const xjw::FramePinholeCamera source_camera = cameraAt(0.08);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = cameraAt(0.08);
     cv::Mat source_depth(64, 96, CV_32FC1, cv::Scalar(2.0f));
     cv::Mat source_confidence(64, 96, CV_32FC1);
     for (int row = 0; row < source_confidence.rows; ++row)
@@ -251,7 +248,7 @@ TEST(DepthCrossViewHoleRepairTest, ParallelHoleCandidateScanMatchesSerialResult)
 
 TEST(DepthCrossViewHoleRepairTest, RepairsHoleConfirmedByTwoDistinctSources)
 {
-    const xjw::FramePinholeCamera reference_camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(29, 29, 7, 7)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));
@@ -344,7 +341,7 @@ TEST(DepthCrossViewHoleRepairTest, DoesNotRepairOutsideSupportMask)
 
 TEST(DepthCrossViewHoleRepairTest, GrowsStableTwoSourceComponentFromStrongCore)
 {
-    const xjw::FramePinholeCamera camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(30, 30, 5, 5)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));
@@ -391,7 +388,7 @@ TEST(DepthCrossViewHoleRepairTest, GrowsStableTwoSourceComponentFromStrongCore)
 
 TEST(DepthCrossViewHoleRepairTest, RejectsOversizedTwoSourceComponent)
 {
-    const xjw::FramePinholeCamera camera = cameraAt(0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(28, 28, 7, 7)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));

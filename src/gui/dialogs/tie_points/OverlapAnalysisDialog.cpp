@@ -6,9 +6,7 @@
 // =============================================================================
 #include "tie_points/OverlapAnalysisDialog.h"
 
-#include "ProjectManager.h"
-#include "ProjectCameraIO.h"
-#include "project/ProjectMatchCatalog.h"
+#include "project/services/ProjectSession.h"
 #include "project/ProjectMetadata.h"
 #include "OverlapAnalyzer.h"
 #include "ui_OverlapAnalysisDialog.h"
@@ -24,15 +22,15 @@
 #include <QLabel>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QImageReader>
+#include <QMap>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMessageBox>
+#include <QStringList>
 
 // 构造函数：初始化界面布局、控件，并从项目中加载影像列表
-OverlapAnalysisDialog::OverlapAnalysisDialog(ProjectManager *projectManager, QWidget *parent)
-    : QDialog(parent)
-    , _projectManager(projectManager)
+OverlapAnalysisDialog::OverlapAnalysisDialog(xjw::gui::project::ProjectSession* session, QWidget* parent)
+    : QDialog(parent), _session(session)
 {
     Ui::OverlapAnalysisDialog ui;
     ui.setupUi(this);
@@ -58,13 +56,13 @@ OverlapAnalysisDialog::OverlapAnalysisDialog(ProjectManager *projectManager, QWi
 void OverlapAnalysisDialog::loadProjectImages()
 {
     _imageList->clear();
-    if (!_projectManager)
+    if (!_session)
     {
         return;
     }
 
-    const QJsonArray images = xjw::common::project::projectImageEntries(_projectManager->currentMeta());
-    for (const QJsonValue &v : images)
+    const QJsonArray images = xjw::common::project::projectImageEntries(_session->metadata());
+    for (const QJsonValue& v : images)
     {
         const QJsonObject obj = v.toObject();
         const QString path = obj.value(QStringLiteral("path")).toString();
@@ -74,7 +72,7 @@ void OverlapAnalysisDialog::loadProjectImages()
         }
 
         // 列表项显示文件名，实际路径存于 UserRole，默认勾选
-        auto *item = new QListWidgetItem(QFileInfo(path).fileName(), _imageList);
+        auto* item = new QListWidgetItem(QFileInfo(path).fileName(), _imageList);
         item->setData(Qt::UserRole, path);
         item->setCheckState(Qt::Checked);
     }
@@ -83,10 +81,8 @@ void OverlapAnalysisDialog::loadProjectImages()
 // browseDemPath: 弹出文件选择对话框，让用户选择 DEM（XYZ 格式）文件路径
 void OverlapAnalysisDialog::browseDemPath()
 {
-    const QString path = QFileDialog::getOpenFileName(this,
-                                                      tr("选择 DEM XYZ"),
-                                                      QString(),
-                                                      tr("XYZ (*.xyz *.txt *.csv);;All files (*.*)"));
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("选择 DEM XYZ"), QString(), tr("XYZ (*.xyz *.txt *.csv);;All files (*.*)"));
     if (!path.isEmpty())
     {
         _demPathEdit->setText(path);
@@ -96,57 +92,60 @@ void OverlapAnalysisDialog::browseDemPath()
 // runAnalysis: 执行影像重叠度分析的主逻辑
 // 流程：
 //   1. 从项目元数据获取影像列表
-//   2. 遍历界面上勾选的影像，解析 FramePinholeCamera 参数
+//   2. 遍历界面上勾选的影像，解析 canonical 数值相机状态
 //   3. （可选）加载 DEM XYZ 文件或使用固定高程值
 //   4. 调用 OverlapAnalyzer::analyze 计算两两影像重叠评分
 //   5. 将结果填入 _resultTable 表格
 void OverlapAnalysisDialog::runAnalysis()
 {
-    if (!_projectManager)
+    if (!_session)
     {
         return;
     }
 
-    const QMap<QString, QJsonObject> imageMetaByPath =
-        xjw::common::project::projectImageMetaByPath(_projectManager->currentMeta());
-
-    std::vector<xjw::OverlapImageInput> inputs;
-    QStringList inputNames;
+    QStringList selectedPaths;
+    selectedPaths.reserve(_imageList->count());
     for (int i = 0; i < _imageList->count(); ++i)
     {
-        QListWidgetItem *it = _imageList->item(i);
-        if (!it || it->checkState() != Qt::Checked)
+        QListWidgetItem* item = _imageList->item(i);
+        if (item && item->checkState() == Qt::Checked)
         {
-            continue;
+            selectedPaths.append(item->data(Qt::UserRole).toString());
         }
-        const QString path = it->data(Qt::UserRole).toString();
-        if (!imageMetaByPath.contains(path))
-        {
-            continue;
-        }
-
-        xjw::FramePinholeCamera cam;
-        if (!xjw::common::project::imageCameraFromEntry(imageMetaByPath.value(path), &cam))
+    }
+    bool hasCamerasForAll = false;
+    const QMap<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras =
+        _session->getPinholeNumericStatesForImages(selectedPaths, &hasCamerasForAll);
+    std::vector<xjw::OverlapImageInput> inputs;
+    for (const QString& path : selectedPaths)
+    {
+        const auto cameraIt = cameras.constFind(xjw::common::project::normalizePath(path));
+        if (cameraIt == cameras.cend())
         {
             continue;
         }
 
         xjw::OverlapImageInput one;
         one.imagePath = xjw::common::io::toUtf8Path(path);
-        one.camera = cam;
-
-        QImageReader reader(path);
-        const QSize sz = reader.size();
-        one.width = sz.width();
-        one.height = sz.height();
+        one.camera = cameraIt.value();
+        const auto imageSize = one.camera.imageSize();
+        if (!imageSize || !imageSize->isValid())
+        {
+            continue;
+        }
+        one.width = imageSize->samples;
+        one.height = imageSize->lines;
 
         inputs.push_back(one);
-        inputNames.push_back(path);
     }
 
     if (inputs.size() < 2)
     {
-        QMessageBox::warning(this, tr("提示"), tr("至少勾选两张带相机参数的影像"));
+        QMessageBox::warning(this,
+                             tr("提示"),
+                             hasCamerasForAll
+                                 ? tr("至少勾选两张带相机参数的影像")
+                                 : tr("所选影像缺少可用于重叠分析的 canonical 面阵针孔相机"));
         return;
     }
 
@@ -170,13 +169,8 @@ void OverlapAnalysisDialog::runAnalysis()
 
     xjw::OverlapAnalysisResult result;
     std::string err;
-    if (!xjw::OverlapAnalyzer::analyze(inputs,
-                                       useFixedZ ? nullptr : &dem,
-                                       useFixedZ,
-                                       _fixedZSpin->value(),
-                                       _neighborSpin->value(),
-                                       &result,
-                                       &err))
+    if (!xjw::OverlapAnalyzer::analyze(
+            inputs, useFixedZ ? nullptr : &dem, useFixedZ, _fixedZSpin->value(), _neighborSpin->value(), &result, &err))
     {
         QMessageBox::warning(this, tr("提示"), QString::fromStdString(err));
         return;
@@ -188,12 +182,12 @@ void OverlapAnalysisDialog::runAnalysis()
     _resultTable->setRowCount(static_cast<int>(result.pairs.size()));
     for (int i = 0; i < static_cast<int>(result.pairs.size()); ++i)
     {
-        const auto &p = result.pairs[static_cast<size_t>(i)];
+        const auto& p = result.pairs[static_cast<size_t>(i)];
         // 获取两张影像的文件名（仅用于显示）
-        const QString nameA = QFileInfo(
-            QString::fromStdString(inputs[static_cast<size_t>(p.indexA)].imagePath)).fileName();
-        const QString nameB = QFileInfo(
-            QString::fromStdString(inputs[static_cast<size_t>(p.indexB)].imagePath)).fileName();
+        const QString nameA =
+            QFileInfo(QString::fromStdString(inputs[static_cast<size_t>(p.indexA)].imagePath)).fileName();
+        const QString nameB =
+            QFileInfo(QString::fromStdString(inputs[static_cast<size_t>(p.indexB)].imagePath)).fileName();
         _resultTable->setItem(i, 0, new QTableWidgetItem(nameA));
         _resultTable->setItem(i, 1, new QTableWidgetItem(nameB));
         _resultTable->setItem(i, 2, new QTableWidgetItem(QString::number(p.centerDistance, 'f', 3)));

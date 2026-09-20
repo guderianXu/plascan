@@ -2,7 +2,8 @@
 
 #include "project/ProjectMetadata.h"
 #include "MainMenu.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
 #include "PhotoStripWidget.h"
 #include "SelectionPropertiesWidget.h"
 #include "WorkspaceCenterWidget.h"
@@ -25,7 +26,7 @@ namespace
 
 QJsonObject MainWindow::currentProjectMeta() const
 {
-    return _projectManager ? _projectManager->currentMeta() : QJsonObject{};
+    return _projectServices ? _projectServices->session().metadata() : QJsonObject{};
 }
 
 bool MainWindow::isProjectPhotoPath(const QString &imagePath) const
@@ -40,8 +41,8 @@ bool MainWindow::isProjectPhotoPath(const QString &imagePath) const
     const QString targetAbsPath = targetInfo.exists()
         ? QDir::cleanPath(targetInfo.absoluteFilePath())
         : QString();
-    const QString projectDirPath = _projectManager
-        ? QFileInfo(_projectManager->currentProjectPath()).absolutePath()
+    const QString projectDirPath = _projectServices
+        ? QFileInfo(_projectServices->session().projectPath()).absolutePath()
         : QString();
     const QDir projectDir(projectDirPath);
     const QJsonArray images = xjw::common::project::projectImageEntries(currentProjectMeta());
@@ -121,8 +122,8 @@ QString MainWindow::projectImageStateKey(const QString &imagePath) const
 {
     const QString requested =
         QDir::cleanPath(QFileInfo(imagePath).absoluteFilePath());
-    const QJsonArray images = _projectManager
-        ? _projectManager->coreProjectMeta()
+    const QJsonArray images = _projectServices
+        ? _projectServices->session().coreMetadata()
               .value(QStringLiteral("images"))
               .toArray()
         : QJsonArray{};
@@ -155,8 +156,8 @@ QString MainWindow::projectImageStateKey(const QString &imagePath) const
 QString MainWindow::projectImagePathForStateKey(
     const QString &stateKey) const
 {
-    const QJsonArray images = _projectManager
-        ? _projectManager->coreProjectMeta()
+    const QJsonArray images = _projectServices
+        ? _projectServices->session().coreMetadata()
               .value(QStringLiteral("images"))
               .toArray()
         : QJsonArray{};
@@ -311,12 +312,12 @@ void MainWindow::persistCurrentUiSettings()
 void MainWindow::saveUiSetting(const QJsonObject &partial)
 {
     if (_applyingUiSettings
-        || !_projectManager
-        || _projectManager->currentProjectPath().trimmed().isEmpty())
+        || !_projectServices
+        || _projectServices->session().projectPath().trimmed().isEmpty())
     {
         return;
     }
-    _projectManager->saveUiSettings(partial);
+    _projectServices->session().saveUiSettings(partial);
 }
 
 // Interest-point panel removed: onIpBtnClicked is a no-op now.

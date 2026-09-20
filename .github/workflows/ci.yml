@@ -68,6 +68,7 @@ jobs:
             libltdl-dev \
             libsm-dev \
             libtool \
+            libwayland-dev \
             libx11-dev \
             libx11-xcb-dev \
             libxcb-cursor-dev \
@@ -335,6 +336,7 @@ jobs:
             libltdl-dev \
             libsm-dev \
             libtool \
+            libwayland-dev \
             libx11-dev \
             libx11-xcb-dev \
             libxcb-cursor-dev \

@@ -3,7 +3,7 @@
  * @brief 增量 SfM 的输入装配、主状态机和人工控制网络接入。
  *
  * 未知位姿路径依次执行：对应图构建、初始像对试算、增量 PnP、三角化和 BA；
- * 已知位姿路径委托 KnownPoseReconstructor。FramePinholeCamera 内部始终使用 camera-to-world
+ * 已知位姿路径委托 KnownPoseReconstructor。FramePinholeNumericState 内部始终使用 camera-to-world
  * 旋转和世界系相机中心，OpenCV 的 world-to-camera 约定只在适配层出现。
  */
 
@@ -107,7 +107,7 @@ namespace xjw
 
     void IncrementalSfm::addImageWithCamera(ImageId id,
                                             const std::string& imagePath,
-                                            const FramePinholeCamera& camera,
+                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                             const std::vector<FeatureKeypoint>& keypoints,
                                             const std::string& sensorKey)
     {
@@ -371,8 +371,9 @@ namespace xjw
         return it == _pendingPriorTracks.cend() ? nullptr : &*it;
     }
 
-    bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId>& baImageIds,
-                                                std::vector<FramePinholeCamera>* baCameras)
+    bool IncrementalSfm::tryApplyControlNetwork(
+        const std::vector<ImageId>& baImageIds,
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras)
     {
         if (_controlNetworkApplied || !baCameras || baImageIds.size() != baCameras->size())
         {
@@ -421,7 +422,7 @@ namespace xjw
         {
             if (!_reconstruction->hasCamera(image_id))
                 continue;
-            FramePinholeCamera& camera = _reconstruction->camera(image_id);
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _reconstruction->camera(image_id);
             camera.setPose(_controlNetworkTransform.rotate(camera.cameraToWorldRotation()),
                            _controlNetworkTransform.apply(camera.cameraCenter()));
         }
@@ -490,6 +491,41 @@ namespace xjw
         {
             result.summary = "At least 2 images required for SfM";
             return result;
+        }
+
+        // Every SfM branch eventually feeds the preloaded or file-backed
+        // camera into the numeric geometry kernels.  Validate the complete
+        // input set before building tracks or registering an image so the
+        // known-pose path cannot bypass the numeric-state contract.
+        std::optional<xjw::coordinate_system::CoordinateFrameId> commonCameraFrame;
+        for (const ImageId imageId : _reconstruction->allImageIds())
+        {
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+            if (!getCamera(imageId, camera))
+            {
+                result.summary = "failed to load or validate camera for image " + std::to_string(imageId);
+                return result;
+            }
+
+            std::string cameraError;
+            if (!camera.isValid() || !camera.validateNumericalState(&cameraError))
+            {
+                result.summary = "invalid camera numeric state for image " + std::to_string(imageId);
+                if (!cameraError.empty())
+                {
+                    result.summary += ": " + cameraError;
+                }
+                return result;
+            }
+            if (!commonCameraFrame.has_value())
+            {
+                commonCameraFrame = camera.worldFrame();
+            }
+            else if (*commonCameraFrame != camera.worldFrame())
+            {
+                result.summary = "camera inputs use mixed world frames; normalize them explicitly before SfM";
+                return result;
+            }
         }
 
         Logger::instance()->infof(
@@ -587,7 +623,7 @@ namespace xjw
             bool anyInitialized = false;
             ImageId bestInitId1 = kInvalidImageId;
             ImageId bestInitId2 = kInvalidImageId;
-            std::optional<FramePinholeCamera> bestSecondCamera;
+            std::optional<xjw::camera_models::frame_pinhole::FramePinholeNumericState> bestSecondCamera;
             int evaluatedCandidates = 0;
             bool stableTrialFound = false;
             int selectedTrialTargetImages = evaluateMultipleSeeds ? trialTargetImages : totalImages;
@@ -676,15 +712,15 @@ namespace xjw
             if (_sfmOptions.useReferenceInitialPairTrials && !stableTrialFound && totalImages > trialTargetImages)
             {
                 const int extendedTarget = std::min(5, totalImages);
-                std::vector<FramePinholeCamera> hypotheses;
+                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> hypotheses;
                 if (bestSecondCamera)
                 {
                     hypotheses.push_back(*bestSecondCamera);
                 }
-                std::vector<FramePinholeCamera> five_point_hypotheses =
+                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> five_point_hypotheses =
                     initializer.enumerateFivePointPoseHypotheses(bestInitId1, bestInitId2);
                 hypotheses.insert(hypotheses.end(), five_point_hypotheses.begin(), five_point_hypotheses.end());
-                for (const FramePinholeCamera& hypothesis : hypotheses)
+                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& hypothesis : hypotheses)
                 {
                     initializer.resetTrial(baseReconstruction);
                     if (!initializer.initializeWithPose(bestInitId1, bestInitId2, hypothesis))

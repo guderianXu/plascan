@@ -1,8 +1,8 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
 #include "DemDomTypes.h"
 #include "OrthoGenerationOptions.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -22,7 +22,7 @@ namespace xjw
         QString imageId;
         QString imagePath;
         QString exclusionMaskPath;
-        FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     };
 
     struct OrthoOutputGrid

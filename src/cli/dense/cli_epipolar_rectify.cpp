@@ -8,7 +8,8 @@
 #include "cli_common.h"
 #include "EpipolarRectifier.h"
 #include "MvsImagePreprocessor.h"
-#include "FramePinholeCamera.h"
+#include "ProjectCameraIO.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -34,12 +35,24 @@ int main(int argc, char *argv[])
 
     CLI11_PARSE(app, argc, argv);
 
-    // 加载相机
-    xjw::FramePinholeCamera camLObj, camRObj;
-    if (!camLObj.loadFromFile(camL))
+    // 相机文件是输入边界；数值内核只接收独立的数值状态。
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camLObj;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camRObj;
+    QJsonObject camLMetadata;
+    QJsonObject camRMetadata;
+    QString cameraError;
+    if (!xjw::common::project::parseTsaiCamera(
+            xjw::common::io::fromUtf8Path(camL), &camLMetadata, &cameraError) ||
+        !xjw::common::project::decodeFramePinholeNumericState(camLMetadata, &camLObj))
+    {
         cli::fatal("无法加载左相机: " + camL, cli::EXIT_IO_ERR);
-    if (!camRObj.loadFromFile(camR))
+    }
+    if (!xjw::common::project::parseTsaiCamera(
+            xjw::common::io::fromUtf8Path(camR), &camRMetadata, &cameraError) ||
+        !xjw::common::project::decodeFramePinholeNumericState(camRMetadata, &camRObj))
+    {
         cli::fatal("无法加载右相机: " + camR, cli::EXIT_IO_ERR);
+    }
 
     // 加载影像
     cv::Mat left  = xjw::common::io::readImage(imgL, cv::IMREAD_GRAYSCALE);
@@ -54,8 +67,8 @@ int main(int argc, char *argv[])
 
     cv::Mat preparedLeft;
     cv::Mat preparedRight;
-    xjw::FramePinholeCamera preparedLeftCamera;
-    xjw::FramePinholeCamera preparedRightCamera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState preparedLeftCamera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState preparedRightCamera;
     std::string preprocessError;
     if (!xjw::mvs::prepareMvsImage(left,
                                    camLObj,

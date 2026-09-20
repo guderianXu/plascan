@@ -3,7 +3,7 @@
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MatchPhotosTask.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectSession.h"
 #include "ProjectResultRecords.h"
 #include "project/ProjectIO.h"
 
@@ -15,13 +15,13 @@
 
 #include <algorithm>
 
-TiePointWorkflowController::TiePointWorkflowController(ProjectManager *projectManager, QObject *parent)
+TiePointWorkflowController::TiePointWorkflowController(xjw::gui::project::ProjectSession *session, QObject *parent)
     : QObject(parent)
-    , _projectManager(projectManager)
+    , _session(session)
 {
-    if (_projectManager)
+    if (_session)
     {
-        connect(_projectManager, &ProjectManager::projectSessionChanged,
+        connect(_session, &xjw::gui::project::ProjectSession::sessionChanged,
                 this, &TiePointWorkflowController::cancel);
     }
 }
@@ -49,16 +49,16 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
         return;
     }
 
-    QPointer<ProjectManager> projectManager = _projectManager;
-    if (!projectManager)
+    QPointer<xjw::gui::project::ProjectSession> session_guard = _session;
+    if (!session_guard)
     {
         emit warningRequested(tr("连接点匹配"), tr("项目管理器未初始化。"));
         return;
     }
 
-    const auto session = projectManager->currentSessionContext();
+    const auto session = session_guard->context();
     const QString projectPath = session.projectPath;
-    const QStringList images = projectManager->getAllImages();
+    const QStringList images = session_guard->allImages();
     if (images.size() < 2)
     {
         emit warningRequested(tr("创建连接点"), tr("当前项目至少需要两张照片才能创建连接点。"));
@@ -79,10 +79,19 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
     context.pairInput.images = images;
     context.pairInput.manualPairKeys = manualPairKeys;
     context.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(projectPath, images);
-    if (options.useReferencePreselection)
+    bool allImageIdsResolved = false;
+    context.imageIds = session_guard->getImageIdsForImages(images, &allImageIdsResolved);
+    if (!allImageIdsResolved)
+    {
+        emit warningRequested(tr("连接点匹配"), tr("当前影像缺少稳定 ImageId，无法建立参考几何。"));
+        return;
+    }
+    if (options.useReferencePreselection ||
+        options.guidedMatchingMode != xjw::matchphotos::GuidedMatchingMode::Disabled)
     {
         bool hasAllReferenceCameras = false;
-        context.referenceCameras = projectManager->getCamerasForImages(images, &hasAllReferenceCameras);
+        context.referenceCameraGeometries = session_guard->getReferenceCameraGeometriesForImages(
+            images, &hasAllReferenceCameras);
         if (!hasAllReferenceCameras)
         {
             LOG_INFO(QStringLiteral(
@@ -106,9 +115,9 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
     _progressTimer->setInterval(100);
     const std::shared_ptr<std::atomic_int> progressCount = _progressCount;
     connect(_progressTimer, &QTimer::timeout, this,
-            [this, progressCount, projectManager, session]()
+            [this, progressCount, session_guard, session]()
     {
-        if (!projectManager || !projectManager->isCurrentSession(session))
+        if (!session_guard || !session_guard->isCurrent(session))
         {
             cancel();
             if (_progressTimer)
@@ -131,7 +140,7 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
             const xjw::matchphotos::MatchPhotosTask task(options);
             return task.run(context);
         },
-        [this, projectManager, session, taskTitle, cancelFlag](TiePointWorkflowController *,
+        [this, session_guard, session, taskTitle, cancelFlag](TiePointWorkflowController *,
                                                                xjw::gui::tasks::TaskOutcome<
                                                                    xjw::matchphotos::MatchPhotosResult> outcome)
         {
@@ -150,25 +159,31 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
             const bool cancelled = cancelFlag && cancelFlag->load();
             finishRun(result.success && !cancelled);
 
-            if (!projectManager)
+            if (!session_guard)
             {
                 return;
             }
-            if (!projectManager->isCurrentSession(session))
+            if (!session_guard->isCurrent(session))
             {
                 emit warningRequested(tr("连接点匹配"), tr("项目已切换，本次连接点匹配结果未写回。"));
                 return;
             }
 
-            projectManager->appendImageMatchResults(
-                xjw::gui::project::makeImageMatchResultRecords(result));
+            QString write_error;
+            if (!session_guard->appendImageMatchResults(
+                    session, xjw::gui::project::makeImageMatchResultRecords(result), &write_error))
+            {
+                emit warningRequested(tr("连接点匹配"),
+                                      write_error.isEmpty() ? tr("匹配结果写回失败。") : write_error);
+                return;
+            }
 
             for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
             {
-                emit projectManager->matchPairReady(match.image0Path,
-                                                    match.image1Path,
-                                                    match.image0MatchFilePath,
-                                                    match.matchCount);
+                emit matchPairReady(match.image0Path,
+                                    match.image1Path,
+                                    match.image0MatchFilePath,
+                                    match.matchCount);
             }
 
             if (result.success && !cancelled)

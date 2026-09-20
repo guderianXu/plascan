@@ -1,48 +1,47 @@
-#include "project/services/ProjectSessionFacade.h"
+#include "project/services/ProjectSession.h"
 
 #include <gtest/gtest.h>
 
 namespace
 {
 
-using xjw::gui::project::ProjectSessionFacade;
+    using xjw::gui::project::ProjectSession;
 
-TEST(ProjectSessionFacadeTest, NullSessionReturnsEmptyReadModels)
-{
-    const ProjectSessionFacade facade;
+    TEST(ProjectSessionNullTest, ReturnsEmptyReadModels)
+    {
+        ProjectSession session(nullptr);
 
-    EXPECT_FALSE(facade.isDirty());
-    EXPECT_TRUE(facade.projectPath().isEmpty());
-    EXPECT_TRUE(facade.activeChunkId().isEmpty());
-    EXPECT_TRUE(facade.metadata().isEmpty());
-    EXPECT_TRUE(facade.coreMetadata().isEmpty());
-    EXPECT_TRUE(facade.allImages().isEmpty());
-    EXPECT_TRUE(facade.intersectionResults().isEmpty());
-}
+        EXPECT_FALSE(session.isDirty());
+        EXPECT_TRUE(session.projectPath().isEmpty());
+        EXPECT_TRUE(session.activeChunkId().isEmpty());
+        EXPECT_TRUE(session.metadata().isEmpty());
+        EXPECT_TRUE(session.coreMetadata().isEmpty());
+        EXPECT_TRUE(session.allImages().isEmpty());
+        EXPECT_TRUE(session.intersectionResults().isEmpty());
+    }
 
-TEST(ProjectSessionFacadeTest, NullSessionExplainsCameraMutationFailure)
-{
-    const ProjectSessionFacade facade;
-    int updatedCount = 7;
-    QString errorMessage;
+    TEST(ProjectSessionNullTest, ExplainsCameraMutationFailure)
+    {
+        ProjectSession session(nullptr);
+        int updatedCount = 7;
+        QString errorMessage;
 
-    EXPECT_FALSE(facade.setImageCameras({}, &updatedCount, &errorMessage));
-    EXPECT_EQ(updatedCount, 0);
-    EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
-}
+        EXPECT_FALSE(session.setCameraInstances({}, &updatedCount, &errorMessage));
+        EXPECT_EQ(updatedCount, 0);
+        EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
+    }
 
-TEST(ProjectSessionFacadeTest, NullSessionResetsBothReplaceCounts)
-{
-    const ProjectSessionFacade facade;
-    int updatedCount = 7;
-    int clearedCount = 9;
-    QString errorMessage;
+    TEST(ProjectSessionNullTest, ResetsBothReplaceCounts)
+    {
+        ProjectSession session(nullptr);
+        int updatedCount = 7;
+        int clearedCount = 9;
+        QString errorMessage;
 
-    EXPECT_FALSE(facade.replaceImageCameras(
-        {}, {}, &updatedCount, &clearedCount, &errorMessage));
-    EXPECT_EQ(updatedCount, 0);
-    EXPECT_EQ(clearedCount, 0);
-    EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
-}
+        EXPECT_FALSE(session.replaceCameraInstances({}, {}, &updatedCount, &clearedCount, &errorMessage));
+        EXPECT_EQ(updatedCount, 0);
+        EXPECT_EQ(clearedCount, 0);
+        EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
+    }
 
 } // namespace

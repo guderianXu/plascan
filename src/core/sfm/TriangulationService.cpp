@@ -4,13 +4,15 @@
 #include "project/SparseResultQuality.h"
 #include "triangulation/InitialSparsePointFilter.h"
 #include "io/PathIO.h"
+#include "io/ImageIO.h"
+#include "Logger.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
+#include <opencv2/imgcodecs.hpp>
 
 #include <QDateTime>
 #include <QDir>
-#include <QImage>
 #include <QJsonArray>
 
 #include <cmath>
@@ -20,6 +22,28 @@ namespace xjw::core::project
 
 namespace
 {
+
+QString buildInputFailureMessage(const BaInputBuildResult &buildResult)
+{
+    const ProjectMatchInputDiagnostics &diagnostics = buildResult.matchDiagnostics;
+    if (!buildResult.firstControlInputError.trimmed().isEmpty())
+    {
+        return QStringLiteral("控制点/标记输入检查失败: %1").arg(buildResult.firstControlInputError);
+    }
+    if (!diagnostics.firstInputError.trimmed().isEmpty())
+    {
+        return QStringLiteral("相机/影像输入检查失败: %1").arg(diagnostics.firstInputError);
+    }
+    if (!diagnostics.firstCameraError.trimmed().isEmpty())
+    {
+        return QStringLiteral("相机/影像输入检查失败: %1").arg(diagnostics.firstCameraError);
+    }
+    if (!diagnostics.firstShardReadError.trimmed().isEmpty())
+    {
+        return QStringLiteral("匹配分片读取失败: %1").arg(diagnostics.firstShardReadError);
+    }
+    return {};
+}
 
 QStringList projectImagePaths(const QJsonObject &meta)
 {
@@ -64,14 +88,26 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     // 正式 BA 使用相同路径解析、索引和人工标记语义。
     BaInputBuildResult buildResult;
     const BaInputBuildStatus buildStatus = buildBaInputFromMeta(meta, images, 1, &buildResult);
+    const QString inputFailureMessage = buildInputFailureMessage(buildResult);
     if (buildStatus == BaInputBuildStatus::NotEnoughCameras)
     {
-        result.errorMessage = QStringLiteral("所选影像中可用相机参数不足（至少需要两台相机）");
+        result.errorMessage = inputFailureMessage.isEmpty()
+            ? QStringLiteral("所选影像中可用相机参数不足（至少需要两台相机）")
+            : inputFailureMessage;
         return result;
     }
     if (buildStatus == BaInputBuildStatus::NoTracks)
     {
-        result.errorMessage = QStringLiteral("未找到可用于三角化的匹配轨迹");
+        result.errorMessage = inputFailureMessage.isEmpty()
+            ? QStringLiteral("未找到可用于三角化的匹配轨迹")
+            : inputFailureMessage;
+        return result;
+    }
+    if (buildStatus == BaInputBuildStatus::InvalidInput)
+    {
+        result.errorMessage = inputFailureMessage.isEmpty()
+            ? QStringLiteral("控制点/标记输入身份无效")
+            : inputFailureMessage;
         return result;
     }
 
@@ -107,13 +143,16 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     }
 
     // 阶段 3：通过原始 track 的各观测采样颜色。采用多视平均可减轻单幅影像
-    // 阴影/曝光差异；影像读取失败时使用中性灰，不影响几何点导出。
+    // 阴影/曝光差异；影像读取失败时记录诊断并保留几何点导出。
     QJsonArray pointsArray;
     QVector<std::array<double, 3>> exportedPoints;
     exportedPoints.reserve(static_cast<int>(coreResult.points.size()));
 
     const int camCount = buildResult.imagePathByIndex.size();
-    QVector<QImage> camImages(camCount);
+    QVector<cv::Mat> camImages(camCount);
+    QVector<bool> colorReadAttempted(camCount, false);
+    QJsonArray colorReadFailures;
+    int uncoloredPointCount = 0;
     auto sampleColor = [&](const xjw::InitialSparsePoint &point,
                            std::array<uint8_t, 3> &color) -> bool {
         if (point.sourceTrackIndex < 0
@@ -142,23 +181,45 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
                 continue;
             }
 
-            QImage &img = camImages[observation.cameraIndex];
-            if (img.isNull())
+            cv::Mat& img = camImages[observation.cameraIndex];
+            if (!colorReadAttempted[observation.cameraIndex])
             {
+                colorReadAttempted[observation.cameraIndex] = true;
                 const QString &path = buildResult.imagePathByIndex[observation.cameraIndex];
-                img = QImage(path).convertToFormat(QImage::Format_RGB888);
+                QString readError;
+                try
+                {
+                    // Track coordinates refer to the encoded raster, without EXIF rotation.
+                    img =
+                        xjw::common::io::readImage(path, cv::IMREAD_COLOR | cv::IMREAD_IGNORE_ORIENTATION, &readError);
+                }
+                catch (const std::exception& exception)
+                {
+                    readError = QString::fromUtf8(exception.what());
+                }
+                if (img.empty() || img.type() != CV_8UC3)
+                {
+                    img.release();
+                    if (readError.isEmpty())
+                    {
+                        readError = QStringLiteral("影像未解码为有效的八位三通道 BGR 图像");
+                    }
+                    colorReadFailures.append(
+                        QJsonObject{{QStringLiteral("image_path"), path}, {QStringLiteral("error"), readError}});
+                    LOG_WARN(QStringLiteral("稀疏点云颜色读取失败：%1 (%2)；跳过此视图颜色采样").arg(path, readError));
+                }
             }
-            if (img.isNull())
+            if (img.empty())
             {
                 continue;
             }
 
-            const int px = qBound(0, qRound(observation.u), img.width() - 1);
-            const int py = qBound(0, qRound(observation.v), img.height() - 1);
-            const QRgb pix = img.pixel(px, py);
-            sumR += qRed(pix);
-            sumG += qGreen(pix);
-            sumB += qBlue(pix);
+            const int px = qBound(0, qRound(observation.u), img.cols - 1);
+            const int py = qBound(0, qRound(observation.v), img.rows - 1);
+            const cv::Vec3b pix = img.at<cv::Vec3b>(py, px);
+            sumR += pix[2];
+            sumG += pix[1];
+            sumB += pix[0];
             ++sampleCount;
         }
 
@@ -191,7 +252,10 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         ExportPoint exportPoint;
         exportPoint.xyz = point.xyz;
         exportPoint.rgb = {128, 128, 128};
-        sampleColor(point, exportPoint.rgb);
+        if (!sampleColor(point, exportPoint.rgb))
+        {
+            ++uncoloredPointCount;
+        }
         exportWithColor.push_back(exportPoint);
 
         QJsonObject pointObject;
@@ -253,6 +317,14 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     summary[QStringLiteral("rejected_by_reproj_count")] = result.rejectedByReprojCount;
     summary[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
     summary[QStringLiteral("points")] = pointsArray;
+    if (!colorReadFailures.isEmpty())
+    {
+        summary[QStringLiteral("color_read_failures")] = colorReadFailures;
+    }
+    if (uncoloredPointCount > 0)
+    {
+        summary[QStringLiteral("uncolored_point_count")] = uncoloredPointCount;
+    }
 
     const QJsonObject quality = xjw::common::project::buildSparseQualityMetadata(
         pointsArray,

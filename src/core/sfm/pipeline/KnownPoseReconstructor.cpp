@@ -1,5 +1,6 @@
 #include "KnownPoseReconstructor.h"
 #include "IncrementalSfmDetail.h"
+#include "FramePinholeTsaiIO.h"
 #include "SfmBundleAdjustCoordinator.h"
 #include "geometry/OpenCvCameraAdapter.h"
 #include "Intersection.h"
@@ -44,12 +45,12 @@ namespace xjw
         auto imageIds = _reconstruction->allImageIds();
         std::sort(imageIds.begin(), imageIds.end());
 
-        // 阶段 1：已知位姿路径不执行初始对/PnP，直接把每台可信 FramePinholeCamera 注册到同一
+        // 阶段 1：已知位姿路径不执行初始对/PnP，直接把每台可信 FramePinholeNumericState 注册到同一
         // 重建中。任何缺失相机都使该路径失败，不能混入任意估计位姿。
         int registeredCount = 0;
         for (ImageId imageId : imageIds)
         {
-            FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
             if (!getCamera(imageId, camera))
             {
                 result.summary = "Failed to load known camera pose for image " + std::to_string(imageId);
@@ -432,12 +433,14 @@ namespace xjw
     // 内部：加载相机
     // ============================================================
 
-    bool IncrementalSfm::loadCamera(const std::string& cameraPath, FramePinholeCamera& cam) const
+    bool IncrementalSfm::loadCamera(const std::string& cameraPath,
+                                    xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const
     {
-        return cam.loadFromFile(cameraPath);
+        return xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(cameraPath, &cam);
     }
 
-    bool IncrementalSfm::getCamera(ImageId imageId, FramePinholeCamera& cam) const
+    bool IncrementalSfm::getCamera(ImageId imageId,
+                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const
     {
         // 优先使用预设相机对象
         auto pit = _preloadedCameras.find(imageId);
@@ -458,13 +461,13 @@ namespace xjw
     std::vector<BACameraPosePrior>
     IncrementalSfm::buildCameraPosePriorsFromInputCameras(const std::vector<ImageId>& imageIds) const
     {
-        std::vector<FramePinholeCamera> inputCameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> inputCameras;
         inputCameras.reserve(imageIds.size());
         std::vector<std::array<double, 3>> inputCenters;
         inputCenters.reserve(imageIds.size());
         for (ImageId imageId : imageIds)
         {
-            FramePinholeCamera inputCamera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
             if (getCamera(imageId, inputCamera))
             {
                 inputCenters.push_back(inputCamera.cameraCenter());
@@ -481,7 +484,7 @@ namespace xjw
         for (size_t i = 0; i < imageIds.size(); ++i)
         {
             BACameraPosePrior prior;
-            const FramePinholeCamera& inputCamera = inputCameras[i];
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& inputCamera = inputCameras[i];
             if (inputCamera.isValid())
             {
                 prior.enabled = true;
@@ -495,8 +498,9 @@ namespace xjw
         return priors;
     }
 
-    void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<ImageId>& imageIds,
-                                                              std::vector<FramePinholeCamera>* baCameras)
+    void IncrementalSfm::alignReconstructionToKnownPosePriors(
+        const std::vector<ImageId>& imageIds,
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras)
     {
         if (!baCameras || imageIds.size() != baCameras->size() || imageIds.size() < 3)
         {
@@ -509,7 +513,7 @@ namespace xjw
         inputCenters.reserve(imageIds.size());
         for (size_t i = 0; i < imageIds.size(); ++i)
         {
-            FramePinholeCamera inputCamera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
             if (!getCamera(imageIds[i], inputCamera))
             {
                 continue;
@@ -605,7 +609,7 @@ namespace xjw
             {
                 continue;
             }
-            FramePinholeCamera& camera = _reconstruction->camera(imageId);
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _reconstruction->camera(imageId);
             camera.setPose(multiplyRotation(transform.rotation, camera.cameraToWorldRotation()),
                            transformPoint(transform, camera.cameraCenter()));
         }
@@ -646,13 +650,13 @@ namespace xjw
 
         // 输入相机和相机中心范围在整轮 PnP 中保持不变。一次加载可避免 .tsai
         // 路径在逐影像循环中被重复打开，并将原来的 O(N^2) 相机读取降为 O(N)。
-        std::unordered_map<ImageId, FramePinholeCamera> inputCameras;
+        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> inputCameras;
         inputCameras.reserve(imageIds.size());
         std::vector<std::array<double, 3>> inputCenters;
         inputCenters.reserve(imageIds.size());
         for (ImageId imageId : imageIds)
         {
-            FramePinholeCamera inputCamera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
             if (getCamera(imageId, inputCamera))
             {
                 inputCenters.push_back(inputCamera.cameraCenter());
@@ -737,14 +741,14 @@ namespace xjw
             pnpOptions.minNumInliers = std::min(pnpOptions.minNumInliers, static_cast<int>(worldPoints.size()));
             pnpOptions.minInlierRatio = std::min(pnpOptions.minInlierRatio, 0.10);
 
-            const FramePinholeCamera before = _reconstruction->camera(imageId);
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState before = _reconstruction->camera(imageId);
             const PnpResult pnp = PnpSolver::solveWithCamera(worldPoints, imagePoints, before, pnpOptions);
             if (!pnp.success)
             {
                 continue;
             }
 
-            FramePinholeCamera candidate = before;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState candidate = before;
             candidate.setPose(pnp.R, pnp.C);
             const auto inputCameraIt = inputCameras.find(imageId);
             if (inputCameraIt != inputCameras.end() &&

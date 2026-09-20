@@ -2,7 +2,6 @@
 #include "OrthoGenerationOptions.h"
 #include "OrthoProjector.h"
 #include "PointCloudDomGenerator.h"
-#include "ProjectCameraIO.h"
 #include "TerrainPipeline.h"
 #include "io/PathIO.h"
 
@@ -23,6 +22,8 @@
 #include <array>
 #include <atomic>
 #include <limits>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -55,13 +56,65 @@ namespace
         return grid;
     }
 
-    xjw::FramePinholeCamera makeProjectionCamera(double centerZ = -10.0)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeProjectionCamera(double centerZ = -10.0)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(10.0, 10.0, 32.0, 32.0);
+        camera.setImageSize({64, 64});
         camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
                        std::array<double, 3>{2.0, 2.0, centerZ});
         return camera;
+    }
+
+    QJsonObject projectionProjectMeta(const std::vector<std::pair<QString, double>>& imageCameras)
+    {
+        const QString definition_id = QStringLiteral("ortho-definition");
+        const QString frame = QStringLiteral("terrain-test-frame");
+        const QJsonObject definition{{QStringLiteral("id"), definition_id},
+                                     {QStringLiteral("model_type"), QStringLiteral("frame_pinhole")},
+                                     {QStringLiteral("schema_version"), 1},
+                                     {QStringLiteral("frame"), frame},
+                                     {QStringLiteral("parameters"),
+                                      QJsonObject{{QStringLiteral("intrinsics"),
+                                                   QJsonObject{{QStringLiteral("fx_px"), 10.0},
+                                                               {QStringLiteral("fy_px"), 10.0},
+                                                               {QStringLiteral("cx_px"), 32.0},
+                                                               {QStringLiteral("cy_px"), 32.0},
+                                                               {QStringLiteral("pixel_pitch_mm"), 0.01},
+                                                               {QStringLiteral("u_axis_sign"), 1},
+                                                               {QStringLiteral("v_axis_sign"), 1}}},
+                                                  {QStringLiteral("distortion"),
+                                                   QJsonObject{{QStringLiteral("k1"), 0.0},
+                                                               {QStringLiteral("k2"), 0.0},
+                                                               {QStringLiteral("k3"), 0.0},
+                                                               {QStringLiteral("p1"), 0.0},
+                                                               {QStringLiteral("p2"), 0.0}}},
+                                                  {QStringLiteral("pixel_convention"), QStringLiteral("center")},
+                                                  {QStringLiteral("depth_axis_flipped"), false}}}};
+
+        QJsonArray images;
+        QJsonArray instances;
+        for (std::size_t index = 0; index < imageCameras.size(); ++index)
+        {
+            const QString image_id = QStringLiteral("ortho-image-%1").arg(index);
+            images.append(QJsonObject{{QStringLiteral("image_uuid"), image_id},
+                                      {QStringLiteral("path"), imageCameras[index].first}});
+            instances.append(
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("ortho-instance-%1").arg(index)},
+                            {QStringLiteral("image_uuid"), image_id},
+                            {QStringLiteral("definition_id"), definition_id},
+                            {QStringLiteral("schema_version"), 1},
+                            {QStringLiteral("image_size"),
+                             QJsonObject{{QStringLiteral("samples"), 64}, {QStringLiteral("lines"), 64}}},
+                            {QStringLiteral("pose"),
+                             QJsonObject{{QStringLiteral("frame"), frame},
+                                         {QStringLiteral("center_m"), QJsonArray{2.0, 2.0, imageCameras[index].second}},
+                                         {QStringLiteral("camera_to_world_rotation"),
+                                          QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}}});
+        }
+        return QJsonObject{{QStringLiteral("images"), images},
+                           {QStringLiteral("camera_definitions"), QJsonArray{definition}},
+                           {QStringLiteral("camera_instances"), instances}};
     }
 
     xjw::OrthoImageInput writeProjectionInput(QTemporaryDir* directory,
@@ -405,7 +458,7 @@ namespace
         EXPECT_TRUE(error.contains(QStringLiteral("像素数")));
     }
 
-    TEST(OrthoImageInputTest, PrefersExactPathAndRejectsAmbiguousFileName)
+    TEST(OrthoImageInputTest, RequiresExactPathAndCanonicalCameraInstance)
     {
         QTemporaryDir directory;
         ASSERT_TRUE(directory.isValid());
@@ -416,14 +469,7 @@ namespace
         const QString firstPath = QDir(firstDirectory).filePath(QStringLiteral("same.png"));
         const QString secondPath = QDir(secondDirectory).filePath(QStringLiteral("same.png"));
 
-        const QJsonObject projectMeta{
-            {QStringLiteral("images"),
-             QJsonArray{QJsonObject{{QStringLiteral("path"), firstPath},
-                                    {QStringLiteral("camera"),
-                                     xjw::common::project::cameraToJson(makeProjectionCamera(-10.0))}},
-                        QJsonObject{{QStringLiteral("path"), secondPath},
-                                    {QStringLiteral("camera"),
-                                     xjw::common::project::cameraToJson(makeProjectionCamera(-20.0))}}}}};
+        const QJsonObject projectMeta = projectionProjectMeta({{firstPath, -10.0}, {secondPath, -20.0}});
 
         std::vector<xjw::OrthoImageInput> inputs;
         QString error;
@@ -431,22 +477,21 @@ namespace
             << error.toStdString();
         ASSERT_EQ(inputs.size(), 1U);
         EXPECT_DOUBLE_EQ(inputs.front().camera.cameraCenter()[2], -20.0);
+        EXPECT_EQ(inputs.front().imageId, QStringLiteral("ortho-image-1"));
 
         const QString ambiguousPath = QDir(directory.path()).filePath(QStringLiteral("other/same.png"));
         EXPECT_FALSE(xjw::OrthoProjector::buildImageInputs({ambiguousPath}, projectMeta, &inputs, &error));
         EXPECT_TRUE(error.contains(QStringLiteral("唯一匹配")));
 
-        const QJsonObject differentExtensionMeta{
-            {QStringLiteral("images"),
-             QJsonArray{QJsonObject{
-                 {QStringLiteral("path"), QDir(firstDirectory).filePath(QStringLiteral("photo.jpg"))},
-                 {QStringLiteral("camera"), xjw::common::project::cameraToJson(makeProjectionCamera(-10.0))}}}}};
+        const QJsonObject differentExtensionMeta =
+            projectionProjectMeta({{QDir(firstDirectory).filePath(QStringLiteral("photo.jpg")), -10.0}});
         EXPECT_FALSE(xjw::OrthoProjector::buildImageInputs(
             {QDir(secondDirectory).filePath(QStringLiteral("photo.png"))}, differentExtensionMeta, &inputs, &error));
 
-        const QJsonObject duplicateExactMeta{{QStringLiteral("images"),
-                                              QJsonArray{projectMeta.value(QStringLiteral("images")).toArray().at(0),
-                                                         projectMeta.value(QStringLiteral("images")).toArray().at(0)}}};
+        QJsonObject duplicateExactMeta = projectMeta;
+        duplicateExactMeta[QStringLiteral("images")] =
+            QJsonArray{projectMeta.value(QStringLiteral("images")).toArray().at(0),
+                       projectMeta.value(QStringLiteral("images")).toArray().at(0)};
         EXPECT_FALSE(xjw::OrthoProjector::buildImageInputs({firstPath}, duplicateExactMeta, &inputs, &error));
     }
 
@@ -694,7 +739,7 @@ namespace
         ASSERT_TRUE(directory.isValid());
         xjw::OrthoImageInput invalid =
             writeProjectionInput(&directory, QStringLiteral("missing_camera.png"), cv::Scalar(1, 2, 3));
-        invalid.camera = xjw::FramePinholeCamera();
+        invalid.camera = xjw::camera_models::frame_pinhole::FramePinholeNumericState();
         const xjw::OrthoImageInput valid =
             writeProjectionInput(&directory, QStringLiteral("valid_camera.png"), cv::Scalar(4, 5, 6));
 

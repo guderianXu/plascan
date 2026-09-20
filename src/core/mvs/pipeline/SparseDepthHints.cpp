@@ -5,51 +5,12 @@ namespace xjw::mvs
     using namespace pipeline_detail;
     using common::string_utils::asciiLowerCopy;
 
-    // =============================================================================
-    cv::Mat MvsPipelineService::buildHintDepth(int refIdx, int W, int H, const std::vector<int>& sourceIndices) const
-    {
-        const int minSourceViews = sourceIndices.empty() ? 0 : 1;
-        std::vector<size_t> visiblePointIndices =
-            visibleSparsePointIndicesForFrame(refIdx, sourceIndices, minSourceViews);
-        if (visiblePointIndices.empty() && minSourceViews > 0)
-        {
-            visiblePointIndices = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
-            LOG_DEBUG("[MVS][帧 %d][稀疏引导] 共视点为空，回退参考帧可见点 (%zu)", refIdx, visiblePointIndices.size());
-        }
-
-        return buildHintDepthFromVisiblePoints(refIdx, W, H, visiblePointIndices);
-    }
-
-    cv::Mat MvsPipelineService::buildHintDepthFromVisiblePoints(int refIdx,
-                                                                int W,
-                                                                int H,
-                                                                const std::vector<size_t>& visiblePointIndices) const
-    {
-        if (refIdx < 0 || refIdx >= static_cast<int>(_views.size()))
-        {
-            return cv::Mat();
-        }
-
-        return buildHintDepthForCamera(refIdx, mvsPinholeCamera(_views[refIdx].camera), W, H, visiblePointIndices);
-    }
-
-    cv::Mat MvsPipelineService::buildHintDepthForCamera(int refIdx,
-                                                        const FramePinholeCamera& camera,
-                                                        int W,
-                                                        int H,
-                                                        const std::vector<size_t>& visiblePointIndices) const
-    {
-        const std::vector<ProjectedSparseDepthSample> samples =
-            collectProjectedSparseDepthSamples(_sparse, camera, W, H, visiblePointIndices);
-        return buildHintDepthFromProjectedSamples(refIdx, W, H, samples);
-    }
-
-    std::vector<ProjectedSparseDepthSample>
-    MvsPipelineService::collectProjectedSparseDepthSamples(const SparseCloud& sparse,
-                                                           const FramePinholeCamera& camera,
-                                                           int imageWidth,
-                                                           int imageHeight,
-                                                           const std::vector<size_t>& visiblePointIndices)
+    std::vector<ProjectedSparseDepthSample> MvsPipelineService::collectProjectedSparseDepthSamples(
+        const SparseCloud& sparse,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        int imageWidth,
+        int imageHeight,
+        const std::vector<size_t>& visiblePointIndices)
     {
         std::vector<ProjectedSparseDepthSample> samples;
         if (sparse.points.empty() || imageWidth <= 0 || imageHeight <= 0 || !camera.isValid())

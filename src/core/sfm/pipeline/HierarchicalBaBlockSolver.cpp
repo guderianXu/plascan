@@ -27,7 +27,7 @@ namespace xjw::hierarchical_ba_detail
         const std::unordered_set<ImageId> core_ids(block.coreImageIds.begin(), block.coreImageIds.end());
         const std::unordered_set<ImageId> overlap_ids(block.overlapImageIds.begin(), block.overlapImageIds.end());
         std::unordered_map<ImageId, int> camera_index;
-        std::vector<FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         cameras.reserve(outcome.cameraIds.size());
         for (ImageId image_id : outcome.cameraIds)
         {

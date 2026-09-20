@@ -67,6 +67,8 @@ TEST(ProjectAssetImporterTest, ImportsMetashapeObjModelWithMaterialAndTexture)
     EXPECT_TRUE(result.hasTexture) << warningText;
     EXPECT_TRUE(QFileInfo::exists(result.importedPath));
     EXPECT_TRUE(result.importedPath.startsWith(projectRoot));
+    EXPECT_TRUE(result.importDirectory.startsWith(
+        QDir(projectRoot).filePath(QStringLiteral("assets/imported/models"))));
     EXPECT_EQ(result.resultArrayKey, QStringLiteral("model_results"));
     EXPECT_EQ(result.resultPathKey, QStringLiteral("final_model_path"));
     EXPECT_EQ(result.projectRecord.value(QStringLiteral("model_obj")).toString(),
@@ -105,6 +107,8 @@ TEST(ProjectAssetImporterTest, ImportsColoredObjPointCloudWithoutFaces)
     EXPECT_EQ(result.faceCount, 0);
     EXPECT_TRUE(result.hasVertexColors);
     EXPECT_TRUE(QFileInfo::exists(result.importedPath));
+    EXPECT_TRUE(result.importDirectory.startsWith(
+        QDir(request.projectRoot).filePath(QStringLiteral("assets/imported/point_clouds"))));
     EXPECT_EQ(result.resultArrayKey, QStringLiteral("dense_cloud_results"));
     EXPECT_EQ(result.projectRecord.value(QStringLiteral("dense_cloud_xyz")).toString(),
               result.importedPath);

@@ -909,7 +909,7 @@ TEST(CameraSceneRenderContractTest, MetadataResultUpdatesDoNotReloadCameraImages
         signature_start, signature_end - signature_start);
     EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"path\")")));
     EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"image_path\")")));
-    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"camera\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"model_parameters\")")));
     EXPECT_FALSE(signature_block.contains(QStringLiteral("depth_map_results")));
 
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonArray _cameraPoseMetadata")));

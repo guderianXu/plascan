@@ -73,7 +73,7 @@ namespace
 
     TEST_F(RecoveredModelInputTest, PublicD4CameraUsesReferenceCalibrationWithoutHalfPixelShift)
     {
-        xjw::FramePinholeCamera original;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState original;
         original.setIntrinsics(402, 400, 131.5, 125.25);
         original.setDistortion({0.1, 0.2, 0.3, 0.01, 0.02});
         original.setCameraCenter({1, 2, 3});

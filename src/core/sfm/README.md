@@ -5,7 +5,7 @@
 - `common/`：SfM 公共类型和内部并查集。
 - `geometry/`：投影、三角化质量和 OpenCV 相机转换；投影约定只在这里定义。
 - `graph/`、`tracks/`：对应图、观测网络和多视轨迹。通用空间近邻统一使用 PlaPoint。
-- `reconstruction/`、`pose/`、`triangulation/`：重建状态、PnP、增量三角化和初始稀疏点过滤。
+- `reconstruction/`、`pose/`、`triangulation/`：重建状态、PnP、外部姿态先验适配、增量三角化和初始稀疏点过滤。
 - `pipeline/`：`IncrementalSfm` 对外保持一个入口，内部委托给初始像对、影像注册、已知位姿和 BA 协调组件。
 - `quality/`、`filtering/`：纯 C++ 质量指标和 PlaPoint 稀疏点云后处理。
 - `project/`：项目 JSON、控制点/标记适配、BA 输入构建和质量 JSON 序列化；Qt 仅允许出现在这一层。
@@ -13,10 +13,18 @@
 
 构建目标与依赖方向如下：
 
-- `sfm_core`：核心算法，不链接 Qt；依赖 `camera`、`intersection`、`bundle_adjust`、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
+- `sfm_core`：核心算法，不链接 Qt；依赖 `camera`、Qt-free `camera_reference_core`、`intersection`、`bundle_adjust`、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
 - `sfm_postprocess`：质量指标和稀疏点云后处理，不链接 Qt；依赖 `sfm_core` 和 PlaPoint。
-- `sfm_project`：项目文件和 JSON 适配，可链接 Qt；依赖前两层。
+- `sfm_project`：项目文件和 JSON 适配，使用 QtCore，不链接 QtGui；依赖前两层。
 - `sfm`：仅聚合以上三个目标的 `INTERFACE` target，不包含转发头、类型别名或兼容实现。
+
+所有静态面阵数值入口都接收 `FramePinholeNumericState`。项目适配层从 typed
+`FramePinholeInstance` 完成能力校验和一次性转换后，SfM 内部不再解析 JSON、持有旧
+`FramePinholeCamera` 或保留 `StaticPinholeView` 兼容对象；RPC/推扫实例在该边界明确失败。
+`camera_core::CameraOperationPlan` 统一声明静态 SfM、BA、MVS、RPC 空三、推扫空三和外部
+姿态参考的能力/共同 frame 合同；工作流只能执行规划器通过的完整影像集合。当一次静态
+SfM/BA 请求同时选中针孔与其它模型时，整个选择集都会在输入边界失败，不能通过丢弃不支持的
+影像来偷偷改变求解问题。
 
 外部调用方必须直接包含真实模块路径，例如 `pipeline/IncrementalSfm.h`、
 `triangulation/InitialSparsePointFilter.h`、`quality/SfmQualityMetrics.h` 或
@@ -24,6 +32,44 @@
 
 `IncrementalSfm` 是正式多视 SfM 主流程；`TriangulationService` 和
 `InitialSparsePointFilter` 用于已有相机/匹配的预览或输入清理，不能替代影像注册、全局 BA 和正式质量门控。
+三角化服务遇到项目输入边界错误时会保留 `BaInputBuilder` 的首条影像身份、相机能力或匹配分片诊断，
+只有在输入本身没有更具体原因时才使用“没有匹配轨迹”等汇总提示，避免把不支持的模型误报为轨迹为空。
+
+## 外部姿态先验与显式相机绑定
+
+外部 GNSS/IMU/POS 记录先由 `camera_reference_core` 的 resolver 转成
+`camera_reference::ResolvedCameraPosePrior`，再由
+`pose/CameraReferencePosePriorAdapter` 按稳定 `ImageId` 对齐到有序的
+`FramePinholeNumericState`/`BACameraPosePrior`。adapter 不把外部姿态当作投影相机，也不在 solver 边界
+猜测坐标变换：所有 matched prior 必须已经处于数值相机共同的 world frame，并具有非空且一致的
+`transformProvenanceHash`。该 hash 表示 frame/单位归一化和变换链，不含影像观测值；观测解析指纹不能
+替代它。
+
+adapter 会先要求本次数值相机集合都具有显式 image identity 和 world frame；任一未绑定的
+`FramePinholeNumericState` 都 fail-closed。局部 BA 窗口之外的 reference 可以被忽略，但结果保留
+matched/ignored 计数和 ignored image 列表；窗口内 reference 的 frame、重复 image 或 provenance 冲突直接失败。
+空 reference 不构造绝对约束，调用方使用 `hasEnabledPriors()` 而不是仅检查输出 vector 是否非空。
+
+`AerialTriangulationOptions`/`PreparedAerialTriangulationInput` 用
+`aerial_triangulation::SolverCameraBinding` 为需要稳定身份或外部姿态的输入提供一条与 `images`
+一一对应的 `(instanceId, imageId, worldFrame)`。`SfmAttemptRunner` 在读取相机文件或项目相机后显式绑定并
+校验唯一性和共同 frame；路径、文件名、列表序号和数值索引只定位资源，不能回退生成 solver identity。
+缺少 bindings 而携带外部姿态先验时，输入在进入 SfM 前拒绝。
+
+## 稀疏点云颜色读取
+
+`TriangulationService` 通过公共 ImageIO 读取八位三通道 BGR `cv::Mat`，转换为 RGB 写入 PLY。
+原始观测坐标按 qRound 舍入、夹到实际栅格边缘；多视颜色继续用整数平均。
+读取时设置 IMREAD_IGNORE_ORIENTATION，禁止 EXIF 旋转改变匹配坐标对应的像素。
+TIFF 沿用公共 GDAL 读取和 UInt16 到八位的转换约定，单波段影像扩展为三通道。
+
+每幅影像只尝试读取一次，成功和失败状态均缓存。不可读视图会记录日志和
+resultJson.color_read_failures（image_path/error），有其它有效视图时继续用其颜色。
+没有有效颜色的点保持中性灰，计入 resultJson.uncolored_point_count；几何点仍可导出。
+这些诊断字段仅在对应问题出现时写入，不改变正常成功结果的 JSON 字段。
+
+`test_triangulation_service` 独立链接 sfm_project 和图像/匹配能力，覆盖颜色通道、半像素舍入、
+边界夹取、单波段 UInt16 TIFF、部分失败和全部失败；不需要 QtGui 或图形平台。
 
 ## 无相机粗筛与正式精化
 
@@ -92,7 +138,7 @@ Auto 对 CUDA/OpenCL 使用独立的常规规模与高密度观测门槛；显�
 - 局部 BA 把窗口外但观测活动轨迹的已注册相机作为固定边界，避免新注册相机优化时拖动整个世界坐标系。
 - 分层 BA 对跨块轨迹固定三维坐标但保留像方残差，使块内相机受到块外结构约束；失败尝试也参与模型增长间隔判定。
 - 有控制点、比例尺或已知位姿约束时，绝对约束优先，不重复施加无尺度规范。
-- 相机前后方判断统一调用 `FramePinholeCamera::positiveDepth()` / `isPointInFront()`；投影、三角化、BA 后过滤
+- 相机前后方判断统一调用 `FramePinholeNumericState::positiveDepth()` / `isPointInFront()`；投影、三角化、BA 后过滤
   和 flipped-depth 相机不再各自解释原始相机 Z。
 - BA 返回 `BASolveStatus` 和 `solutionUsable`。取消、数值失败或不支持配置不会回写相机和三维点。
 
@@ -101,6 +147,18 @@ Auto 对 CUDA/OpenCL 使用独立的常规规模与高密度观测门槛；显�
 - GUI 项目元数据中的相机参数通常来自 EXIF/GPS 或前置估计，只作为增量 SfM 的相机初值和内参输入，后续 PnP/BA 允许调整位姿。
 - 只有调用方显式提供完整 `.tsai` 相机文件列表时，才进入固定已知外参的直接三角化路径。
 - 固定已知外参路径如果输入存在多视 track 但输出退化为全两视稀疏点云，应视为失败，不能发布为正式空三结果。
+- 外部 pose reference 是独立的软约束来源，不等价于 `useKnownCameraPoses`；它经由
+  `CameraReferencePosePriorAdapter` 对齐后才写入 BA，不能与手工 `BACameraPosePrior` 或完整 known-pose
+  来源隐式叠加。
+- 需要将相机结果与外部 reference 关联时，运行器优先从当前工程已验证的
+  `camera_instances` 按 `image_uuid` 传播与影像顺序一致的 `SolverCameraBinding`；调用方也可以显式提供绑定，
+  但在工程集合完整时必须与 canonical instance/frame 一致。工程外部相机或没有完整 canonical 集合时，
+  必须显式提供绑定；`cameraPaths` 仍只是文件定位信息，不能作为 image identity/frame 的回退来源。
+- 工程级 BA/SfM 输入同时输出 `imageIdByIndex` 和路径定位表；标记、测量控制点和空三先验
+  必须按 `image_uuid`/`image_id` 绑定。`image_path`、`image_path_snapshot` 只保留为展示、审计
+  或匹配分片定位字段，不能回退成 solver 相机身份；缺少、冲突或未知 ImageId 会使输入在边界
+  失败。规范化路径的一对多别名、重复选择、重复工程路径和未知选择也会在读入边界失败，不能
+  由 `QMap` 顺序静默决定相机下标。
 
 ## 匹配配对规划与诊断
 

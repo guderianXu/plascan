@@ -16,8 +16,8 @@ public:
     {
         cv::Mat rectLeft;
         cv::Mat rectRight;
-        FramePinholeCamera rectCamLeft;
-        FramePinholeCamera rectCamRight;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState rectCamLeft;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState rectCamRight;
         cv::Mat H1;
         cv::Mat H2;
         cv::Mat H1inv;
@@ -28,31 +28,31 @@ public:
         bool transposed = false;
     };
 
-    static bool rectify(
-        const cv::Mat &imgLeft,
-        const cv::Mat &imgRight,
-        const FramePinholeCamera &camLeft,
-        const FramePinholeCamera &camRight,
-        RectifiedPair &result,
-        std::string *errorMsg = nullptr);
+    static bool rectify(const cv::Mat& imgLeft,
+                        const cv::Mat& imgRight,
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camLeft,
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camRight,
+                        RectifiedPair& result,
+                        std::string* errorMsg = nullptr);
 
-    static cv::Mat unrectifyDepth(
-        const cv::Mat &rectifiedDepth,
-        const RectifiedPair &pair,
-        const FramePinholeCamera &originalReferenceCamera,
-        int origW, int origH);
+    static cv::Mat
+    unrectifyDepth(const cv::Mat& rectifiedDepth,
+                   const RectifiedPair& pair,
+                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
+                   int origW,
+                   int origH);
 
     /// Converts an axial positive-depth interval from the original reference
     /// camera into a conservative interval for the rectified reference camera.
-    static bool rectifiedDepthRange(
-        const FramePinholeCamera &originalReferenceCamera,
-        const FramePinholeCamera &rectifiedReferenceCamera,
-        int originalWidth,
-        int originalHeight,
-        float originalNear,
-        float originalFar,
-        float &rectifiedNear,
-        float &rectifiedFar);
+    static bool
+    rectifiedDepthRange(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectifiedReferenceCamera,
+                        int originalWidth,
+                        int originalHeight,
+                        float originalNear,
+                        float originalFar,
+                        float& rectifiedNear,
+                        float& rectifiedFar);
 
     static cv::Mat unrectifyNearest(
         const cv::Mat &rectifiedArtifact,

@@ -1,6 +1,6 @@
 #include "BaBenchmarkRealDataset.h"
 
-#include "FramePinholeCamera.h"
+#include "FramePinholeTsaiIO.h"
 #include "io/PathIO.h"
 
 #include <QFile>
@@ -83,7 +83,8 @@ namespace xjw::ba_benchmark
             return tokens;
         }
 
-        std::vector<FramePinholeCamera> loadCameras(const std::filesystem::path& listPath)
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+        loadCameras(const std::filesystem::path& listPath)
         {
             QFile file(toQString(listPath));
             if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -91,7 +92,7 @@ namespace xjw::ba_benchmark
                 throw std::runtime_error("无法读取相机列表: " + file.errorString().toStdString());
             }
 
-            std::vector<FramePinholeCamera> cameras;
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
             const std::filesystem::path base = std::filesystem::absolute(listPath).parent_path();
             int lineNumber = 0;
             while (!file.atEnd())
@@ -114,10 +115,13 @@ namespace xjw::ba_benchmark
                     cameraPath = base / cameraPath;
                 }
                 cameraPath = cameraPath.lexically_normal();
-                FramePinholeCamera camera;
-                if (!camera.loadFromFile(toQString(cameraPath).toUtf8().toStdString()))
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                std::string error;
+                if (!xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(
+                        toQString(cameraPath).toUtf8().toStdString(), &camera, &error))
                 {
-                    throw std::runtime_error("无法加载 TSAI 相机: " + toQString(cameraPath).toStdString());
+                    throw std::runtime_error("无法加载 TSAI 相机: " + toQString(cameraPath).toStdString() +
+                                             " (" + error + ")");
                 }
                 cameras.push_back(std::move(camera));
             }

@@ -12,36 +12,36 @@
 namespace
 {
 
-QString imagePath(int index)
-{
-    return QDir::cleanPath(QStringLiteral("/tmp/plascan_pair_plan/img_%1.jpg").arg(index, 4, 10, QLatin1Char('0')));
-}
+    QString imagePath(int index)
+    {
+        return QDir::cleanPath(QStringLiteral("/tmp/plascan_pair_plan/img_%1.jpg").arg(index, 4, 10, QLatin1Char('0')));
+    }
 
-QString cameraPath(int index)
-{
+    QString cameraPath(int index)
+    {
         return QDir::cleanPath(
             QStringLiteral("/tmp/plascan_pair_plan/img_%1.tsai").arg(index, 4, 10, QLatin1Char('0')));
-}
-
-QStringList imagePaths(int count)
-{
-    QStringList result;
-    for (int i = 0; i < count; ++i)
-    {
-        result.append(imagePath(i));
     }
-    return result;
-}
 
-QStringList cameraPaths(int count)
-{
-    QStringList result;
-    for (int i = 0; i < count; ++i)
+    QStringList imagePaths(int count)
     {
-        result.append(cameraPath(i));
+        QStringList result;
+        for (int i = 0; i < count; ++i)
+        {
+            result.append(imagePath(i));
+        }
+        return result;
     }
-    return result;
-}
+
+    QStringList cameraPaths(int count)
+    {
+        QStringList result;
+        for (int i = 0; i < count; ++i)
+        {
+            result.append(cameraPath(i));
+        }
+        return result;
+    }
 
 } // namespace
 
@@ -242,8 +242,8 @@ TEST(SfmPairPlannerTest, PairPlanUsesViewingDirectionAndBaselineScoresForSpatial
     options.knownCameraCenters = centers;
 
     std::vector<std::array<double, 3>> viewDirs(8, {0.0, 0.0, -1.0});
-    viewDirs[2] = {0.0, 0.0, 1.0};   // close, but opposite looking direction
-    viewDirs[3] = {0.0, 0.0, -1.0};  // farther, but consistent nadir direction
+    viewDirs[2] = {0.0, 0.0, 1.0};  // close, but opposite looking direction
+    viewDirs[3] = {0.0, 0.0, -1.0}; // farther, but consistent nadir direction
     options.knownCameraViewingDirections = viewDirs;
 
     const xjw::aerial_triangulation::SfmPairPlan plan =
@@ -449,8 +449,8 @@ TEST(SfmPairPlannerTest, MissingCameraPathsKeepAllPairs)
 
 TEST(SfmMatchDiagnosticsTest, SeparatesCandidateGraphFromActualMatchGraph)
 {
-    const QVector<int> imageIds = {0, 1, 2, 3, 4, 5, 6, 7};
-    const QVector<xjw::aerial_triangulation::SfmMatchDiagnosticPair> pairs = {
+    const std::vector<int> imageIds = {0, 1, 2, 3, 4, 5, 6, 7};
+    const std::vector<xjw::aerial_triangulation::SfmMatchDiagnosticPair> pairs = {
         {0, 1, 120, true, false},
         {1, 2, 115, true, false},
         {2, 3, 98, true, false},
@@ -481,8 +481,8 @@ TEST(SfmMatchDiagnosticsTest, SeparatesCandidateGraphFromActualMatchGraph)
 
 TEST(SfmGuidedMatchPlannerTest, PrioritizesRegisteredWeakOverlapPairsForEpipolarRematching)
 {
-    const QVector<int> imageIds = {0, 1, 2, 3, 4};
-    const QVector<xjw::aerial_triangulation::SfmMatchDiagnosticPair> pairs = {
+    const std::vector<int> imageIds = {0, 1, 2, 3, 4};
+    const std::vector<xjw::aerial_triangulation::SfmMatchDiagnosticPair> pairs = {
         {0, 1, 240, true, false},
         {1, 2, 18, true, false},
         {2, 3, 0, true, true},
@@ -503,16 +503,16 @@ TEST(SfmGuidedMatchPlannerTest, PrioritizesRegisteredWeakOverlapPairsForEpipolar
     EXPECT_EQ(plan.seedPairCount, 2);
     EXPECT_EQ(plan.skippedUnregisteredPairs, 1);
 
-    const xjw::aerial_triangulation::SfmGuidedMatchCandidate &first = plan.candidates.front();
+    const xjw::aerial_triangulation::SfmGuidedMatchCandidate& first = plan.candidates.front();
     EXPECT_EQ(first.imageA, 2);
     EXPECT_EQ(first.imageB, 3);
-    EXPECT_EQ(first.reason, QStringLiteral("skipped_no_match_cache"));
+    EXPECT_EQ(first.reason, "skipped_no_match_cache");
     EXPECT_TRUE(first.canUseEpipolarBand);
     EXPECT_GT(first.priorityScore, plan.candidates.back().priorityScore);
 
-    const xjw::aerial_triangulation::SfmGuidedMatchCandidate &second = plan.candidates.back();
+    const xjw::aerial_triangulation::SfmGuidedMatchCandidate& second = plan.candidates.back();
     EXPECT_EQ(second.imageA, 1);
     EXPECT_EQ(second.imageB, 2);
-    EXPECT_EQ(second.reason, QStringLiteral("weak_geometric_inliers"));
+    EXPECT_EQ(second.reason, "weak_geometric_inliers");
     EXPECT_TRUE(second.canUseEpipolarBand);
 }

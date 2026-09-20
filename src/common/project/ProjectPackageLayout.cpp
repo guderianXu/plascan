@@ -1,5 +1,11 @@
 #include "ProjectPackageLayout.h"
 
+#include "ProjectPathBridge.h"
+
+#include <array>
+#include <filesystem>
+#include <optional>
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -81,47 +87,40 @@ bool removeDirectoryIfEmpty(const QString &path, QString *errorMessage)
 
 QString ProjectPackageLayout::dataDirectory(const QString &projectPath)
 {
-    const QFileInfo info(absoluteProjectPath(projectPath));
-    return info.dir().filePath(
-        QStringLiteral("%1.files").arg(info.completeBaseName()));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->filesDirectory()) : QString();
 }
 
 QString ProjectPackageLayout::metadataArchivePath(const QString &projectPath)
 {
-    return QDir(dataDirectory(projectPath)).filePath(
-        QStringLiteral("project.zip"));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->metadataArchive()) : QString();
 }
 
 QString ProjectPackageLayout::sharedDirectory(const QString &projectPath)
 {
-    return QDir(dataDirectory(projectPath)).filePath(
-        QStringLiteral("shared"));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->sharedDirectory()) : QString();
 }
 
 QString ProjectPackageLayout::sharedImagesDirectory(const QString &projectPath)
 {
-    return QDir(sharedDirectory(projectPath)).filePath(
-        QStringLiteral("images"));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->sharedImagesDirectory()) : QString();
 }
 
 QString ProjectPackageLayout::chunkDirectory(const QString &projectPath,
                                              int directoryNumber)
 {
-    if (directoryNumber <= 0)
-    {
-        return {};
-    }
-    return QDir(dataDirectory(projectPath)).filePath(
-        QString::number(directoryNumber));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->chunkDirectory(directoryNumber)) : QString();
 }
 
 QString ProjectPackageLayout::chunkArchivePath(const QString &projectPath,
                                                int directoryNumber)
 {
-    const QString directory = chunkDirectory(projectPath, directoryNumber);
-    return directory.isEmpty()
-        ? QString()
-        : QDir(directory).filePath(QStringLiteral("chunk.zip"));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->chunkArchive(directoryNumber)) : QString();
 }
 
 bool ProjectPackageLayout::pruneEmptyOptionalDirectories(
@@ -140,37 +139,46 @@ bool ProjectPackageLayout::pruneEmptyOptionalDirectories(
         return false;
     }
 
-    const QStringList optionalDirectories{
-        QStringLiteral("reconstruction/terrain/products"),
-        QStringLiteral("reconstruction/terrain"),
-        QStringLiteral("reconstruction/model"),
-        QStringLiteral("reconstruction/mvs"),
-        QStringLiteral("reconstruction/sparse"),
-        QStringLiteral("reconstruction"),
+    const auto layout = path_bridge::projectLayout(projectPath);
+    const auto chunk = layout
+        ? xjw::common::plafs::PlaChunkLayout::open(layout->chunkDirectory(directoryNumber))
+        : std::nullopt;
+    if (!chunk)
+    {
+        setError(errorMessage, QStringLiteral("Chunk 目录编号无效"));
+        return false;
+    }
+
+    const std::array<std::filesystem::path, 13> optionalDirectories{
+        chunk->reconstructionDirectory() / "terrain" / "products",
+        chunk->reconstructionDirectory() / "terrain",
+        chunk->reconstructionDirectory() / "model",
+        chunk->reconstructionDirectory() / "mvs",
+        chunk->reconstructionDirectory() / "sparse",
+        chunk->reconstructionDirectory(),
         // 统一匹配模块只产生逐影像 `.pimatch`，不再创建特征目录或旧成对匹配目录。
-        QStringLiteral("assets/image_matches"),
-        QStringLiteral("assets/tie_points"),
-        QStringLiteral("assets/control_points"),
-        QStringLiteral("assets/imported"),
-        QStringLiteral("assets"),
-        QStringLiteral("bundle_adjust"),
-        QStringLiteral("reports")
+        chunk->imageMatchesDirectory(),
+        chunk->tiePointsDirectory(),
+        chunk->controlPointsDirectory(),
+        chunk->importedDirectory(),
+        chunk->assetsDirectory(),
+        chunk->bundleAdjustDirectory(),
+        chunk->reportsDirectory()
     };
-    for (const QString &relative : optionalDirectories)
+    for (const auto &directory : optionalDirectories)
     {
         if (!removeDirectoryIfEmpty(
-                QDir(root).filePath(relative), errorMessage))
+                path_bridge::toQtPath(directory), errorMessage))
         {
             return false;
         }
     }
 
-    const QString dataRoot = dataDirectory(projectPath);
     if (!removeDirectoryIfEmpty(
-            QDir(dataRoot).filePath(QStringLiteral("shared/images")),
+            path_bridge::toQtPath(layout->sharedImagesDirectory()),
             errorMessage)
         || !removeDirectoryIfEmpty(
-            QDir(dataRoot).filePath(QStringLiteral("shared")),
+            path_bridge::toQtPath(layout->sharedDirectory()),
             errorMessage))
     {
         return false;
@@ -187,8 +195,8 @@ bool ProjectPackageLayout::isChunkDirectoryName(const QString &name)
 
 QString ProjectPackageLayout::resourcesDirectory(const QString &projectPath)
 {
-    return QDir(chunkDirectory(projectPath, 1)).filePath(
-        QStringLiteral("resources"));
+    const auto layout = path_bridge::projectLayout(projectPath);
+    return layout ? path_bridge::toQtPath(layout->resourcesDirectory(1)) : QString();
 }
 
 bool ProjectPackageLayout::parseDescriptor(const QString &projectPath,

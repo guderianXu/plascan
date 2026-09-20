@@ -1,14 +1,14 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
 #include "PairSelector.h"
+#include "camera/reference/geometry/ReferenceCameraGeometry.h"
 
 #include <QMap>
 #include <QString>
 #include <atomic>
-#include <array>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace xjw
 {
@@ -24,10 +24,13 @@ namespace xjw
             QString workingDirectory;
             QString matchDirectory;
             PairSelectionInput pairInput;
-            QMap<QString, xjw::FramePinholeCamera> referenceCameras;
+            // ImageId 是参考几何的唯一键。路径只在进入任务时用于把输入影像
+            // 定位到 imageIds，之后不再作为相机身份参与匹配。
+            std::vector<camera_core::ImageId> imageIds;
+            camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
             // 仅含相机中心的位置先验也可用于 Source/Estimated 参考预选，
             // 不要求调用方伪造完整且可投影的相机模型。
-            QMap<QString, std::array<double, 3>> referencePositions;
+            camera_reference::ReferenceCameraPositionMap referencePositions;
             // 影像路径到蒙版路径的映射。键可以是绝对路径、文件名或 baseName，运行时会做宽松匹配。
             QMap<QString, QString> maskPaths;
             // 特征只在本次任务内存在。调用方通常无需设置，MatchPhotosTask 会创建并在

@@ -43,25 +43,26 @@ namespace xjw::detail::plamatrix_ba
 
     bool canUseReferenceOnlineSchur(const BAOptions& options, const ActiveProblem& active);
 
-    ReferenceSchurBuildResult buildReferenceReducedNormalEquations(const std::vector<FramePinholeCamera>& input_cameras,
-                                                                   const std::vector<BATrack>& tracks,
-                                                                   const BAOptions& options,
-                                                                   const ActiveProblem& active,
-                                                                   const OptimizationState& state,
-                                                                   int iteration,
-                                                                   double damping,
-                                                                   ReferenceSchurWorkspace* workspace);
+    ReferenceSchurBuildResult buildReferenceReducedNormalEquations(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        double damping,
+        ReferenceSchurWorkspace* workspace);
 
-    ReferenceSchurBackSubstitutionResult
-    recoverReferencePointSteps(const std::vector<FramePinholeCamera>& input_cameras,
-                               const std::vector<BATrack>& tracks,
-                               const BAOptions& options,
-                               const ActiveProblem& active,
-                               const OptimizationState& state,
-                               int iteration,
-                               double damping,
-                               const std::vector<double>& primary_step,
-                               const std::vector<double>& direct_primary_rhs,
-                               std::vector<double>* eliminated_step);
+    ReferenceSchurBackSubstitutionResult recoverReferencePointSteps(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        double damping,
+        const std::vector<double>& primary_step,
+        const std::vector<double>& direct_primary_rhs,
+        std::vector<double>* eliminated_step);
 
 } // namespace xjw::detail::plamatrix_ba

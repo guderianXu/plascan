@@ -2,7 +2,7 @@
 
 #include "CanvasWidget.h"
 #include "MainWindow.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectSession.h"
 #include "settings/DialogSettingKeys.h"
 #include "settings/DialogSettingStore.h"
 #include "tie_points/FeaturePointVisualizationDialog.h"
@@ -80,14 +80,14 @@ FeatureVisualizationController::FeatureVisualizationController(QMainWindow *main
 {
 }
 
-void FeatureVisualizationController::setProjectManager(ProjectManager *projectManager)
+void FeatureVisualizationController::setProjectSession(xjw::gui::project::ProjectSession *session)
 {
-    _projectManager = projectManager;
+    _session = session;
 }
 
 DialogSettingStore *FeatureVisualizationController::ensureSettingStore()
 {
-    if (!_projectManager)
+    if (!_session)
     {
         return nullptr;
     }
@@ -96,13 +96,13 @@ DialogSettingStore *FeatureVisualizationController::ensureSettingStore()
         _settingStore = new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
         _settingStore->setChangeCallback([this]()
         {
-            if (_projectManager)
+            if (_session)
             {
-                _projectManager->markWorkspaceDirty();
+                _session->markWorkspaceDirty();
             }
         });
     }
-    _settingStore->setProjectPath(_projectManager->currentProjectPath());
+    _settingStore->setProjectPath(_session->projectPath());
     return _settingStore;
 }
 

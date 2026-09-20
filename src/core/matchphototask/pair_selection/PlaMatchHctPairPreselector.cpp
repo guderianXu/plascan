@@ -84,55 +84,78 @@ namespace xjw::matchphotos
                 backendName, deviceIndex, std::numeric_limits<std::uint64_t>::max(), false);
         }
 
-        bool cameraForImage(const QMap<QString, FramePinholeCamera>& cameras,
-                            const QString& imagePath,
-                            FramePinholeCamera* camera)
+        std::optional<std::size_t> imageIndexForPath(const QStringList& images,
+                                                     const std::vector<camera_core::ImageId>& imageIds,
+                                                     const QString& imagePath)
         {
-            if (!camera)
+            if (images.size() != static_cast<qsizetype>(imageIds.size()))
             {
-                return false;
+                return std::nullopt;
             }
-
             const QFileInfo imageInfo(imagePath);
             const QStringList keys = {
                 imagePath, imageInfo.absoluteFilePath(), imageInfo.fileName(), imageInfo.completeBaseName()};
             for (const QString& key : keys)
             {
-                const auto found = cameras.constFind(key);
-                if (found != cameras.constEnd() && found->isValid())
+                std::optional<std::size_t> foundIndex;
+                for (int index = 0; index < images.size(); ++index)
                 {
-                    *camera = *found;
-                    return true;
+                    const QFileInfo candidateInfo(images.at(index));
+                    if (key == images.at(index) || key == candidateInfo.absoluteFilePath() ||
+                        key == candidateInfo.fileName() || key == candidateInfo.completeBaseName())
+                    {
+                        if (foundIndex)
+                        {
+                            return std::nullopt;
+                        }
+                        foundIndex = static_cast<std::size_t>(index);
+                    }
+                }
+                if (foundIndex)
+                {
+                    return foundIndex;
                 }
             }
-            return false;
+            return std::nullopt;
         }
 
-        std::optional<std::array<double, 3>> positionForImage(const QMap<QString, std::array<double, 3>>& positions,
-                                                              const QMap<QString, FramePinholeCamera>& cameras,
-                                                              const QString& imagePath)
+        const camera_reference::ReferenceCameraGeometry* cameraForImage(
+            const QStringList& images,
+            const std::vector<camera_core::ImageId>& imageIds,
+            const camera_reference::ReferenceCameraGeometryMap& cameras,
+            const QString& imagePath)
         {
-            const QFileInfo imageInfo(imagePath);
-            const QStringList keys = {
-                imagePath, imageInfo.absoluteFilePath(), imageInfo.fileName(), imageInfo.completeBaseName()};
-            for (const QString& key : keys)
+            const auto index = imageIndexForPath(images, imageIds, imagePath);
+            if (!index)
             {
-                const auto found = positions.constFind(key);
-                if (found != positions.constEnd() && std::isfinite((*found)[0]) && std::isfinite((*found)[1]) &&
-                    std::isfinite((*found)[2]))
-                {
-                    return *found;
-                }
+                return nullptr;
             }
+            const auto found = cameras.find(imageIds[*index]);
+            return found == cameras.cend() ? nullptr : &found->second;
+        }
 
-            FramePinholeCamera camera;
-            if (cameraForImage(cameras, imagePath, &camera))
+        std::optional<std::array<double, 3>> positionForImage(
+            const QStringList& images,
+            const std::vector<camera_core::ImageId>& imageIds,
+            const camera_reference::ReferenceCameraPositionMap& positions,
+            const camera_reference::ReferenceCameraGeometryMap& cameras,
+            const QString& imagePath)
+        {
+            const auto index = imageIndexForPath(images, imageIds, imagePath);
+            if (!index)
             {
-                const std::array<double, 3> center = camera.cameraCenter();
-                if (std::isfinite(center[0]) && std::isfinite(center[1]) && std::isfinite(center[2]))
-                {
-                    return center;
-                }
+                return std::nullopt;
+            }
+            const auto imageId = imageIds[*index];
+            const auto position = positions.find(imageId);
+            if (position != positions.cend())
+            {
+                return position->second.center();
+            }
+            const auto* camera = cameraForImage(images, imageIds, cameras, imagePath);
+            if (camera)
+            {
+                return camera->numericState().cameraCenter();
             }
             return std::nullopt;
         }
@@ -145,9 +168,11 @@ namespace xjw::matchphotos
             return dx * dx + dy * dy + dz * dz;
         }
 
-        std::set<metalign::ImagePair> referencePairs(const QStringList& images,
-                                                     const QMap<QString, FramePinholeCamera>& referenceCameras,
-                                                     const QMap<QString, std::array<double, 3>>& referencePositions,
+        std::set<metalign::ImagePair> referencePairs(
+                                                     const QStringList& images,
+                                                     const std::vector<camera_core::ImageId>& imageIds,
+                                                     const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                                     const camera_reference::ReferenceCameraPositionMap& referencePositions,
                                                      ReferencePreselectionMode mode,
                                                      int neighborCount,
                                                      bool* usedIndexFallback)
@@ -170,8 +195,11 @@ namespace xjw::matchphotos
             bool hasReferencePosition = false;
             for (std::size_t index = 0; index < count; ++index)
             {
-                const auto position =
-                    positionForImage(referencePositions, referenceCameras, images.at(static_cast<int>(index)));
+                const auto position = positionForImage(images,
+                                                       imageIds,
+                                                       referencePositions,
+                                                       referenceCameraGeometries,
+                                                       images.at(static_cast<int>(index)));
                 if (!position)
                 {
                     continue;
@@ -356,7 +384,8 @@ namespace xjw::matchphotos
     bool PlaMatchHctPairPreselector::select(const QStringList& images,
                                             const MatchPhotosFeatureCache& featureCache,
                                             const MatchPhotosOptions& options,
-                                            const QMap<QString, FramePinholeCamera>& referenceCameras,
+                                            const std::vector<camera_core::ImageId>& imageIds,
+                                            const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
                                             image_matching::SiftComputeBackend backend,
                                             int deviceIndex,
                                             PairSelectionResult* output,
@@ -367,7 +396,8 @@ namespace xjw::matchphotos
         return selectWithPositions(images,
                                    featureCache,
                                    options,
-                                   referenceCameras,
+                                   imageIds,
+                                   referenceCameraGeometries,
                                    {},
                                    backend,
                                    deviceIndex,
@@ -380,8 +410,9 @@ namespace xjw::matchphotos
     bool PlaMatchHctPairPreselector::selectWithPositions(const QStringList& images,
                                                          const MatchPhotosFeatureCache& featureCache,
                                                          const MatchPhotosOptions& options,
-                                                         const QMap<QString, FramePinholeCamera>& referenceCameras,
-                                                         const QMap<QString, std::array<double, 3>>& referencePositions,
+                                                         const std::vector<camera_core::ImageId>& imageIds,
+                                                         const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                                         const camera_reference::ReferenceCameraPositionMap& referencePositions,
                                                          image_matching::SiftComputeBackend backend,
                                                          int deviceIndex,
                                                          PairSelectionResult* output,
@@ -485,7 +516,8 @@ namespace xjw::matchphotos
             if (options.useReferencePreselection)
             {
                 selectedByReference = referencePairs(images,
-                                                     referenceCameras,
+                                                     imageIds,
+                                                     referenceCameraGeometries,
                                                      referencePositions,
                                                      options.referencePreselectionMode,
                                                      options.referencePreselectionNeighbors,

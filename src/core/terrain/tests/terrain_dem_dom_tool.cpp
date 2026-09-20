@@ -1,8 +1,9 @@
 #include "TerrainPipeline.h"
-#include "FramePinholeCamera.h"
+#include "FramePinholeTsaiIO.h"
 
 #include <QFile>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -41,46 +42,63 @@ bool tryParseResolution(const char *value, double *resolution)
     return true;
 }
 
-QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera)
+QJsonObject cameraDefinitionToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                   const QString& definitionId,
+                                   const QString& frame)
 {
     const auto intrinsics = camera.intrinsics();
     const auto distortion = camera.distortion();
-    const auto center = camera.cameraCenter();
-    const auto rotation = camera.cameraToWorldRotation();
+    return QJsonObject{{QStringLiteral("id"), definitionId},
+                       {QStringLiteral("model_type"), QStringLiteral("frame_pinhole")},
+                       {QStringLiteral("schema_version"), 1},
+                       {QStringLiteral("frame"), frame},
+                       {QStringLiteral("parameters"),
+                        QJsonObject{{QStringLiteral("intrinsics"),
+                                     QJsonObject{{QStringLiteral("fx_px"), intrinsics.focalX},
+                                                 {QStringLiteral("fy_px"), intrinsics.focalY},
+                                                 {QStringLiteral("cx_px"), intrinsics.principalX},
+                                                 {QStringLiteral("cy_px"), intrinsics.principalY},
+                                                 {QStringLiteral("pixel_pitch_mm"), intrinsics.pixelPitch},
+                                                 {QStringLiteral("u_axis_sign"), intrinsics.uAxisSign},
+                                                 {QStringLiteral("v_axis_sign"), intrinsics.vAxisSign}}},
+                                    {QStringLiteral("distortion"),
+                                     QJsonObject{{QStringLiteral("k1"), distortion.radialK1},
+                                                 {QStringLiteral("k2"), distortion.radialK2},
+                                                 {QStringLiteral("k3"), distortion.radialK3},
+                                                 {QStringLiteral("p1"), distortion.tangentialP1},
+                                                 {QStringLiteral("p2"), distortion.tangentialP2}}},
+                                    {QStringLiteral("pixel_convention"), QStringLiteral("center")},
+                                    {QStringLiteral("depth_axis_flipped"), camera.depthAxisFlipped()}}}};
+}
 
-    QJsonObject cameraObject;
-    cameraObject[QStringLiteral("model")] = QStringLiteral("tsai");
-    cameraObject[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
-    cameraObject[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
-    cameraObject[QStringLiteral("pitch")] = camera.pixelPitch();
-    cameraObject[QStringLiteral("fu")] = camera.focalXMillimeters();
-    cameraObject[QStringLiteral("fv")] = camera.focalYMillimeters();
-    cameraObject[QStringLiteral("cu")] = camera.principalXMillimeters();
-    cameraObject[QStringLiteral("cv")] = camera.principalYMillimeters();
-    cameraObject[QStringLiteral("k1")] = distortion.radialK1;
-    cameraObject[QStringLiteral("k2")] = distortion.radialK2;
-    cameraObject[QStringLiteral("k3")] = distortion.radialK3;
-    cameraObject[QStringLiteral("p1")] = distortion.tangentialP1;
-    cameraObject[QStringLiteral("p2")] = distortion.tangentialP2;
-    cameraObject[QStringLiteral("u_direction")] = intrinsics.uAxisSign;
-    cameraObject[QStringLiteral("v_direction")] = intrinsics.vAxisSign;
-    cameraObject[QStringLiteral("depth_axis_flipped")] = camera.depthAxisFlipped();
-
-    QJsonArray centerArray;
-    for (double value : center)
+QJsonObject cameraInstanceToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                 const QString& instanceId,
+                                 const QString& imageId,
+                                 const QString& definitionId,
+                                 const QString& frame,
+                                 const QSize& imageSize)
+{
+    QJsonArray center;
+    for (double value : camera.cameraCenter())
     {
-        centerArray.append(value);
+        center.append(value);
     }
-    cameraObject[QStringLiteral("C")] = centerArray;
-
-    QJsonArray rotationArray;
-    for (double value : rotation)
+    QJsonArray rotation;
+    for (double value : camera.cameraToWorldRotation())
     {
-        rotationArray.append(value);
+        rotation.append(value);
     }
-    cameraObject[QStringLiteral("R")] = rotationArray;
-
-    return cameraObject;
+    return QJsonObject{
+        {QStringLiteral("id"), instanceId},
+        {QStringLiteral("image_uuid"), imageId},
+        {QStringLiteral("definition_id"), definitionId},
+        {QStringLiteral("schema_version"), 1},
+        {QStringLiteral("image_size"),
+         QJsonObject{{QStringLiteral("samples"), imageSize.width()}, {QStringLiteral("lines"), imageSize.height()}}},
+        {QStringLiteral("pose"),
+         QJsonObject{{QStringLiteral("frame"), frame},
+                     {QStringLiteral("center_m"), center},
+                     {QStringLiteral("camera_to_world_rotation"), rotation}}}};
 }
 
 bool readImageCameraList(const QString &listPath,
@@ -103,6 +121,8 @@ bool readImageCameraList(const QString &listPath,
 
     images->clear();
     QJsonArray imageArray;
+    QJsonArray definitionArray;
+    QJsonArray instanceArray;
     QTextStream stream(&file);
     int lineNumber = 0;
     while (!stream.atEnd())
@@ -138,24 +158,47 @@ bool readImageCameraList(const QString &listPath,
 
         const QString imagePath = QFileInfo(parts.at(0)).absoluteFilePath();
         const QString cameraPath = QFileInfo(parts.at(1)).absoluteFilePath();
-        xjw::FramePinholeCamera camera;
-        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::string cameraError;
+        if (!xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(cameraPath.toStdString(), &camera, &cameraError))
         {
             if (error)
             {
-                *error = QStringLiteral("%1:%2 相机文件读取失败: %3")
+                *error = QStringLiteral("%1:%2 相机文件读取失败: %3；%4")
                              .arg(listPath)
                              .arg(lineNumber)
-                             .arg(cameraPath);
+                             .arg(cameraPath, QString::fromStdString(cameraError));
             }
             return false;
         }
 
+        QImageReader imageReader(imagePath);
+        QSize imageSize = imageReader.size();
+        if (!imageSize.isValid())
+        {
+            imageSize = imageReader.read().size();
+        }
+        if (!imageSize.isValid())
+        {
+            if (error)
+            {
+                *error = QStringLiteral("%1:%2 无法读取影像尺寸: %3").arg(listPath).arg(lineNumber).arg(imagePath);
+            }
+            return false;
+        }
+
+        const QString imageId = QStringLiteral("terrain-tool-image-%1").arg(lineNumber);
+        const QString definitionId = QStringLiteral("terrain-tool-definition-%1").arg(lineNumber);
+        const QString instanceId = QStringLiteral("terrain-tool-instance-%1").arg(lineNumber);
+        const QString frame = QStringLiteral("terrain-tool-frame");
+
         QJsonObject imageObject;
+        imageObject[QStringLiteral("image_uuid")] = imageId;
         imageObject[QStringLiteral("path")] = imagePath;
         imageObject[QStringLiteral("name")] = QFileInfo(imagePath).fileName();
-        imageObject[QStringLiteral("camera")] = cameraToJson(camera);
         imageArray.append(imageObject);
+        definitionArray.append(cameraDefinitionToJson(camera, definitionId, frame));
+        instanceArray.append(cameraInstanceToJson(camera, instanceId, imageId, definitionId, frame, imageSize));
         images->push_back(imagePath);
     }
 
@@ -166,6 +209,8 @@ bool readImageCameraList(const QString &listPath,
     }
 
     (*projectMeta)[QStringLiteral("images")] = imageArray;
+    (*projectMeta)[QStringLiteral("camera_definitions")] = definitionArray;
+    (*projectMeta)[QStringLiteral("camera_instances")] = instanceArray;
     return true;
 }
 

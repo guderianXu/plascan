@@ -21,15 +21,60 @@ namespace xjw::matchphotos
             return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
         }
 
-        const FramePinholeCamera* findReferenceCamera(const GuidedMatchPolicyCache& cache, const QString& imagePath)
+        void insertLocator(QHash<QString, QString>* locators, const QString& key, const QString& imageId)
         {
-            auto exact = cache.referenceCamerasByPath.constFind(imagePath);
-            if (exact != cache.referenceCamerasByPath.cend())
+            if (!locators || key.trimmed().isEmpty() || imageId.trimmed().isEmpty())
             {
-                return &exact.value();
+                return;
             }
-            const auto normalized = cache.referenceCamerasByPath.constFind(normalizedPath(imagePath));
-            return normalized == cache.referenceCamerasByPath.cend() ? nullptr : &normalized.value();
+            const auto existing = locators->constFind(key);
+            if (existing == locators->cend())
+            {
+                locators->insert(key, imageId);
+                return;
+            }
+            if (!existing.value().isEmpty() && existing.value() != imageId)
+            {
+                // A basename/relative token can identify more than one image.  Keep
+                // the ambiguity explicit; silently retaining the first camera would
+                // make a path typo change the geometric prior.
+                locators->insert(key, QString());
+            }
+        }
+
+        const QString* imageIdForLocator(const QHash<QString, QString>& locators, const QString& key)
+        {
+            const auto found = locators.constFind(key);
+            if (found == locators.cend() || found.value().isEmpty())
+            {
+                return nullptr;
+            }
+            return &found.value();
+        }
+
+        const camera_reference::ReferenceCameraGeometry* findReferenceCamera(
+            const MatchPhotosContext& context,
+            const GuidedMatchPolicyCache& cache,
+            const QString& imagePath)
+        {
+            const QString* imageId = imageIdForLocator(cache.imageIdsByPath, imagePath);
+            if (!imageId)
+            {
+                imageId = imageIdForLocator(cache.imageIdsByPath, normalizedPath(imagePath));
+            }
+            if (!imageId)
+            {
+                return nullptr;
+            }
+            try
+            {
+                const auto reference = context.referenceCameraGeometries.find(camera_core::ImageId(imageId->toStdString()));
+                return reference == context.referenceCameraGeometries.cend() ? nullptr : &reference->second;
+            }
+            catch (...)
+            {
+                return nullptr;
+            }
         }
 
         bool validFundamental(const std::array<double, 9>& values)
@@ -180,11 +225,20 @@ namespace xjw::matchphotos
     GuidedMatchPolicyCache buildGuidedMatchPolicyCache(const MatchPhotosContext& context)
     {
         GuidedMatchPolicyCache cache;
-        cache.referenceCamerasByPath.reserve(context.referenceCameras.size() * 2);
-        for (auto it = context.referenceCameras.cbegin(); it != context.referenceCameras.cend(); ++it)
+        if (context.imageIds.size() != static_cast<std::size_t>(context.pairInput.images.size()))
         {
-            cache.referenceCamerasByPath.insert(it.key(), it.value());
-            cache.referenceCamerasByPath.insert(normalizedPath(it.key()), it.value());
+            return cache;
+        }
+        cache.imageIdsByPath.reserve(context.pairInput.images.size() * 3);
+        for (int index = 0; index < context.pairInput.images.size(); ++index)
+        {
+            const QString imageId = QString::fromStdString(context.imageIds[static_cast<std::size_t>(index)].value());
+            const QString path = context.pairInput.images.at(index);
+            insertLocator(&cache.imageIdsByPath, path, imageId);
+            insertLocator(&cache.imageIdsByPath, normalizedPath(path), imageId);
+            const QFileInfo info(path);
+            insertLocator(&cache.imageIdsByPath, info.fileName(), imageId);
+            insertLocator(&cache.imageIdsByPath, info.completeBaseName(), imageId);
         }
         return cache;
     }
@@ -217,11 +271,13 @@ namespace xjw::matchphotos
         ReferencePoseEpipolarGeometry referenceGeometry;
         if (options.guidedUseReferenceCameraPoses)
         {
-            const FramePinholeCamera* camera0 = findReferenceCamera(cache, record.image0Path);
-            const FramePinholeCamera* camera1 = findReferenceCamera(cache, record.image1Path);
+            const camera_reference::ReferenceCameraGeometry* camera0 =
+                findReferenceCamera(context, cache, record.image0Path);
+            const camera_reference::ReferenceCameraGeometry* camera1 =
+                findReferenceCamera(context, cache, record.image1Path);
             if (camera0 && camera1)
             {
-                referenceGeometry = fundamentalFromReferenceCameras(*camera0, *camera1);
+                referenceGeometry = fundamentalFromReferenceCameras(camera0->numericState(), camera1->numericState());
             }
         }
 

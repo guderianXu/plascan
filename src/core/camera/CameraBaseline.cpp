@@ -36,7 +36,8 @@ double vectorLength(const std::array<double, 3> &vector)
     return std::sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
 }
 
-double physicalDepth(const FramePinholeCamera &camera, const std::array<double, 3> &worldPoint)
+double physicalDepth(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                     const std::array<double, 3>& worldPoint)
 {
     const std::array<double, 3> center = camera.cameraCenter();
     const std::array<double, 9> rotation = camera.cameraToWorldRotation();
@@ -49,7 +50,8 @@ double physicalDepth(const FramePinholeCamera &camera, const std::array<double, 
 
 } // namespace
 
-CameraBaseline CameraBaseline::evaluate(const FramePinholeCamera &first, const FramePinholeCamera &second)
+CameraBaseline CameraBaseline::evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& first,
+                                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& second)
 {
     CameraBaseline result;
     const std::array<double, 3> firstCenter = first.cameraCenter();
@@ -71,9 +73,9 @@ CameraBaseline CameraBaseline::evaluate(const FramePinholeCamera &first, const F
     return result;
 }
 
-CameraBaseline CameraBaseline::evaluate(const FramePinholeCamera &first,
-                                        const FramePinholeCamera &second,
-                                        const std::array<double, 3> &worldPoint)
+CameraBaseline CameraBaseline::evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& first,
+                                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& second,
+                                        const std::array<double, 3>& worldPoint)
 {
     CameraBaseline result = evaluate(first, second);
     if (!result._valid || !isFinitePoint(worldPoint))

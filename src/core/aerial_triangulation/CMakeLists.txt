@@ -1,6 +1,22 @@
 cmake_minimum_required(VERSION 3.16)
 project(plascan_aerial_triangulation LANGUAGES CXX)
 
+# Standard numerical entry points and file formats; project/Qt conversion remains in the facade below.
+add_library(aerial_triangulation_engine STATIC
+    engine/TiePointGraphReader.cpp
+    engine/PinholeEngine.cpp
+    engine/RpcEngine.cpp
+    engine/RpcTracks.cpp
+    engine/RpcCoordinates.cpp
+    engine/RpcPointIntersection.cpp
+    reporting/SparsePlyWriter.cpp
+)
+target_include_directories(aerial_triangulation_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(aerial_triangulation_engine
+    PUBLIC camera sfm_core plascan_common_json_io
+)
+target_compile_features(aerial_triangulation_engine PUBLIC cxx_std_20)
+
 add_library(aerial_triangulation STATIC
     model/AerialTriangulationOptions.h
     model/AerialTriangulationResolvedConfig.h
@@ -46,12 +62,17 @@ target_link_libraries(aerial_triangulation
     PUBLIC
         Qt6::Core
         camera
+        camera_project
+        camera_reference_geometry
+        camera_models_registry
+        coordinate_system_types
+        aerial_triangulation_engine
         sfm
         matchphototask
     PRIVATE
-        Qt6::Gui
         control_points
         plascan_common_io
+        plascan_common_log
         plascan_common_project
 )
 

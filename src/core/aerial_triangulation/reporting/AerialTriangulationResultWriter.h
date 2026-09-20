@@ -24,7 +24,7 @@ public:
      * @brief 写出稀疏云并填充 execution.result 的回写字段。
      *
      * execution/reconstruction 必须来自同一 SfmAttemptRunner。成功前所有相机更新
-     * 保存在 pendingCamUpdates，由上层项目服务统一提交，避免部分写回。
+     * 保存在 cameraInstanceUpdates，由上层项目服务统一提交，避免部分写回。
      */
     bool write(const PreparedAerialTriangulationInput &input,
                SfmAttemptExecutionResult *execution,

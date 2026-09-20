@@ -7,7 +7,7 @@
 
 #include "BundleAdjustProblem.h"
 #include "BundleAdjustTypes.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <array>
 
@@ -27,13 +27,13 @@ namespace xjw::detail::plamatrix_ba
     };
 
     /**
-     * @brief 按 FramePinholeCamera 投影语义线性化单条观测。
+     * @brief 按 FramePinholeNumericState 投影语义线性化单条观测。
      *
      * cameraJacobian 对应局部参数 `[wx, wy, wz, dCx, dCy, dCz]`，旋转增量左乘
      * camera-to-world 旋转，中心增量位于世界坐标系。返回 false 表示点不在物理前方、
      * 输入非法或投影/雅可比非有限。
      */
-    bool linearizeObservation(const FramePinholeCamera& camera,
+    bool linearizeObservation(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                               const std::array<double, 3>& point,
                               const BAObservation& observation,
                               double huber_delta,
@@ -42,15 +42,16 @@ namespace xjw::detail::plamatrix_ba
                               bool use_reference_point_parameterization = false);
 
     /// Linearize reprojection with the shared nine-parameter Brown-Conrady model.
-    bool linearizeObservationWithSharedIntrinsics(const FramePinholeCamera& camera,
-                                                  const FramePinholeCamera& reference_camera,
-                                                  const std::array<double, 9>& shared_intrinsics,
-                                                  const BAIntrinsicParameterMask& active_parameters,
-                                                  const std::array<double, 3>& point,
-                                                  const BAObservation& observation,
-                                                  double huber_delta,
-                                                  ObservationLinearization* linearization,
-                                                  bool whiten_by_measurement_scale = false,
-                                                  bool use_reference_point_parameterization = false);
+    bool linearizeObservationWithSharedIntrinsics(
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+        const std::array<double, 9>& shared_intrinsics,
+        const BAIntrinsicParameterMask& active_parameters,
+        const std::array<double, 3>& point,
+        const BAObservation& observation,
+        double huber_delta,
+        ObservationLinearization* linearization,
+        bool whiten_by_measurement_scale = false,
+        bool use_reference_point_parameterization = false);
 
 } // namespace xjw::detail::plamatrix_ba

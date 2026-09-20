@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "MvsTypes.h"
 #include <opencv2/core.hpp>
 #include <array>
@@ -35,22 +35,24 @@ namespace xjw
         public:
             // The disparity map belongs to the left rectified image and follows
             // d = x_left - x_right, so the right sample is x_left - d.
-            static TriangulationResult triangulate(const cv::Mat& disparity,
-                                                   const cv::Mat& validMask,
-                                                   const cv::Mat& H1inv,
-                                                   const cv::Mat& H2inv,
-                                                   const FramePinholeCamera& camL,
-                                                   const FramePinholeCamera& camR,
-                                                   const TriangulationConfig& cfg = {});
+            static TriangulationResult
+            triangulate(const cv::Mat& disparity,
+                        const cv::Mat& validMask,
+                        const cv::Mat& H1inv,
+                        const cv::Mat& H2inv,
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
+                        const TriangulationConfig& cfg = {});
 
             // Depth-based triangulation: unproject rectified depth using camera model
-            static TriangulationResult triangulateFromDepth(const cv::Mat& depthMap,
-                                                            const cv::Mat& validMask,
-                                                            const cv::Mat& H1inv,
-                                                            const FramePinholeCamera& camL,
-                                                            const FramePinholeCamera& camR,
-                                                            const FramePinholeCamera& rectCamL,
-                                                            const TriangulationConfig& cfg = {});
+            static TriangulationResult
+            triangulateFromDepth(const cv::Mat& depthMap,
+                                 const cv::Mat& validMask,
+                                 const cv::Mat& H1inv,
+                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
+                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
+                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectCamL,
+                                 const TriangulationConfig& cfg = {});
         };
 
     } // namespace mvs

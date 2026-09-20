@@ -32,14 +32,15 @@ namespace xjw
             /// @param maxDepth  上深度截断
             /// @param errorMsg  出错时填充
             /// @return 点云；CUDA 不可用或执行失败时返回空并填写 errorMsg，不静默回退
-            static std::vector<DensePoint> unprojectGPU(const cv::Mat& depth,
-                                                        const cv::Mat& mask,
-                                                        const FramePinholeCamera& cameraModel,
-                                                        const cv::Mat& colorImg,
-                                                        float minDepth = 0.01f,
-                                                        float maxDepth = 1e6f,
-                                                        std::string* errorMsg = nullptr,
-                                                        const DenseCloudOptions* options = nullptr);
+            static std::vector<DensePoint>
+            unprojectGPU(const cv::Mat& depth,
+                         const cv::Mat& mask,
+                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                         const cv::Mat& colorImg,
+                         float minDepth = 0.01f,
+                         float maxDepth = 1e6f,
+                         std::string* errorMsg = nullptr,
+                         const DenseCloudOptions* options = nullptr);
         };
 
     } // namespace mvs

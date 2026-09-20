@@ -538,11 +538,31 @@ int main(int argc, char* argv[])
     context.workingDirectory = assetDir;
     context.matchDirectory = QDir(assetDir).filePath(QStringLiteral("image_matches"));
     context.pairInput.images = xjw::cli::imagePaths(items);
-    context.referenceCameras = xjw::cli::referenceCameraMap(items);
+    const QJsonObject projectFiles = projectSession.mergedMetadata();
+    if (!xjw::cli::resolveProjectImageIds(projectFiles, context.pairInput.images, &context.imageIds, &errorMessage))
+    {
+        std::fprintf(stderr, "工程影像身份解析失败: %s\n", qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!xjw::cli::buildReferenceCameraGeometries(projectFiles,
+                                                  items,
+                                                  context.pairInput.images,
+                                                  context.imageIds,
+                                                  &context.referenceCameraGeometries,
+                                                  &errorMessage))
+    {
+        std::fprintf(stderr, "参考相机几何解析失败: %s\n", qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
     if (!referenceCsvArg.empty())
     {
         const QString referenceCsv = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(referenceCsvArg));
-        if (!xjw::cli::readReferencePositionCsv(referenceCsv, &context.referencePositions, &errorMessage))
+        if (!xjw::cli::readReferencePositionCsv(referenceCsv,
+                                                projectFiles,
+                                                context.pairInput.images,
+                                                context.imageIds,
+                                                &context.referencePositions,
+                                                &errorMessage))
         {
             std::fprintf(stderr, "参考位置读取失败: %s\n", qUtf8Printable(errorMessage));
             return cli::EXIT_IO_ERR;

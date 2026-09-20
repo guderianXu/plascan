@@ -802,7 +802,7 @@ namespace xjw
         struct SuccessfulCandidate
         {
             ImageId imageId = kInvalidImageId;
-            FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
             int support = 0;
         };
         const auto evaluationStarted = std::chrono::steady_clock::now();
@@ -950,7 +950,7 @@ namespace xjw
     {
         ImageRegistrationEvaluation evaluation;
         // 加载相机内参
-        FramePinholeCamera cam;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
         if (!getCamera(imageId, cam))
         {
             evaluation.error = "getCamera(" + std::to_string(imageId) + ") failed";
@@ -1175,7 +1175,7 @@ namespace xjw
             pnpOptions.useInitialPose = false;
             pnpOptions.useInitialPosePrefilter = false;
             pnpOptions.useReferenceResection = true;
-            if (const std::optional<CameraImageSize> image_size = cam.imageSize();
+            if (const auto image_size = cam.imageSize();
                 image_size && image_size->samples > 0 && image_size->lines > 0)
             {
                 pnpOptions.maxReprojError =
@@ -1198,7 +1198,7 @@ namespace xjw
         bool usedSequenceRecovery = false;
         auto solveSequenceRecovery = [&]()
         {
-            FramePinholeCamera sequenceGuessCamera = cam;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState sequenceGuessCamera = cam;
             if (!makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
             {
                 return PnpResult{};
@@ -1275,7 +1275,7 @@ namespace xjw
         bool strict_spatial_support_accepted = true;
         if (pnpResult.success && strict_small_support)
         {
-            const std::optional<CameraImageSize> image_size = cam.imageSize();
+            const auto image_size = cam.imageSize();
             double maximum_x = std::max(0.0, cam.principalX() * 2.0 + 1.0);
             double maximum_y = std::max(0.0, cam.principalY() * 2.0 + 1.0);
             for (const FeatureKeypoint& keypoint : img.keypoints)
@@ -1483,10 +1483,11 @@ namespace xjw
         return percentile(distances, 0.5);
     }
 
-    bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
-                                                         const FramePinholeCamera& candidateCamera,
-                                                         std::string* reason,
-                                                         bool force) const
+    bool IncrementalSfm::validateSequencePoseConsistency(
+        ImageId imageId,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& candidateCamera,
+        std::string* reason,
+        bool force) const
     {
         if ((!_sfmOptions.enforceSequencePoseConsistency && !force) || !_reconstruction ||
             _reconstruction->numRegisteredImages() < 3)
@@ -1633,7 +1634,8 @@ namespace xjw
         return true;
     }
 
-    bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, FramePinholeCamera* guessCamera) const
+    bool IncrementalSfm::makeSequenceInitialPoseGuess(
+        ImageId imageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState* guessCamera) const
     {
         if (!guessCamera || !_sfmOptions.useSequencePoseRecovery || !_reconstruction ||
             _reconstruction->numRegisteredImages() < 2)

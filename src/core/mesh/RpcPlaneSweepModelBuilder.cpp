@@ -2,8 +2,7 @@
 
 #include "GpuDeviceLease.h"
 #include "PatchMatchCUDA.h"
-#include "RpcCameraIO.h"
-#include "RpcCameraModel.h"
+#include "RpcRasterIO.h"
 #include "metmodel/gpu.hpp"
 #include "metmodel/mesh.hpp"
 
@@ -43,9 +42,9 @@ void checkpoint(const std::function<bool()>& cancelled,
     }
 }
 
-metmodel::Rpc00bCamera packRpc(const xjw::RpcCameraModel& camera)
+metmodel::Rpc00bCamera packRpc(const xjw::camera_models::rpc::RpcInstance& camera)
 {
-    const auto& parameters = camera.parameters();
+    const auto& parameters = camera.rpcDefinition().parameters();
     metmodel::Rpc00bCamera result;
     result.line_off = parameters.lineOffset;
     result.sample_off = parameters.sampleOffset;
@@ -62,10 +61,8 @@ metmodel::Rpc00bCamera packRpc(const xjw::RpcCameraModel& camera)
     result.sample_num = parameters.sampleNumerator;
     result.sample_den = parameters.sampleDenominator;
     const auto& correction = camera.imageCorrection();
-    // RpcCameraModel's correction is expressed in normalized image coordinates,
-    // not the reference alignment sidecar's world-delta affine schema.  Accept
-    // only the identity form until that exact sidecar is made part of PlaScan's
-    // public RPC input; approximating it would corrupt a geographic sweep.
+    // The typed RPC correction is expressed in normalized image coordinates,
+    // not the reference alignment sidecar's world-delta affine schema.
     if (correction.sampleOffsetPixels != 0.0 || correction.sampleSamplePixels != 0.0 ||
         correction.sampleLinePixels != 0.0 || correction.lineOffsetPixels != 0.0 ||
         correction.lineSamplePixels != 0.0 || correction.lineLinePixels != 0.0)
@@ -97,15 +94,14 @@ std::vector<float> readGray(const QString& path, std::size_t* width, std::size_t
     return result;
 }
 
-void validateImageSize(const xjw::RpcCameraModel& camera,
+void validateImageSize(const xjw::camera_models::rpc::RpcInstance& camera,
                        std::size_t width,
                        std::size_t height,
                        const QString& path)
 {
-    const auto declared = camera.imageSize();
-    if (!declared || declared->samples <= 0 || declared->lines <= 0 ||
-        static_cast<std::size_t>(declared->samples) != width ||
-        static_cast<std::size_t>(declared->lines) != height)
+    const auto& declared = camera.imageSize();
+    if (!declared.isValid() || static_cast<std::size_t>(declared.samples) != width ||
+        static_cast<std::size_t>(declared.lines) != height)
     {
         throw std::runtime_error("RPC camera raster dimensions do not match decoded input: " + path.toStdString());
     }
@@ -411,19 +407,31 @@ RpcPlaneSweepModelResult buildRpcPlaneSweepModel(const QJsonObject& settings,
     {
         throw std::runtime_error("rpcMinimumConfidence must be in [0, 1]");
     }
-    xjw::RpcCameraModel reference_camera;
-    xjw::RpcCameraModel neighbor_camera;
     std::string load_error;
-    if (!xjw::loadRpcCameraFromRaster(reference_path.toStdString(), &reference_camera, &load_error) || !reference_camera.isValid())
+    const auto reference_camera = xjw::camera_models::rpc::importRpcRasterInstance(
+        reference_path.toStdString(),
+        xjw::camera_core::CameraDefinitionId("rpc-plane-sweep-reference-definition"),
+        xjw::camera_core::CameraInstanceId("rpc-plane-sweep-reference-instance"),
+        xjw::camera_core::ImageId("rpc-plane-sweep-reference-image"),
+        xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
+        &load_error);
+    if (!reference_camera)
     {
         throw std::runtime_error("cannot load reference RPC00B camera: " + load_error);
     }
-    if (!xjw::loadRpcCameraFromRaster(neighbor_path.toStdString(), &neighbor_camera, &load_error) || !neighbor_camera.isValid())
+    const auto neighbor_camera = xjw::camera_models::rpc::importRpcRasterInstance(
+        neighbor_path.toStdString(),
+        xjw::camera_core::CameraDefinitionId("rpc-plane-sweep-neighbor-definition"),
+        xjw::camera_core::CameraInstanceId("rpc-plane-sweep-neighbor-instance"),
+        xjw::camera_core::ImageId("rpc-plane-sweep-neighbor-image"),
+        xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
+        &load_error);
+    if (!neighbor_camera)
     {
         throw std::runtime_error("cannot load neighbor RPC00B camera: " + load_error);
     }
-    const metmodel::Rpc00bCamera reference_rpc = packRpc(reference_camera);
-    const metmodel::Rpc00bCamera neighbor_rpc = packRpc(neighbor_camera);
+    const metmodel::Rpc00bCamera reference_rpc = packRpc(*reference_camera);
+    const metmodel::Rpc00bCamera neighbor_rpc = packRpc(*neighbor_camera);
     for (const auto& pair : {std::pair<const char*, const metmodel::Rpc00bCamera*>{"reference", &reference_rpc},
                              std::pair<const char*, const metmodel::Rpc00bCamera*>{"neighbor", &neighbor_rpc}})
     {
@@ -442,8 +450,8 @@ RpcPlaneSweepModelResult buildRpcPlaneSweepModel(const QJsonObject& settings,
     std::size_t reference_width = 0, reference_height = 0, neighbor_width = 0, neighbor_height = 0;
     const auto reference_gray = readGray(reference_path, &reference_width, &reference_height);
     const auto neighbor_gray = readGray(neighbor_path, &neighbor_width, &neighbor_height);
-    validateImageSize(reference_camera, reference_width, reference_height, reference_path);
-    validateImageSize(neighbor_camera, neighbor_width, neighbor_height, neighbor_path);
+    validateImageSize(*reference_camera, reference_width, reference_height, reference_path);
+    validateImageSize(*neighbor_camera, neighbor_width, neighbor_height, neighbor_path);
     xjw::mvs::GpuDeviceLeaseSet lease;
     QString lease_error;
     const auto identity = xjw::mvs::PatchMatchDepthEstimator::cudaDeviceIdentity(device);

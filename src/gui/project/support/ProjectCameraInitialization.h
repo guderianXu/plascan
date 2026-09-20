@@ -9,37 +9,32 @@
 
 #include <optional>
 
-class ProjectData;
+namespace xjw::gui::project
+{
 
-namespace xjw::gui::project {
+    std::optional<double> parsePossiblyFractionalNumber(const QString& text);
 
-std::optional<double> parsePossiblyFractionalNumber(const QString &text);
+    std::optional<double>
+    focalPixelsFromExif(const QString& imagePath, const QSize& size, double sensorWidthMm, QString* sourceTag);
 
-std::optional<double> focalPixelsFromExif(const QString &imagePath,
-                                          const QSize &size,
-                                          double sensorWidthMm,
-                                          QString *sourceTag);
+    QStringList resolveInitTargets(const QStringList& allImages, const QJsonObject& settings, QString* errorMsg);
 
-QStringList resolveInitTargets(ProjectData *projectData,
-                               const QJsonObject &settings,
-                               QString *errorMsg);
+    QSet<QString> existingCameraImages(const QJsonObject& meta);
 
-QSet<QString> existingCameraImages(const QJsonObject &meta);
+    QJsonObject withPreparedCameras(const QJsonObject& baseMeta,
+                                    const QMap<QString, QJsonObject>& preparedCameraByImage,
+                                    bool overwriteExisting);
 
-QJsonObject withPreparedCameras(const QJsonObject &baseMeta,
-                                const QMap<QString, QJsonObject> &preparedCameraByImage,
-                                bool overwriteExisting);
-
-QJsonObject makeInitializedCameraMeta(double fx,
-                                      double fy,
-                                      double cx,
-                                      double cy,
-                                      double k1,
-                                      double k2,
-                                      double p1,
-                                      double p2,
-                                      const QString &source,
-                                      const QString &distortionModel,
-                                      const QSize &imageSize);
+    QJsonObject makeInitializedCameraMeta(double fx,
+                                          double fy,
+                                          double cx,
+                                          double cy,
+                                          double k1,
+                                          double k2,
+                                          double p1,
+                                          double p2,
+                                          const QString& source,
+                                          const QString& distortionModel,
+                                          const QSize& imageSize);
 
 } // namespace xjw::gui::project

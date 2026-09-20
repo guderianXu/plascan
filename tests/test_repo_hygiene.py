@@ -125,13 +125,18 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("set(VCPKG_BUILD_TYPE release)", triplet_text)
 
         manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
-        linux_vulkan_loader = next(
-            dependency
-            for dependency in manifest["dependencies"]
-            if isinstance(dependency, dict) and dependency.get("name") == "vulkan-loader"
+        source_manifest = json.loads(
+            (ROOT / "cmake/source-deps/vcpkg.json").read_text(encoding="utf-8")
         )
-        self.assertEqual("linux", linux_vulkan_loader["platform"])
-        self.assertEqual(["xcb"], linux_vulkan_loader["features"])
+        for dependency_manifest in (manifest, source_manifest):
+            linux_vulkan_loader = next(
+                dependency
+                for dependency in dependency_manifest["dependencies"]
+                if isinstance(dependency, dict) and dependency.get("name") == "vulkan-loader"
+            )
+            self.assertEqual("linux", linux_vulkan_loader["platform"])
+            self.assertEqual(["xcb", "wayland"], linux_vulkan_loader["features"])
+        self.assertIn("libwayland-dev", text)
         production_dependency_names = {
             dependency if isinstance(dependency, str) else dependency.get("name")
             for dependency in manifest["dependencies"]

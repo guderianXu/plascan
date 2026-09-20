@@ -15,6 +15,84 @@ find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_TEST_QT_COMPONENTS})
 find_package(Python3 COMPONENTS Interpreter)
 include(PlascanTestRuntime)
 
+add_executable(test_camera_core_types
+    test_camera_core_types.cpp
+)
+target_link_libraries(test_camera_core_types PRIVATE
+    camera_core
+    GTest::gtest_main
+)
+target_include_directories(test_camera_core_types PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_core_types)
+
+add_executable(test_camera_core_registry
+    test_camera_core_registry.cpp
+)
+target_link_libraries(test_camera_core_registry PRIVATE
+    camera_core
+    GTest::gtest_main
+)
+target_include_directories(test_camera_core_registry PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_core_registry)
+
+add_executable(test_camera_model_factories
+    test_camera_model_factories.cpp
+)
+target_link_libraries(test_camera_model_factories PRIVATE
+    camera_models_registry
+    GTest::gtest_main
+)
+target_include_directories(test_camera_model_factories PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_model_factories)
+
+add_executable(test_camera_capability_requirements
+    test_camera_capability_requirements.cpp
+)
+target_link_libraries(test_camera_capability_requirements PRIVATE
+    camera_core
+    camera_models_frame_pinhole
+    camera_models_rpc
+    camera_models_linescan
+    GTest::gtest_main
+)
+target_include_directories(test_camera_capability_requirements PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_capability_requirements)
+
+add_executable(test_camera_reference_resolver
+    test_camera_reference_resolver.cpp
+)
+target_link_libraries(test_camera_reference_resolver PRIVATE
+    camera_reference
+    camera_core
+    GTest::gtest_main
+)
+target_include_directories(test_camera_reference_resolver PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_reference_resolver)
+
+add_executable(test_camera_reference_comparator
+    test_camera_reference_comparator.cpp
+)
+target_link_libraries(test_camera_reference_comparator PRIVATE
+    camera_reference
+    camera_models_frame_pinhole
+    camera_models_rpc
+    GTest::gtest_main
+)
+target_include_directories(test_camera_reference_comparator PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_camera_reference_comparator)
+
 # vcpkg builds Qt statically on macOS. Static platform plugins cannot be found
 # through QT_QPA_PLATFORM_PLUGIN_PATH, so tests that request the offscreen
 # backend must import it into their executable explicitly.
@@ -82,6 +160,43 @@ target_compile_definitions(test_source_contracts PRIVATE
 )
 gtest_discover_tests(test_source_contracts)
 
+add_executable(test_project_manager_architecture test_project_manager_architecture.cpp)
+target_link_libraries(test_project_manager_architecture PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_compile_definitions(test_project_manager_architecture PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+gtest_discover_tests(test_project_manager_architecture)
+add_test(
+    NAME test_project_manager_architecture
+    COMMAND test_project_manager_architecture
+)
+
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME test_project_manager_boundary
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/validation/check_project_manager_boundary.py
+            --source-root ${CMAKE_SOURCE_DIR}
+    )
+    add_test(
+        NAME TaskImplementationsBoundaryScannerFixture
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/validation/check_project_manager_boundary.py
+            --self-test-task-implementations
+    )
+    add_test(
+        NAME TaskImplementationsBoundaryStrict
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/validation/check_project_manager_boundary.py
+            --source-root ${CMAKE_SOURCE_DIR}
+            --scope task-implementations
+            --strict
+    )
+endif()
+
 add_executable(test_project_file_integration
     test_project_file_integration.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/platform/ProjectFileIntegration.cpp
@@ -121,6 +236,7 @@ add_executable(test_reference_models
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ReferenceMarkerModels.cpp
 )
 target_link_libraries(test_reference_models PRIVATE
+    camera
     camera_reference
     control_points
     plascan_common_project
@@ -130,6 +246,7 @@ target_link_libraries(test_reference_models PRIVATE
 )
 target_include_directories(test_reference_models PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 set_target_properties(test_reference_models PROPERTIES AUTOMOC ON)
 gtest_discover_tests(test_reference_models)
@@ -337,7 +454,7 @@ target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
 gtest_discover_tests(test_bundle_adjust_lidar_constraints)
 
 # ==============================================================================
-# test_bundle_adjust_projection — BA AutoDiff 投影模型与 FramePinholeCamera 投影一致性
+# test_bundle_adjust_projection — BA AutoDiff 投影模型与针孔数值状态投影一致性
 # ==============================================================================
 add_executable(test_bundle_adjust_projection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_projection.cpp
@@ -444,6 +561,8 @@ add_executable(test_bundle_adjust_service_lidar
 target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
     plascan_common_project
     lidar
+    sfm_core
+    camera_reference_core
     bundle_adjust
     camera
     control_points
@@ -468,6 +587,7 @@ if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
         test_planetary_laser_preview.cpp
     )
     target_link_libraries(test_planetary_laser_preview PRIVATE
+        camera_project
         gui_project
         Qt6::Core
         GTest::gtest_main
@@ -503,6 +623,7 @@ set_target_properties(test_project_data PROPERTIES
 target_link_libraries(test_project_data PRIVATE
     plascan_common_project
     plascan_common_json
+    camera
     Qt6::Core
     Qt6::Concurrent
     ${PLASCAN_LIBZIP_TARGET}
@@ -519,6 +640,7 @@ add_executable(test_project_resource_cleanup
 )
 target_link_libraries(test_project_resource_cleanup PRIVATE
     project_workflows
+    project_recovery_qt
     plascan_common_project
     Qt6::Core
     GTest::gtest_main
@@ -590,10 +712,140 @@ target_link_libraries(test_project_session_facade PRIVATE
     Qt6::Core
     GTest::gtest_main
 )
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_session_facade PRIVATE gui_runtime)
+endif()
 target_include_directories(test_project_session_facade PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 gtest_discover_tests(test_project_session_facade)
+
+# ProjectSession is the QObject-backed GUI session service. Keep its focused
+# tests in a separate source file; the target name avoids colliding with the
+# common-project session target.
+target_sources(test_project_session_facade PRIVATE
+    test_project_session.cpp
+)
+
+add_executable(test_project_lifecycle_service
+    test_project_lifecycle_service.cpp
+)
+target_link_libraries(test_project_lifecycle_service PRIVATE
+    gui_project
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Widgets
+    Qt6::Test
+    GTest::gtest_main
+)
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_lifecycle_service PRIVATE gui_runtime)
+endif()
+target_include_directories(test_project_lifecycle_service PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_lifecycle_service)
+
+add_executable(test_project_resource_service
+    test_project_resource_service.cpp
+)
+target_link_libraries(test_project_resource_service PRIVATE
+    gui_project
+    Qt6::Core
+    Qt6::Widgets
+    GTest::gtest_main
+)
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_resource_service PRIVATE gui_runtime)
+endif()
+target_include_directories(test_project_resource_service PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_resource_service)
+
+add_executable(test_project_task_orchestrator
+    test_project_task_orchestrator.cpp
+)
+target_link_libraries(test_project_task_orchestrator PRIVATE
+    gui_project
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Widgets
+    Qt6::Test
+    GTest::gtest_main
+)
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_task_orchestrator PRIVATE gui_runtime)
+endif()
+target_include_directories(test_project_task_orchestrator PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_task_orchestrator)
+
+add_executable(test_project_bundle_adjust_controller
+    test_project_bundle_adjust_controller.cpp
+)
+target_link_libraries(test_project_bundle_adjust_controller PRIVATE
+    gui_project
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Widgets
+    Qt6::Test
+    GTest::gtest_main
+)
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_bundle_adjust_controller PRIVATE gui_runtime)
+endif()
+target_include_directories(test_project_bundle_adjust_controller PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_bundle_adjust_controller)
+
+add_executable(test_project_resource_cleanup_coordinator
+    test_project_resource_cleanup_coordinator.cpp
+)
+target_link_libraries(test_project_resource_cleanup_coordinator PRIVATE
+    gui_project
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Concurrent
+    Qt6::Test
+    GTest::gtest
+)
+if(TARGET gui_runtime)
+    target_link_libraries(test_project_resource_cleanup_coordinator PRIVATE gui_runtime)
+endif()
+target_include_directories(test_project_resource_cleanup_coordinator PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_project_resource_cleanup_coordinator)
+
+add_executable(test_project_ui_message_adapter
+    test_project_ui_message_adapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectUiMessageAdapter.cpp
+)
+target_link_libraries(test_project_ui_message_adapter PRIVATE
+    Qt6::Core
+    Qt6::Widgets
+    GTest::gtest_main
+)
+target_include_directories(test_project_ui_message_adapter PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services
+)
+gtest_discover_tests(test_project_ui_message_adapter)
 
 add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
@@ -628,6 +880,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     bundle_adjust
     qc
     control_points
+    marker_print_qt
     terrain
     project_workflows
     mask
@@ -825,6 +1078,19 @@ target_include_directories(test_workflow_settings_dialog PRIVATE
 plascan_import_qt_offscreen_plugin(test_workflow_settings_dialog)
 gtest_discover_tests(test_workflow_settings_dialog
     DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+add_executable(test_window_controls
+    test_window_controls.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window/WindowControlsWidget.cpp
+)
+target_link_libraries(test_window_controls PRIVATE Qt6::Widgets Qt6::Test GTest::gtest)
+target_include_directories(test_window_controls PRIVATE ${CMAKE_SOURCE_DIR}/src/gui/main_window)
+plascan_import_qt_offscreen_plugin(test_window_controls)
+gtest_discover_tests(test_window_controls
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT
@@ -1378,7 +1644,7 @@ add_executable(test_marker_task_runner
 )
 set_target_properties(test_marker_task_runner PROPERTIES AUTOMOC ON)
 target_link_libraries(test_marker_task_runner PRIVATE
-    control_points
+    marker_detection_qt
     Qt6::Core
     Qt6::Gui
     Qt6::Concurrent

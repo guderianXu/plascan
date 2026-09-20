@@ -213,7 +213,8 @@ namespace xjw::ortho_internal
 
                 const std::array<double, 9> rotation = frame.input.camera.cameraToWorldRotation();
                 const std::array<double, 3> center = frame.input.camera.cameraCenter();
-                const FramePinholeCamera::Distortion distortion = frame.input.camera.distortion();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                    frame.input.camera.distortion();
                 packed->cameraValues.insert(packed->cameraValues.end(), rotation.begin(), rotation.end());
                 packed->cameraValues.insert(packed->cameraValues.end(), center.begin(), center.end());
                 packed->cameraValues.push_back(frame.input.camera.focalX());

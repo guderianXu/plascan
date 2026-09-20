@@ -42,99 +42,98 @@
 
 namespace
 {
-constexpr int PathRole = Qt::UserRole + 1;
-constexpr int MaskAvailableRole = Qt::UserRole + 2;
-constexpr int ThumbWidth = 132;
-constexpr int ThumbHeight = 88;
-constexpr int GridWidth = 220;
-constexpr int GridHeight = 140;
-constexpr int AsyncListThreshold = 100;
-constexpr int ImageListBatchSize = 40;
-constexpr int MaximumPendingThumbnailLoads = 64;
-constexpr int MaximumThumbnailCacheEntries = 256;
-constexpr int HiddenListFallbackCount = 8;
+    constexpr int PathRole = Qt::UserRole + 1;
+    constexpr int MaskAvailableRole = Qt::UserRole + 2;
+    constexpr int ThumbWidth = 132;
+    constexpr int ThumbHeight = 88;
+    constexpr int GridWidth = 220;
+    constexpr int GridHeight = 140;
+    constexpr int AsyncListThreshold = 100;
+    constexpr int ImageListBatchSize = 40;
+    constexpr int MaximumPendingThumbnailLoads = 64;
+    constexpr int MaximumThumbnailCacheEntries = 256;
+    constexpr int HiddenListFallbackCount = 8;
 
-class ThumbnailLoadPool final : public QThreadPool
-{
-public:
-    explicit ThumbnailLoadPool(QObject* parent) : QThreadPool(parent)
+    class ThumbnailLoadPool final : public QThreadPool
     {
-        setMaxThreadCount(std::clamp(QThread::idealThreadCount(), 2, 8));
-        setExpiryTimeout(30'000);
-    }
-};
+    public:
+        explicit ThumbnailLoadPool(QObject* parent) : QThreadPool(parent)
+        {
+            setMaxThreadCount(std::clamp(QThread::idealThreadCount(), 2, 8));
+            setExpiryTimeout(30'000);
+        }
+    };
 
-QThreadPool *thumbnailLoadPool()
-{
-    static auto* pool = new ThumbnailLoadPool(QCoreApplication::instance());
-    return pool;
-}
-
-bool hasAlignmentEvidence(const QJsonObject &entry)
-{
-    if (entry.value(QStringLiteral("camera")).isObject())
+    QThreadPool* thumbnailLoadPool()
     {
-        return true;
-    }
-    if (entry.contains(QStringLiteral("center")))
-    {
-        return true;
-    }
-    return entry.contains(QStringLiteral("camera_center"));
-}
-
-bool isAlignedEntry(const QJsonObject &entry)
-{
-    if (entry.contains(QStringLiteral("aligned")))
-    {
-        return entry.value(QStringLiteral("aligned")).toBool(false);
-    }
-    return hasAlignmentEvidence(entry);
-}
-
-QString displayNameForEntry(const QJsonObject &entry, const QString &imagePath)
-{
-    const QString name = entry.value(QStringLiteral("name")).toString().trimmed();
-    if (!name.isEmpty())
-    {
-        return name;
+        static auto* pool = new ThumbnailLoadPool(QCoreApplication::instance());
+        return pool;
     }
 
-    const QString fileName = QFileInfo(imagePath).fileName();
-    return fileName.isEmpty() ? imagePath : fileName;
-}
-
-QIcon placeholderPhotoIcon()
-{
-    static const QIcon icon = []()
+    bool hasAlignmentEvidence(const QJsonObject& entry, const QJsonObject& metadata)
     {
-        QImage image(QSize(ThumbWidth, ThumbHeight), QImage::Format_ARGB32_Premultiplied);
-        image.fill(QColor(246, 249, 252));
+        if (!xjw::common::project::projectCameraModelParameters(metadata, entry).isEmpty())
+        {
+            return true;
+        }
+        if (entry.contains(QStringLiteral("center")))
+        {
+            return true;
+        }
+        return entry.contains(QStringLiteral("camera_center"));
+    }
 
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(QPen(QColor(188, 199, 211), 1));
-        painter.setBrush(QColor(236, 242, 248));
-        painter.drawRoundedRect(QRectF(0.5, 0.5, ThumbWidth - 1.0, ThumbHeight - 1.0), 4.0, 4.0);
+    bool isAlignedEntry(const QJsonObject& entry, const QJsonObject& metadata)
+    {
+        if (entry.contains(QStringLiteral("aligned")))
+        {
+            return entry.value(QStringLiteral("aligned")).toBool(false);
+        }
+        return hasAlignmentEvidence(entry, metadata);
+    }
 
-        painter.setPen(QPen(QColor(117, 135, 153), 2));
-        painter.drawLine(QPointF(28.0, 60.0), QPointF(56.0, 38.0));
-        painter.drawLine(QPointF(56.0, 38.0), QPointF(76.0, 54.0));
-        painter.drawLine(QPointF(76.0, 54.0), QPointF(102.0, 30.0));
-        painter.setBrush(QColor(117, 135, 153));
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(QPointF(38.0, 28.0), 5.0, 5.0);
-        return QIcon(QPixmap::fromImage(image));
-    }();
-    return icon;
-}
+    QString displayNameForEntry(const QJsonObject& entry, const QString& imagePath)
+    {
+        const QString name = entry.value(QStringLiteral("name")).toString().trimmed();
+        if (!name.isEmpty())
+        {
+            return name;
+        }
+
+        const QString fileName = QFileInfo(imagePath).fileName();
+        return fileName.isEmpty() ? imagePath : fileName;
+    }
+
+    QIcon placeholderPhotoIcon()
+    {
+        static const QIcon icon = []()
+        {
+            QImage image(QSize(ThumbWidth, ThumbHeight), QImage::Format_ARGB32_Premultiplied);
+            image.fill(QColor(246, 249, 252));
+
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setPen(QPen(QColor(188, 199, 211), 1));
+            painter.setBrush(QColor(236, 242, 248));
+            painter.drawRoundedRect(QRectF(0.5, 0.5, ThumbWidth - 1.0, ThumbHeight - 1.0), 4.0, 4.0);
+
+            painter.setPen(QPen(QColor(117, 135, 153), 2));
+            painter.drawLine(QPointF(28.0, 60.0), QPointF(56.0, 38.0));
+            painter.drawLine(QPointF(56.0, 38.0), QPointF(76.0, 54.0));
+            painter.drawLine(QPointF(76.0, 54.0), QPointF(102.0, 30.0));
+            painter.setBrush(QColor(117, 135, 153));
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(QPointF(38.0, 28.0), 5.0, 5.0);
+            return QIcon(QPixmap::fromImage(image));
+        }();
+        return icon;
+    }
 } // namespace
 
-PhotoStripWidget::PhotoStripWidget(QWidget *parent)
-    : QWidget(parent)
+PhotoStripWidget::PhotoStripWidget(QWidget* parent) : QWidget(parent)
 {
     _thumbnailCancellation = std::make_shared<std::atomic_bool>(false);
-    auto *layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
@@ -158,44 +157,39 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
     _list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     layout->addWidget(_list);
 
-    connect(_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item)
-    {
-        if (!item || !item->isSelected())
-        {
-            return;
-        }
-        emit photoSelected(item->data(PathRole).toString());
-    });
-    connect(_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item)
-    {
-        if (!item)
-        {
-            return;
-        }
-        emit photoActivated(item->data(PathRole).toString());
-    });
     connect(_list,
-            &QListWidget::customContextMenuRequested,
+            &QListWidget::itemClicked,
             this,
-            &PhotoStripWidget::showPhotoContextMenu);
-    connect(_list->verticalScrollBar(), &QScrollBar::valueChanged,
-            this, [this]()
-    {
-        scheduleVisibleThumbnailLoads();
-    });
-    connect(_list->verticalScrollBar(), &QScrollBar::rangeChanged,
-            this, [this]()
-    {
-        scheduleVisibleThumbnailLoads();
-    });
+            [this](QListWidgetItem* item)
+            {
+                if (!item || !item->isSelected())
+                {
+                    return;
+                }
+                emit photoSelected(item->data(PathRole).toString());
+            });
+    connect(_list,
+            &QListWidget::itemActivated,
+            this,
+            [this](QListWidgetItem* item)
+            {
+                if (!item)
+                {
+                    return;
+                }
+                emit photoActivated(item->data(PathRole).toString());
+            });
+    connect(_list, &QListWidget::customContextMenuRequested, this, &PhotoStripWidget::showPhotoContextMenu);
+    connect(_list->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() { scheduleVisibleThumbnailLoads(); });
+    connect(_list->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this]() { scheduleVisibleThumbnailLoads(); });
     _list->viewport()->installEventFilter(this);
 }
 
 PhotoStripWidget::~PhotoStripWidget()
 {
     advanceThumbnailGeneration(false);
-    const QSet<QFutureWatcher<ThumbnailResult> *> watchers = _thumbnailWatchers;
-    for (QFutureWatcher<ThumbnailResult> *watcher : watchers)
+    const QSet<QFutureWatcher<ThumbnailResult>*> watchers = _thumbnailWatchers;
+    for (QFutureWatcher<ThumbnailResult>* watcher : watchers)
     {
         disconnect(watcher, nullptr, this, nullptr);
         watcher->cancel();
@@ -203,25 +197,22 @@ PhotoStripWidget::~PhotoStripWidget()
     _thumbnailWatchers.clear();
 }
 
-bool PhotoStripWidget::eventFilter(QObject *watched, QEvent *event)
+bool PhotoStripWidget::eventFilter(QObject* watched, QEvent* event)
 {
-    if (_list && watched == _list->viewport()
-        && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+    if (_list && watched == _list->viewport() && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
     {
         scheduleVisibleThumbnailLoads();
     }
     return QWidget::eventFilter(watched, event);
 }
 
-void PhotoStripWidget::setProjectPath(const QString &plascanPath)
+void PhotoStripWidget::setProjectPath(const QString& plascanPath)
 {
     QString projectRootPath;
     const QString cleanProjectPath = plascanPath.trimmed();
     if (!cleanProjectPath.isEmpty())
     {
-        projectRootPath =
-            xjw::common::project::ProjectIO::projectRootFromPlascan(
-                cleanProjectPath);
+        projectRootPath = xjw::common::project::ProjectIO::projectRootFromPlascan(cleanProjectPath);
     }
 
     if (_projectRootPath == projectRootPath && _projectFilePath == cleanProjectPath)
@@ -235,13 +226,14 @@ void PhotoStripWidget::setProjectPath(const QString &plascanPath)
     clearPhotos();
 }
 
-void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
+void PhotoStripWidget::loadFromJson(const QJsonObject& meta)
 {
     if (meta.isEmpty())
     {
         return;
     }
 
+    _projectMetadata = meta;
     const QJsonArray images = xjw::common::project::projectImageEntries(meta);
     if (_hasLoadedImageEntries && _loadedImageEntries == images)
     {
@@ -264,7 +256,7 @@ void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
     emit imageLoadingProgressChanged(tr("正在加载影像列表..."), 0, total);
     if (total <= AsyncListThreshold)
     {
-        for (const QJsonValue &value : images)
+        for (const QJsonValue& value : images)
         {
             appendImageEntry(value);
         }
@@ -278,13 +270,10 @@ void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
     _pendingImageEntries = images;
     _pendingImageIndex = 0;
     const quint64 generation = _thumbnailGeneration;
-    QTimer::singleShot(0, this, [this, generation]()
-    {
-        processPendingImageBatch(generation);
-    });
+    QTimer::singleShot(0, this, [this, generation]() { processPendingImageBatch(generation); });
 }
 
-void PhotoStripWidget::appendImageEntry(const QJsonValue &value)
+void PhotoStripWidget::appendImageEntry(const QJsonValue& value)
 {
     QJsonObject entry;
     if (value.isObject())
@@ -305,7 +294,7 @@ void PhotoStripWidget::appendImageEntry(const QJsonValue &value)
         return;
     }
 
-    QListWidgetItem *item = createItem(entry);
+    QListWidgetItem* item = createItem(entry);
     if (!item)
     {
         return;
@@ -331,8 +320,7 @@ void PhotoStripWidget::processPendingImageBatch(quint64 generation)
         appendImageEntry(_pendingImageEntries.at(_pendingImageIndex));
         ++_pendingImageIndex;
     }
-    emit imageLoadingProgressChanged(
-        tr("正在加载影像列表..."), _pendingImageIndex, total);
+    emit imageLoadingProgressChanged(tr("正在加载影像列表..."), _pendingImageIndex, total);
     scheduleVisibleThumbnailLoads();
 
     if (_pendingImageIndex >= total)
@@ -344,13 +332,10 @@ void PhotoStripWidget::processPendingImageBatch(quint64 generation)
         return;
     }
 
-    QTimer::singleShot(0, this, [this, generation]()
-    {
-        processPendingImageBatch(generation);
-    });
+    QTimer::singleShot(0, this, [this, generation]() { processPendingImageBatch(generation); });
 }
 
-void PhotoStripWidget::setCurrentPhoto(const QString &imagePath)
+void PhotoStripWidget::setCurrentPhoto(const QString& imagePath)
 {
     if (!_list)
     {
@@ -358,7 +343,7 @@ void PhotoStripWidget::setCurrentPhoto(const QString &imagePath)
     }
 
     const QString key = normalizedPath(imagePath);
-    const QList<QListWidgetItem *> items = _itemsByPath.value(key);
+    const QList<QListWidgetItem*> items = _itemsByPath.value(key);
     if (items.isEmpty() || !items.first())
     {
         _list->clearSelection();
@@ -366,10 +351,9 @@ void PhotoStripWidget::setCurrentPhoto(const QString &imagePath)
         return;
     }
 
-    QListWidgetItem *item = items.first();
-    const QItemSelectionModel::SelectionFlags command = item->isSelected()
-        ? QItemSelectionModel::NoUpdate
-        : QItemSelectionModel::ClearAndSelect;
+    QListWidgetItem* item = items.first();
+    const QItemSelectionModel::SelectionFlags command =
+        item->isSelected() ? QItemSelectionModel::NoUpdate : QItemSelectionModel::ClearAndSelect;
     _list->setCurrentItem(item, command);
     _list->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     scheduleVisibleThumbnailLoads();
@@ -386,7 +370,7 @@ QStringList PhotoStripWidget::selectedPhotoPaths() const
 
     for (int row = 0; row < _list->count(); ++row)
     {
-        QListWidgetItem *item = _list->item(row);
+        QListWidgetItem* item = _list->item(row);
         if (!item || !item->isSelected())
         {
             continue;
@@ -410,29 +394,27 @@ bool PhotoStripWidget::selectedPhotosHaveMasks() const
         return false;
     }
 
-    const QList<QListWidgetItem *> selectedItems = _list->selectedItems();
-    return std::any_of(selectedItems.cbegin(), selectedItems.cend(), [](const QListWidgetItem *item)
-    {
-        return item && item->data(MaskAvailableRole).toBool();
-    });
+    const QList<QListWidgetItem*> selectedItems = _list->selectedItems();
+    return std::any_of(selectedItems.cbegin(),
+                       selectedItems.cend(),
+                       [](const QListWidgetItem* item) { return item && item->data(MaskAvailableRole).toBool(); });
 }
 
-void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
+void PhotoStripWidget::showPhotoContextMenu(const QPoint& position)
 {
     if (!_list)
     {
         return;
     }
 
-    QListWidgetItem *item = _list->itemAt(position);
+    QListWidgetItem* item = _list->itemAt(position);
     if (!item)
     {
         return;
     }
 
-    const QItemSelectionModel::SelectionFlags command = item->isSelected()
-        ? QItemSelectionModel::NoUpdate
-        : QItemSelectionModel::ClearAndSelect;
+    const QItemSelectionModel::SelectionFlags command =
+        item->isSelected() ? QItemSelectionModel::NoUpdate : QItemSelectionModel::ClearAndSelect;
     _list->setCurrentItem(item, command);
     emit photoSelected(item->data(PathRole).toString());
 
@@ -442,25 +424,29 @@ void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
         return;
     }
 
-    auto *menu = new QMenu(this);
+    auto* menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
-    QAction *generateAction = menu->addAction(tr("生成蒙版..."));
-    connect(generateAction, &QAction::triggered, this, [this, menu, imagePaths]()
-    {
-        menu->close();
-        emit generateMaskRequested(imagePaths);
-    });
+    QAction* generateAction = menu->addAction(tr("生成蒙版..."));
+    connect(generateAction,
+            &QAction::triggered,
+            this,
+            [this, menu, imagePaths]()
+            {
+                menu->close();
+                emit generateMaskRequested(imagePaths);
+            });
     menu->addSeparator();
-    QAction *clearAction = menu->addAction(tr("清除蒙版"));
+    QAction* clearAction = menu->addAction(tr("清除蒙版"));
     clearAction->setEnabled(selectedPhotosHaveMasks());
-    clearAction->setStatusTip(clearAction->isEnabled()
-                                  ? tr("清除所选照片的蒙版")
-                                  : tr("所选照片没有可清除的蒙版"));
-    connect(clearAction, &QAction::triggered, this, [this, menu, imagePaths]()
-    {
-        menu->close();
-        emit clearMasksRequested(imagePaths);
-    });
+    clearAction->setStatusTip(clearAction->isEnabled() ? tr("清除所选照片的蒙版") : tr("所选照片没有可清除的蒙版"));
+    connect(clearAction,
+            &QAction::triggered,
+            this,
+            [this, menu, imagePaths]()
+            {
+                menu->close();
+                emit clearMasksRequested(imagePaths);
+            });
     menu->popup(_list->viewport()->mapToGlobal(position));
 }
 
@@ -479,7 +465,7 @@ void PhotoStripWidget::clearPhotos()
     }
 }
 
-QListWidgetItem *PhotoStripWidget::createItem(const QJsonObject &entry)
+QListWidgetItem* PhotoStripWidget::createItem(const QJsonObject& entry)
 {
     const QString imagePath = resolveImagePath(entry.value(QStringLiteral("path")).toString());
     if (imagePath.isEmpty())
@@ -488,11 +474,10 @@ QListWidgetItem *PhotoStripWidget::createItem(const QJsonObject &entry)
     }
 
     const QString key = thumbnailCacheKey(imagePath);
-    auto *item = new QListWidgetItem(displayNameForEntry(entry, imagePath));
+    auto* item = new QListWidgetItem(displayNameForEntry(entry, imagePath));
     item->setData(PathRole, imagePath);
-    const bool hasMask = !entry.value(QStringLiteral("mask_path")).toString().trimmed().isEmpty()
-                         || !xjw::common::project::ProjectIO::findMaskForImage(
-                                 _projectFilePath, imagePath).isEmpty();
+    const bool hasMask = !entry.value(QStringLiteral("mask_path")).toString().trimmed().isEmpty() ||
+                         !xjw::common::project::ProjectIO::findMaskForImage(_projectFilePath, imagePath).isEmpty();
     item->setData(MaskAvailableRole, hasMask);
     item->setTextAlignment(Qt::AlignHCenter);
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
@@ -500,7 +485,7 @@ QListWidgetItem *PhotoStripWidget::createItem(const QJsonObject &entry)
     const QIcon cachedIcon = cachedThumbnail(key);
     item->setIcon(cachedIcon.isNull() ? placeholderPhotoIcon() : cachedIcon);
 
-    const QString alignedText = isAlignedEntry(entry) ? tr("已对齐") : tr("未对齐");
+    const QString alignedText = isAlignedEntry(entry, _projectMetadata) ? tr("已对齐") : tr("未对齐");
     item->setToolTip(tr("%1\n状态: %2").arg(imagePath, alignedText));
     return item;
 }
@@ -513,11 +498,13 @@ void PhotoStripWidget::scheduleVisibleThumbnailLoads()
     }
 
     _thumbnailRefreshScheduled = true;
-    QTimer::singleShot(0, this, [this]()
-    {
-        _thumbnailRefreshScheduled = false;
-        refreshVisibleThumbnailLoads();
-    });
+    QTimer::singleShot(0,
+                       this,
+                       [this]()
+                       {
+                           _thumbnailRefreshScheduled = false;
+                           refreshVisibleThumbnailLoads();
+                       });
 }
 
 void PhotoStripWidget::refreshVisibleThumbnailLoads()
@@ -540,23 +527,22 @@ void PhotoStripWidget::refreshVisibleThumbnailLoads()
     if (paths.size() < MaximumPendingThumbnailLoads)
     {
         const int prefetch_height = std::max(visible_rect.height(), GridHeight);
-        const QRect prefetch_rect = visible_rect.adjusted(
-            0, -prefetch_height, 0, prefetch_height);
+        const QRect prefetch_rect = visible_rect.adjusted(0, -prefetch_height, 0, prefetch_height);
         appendThumbnailCandidates(prefetch_rect, &paths, &keys);
     }
 
     _desiredThumbnailKeys = keys;
     const quint64 visibility_generation = _thumbnailVisibilityGeneration;
-    for (const QString &path : paths)
+    for (const QString& path : paths)
     {
         startThumbnailLoad(path, visibility_generation);
     }
     pumpThumbnailLoads();
 }
 
-void PhotoStripWidget::appendThumbnailCandidates(const QRect &viewport_rect,
-                                                 QStringList *paths,
-                                                 QSet<QString> *keys) const
+void PhotoStripWidget::appendThumbnailCandidates(const QRect& viewport_rect,
+                                                 QStringList* paths,
+                                                 QSet<QString>* keys) const
 {
     if (!_list || !paths || !keys || paths->size() >= MaximumPendingThumbnailLoads)
     {
@@ -566,7 +552,7 @@ void PhotoStripWidget::appendThumbnailCandidates(const QRect &viewport_rect,
     const int item_count = _list->count();
     auto item_rect = [this](int row)
     {
-        QListWidgetItem *item = _list->item(row);
+        QListWidgetItem* item = _list->item(row);
         return item ? _list->visualItemRect(item) : QRect();
     };
 
@@ -609,11 +595,9 @@ void PhotoStripWidget::appendThumbnailCandidates(const QRect &viewport_rect,
         last = low;
     }
 
-    for (int row = first;
-         row < last && paths->size() < MaximumPendingThumbnailLoads;
-         ++row)
+    for (int row = first; row < last && paths->size() < MaximumPendingThumbnailLoads; ++row)
     {
-        QListWidgetItem *item = _list->item(row);
+        QListWidgetItem* item = _list->item(row);
         if (!item)
         {
             continue;
@@ -629,8 +613,7 @@ void PhotoStripWidget::appendThumbnailCandidates(const QRect &viewport_rect,
     }
 }
 
-void PhotoStripWidget::startThumbnailLoad(const QString &imagePath,
-                                          quint64 visibility_generation)
+void PhotoStripWidget::startThumbnailLoad(const QString& imagePath, quint64 visibility_generation)
 {
     const QString resolvedPath = resolveImagePath(imagePath);
     const QString key = normalizedPath(resolvedPath);
@@ -643,7 +626,7 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath,
     if (_thumbnailCache.contains(cache_key))
     {
         const QIcon icon = cachedThumbnail(cache_key);
-        for (QListWidgetItem *item : _itemsByPath.value(key))
+        for (QListWidgetItem* item : _itemsByPath.value(key))
         {
             if (item)
             {
@@ -652,102 +635,88 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath,
         }
         return;
     }
-    if (_thumbnailLoadsInFlight.value(key, 0) == generation
-        || _queuedThumbnailKeys.contains(key))
+    if (_thumbnailLoadsInFlight.value(key, 0) == generation || _queuedThumbnailKeys.contains(key))
     {
         return;
     }
 
-    _pendingThumbnailRequests.enqueue({resolvedPath,
-                                       cache_key,
-                                       _thumbnailGeneration,
-                                       visibility_generation});
+    _pendingThumbnailRequests.enqueue({resolvedPath, cache_key, _thumbnailGeneration, visibility_generation});
     _queuedThumbnailKeys.insert(key);
 }
 
 void PhotoStripWidget::pumpThumbnailLoads()
 {
     const int maximumLoads = thumbnailLoadPool()->maxThreadCount();
-    while (_activeThumbnailLoads < maximumLoads
-           && !_pendingThumbnailRequests.isEmpty())
+    while (_activeThumbnailLoads < maximumLoads && !_pendingThumbnailRequests.isEmpty())
     {
         const ThumbnailRequest request = _pendingThumbnailRequests.dequeue();
         const QString resolvedPath = request.path;
         const QString key = normalizedPath(resolvedPath);
         const QString cache_key = request.cacheKey;
         _queuedThumbnailKeys.remove(key);
-        if (request.projectGeneration != _thumbnailGeneration
-            || request.visibilityGeneration != _thumbnailVisibilityGeneration)
+        if (request.projectGeneration != _thumbnailGeneration ||
+            request.visibilityGeneration != _thumbnailVisibilityGeneration)
         {
             continue;
         }
-        if (key.isEmpty() || cache_key.isEmpty() || _thumbnailCache.contains(cache_key)
-            || _thumbnailLoadsInFlight.value(key, 0) == _thumbnailGeneration)
+        if (key.isEmpty() || cache_key.isEmpty() || _thumbnailCache.contains(cache_key) ||
+            _thumbnailLoadsInFlight.value(key, 0) == _thumbnailGeneration)
         {
             continue;
         }
 
         const quint64 generation = _thumbnailGeneration;
         _thumbnailLoadsInFlight.insert(key, generation);
-        auto *watcher = new QFutureWatcher<ThumbnailResult>();
+        auto* watcher = new QFutureWatcher<ThumbnailResult>();
         _thumbnailWatchers.insert(watcher);
         ++_activeThumbnailLoads;
         const QString projectPath = _projectFilePath;
         const auto cancellation = _thumbnailCancellation;
         const quint64 visibility_generation = request.visibilityGeneration;
-        connect(watcher, &QFutureWatcher<ThumbnailResult>::finished,
-                watcher, &QObject::deleteLater);
-        connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, this,
+        connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, watcher, &QObject::deleteLater);
+        connect(watcher,
+                &QFutureWatcher<ThumbnailResult>::finished,
+                this,
                 [this, watcher, key, generation, visibility_generation, projectPath]()
-        {
-            const bool is_latest_request =
-                visibility_generation == _thumbnailVisibilityGeneration;
-            const bool is_still_wanted = _desiredThumbnailKeys.contains(key);
-            if (generation == _thumbnailGeneration
-                && projectPath == _projectFilePath
-                && (is_latest_request || is_still_wanted))
-            {
-                ThumbnailResult result;
-                try
                 {
-                    result = watcher->result();
-                }
-                catch (const std::exception &exception)
-                {
-                    result.error = QString::fromUtf8(exception.what());
-                }
-                catch (...)
-                {
-                    result.error = tr("未知后台异常");
-                }
-                if (!result.error.isEmpty())
-                {
-                    LOG_WARN(QStringLiteral("缩略图后台加载失败：%1（%2）")
-                                 .arg(key, result.error));
-                }
-                applyThumbnail(result, generation, projectPath);
-            }
-            if (_thumbnailLoadsInFlight.value(key, 0) == generation)
-            {
-                _thumbnailLoadsInFlight.remove(key);
-            }
-            _thumbnailWatchers.remove(watcher);
-            _activeThumbnailLoads = std::max(0, _activeThumbnailLoads - 1);
-            pumpThumbnailLoads();
-        });
+                    const bool is_latest_request = visibility_generation == _thumbnailVisibilityGeneration;
+                    const bool is_still_wanted = _desiredThumbnailKeys.contains(key);
+                    if (generation == _thumbnailGeneration && projectPath == _projectFilePath &&
+                        (is_latest_request || is_still_wanted))
+                    {
+                        ThumbnailResult result;
+                        try
+                        {
+                            result = watcher->result();
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            result.error = QString::fromUtf8(exception.what());
+                        }
+                        catch (...)
+                        {
+                            result.error = tr("未知后台异常");
+                        }
+                        if (!result.error.isEmpty())
+                        {
+                            LOG_WARN(QStringLiteral("缩略图后台加载失败：%1（%2）").arg(key, result.error));
+                        }
+                        applyThumbnail(result, generation, projectPath);
+                    }
+                    if (_thumbnailLoadsInFlight.value(key, 0) == generation)
+                    {
+                        _thumbnailLoadsInFlight.remove(key);
+                    }
+                    _thumbnailWatchers.remove(watcher);
+                    _activeThumbnailLoads = std::max(0, _activeThumbnailLoads - 1);
+                    pumpThumbnailLoads();
+                });
         watcher->setFuture(QtConcurrent::run(
-            thumbnailLoadPool(),
-            &PhotoStripWidget::loadThumbnail,
-            resolvedPath,
-            projectPath,
-            cache_key,
-            cancellation));
+            thumbnailLoadPool(), &PhotoStripWidget::loadThumbnail, resolvedPath, projectPath, cache_key, cancellation));
     }
 }
 
-void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result,
-                                      quint64 generation,
-                                      const QString &projectPath)
+void PhotoStripWidget::applyThumbnail(const ThumbnailResult& result, quint64 generation, const QString& projectPath)
 {
     if (generation != _thumbnailGeneration || projectPath != _projectFilePath)
     {
@@ -764,7 +733,7 @@ void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result,
         return;
     }
 
-    const QList<QListWidgetItem *> items = _itemsByPath.value(key);
+    const QList<QListWidgetItem*> items = _itemsByPath.value(key);
     if (items.isEmpty())
     {
         return;
@@ -772,7 +741,7 @@ void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result,
 
     const QIcon icon(QPixmap::fromImage(result.image));
     insertThumbnailCache(result.cacheKey, icon);
-    for (QListWidgetItem *item : items)
+    for (QListWidgetItem* item : items)
     {
         if (item)
         {
@@ -781,7 +750,7 @@ void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result,
     }
 }
 
-QIcon PhotoStripWidget::cachedThumbnail(const QString &key)
+QIcon PhotoStripWidget::cachedThumbnail(const QString& key)
 {
     const auto cached = _thumbnailCache.constFind(key);
     if (cached == _thumbnailCache.cend())
@@ -793,7 +762,7 @@ QIcon PhotoStripWidget::cachedThumbnail(const QString &key)
     return cached.value();
 }
 
-void PhotoStripWidget::insertThumbnailCache(const QString &key, const QIcon &icon)
+void PhotoStripWidget::insertThumbnailCache(const QString& key, const QIcon& icon)
 {
     if (key.isEmpty() || icon.isNull())
     {
@@ -811,15 +780,15 @@ void PhotoStripWidget::insertThumbnailCache(const QString &key, const QIcon &ico
     }
 }
 
-void PhotoStripWidget::resetItemIcons(const QString &key)
+void PhotoStripWidget::resetItemIcons(const QString& key)
 {
     const QString path_key = key.section(QLatin1Char('\n'), 0, 0);
     if (thumbnailCacheKey(path_key) != key)
     {
         return;
     }
-    const QList<QListWidgetItem *> items = _itemsByPath.value(path_key);
-    for (QListWidgetItem *item : items)
+    const QList<QListWidgetItem*> items = _itemsByPath.value(path_key);
+    for (QListWidgetItem* item : items)
     {
         if (item)
         {
@@ -855,7 +824,7 @@ void PhotoStripWidget::advanceThumbnailGeneration(bool clearCache)
     }
 }
 
-QString PhotoStripWidget::resolveImagePath(const QString &imagePath) const
+QString PhotoStripWidget::resolveImagePath(const QString& imagePath) const
 {
     const QString path = QDir::cleanPath(imagePath.trimmed());
     if (path.isEmpty())
@@ -877,11 +846,10 @@ QString PhotoStripWidget::resolveImagePath(const QString &imagePath) const
     return absolutePath.isEmpty() ? path : QDir::cleanPath(absolutePath);
 }
 
-PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(
-    const QString &imagePath,
-    const QString &projectPath,
-    const QString &cacheKey,
-    const std::shared_ptr<std::atomic_bool> &cancellation)
+PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(const QString& imagePath,
+                                                                  const QString& projectPath,
+                                                                  const QString& cacheKey,
+                                                                  const std::shared_ptr<std::atomic_bool>& cancellation)
 {
     ThumbnailResult result;
     result.path = imagePath;
@@ -892,10 +860,10 @@ PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(
     }
     try
     {
-        result.image = xjw::gui::views::loadImageForDisplay(
-            imagePath, projectPath, QSize(ThumbWidth, ThumbHeight), nullptr);
+        result.image =
+            xjw::gui::views::loadImageForDisplay(imagePath, projectPath, QSize(ThumbWidth, ThumbHeight), nullptr);
     }
-    catch (const std::exception &exception)
+    catch (const std::exception& exception)
     {
         result.error = QString::fromUtf8(exception.what());
         return result;
@@ -906,8 +874,7 @@ PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(
         return result;
     }
 
-    if ((cancellation && cancellation->load(std::memory_order_relaxed))
-        || result.image.isNull())
+    if ((cancellation && cancellation->load(std::memory_order_relaxed)) || result.image.isNull())
     {
         return result;
     }
@@ -916,7 +883,7 @@ PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(
     return result;
 }
 
-QString PhotoStripWidget::normalizedPath(const QString &imagePath) const
+QString PhotoStripWidget::normalizedPath(const QString& imagePath) const
 {
     const QString path = resolveImagePath(imagePath);
     if (path.isEmpty())
@@ -929,7 +896,7 @@ QString PhotoStripWidget::normalizedPath(const QString &imagePath) const
     return absolutePath.isEmpty() ? path : QDir::cleanPath(absolutePath);
 }
 
-QString PhotoStripWidget::thumbnailCacheKey(const QString &imagePath) const
+QString PhotoStripWidget::thumbnailCacheKey(const QString& imagePath) const
 {
     const QString path = normalizedPath(imagePath);
     if (path.isEmpty())

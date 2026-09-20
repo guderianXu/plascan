@@ -128,8 +128,7 @@ bool qualityGateBlocksMvs(const QJsonObject &record)
 bool hasAbsoluteRpcGeometry(const QJsonObject &record)
 {
     const QJsonObject quality = qualityObjectFromRecord(record);
-    return quality.value(QStringLiteral("camera_model")).toString()
-                   .compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0 &&
+    return quality.value(QStringLiteral("camera_model")).toString() == QStringLiteral("rpc00b") &&
            quality.value(QStringLiteral("absolute_sensor_model")).toBool(false);
 }
 

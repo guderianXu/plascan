@@ -21,6 +21,7 @@
 #include <array>
 #include <exception>
 #include <numeric>
+#include <optional>
 #include <cstdio>
 #include <queue>
 #include <atomic>
@@ -73,7 +74,7 @@ namespace xjw
                 return hasSecond ? std::max(first, second) : first;
             }
 
-            bool projectWorldPoint(const FramePinholeCamera& camera,
+            bool projectWorldPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                    float worldX,
                                    float worldY,
                                    float worldZ,
@@ -92,7 +93,7 @@ namespace xjw
                 return true;
             }
 
-            bool unprojectPixel(const FramePinholeCamera& camera,
+            bool unprojectPixel(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                 float pixelX,
                                 float pixelY,
                                 float depth,
@@ -112,7 +113,10 @@ namespace xjw
                 return true;
             }
 
-            float positiveDepth(const FramePinholeCamera& camera, float worldX, float worldY, float worldZ)
+            float positiveDepth(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                float worldX,
+                                float worldY,
+                                float worldZ)
             {
                 const double world[3] = {worldX, worldY, worldZ};
                 double camera_point[3] = {0.0, 0.0, 0.0};
@@ -152,11 +156,11 @@ namespace xjw
                     }
                     if (!image.empty())
                     {
-                        const FramePinholeCamera& source_camera = m_frames[frameIdx].sourceCamera.isValid()
-                                                                      ? m_frames[frameIdx].sourceCamera
+                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera =
+                            m_frames[frameIdx].sourceCamera.isValid() ? m_frames[frameIdx].sourceCamera
                                                                       : m_frames[frameIdx].cameraModel;
                         cv::Mat prepared;
-                        FramePinholeCamera prepared_camera;
+                        xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
                         if (prepareMvsImage(image, source_camera, &prepared, &prepared_camera))
                         {
                             image = std::move(prepared);
@@ -354,7 +358,7 @@ namespace xjw
 
             for (int fi = 0; fi < NF; ++fi)
             {
-                const FramePinholeCamera& cam = frames[fi].cameraModel;
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = frames[fi].cameraModel;
                 FrameGeometry& g = geom[fi];
                 g.cameraModel = cam;
                 g.W = frames[fi].imgW;
@@ -389,7 +393,8 @@ namespace xjw
                               _config.localDepthGradientRadiusPixels,
                               g.localDepthGradientRadiusPixels);
                 }
-                const FramePinholeCamera::Intrinsics intrinsics = cam.intrinsics();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                    cam.intrinsics();
                 const std::array<double, 9> rotation = cam.worldToCameraRotation();
                 const std::array<double, 3> translation = cam.worldToCameraTranslation();
 
@@ -1750,6 +1755,56 @@ namespace xjw
                     *errorMsg = "输入帧为空";
                 }
                 return false;
+            }
+
+            std::optional<xjw::coordinate_system::CoordinateFrameId> commonFrame;
+            for (std::size_t frameIndex = 0; frameIndex < frames.size(); ++frameIndex)
+            {
+                const FusionFrameInput& frame = frames[frameIndex];
+                std::string cameraError;
+                if (!frame.cameraModel.isValid() || !frame.cameraModel.validateNumericalState(&cameraError))
+                {
+                    if (errorMsg)
+                    {
+                        *errorMsg = "帧 " + std::to_string(frameIndex) + " 的 cameraModel 数值状态非法" +
+                                    (cameraError.empty() ? std::string() : ": " + cameraError);
+                    }
+                    return false;
+                }
+                if (frame.sourceCamera.isValid())
+                {
+                    cameraError.clear();
+                    if (!frame.sourceCamera.validateNumericalState(&cameraError))
+                    {
+                        if (errorMsg)
+                        {
+                            *errorMsg = "帧 " + std::to_string(frameIndex) + " 的 sourceCamera 数值状态非法" +
+                                        (cameraError.empty() ? std::string() : ": " + cameraError);
+                        }
+                        return false;
+                    }
+                    if (frame.sourceCamera.worldFrame() != frame.cameraModel.worldFrame())
+                    {
+                        if (errorMsg)
+                        {
+                            *errorMsg = "帧 " + std::to_string(frameIndex) +
+                                        " 的 sourceCamera 与 cameraModel 混用 world frame";
+                        }
+                        return false;
+                    }
+                }
+                if (!commonFrame.has_value())
+                {
+                    commonFrame = frame.cameraModel.worldFrame();
+                }
+                else if (*commonFrame != frame.cameraModel.worldFrame())
+                {
+                    if (errorMsg)
+                    {
+                        *errorMsg = "融合帧相机集合混用 world frame；必须先显式归一化";
+                    }
+                    return false;
+                }
             }
 
             if (isFusionCancelled(_config))

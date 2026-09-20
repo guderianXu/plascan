@@ -274,6 +274,8 @@ namespace
             return QStringLiteral("OK");
         case xjw::core::project::BaInputBuildStatus::NotEnoughCameras:
             return QStringLiteral("项目中可用相机少于 2 台");
+        case xjw::core::project::BaInputBuildStatus::InvalidInput:
+            return QStringLiteral("BA 输入身份无效：%1").arg(input.firstControlInputError);
         case xjw::core::project::BaInputBuildStatus::NoTracks:
         default:
         {
@@ -292,6 +294,18 @@ namespace
                                   .arg(input.indexedObservationCount)
                                   .arg(input.multiViewTrackCount)
                                   .arg(diagnostics.rejectedByMinMatchesCount);
+            if (diagnostics.unsupportedCameraCount > 0)
+            {
+                message += QStringLiteral(" 不支持的相机 %1 台").arg(diagnostics.unsupportedCameraCount);
+            }
+            if (!diagnostics.firstInputError.isEmpty())
+            {
+                message += QStringLiteral(" 输入身份错误：%1").arg(diagnostics.firstInputError);
+            }
+            if (!diagnostics.firstCameraError.isEmpty())
+            {
+                message += QStringLiteral(" 首个相机错误：%1").arg(diagnostics.firstCameraError);
+            }
             if (!diagnostics.firstShardReadError.isEmpty())
             {
                 message += QStringLiteral(" 首个分片错误：%1").arg(diagnostics.firstShardReadError);
@@ -301,13 +315,15 @@ namespace
         }
     }
 
-    xjw::gui::BaServiceResult runOneBa(const std::vector<xjw::FramePinholeCamera>& cameras,
-                                       const std::vector<xjw::BATrack>& tracks,
-                                       const xjw::core::project::BaInputBuildResult& input,
-                                       xjw::gui::BaServiceOptions options)
+    xjw::gui::BaServiceResult runOneBa(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        const std::vector<xjw::BATrack>& tracks,
+        const xjw::core::project::BaInputBuildResult& input,
+        xjw::gui::BaServiceOptions options)
     {
         std::vector<xjw::BATrack> runTracks = tracks;
         options.imagePathByIndex = input.imagePathByIndex;
+        options.imageIdByIndex = input.imageIdByIndex;
         options.beforeCamMeta = input.beforeCamMeta;
         return xjw::gui::BundleAdjustService::run(cameras, runTracks, options);
     }
@@ -932,7 +948,9 @@ int main(int argc, char* argv[])
         }
 
         int updatedCameraCount = 0;
-        if (!dryRun && !projectSession.updateImageCameras(laser.pendingCamUpdates, &updatedCameraCount, &projectError))
+        if (!dryRun &&
+            !projectSession.updateCameraInstancesById(
+                laser.cameraInstanceUpdates, &updatedCameraCount, &projectError))
         {
             fatalQt(QStringLiteral("A/B BA 已完成，但相机写回失败: %1").arg(projectError), cli::EXIT_IO_ERR);
         }
@@ -977,7 +995,8 @@ int main(int argc, char* argv[])
                                                    outputDir,
                                                    result));
     int updatedCameraCount = 0;
-    if (!dryRun && !projectSession.updateImageCameras(result.pendingCamUpdates, &updatedCameraCount, &projectError))
+    if (!dryRun &&
+        !projectSession.updateCameraInstancesById(result.cameraInstanceUpdates, &updatedCameraCount, &projectError))
     {
         fatalQt(QStringLiteral("BA 已完成，但相机写回失败: %1").arg(projectError), cli::EXIT_IO_ERR);
     }

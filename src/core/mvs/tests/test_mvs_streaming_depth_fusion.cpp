@@ -94,11 +94,11 @@ namespace
                 frame.cameraModel.setIntrinsics(
                     20.0, 20.0, 4.0 + principal_offsets[static_cast<std::size_t>(index)], 4.0);
                 frame.cameraModel.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-                frame.cameraModel.setImageSize(xjw::CameraImageSize{kGridSize, kGridSize});
+                frame.cameraModel.setImageSize(xjw::camera_core::ImageSize{kGridSize, kGridSize});
                 frame.sourceCamera = frame.cameraModel.scaledIntrinsics(static_cast<double>(raster_scale),
                                                                         static_cast<double>(raster_scale));
                 frame.sourceCamera.setImageSize(
-                    xjw::CameraImageSize{kGridSize * raster_scale, kGridSize * raster_scale});
+                    xjw::camera_core::ImageSize{kGridSize * raster_scale, kGridSize * raster_scale});
                 frame.imgW = kGridSize;
                 frame.imgH = kGridSize;
                 frame.viewIndex = index;

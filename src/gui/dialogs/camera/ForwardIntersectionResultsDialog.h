@@ -3,15 +3,20 @@
 #include <QDialog>
 #include <QJsonArray>
 
-class ProjectManager;
 class QComboBox;
 class QTableWidget;
+
+namespace xjw::gui::project
+{
+class ProjectSession;
+}
 
 class ForwardIntersectionResultsDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ForwardIntersectionResultsDialog(ProjectManager *projectManager, QWidget *parent = nullptr);
+    explicit ForwardIntersectionResultsDialog(xjw::gui::project::ProjectSession *session,
+                                              QWidget *parent = nullptr);
     ~ForwardIntersectionResultsDialog() override;
 
 private slots:
@@ -25,7 +30,7 @@ private:
     void fillDetailTable(const QJsonObject &batchResult);
     QString makePairKey(const QJsonObject &result) const;
 
-    ProjectManager *_projectManager{};
+    xjw::gui::project::ProjectSession *_session{};
     QComboBox *_pairCombo{};
     QTableWidget *_table{};
     QTableWidget *_detailTable{};

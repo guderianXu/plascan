@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustService.h"
-#include "FramePinholeCamera.h"
+#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
+#include "camera/models/frame_pinhole/FramePinholeInstance.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -10,20 +13,72 @@
 
 #include <array>
 #include <fstream>
+#include <string>
 #include <vector>
 
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera()
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    {
+        static int nextId = 0;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{0.0, 0.0, 0.0}});
+        const std::string imageId = QStringLiteral("test-image-%1").arg(nextId++).toStdString();
+        EXPECT_TRUE(camera.bindIdentity(xjw::camera_core::CameraInstanceId("test-instance-" + imageId),
+                                        xjw::camera_core::ImageId(imageId),
+                                        xjw::coordinate_system::CoordinateFrameId("world")));
+        return camera;
+}
+
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeTypedCamera(const char* imageId, const char* frame)
 {
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    camera.setPose({{1.0, 0.0, 0.0,
-                     0.0, 1.0, 0.0,
-                     0.0, 0.0, 1.0}},
-                   {{0.0, 0.0, 0.0}});
-    return camera;
+    const xjw::coordinate_system::CoordinateFrameId frameId(frame);
+    const auto definition = xjw::camera_models::frame_pinhole::FramePinholeDefinition::create(
+        xjw::camera_core::CameraDefinitionId("definition"),
+        xjw::camera_models::frame_pinhole::Intrinsics{1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+        xjw::camera_models::frame_pinhole::Distortion{},
+        xjw::camera_models::frame_pinhole::PixelConvention::PixelCenter,
+        frameId);
+    const auto instance = xjw::camera_models::frame_pinhole::FramePinholeInstance::create(
+        xjw::camera_core::CameraInstanceId(std::string("instance-") + imageId),
+        xjw::camera_core::ImageId(imageId),
+        definition,
+        xjw::camera_core::ImageSize{1024, 768},
+        xjw::camera_core::Pose::create(
+            frameId,
+            {0.0, 0.0, 0.0},
+            xjw::camera_core::Rotation{{1.0, 0.0, 0.0,
+                                        0.0, 1.0, 0.0,
+                                        0.0, 0.0, 1.0}}));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState result;
+    EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &result));
+    return result;
+}
+
+xjw::camera_reference::ResolvedCameraPosePrior makePosePrior(const char *imageId, const char *frame)
+{
+    using namespace xjw::camera_reference;
+    const xjw::coordinate_system::CoordinateFrameId frameId(frame);
+    CameraReferenceObservation observation{
+        xjw::camera_core::ImageId(imageId),
+        xjw::camera_core::ReferenceSourceId("gnss"),
+        frameId};
+    ResolvedCameraReference resolved;
+    resolved.status = ReferenceResolutionStatus::Resolved;
+    resolved.targetFrame = frameId;
+    resolved.pose = xjw::camera_core::Pose::create(
+        frameId,
+        {0.0, 0.0, 0.0},
+        xjw::camera_core::Rotation{{1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0}});
+    resolved.transformProvenanceHash = "test-provenance";
+    resolved.transformHash = "test-transform";
+    const auto result = makeResolvedCameraPosePrior(observation, resolved);
+    EXPECT_TRUE(result.ok()) << result.reason;
+    return *result.prior;
 }
 
 xjw::BATrack makeTrack()
@@ -73,12 +128,47 @@ QString writeLaserHeightPly(const QString &dir)
 
 } // namespace
 
+TEST(BundleAdjustServiceCameraReferenceTest, AcceptsResolvedTypedPosePrior)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+        makeTypedCamera("image-0", "world"), makeTypedCamera("image-1", "world")};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.dryRun = true;
+    options.cameraReferencePosePriors.push_back(makePosePrior("image-1", "world"));
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+}
+
+TEST(BundleAdjustServiceCameraReferenceTest, RejectsResolvedPosePriorWithDifferentFrame)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+        makeTypedCamera("image-0", "world"), makeTypedCamera("image-1", "world")};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.dryRun = true;
+    options.cameraReferencePosePriors.push_back(makePosePrior("image-1", "ecef"));
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.errorMessage.indexOf(QStringLiteral("frame mismatch")), -1);
+}
+
 TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -112,7 +202,7 @@ TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUser
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -145,7 +235,7 @@ TEST(BundleAdjustServiceLidarTest, RunDerivesStatisticalWeightFromSigma)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -181,7 +271,7 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     tracks.front().observations[0].u += 1000.0;
     tracks.front().observations[1].u -= 1000.0;
@@ -203,7 +293,7 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     EXPECT_FALSE(result.success);
-    EXPECT_TRUE(result.pendingCamUpdates.isEmpty());
+    EXPECT_TRUE(result.cameraInstanceUpdates.empty());
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR 约束在求解或质量过滤后全部失效")));
     const QJsonObject summary =
         result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
@@ -216,7 +306,7 @@ TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplici
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -252,7 +342,7 @@ TEST(BundleAdjustServiceLidarTest, RunWritesControlPointConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::BAControlPointConstraint constraint;
@@ -293,7 +383,7 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{12.0, 0.0, 10.0}};
@@ -340,7 +430,7 @@ TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{2.0, 0.0, 10.0}};
@@ -388,7 +478,7 @@ TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -410,7 +500,7 @@ TEST(BundleAdjustServiceLidarTest, RunFailsWhenNoTrackCanAssociateWithLaserCloud
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));

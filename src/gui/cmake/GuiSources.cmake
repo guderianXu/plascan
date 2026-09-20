@@ -10,6 +10,7 @@ set(GUI_SOURCES
   config/settings/RecentProjectsManager.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
+  main_window/WindowControlsWidget.cpp
   main_window/MainWindowLayout.cpp
   main_window/MainWindowMenuBindings.cpp
   main_window/MainWindowProjectBindings.cpp
@@ -116,7 +117,12 @@ set(GUI_PROJECT_SOURCES
   config/settings/FileDialogStateManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
-  project/services/ProjectSessionFacade.cpp
+  project/services/ProjectLifecycleService.cpp
+  project/services/ProjectResourceCleanupCoordinator.cpp
+  project/services/ProjectResourceService.cpp
+  project/services/ProjectServiceContainer.cpp
+  project/services/ProjectSession.cpp
+  project/services/ProjectUiMessageAdapter.cpp
   project/services/ProjectTiePointResultService.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
@@ -136,14 +142,14 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
-  project/manager/ProjectLifecycleController.cpp
   project/manager/ProjectMaskInferenceAdapter.cpp
   project/manager/ProjectMaskWorkflowController.cpp
   project/manager/ProjectPointCloudWorkflowController.cpp
   project/manager/ProjectModelManager.cpp
-  project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectTerrainRpcProducts.cpp
   project/manager/ProjectCameraSetupManager.cpp
+  project/tasks/ProjectTaskOrchestrator.cpp
+  project/tasks/ProjectBundleAdjustController.cpp
 )

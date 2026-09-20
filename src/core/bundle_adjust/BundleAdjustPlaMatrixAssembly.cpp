@@ -122,7 +122,8 @@ namespace xjw::detail::plamatrix_ba
                   origin[2] + (direction[2] * inverse_updated_length) * options.referenceGaugeBaseline}});
         }
 
-        void applyReferenceCameraPoseStep(FramePinholeCamera* camera, const double* delta)
+        void applyReferenceCameraPoseStep(xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera,
+                                          const double* delta)
         {
             auto rotation = camera->cameraToWorldRotation();
             // 转到参考 type-4 矩阵约定 R*diag(1,-1,-1)。
@@ -324,15 +325,16 @@ namespace xjw::detail::plamatrix_ba
             }
         }
 
-        bool linearizeImageObservation(const std::vector<FramePinholeCamera>& input_cameras,
-                                       const BAOptions& options,
-                                       const ActiveProblem& active,
-                                       const OptimizationState& state,
-                                       std::size_t camera_index,
-                                       const std::array<double, 3>& point,
-                                       const BAObservation& observation,
-                                       int iteration,
-                                       ObservationLinearization* output)
+        bool linearizeImageObservation(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+            const BAOptions& options,
+            const ActiveProblem& active,
+            const OptimizationState& state,
+            std::size_t camera_index,
+            const std::array<double, 3>& point,
+            const BAObservation& observation,
+            int iteration,
+            ObservationLinearization* output)
         {
             constexpr double image_huber_delta = 0.0;
             const bool reference_point_parameterization = useReferencePointParameterization(options);
@@ -369,16 +371,17 @@ namespace xjw::detail::plamatrix_ba
     namespace
     {
 
-        double assembleTrackRange(const std::vector<FramePinholeCamera>& input_cameras,
-                                  const std::vector<BATrack>& tracks,
-                                  const BAOptions& options,
-                                  const ActiveProblem& active,
-                                  const OptimizationState& state,
-                                  int iteration,
-                                  std::size_t begin,
-                                  std::size_t end,
-                                  plamatrix::BlockNormalEquations<double>* equations,
-                                  int eliminated_block_offset)
+        double assembleTrackRange(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+            const std::vector<BATrack>& tracks,
+            const BAOptions& options,
+            const ActiveProblem& active,
+            const OptimizationState& state,
+            int iteration,
+            std::size_t begin,
+            std::size_t end,
+            plamatrix::BlockNormalEquations<double>* equations,
+            int eliminated_block_offset)
         {
             double cost = 0.0;
             for (std::size_t track_index = begin; track_index < end; ++track_index)
@@ -457,14 +460,15 @@ namespace xjw::detail::plamatrix_ba
             return cost;
         }
 
-        double assembleTrackResiduals(const std::vector<FramePinholeCamera>& input_cameras,
-                                      const std::vector<BATrack>& tracks,
-                                      const BAOptions& options,
-                                      const ActiveProblem& active,
-                                      const OptimizationState& state,
-                                      int iteration,
-                                      plamatrix::BlockNormalEquations<double>* equations,
-                                      NormalEquationAssemblyWorkspace* workspace)
+        double assembleTrackResiduals(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+            const std::vector<BATrack>& tracks,
+            const BAOptions& options,
+            const ActiveProblem& active,
+            const OptimizationState& state,
+            int iteration,
+            plamatrix::BlockNormalEquations<double>* equations,
+            NormalEquationAssemblyWorkspace* workspace)
         {
             const int requested_threads = options.numThreads > 0 ? options.numThreads : omp_get_max_threads();
             const int thread_count = std::min<int>(std::max(1, requested_threads), static_cast<int>(tracks.size()));
@@ -631,14 +635,15 @@ namespace xjw::detail::plamatrix_ba
             return std::accumulate(partial_costs->begin(), partial_costs->end(), 0.0);
         }
 
-        double assembleAll(const std::vector<FramePinholeCamera>& input_cameras,
-                           const std::vector<BATrack>& tracks,
-                           const BAOptions& options,
-                           const ActiveProblem& active,
-                           const OptimizationState& state,
-                           int iteration,
-                           plamatrix::BlockNormalEquations<double>* equations,
-                           NormalEquationAssemblyWorkspace* workspace)
+        double
+        assembleAll(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                    const std::vector<BATrack>& tracks,
+                    const BAOptions& options,
+                    const ActiveProblem& active,
+                    const OptimizationState& state,
+                    int iteration,
+                    plamatrix::BlockNormalEquations<double>* equations,
+                    NormalEquationAssemblyWorkspace* workspace)
         {
             return assembleTrackResiduals(
                        input_cameras, tracks, options, active, state, iteration, equations, workspace) +
@@ -648,10 +653,11 @@ namespace xjw::detail::plamatrix_ba
 
     } // namespace
 
-    OptimizationState initializeState(const std::vector<FramePinholeCamera>& cameras,
-                                      const std::vector<BATrack>& tracks,
-                                      const BAOptions& options,
-                                      const ActiveProblem& active)
+    OptimizationState
+    initializeState(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                    const std::vector<BATrack>& tracks,
+                    const BAOptions& options,
+                    const ActiveProblem& active)
     {
         OptimizationState state;
         state.cameras = cameras;
@@ -677,14 +683,15 @@ namespace xjw::detail::plamatrix_ba
     {
     }
 
-    void buildNormalEquations(const std::vector<FramePinholeCamera>& input_cameras,
-                              const std::vector<BATrack>& tracks,
-                              const BAOptions& options,
-                              const ActiveProblem& active,
-                              const OptimizationState& state,
-                              int iteration,
-                              NormalEquationAssemblyWorkspace* workspace,
-                              double* objective_cost)
+    void
+    buildNormalEquations(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                         const std::vector<BATrack>& tracks,
+                         const BAOptions& options,
+                         const ActiveProblem& active,
+                         const OptimizationState& state,
+                         int iteration,
+                         NormalEquationAssemblyWorkspace* workspace,
+                         double* objective_cost)
     {
         if (!workspace)
         {
@@ -699,12 +706,13 @@ namespace xjw::detail::plamatrix_ba
         }
     }
 
-    double evaluateObjective(const std::vector<FramePinholeCamera>& input_cameras,
-                             const std::vector<BATrack>& tracks,
-                             const BAOptions& options,
-                             const ActiveProblem& active,
-                             const OptimizationState& state,
-                             int iteration)
+    double
+    evaluateObjective(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+                      const std::vector<BATrack>& tracks,
+                      const BAOptions& options,
+                      const ActiveProblem& active,
+                      const OptimizationState& state,
+                      int iteration)
     {
         return assembleAll(input_cameras, tracks, options, active, state, iteration, nullptr, nullptr);
     }

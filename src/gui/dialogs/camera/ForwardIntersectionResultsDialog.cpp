@@ -1,6 +1,6 @@
 #include "camera/ForwardIntersectionResultsDialog.h"
 
-#include "ProjectManager.h"
+#include "project/services/ProjectSession.h"
 #include "ui_ForwardIntersectionResultsDialog.h"
 
 #include <QComboBox>
@@ -34,9 +34,10 @@ QString formatArrayNumber(const QJsonArray &values, int index)
 
 }
 
-ForwardIntersectionResultsDialog::ForwardIntersectionResultsDialog(ProjectManager *projectManager, QWidget *parent)
+ForwardIntersectionResultsDialog::ForwardIntersectionResultsDialog(xjw::gui::project::ProjectSession *session,
+                                                                   QWidget *parent)
     : QDialog(parent)
-    , _projectManager(projectManager)
+    , _session(session)
 {
     setWindowTitle(tr("前方交汇结果查看"));
     resize(980, 700);
@@ -74,11 +75,11 @@ void ForwardIntersectionResultsDialog::loadResults()
     _table->setRowCount(0);
     _detailTable->setRowCount(0);
 
-    if (!_projectManager)
+    if (!_session)
     {
         return;
     }
-    _allResults = _projectManager->intersectionResults();
+    _allResults = _session->intersectionResults();
 
     QSet<QString> pairSet;
     for (const QJsonValue &v : _allResults)

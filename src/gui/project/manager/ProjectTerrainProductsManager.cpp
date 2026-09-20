@@ -1,16 +1,16 @@
 #include "ProjectTerrainProductsManager.h"
 
-#include "ProjectManager.h"
-#include "project/ProjectSessionModel.h"
+#include "project/services/ProjectSession.h"
+#include "project/services/ProjectUiMessageAdapter.h"
 #include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowOperations.h"
-#include "ProjectOpenGuard.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "DemDomIO.h"
 #include "TerrainPipeline.h"
+#include "GlobalTerrainReportRenderer.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -18,7 +18,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QMessageBox>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -29,12 +28,10 @@
 
 using xjw::gui::project::makeDemResultRecord;
 using xjw::gui::project::makeOrthoResultRecord;
-using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::resolveProjectOutputDir;
 using xjw::core::project::runDemProducts;
 using xjw::core::project::runOrthoProduct;
 using xjw::core::project::TerrainPipelineResult;
-using xjw::gui::project::upsertMetaArrayRecordByPath;
 
 namespace
 {
@@ -274,9 +271,14 @@ TerrainPipelineResult runSmallBodyGlobalProducts(
         QFile::remove(projectReportPath);
         QDir(outputDir).removeRecursively();
     };
-    result.ok = xjw::TerrainPipeline::generateSmallBodyGlobalProducts(
-        surfacePath, outputDir, options, &result.payload, &result.error,
-        cancelFlag, progressCallback);
+    result.ok = xjw::TerrainPipeline::generateSmallBodyGlobalProducts(surfacePath,
+                                                                      outputDir,
+                                                                      options,
+                                                                      &result.payload,
+                                                                      &result.error,
+                                                                      cancelFlag,
+                                                                      progressCallback,
+                                                                      xjw::GlobalTerrainReportRenderer::writePreview);
     if (!result.ok)
     {
         rollback_run();
@@ -317,109 +319,120 @@ TerrainPipelineResult runSmallBodyGlobalProducts(
 } // namespace
 
 
-ProjectTerrainProductsManager::ProjectTerrainProductsManager(ProjectManager *owner,
-                                                             ProjectData *projectData,
-                                                             QWidget *parentWidget,
-                                                             QObject *parent)
-    : QObject(parent)
-    , _owner(owner)
-    , _projectData(projectData)
-    , _parentWidget(parentWidget)
+ProjectTerrainProductsManager::ProjectTerrainProductsManager(
+    xjw::gui::project::ProjectSession *session,
+    ProjectUiMessageAdapter *messages,
+    QObject *parent)
+    : QObject(parent), _session(session), _messages(messages)
 {
-    if (_owner)
+}
+
+ProjectTerrainProductsManager::~ProjectTerrainProductsManager()
+{
+    waitForActiveTask();
+}
+
+bool ProjectTerrainProductsManager::demContextMatches(
+    const xjw::gui::project::ProjectTaskContext &taskContext,
+    bool requireCurrent) const
+{
+    return taskContext.cancelFlag && _demContext.taskId == taskContext.taskId &&
+           _demContext.cancelFlag == taskContext.cancelFlag &&
+           (!requireCurrent || (_session && _session->isCurrent(taskContext.session)));
+}
+
+bool ProjectTerrainProductsManager::orthoContextMatches(
+    const xjw::gui::project::ProjectTaskContext &taskContext,
+    bool requireCurrent) const
+{
+    return taskContext.cancelFlag && _orthoContext.taskId == taskContext.taskId &&
+           _orthoContext.cancelFlag == taskContext.cancelFlag &&
+           (!requireCurrent || (_session && _session->isCurrent(taskContext.session)));
+}
+
+void ProjectTerrainProductsManager::clearDemContextIfMatches(
+    const xjw::gui::project::ProjectTaskContext &taskContext)
+{
+    if (demContextMatches(taskContext, false))
     {
-        connect(_owner, &ProjectManager::projectSessionChanged, this,
-                [this]()
-                {
-                    cancelDemGeneration();
-                    cancelMapProject();
-                });
+        _demContext = {};
     }
-    if (_projectData)
+}
+
+void ProjectTerrainProductsManager::clearOrthoContextIfMatches(
+    const xjw::gui::project::ProjectTaskContext &taskContext)
+{
+    if (orthoContextMatches(taskContext, false))
     {
-        connect(_projectData, &ProjectData::projectClosed, this,
-                [this]()
-                {
-                    cancelDemGeneration();
-                    cancelMapProject();
-                });
-        connect(_projectData, &ProjectData::activeChunkChanged, this,
-                [this](const QString &chunkId, const QString &, int)
-                {
-                    if (_demCancelFlag && chunkId != _demTaskChunkId)
-                    {
-                        cancelDemGeneration();
-                    }
-                    if (_orthoCancelFlag && chunkId != _orthoTaskChunkId)
-                    {
-                        cancelMapProject();
-                    }
-                });
+        _orthoContext = {};
     }
 }
 
 void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
-    const xjw::gui::project::DemGenerationRequest &request)
+    const xjw::gui::project::DemGenerationRequest &request,
+    const xjw::gui::project::ProjectTaskContext &taskContext)
 {
-    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
+    _demContext = taskContext;
+    if (!_session || !_session->hasProject() || !_session->isCurrent(taskContext.session) ||
+        !taskContext.cancelFlag || taskContext.cancelFlag->load(std::memory_order_relaxed))
     {
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("提示"), QStringLiteral("请先打开项目"));
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, QStringLiteral("请先打开项目。"));
-        return;
-    }
-
-    if (!_demTaskId.isEmpty())
-    {
-        const QString message = QStringLiteral(
-            "已有 DEM/DOM 任务正在运行，请等待其完成后再启动新任务。");
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建 DEM/DOM"), message);
-        emit demPipelineFinished(false, message);
         return;
     }
 
     QString requestError;
     if (!request.validate(&requestError))
     {
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建 DEM"), requestError);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建 DEM"), requestError);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, requestError);
         return;
     }
 
     if (request.isSmallBodyGlobal())
     {
-        startSmallBodyGlobalAsync(request);
+        startSmallBodyGlobalAsync(request, taskContext);
         return;
     }
     if (request.isImageStereo())
     {
-        startRpcStereoDemAsync(request);
+        startRpcStereoDemAsync(request, taskContext);
         return;
     }
 
     const QString pointCloudPath = request.sourcePointCloudPath.trimmed();
     if (!QFileInfo::exists(pointCloudPath))
     {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("创建 DEM"),
-                             QStringLiteral("指定的点云文件不存在：\n%1").arg(pointCloudPath));
+        if (_messages)
+        {
+            _messages->warning(nullptr,
+                               QStringLiteral("创建 DEM"),
+                               QStringLiteral("指定的点云文件不存在：\n%1").arg(pointCloudPath));
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, QStringLiteral("点云文件不存在"));
         return;
     }
 
-    const QString background_task_id = QStringLiteral("dem:%1").arg(
-        QUuid::createUuid().toString(QUuid::WithoutBraces));
-    QString outDir = resolveProjectOutputDir(_owner->currentProjectPath(),
+    const QString background_task_id = taskContext.taskId;
+    QString outDir = resolveProjectOutputDir(taskContext.session.projectPath,
                                              request.outputDirectory.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
 
-    const auto session = _owner->currentSessionContext();
     const double demResolution = request.resolution;
     const QString demType = request.dataType;
-    _demTaskId = background_task_id;
-    _demTaskChunkId = session.chunkId;
     emit backgroundTaskProgressChanged(background_task_id, 5, 100);
     emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
 
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [pointCloudPath, outDir, demResolution, demType]()
         {
@@ -429,21 +442,24 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
                                   demType,
                                   false);
         },
-        [pointCloudPath, outDir, demResolution, demType, session, background_task_id](
+        [pointCloudPath, outDir, demResolution, demType, taskContext, background_task_id](
             ProjectTerrainProductsManager *self,
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome)
         {
-            emit self->backgroundTaskFinished(background_task_id);
-            if (self->_demTaskId != background_task_id)
+            if (!self->demContextMatches(taskContext, false))
             {
                 return;
             }
-            self->_demTaskId.clear();
-            self->_demTaskChunkId.clear();
-            if (!self->_owner ||
-                !self->_projectData ||
-                !self->_owner->isCurrentSession(session))
+            if (!self->_session || !self->_session->isCurrent(taskContext.session))
             {
+                self->clearDemContextIfMatches(taskContext);
+                return;
+            }
+            emit self->backgroundTaskFinished(background_task_id);
+            if (taskContext.cancelFlag->load(std::memory_order_relaxed))
+            {
+                self->clearDemContextIfMatches(taskContext);
+                emit self->demPipelineFinished(false, QStringLiteral("DEM 生成已取消"));
                 return;
             }
 
@@ -452,9 +468,13 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
                 const QString error = outcome.errorMessage.isEmpty()
                     ? QStringLiteral("DEM 后台任务失败")
                     : outcome.errorMessage;
-                QMessageBox::warning(self->_parentWidget,
-                                     QStringLiteral("创建相对 DEM"),
-                                     QStringLiteral("处理失败：%1").arg(error));
+                if (self->_messages)
+                {
+                    self->_messages->warning(nullptr,
+                                             QStringLiteral("创建相对 DEM"),
+                                             QStringLiteral("处理失败：%1").arg(error));
+                }
+                self->clearDemContextIfMatches(taskContext);
                 emit self->demPipelineFinished(false, error);
                 return;
             }
@@ -462,14 +482,17 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
             const TerrainPipelineResult terrainRun = std::move(*outcome.value);
             if (!terrainRun.ok)
             {
-                QMessageBox::warning(self->_parentWidget,
-                                     QStringLiteral("创建相对 DEM"),
-                                     QStringLiteral("处理失败：%1").arg(terrainRun.error));
+                if (self->_messages)
+                {
+                    self->_messages->warning(nullptr,
+                                             QStringLiteral("创建相对 DEM"),
+                                             QStringLiteral("处理失败：%1").arg(terrainRun.error));
+                }
+                self->clearDemContextIfMatches(taskContext);
                 emit self->demPipelineFinished(false, terrainRun.error);
                 return;
             }
 
-            QJsonObject meta = self->_projectData->metadata();
             const QJsonObject terrainResult = terrainRun.payload;
             QJsonObject demResult = makeDemResultRecord(terrainResult.value(QStringLiteral("created_at")).toString(),
                                                         outDir,
@@ -484,39 +507,49 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
             demResult[QStringLiteral("preview_path")] = terrainResult.value(QStringLiteral("preview_path")).toString();
             demResult[QStringLiteral("relative_z_offset")] =
                 terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-            upsertMetaArrayRecordByPath(&meta, QStringLiteral("dem_results"), QStringLiteral("dem_path"), demResult);
-
-            persistProjectMeta(self->_projectData, meta, true);
-            self->_owner->refreshReconstructionQualityReport();
+            QString persistence_error;
+            if (!self->_session->upsertResultRecordByPath(taskContext.session,
+                                                          QStringLiteral("dem_results"),
+                                                          QStringLiteral("dem_path"),
+                                                          demResult,
+                                                          true,
+                                                          &persistence_error))
+            {
+                self->clearDemContextIfMatches(taskContext);
+                emit self->demPipelineFinished(false, persistence_error);
+                return;
+            }
+            if (!self->demContextMatches(taskContext) ||
+                taskContext.cancelFlag->load(std::memory_order_relaxed))
+            {
+                self->clearDemContextIfMatches(taskContext);
+                return;
+            }
 
             emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+            self->clearDemContextIfMatches(taskContext);
             emit self->demPipelineFinished(true, QStringLiteral("DEM 生成完成"));
-            QMessageBox::information(
-                self->_parentWidget,
-                QStringLiteral("创建相对 DEM"),
-                QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
-                    .arg(terrainResult.value(QStringLiteral("dem_path")).toString())
-                    .arg(terrainResult.value(QStringLiteral("preview_path")).toString())
-                    .arg(pointCloudPath)
-                    .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
-        });
+            if (self->_messages)
+            {
+                self->_messages->information(
+                    nullptr,
+                    QStringLiteral("创建相对 DEM"),
+                    QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
+                        .arg(terrainResult.value(QStringLiteral("dem_path")).toString())
+                        .arg(terrainResult.value(QStringLiteral("preview_path")).toString())
+                        .arg(pointCloudPath)
+                        .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+            }
+        }));
 }
 
 void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
-    const xjw::gui::project::DemGenerationRequest &request)
+    const xjw::gui::project::DemGenerationRequest &request,
+    const xjw::gui::project::ProjectTaskContext &taskContext)
 {
-    if (!_demTaskId.isEmpty())
-    {
-        const QString message = QStringLiteral("已有小天体全球 DEM/DOM 任务正在运行，请等待其完成。");
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
-        emit demPipelineFinished(false, message);
-        return;
-    }
-
-    const auto session = _owner->currentSessionContext();
     const QString surface_path =
         xjw::common::project::ProjectIO::resolveProjectResourcePath(
-            session.projectPath, request.sourceSurfacePath.trimmed());
+            taskContext.session.projectPath, request.sourceSurfacePath.trimmed());
     const QFileInfo surface_info(surface_path);
     if (surface_path.isEmpty() || !surface_info.exists() || !surface_info.isFile())
     {
@@ -524,7 +557,11 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
                                     .arg(surface_path.isEmpty()
                                              ? request.sourceSurfacePath
                                              : surface_path);
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), message);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
@@ -534,23 +571,31 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
     {
         const QString message = QStringLiteral("全球 DEM/DOM 输入必须是 PLY 或 OBJ 三角网格：\n%1")
                                     .arg(surface_path);
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), message);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
 
     const QString output_root = resolveProjectOutputDir(
-        session.projectPath,
+        taskContext.session.projectPath,
         request.outputDirectory.trimmed(),
         QStringLiteral("assets/dem/small_body_global"));
     if (output_root.isEmpty())
     {
         const QString message = QStringLiteral("无法解析全球 DEM/DOM 输出根目录。");
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), message);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
-    const QString chunk_component = safeStorageComponent(session.chunkId);
+    const QString chunk_component = safeStorageComponent(taskContext.session.chunkId);
     const QString run_component = QStringLiteral("%1_%2")
         .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")),
              QUuid::createUuid().toString(QUuid::WithoutBraces));
@@ -560,17 +605,25 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
     {
         const QString message = QStringLiteral("无法创建全球 DEM/DOM 输出目录：%1")
                                     .arg(output_dir);
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), message);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
 
     const QString assets_dir =
-        xjw::common::project::ProjectIO::projectAssetsDir(session.projectPath);
+        xjw::common::project::ProjectIO::projectAssetsDir(taskContext.session.projectPath);
     if (assets_dir.isEmpty())
     {
         const QString message = QStringLiteral("无法解析当前项目的 assets 目录。");
-        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), message);
+        }
+        clearDemContextIfMatches(taskContext);
         emit demPipelineFinished(false, message);
         return;
     }
@@ -579,19 +632,15 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
             .arg(chunk_component, run_component));
     const QString project_root = QFileInfo(assets_dir).absolutePath();
 
-    const auto cancel_flag = std::make_shared<std::atomic_bool>(false);
-    const QString background_task_id = QStringLiteral("dem-global:%1").arg(
-        QUuid::createUuid().toString(QUuid::WithoutBraces));
-    _demCancelFlag = cancel_flag;
-    _demTaskId = background_task_id;
-    _demTaskChunkId = session.chunkId;
+    const auto cancel_flag = taskContext.cancelFlag;
+    const QString background_task_id = taskContext.taskId;
 
     emit backgroundTaskProgressChanged(background_task_id, 0, 100);
     emit demPipelineProgressChanged(QStringLiteral("准备小天体全球 DEM/DOM"), 0);
 
     QPointer<ProjectTerrainProductsManager> self(this);
     const auto progress_callback =
-        [self, cancel_flag, session, background_task_id](
+        [self, cancel_flag, taskContext, background_task_id](
             const xjw::SmallBodyGlobalProgress &progress)
     {
         if (!self)
@@ -602,13 +651,10 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
         const int percent = progress.overallPercent;
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancel_flag, session, stage, percent, background_task_id]()
+            [self, cancel_flag, taskContext, stage, percent, background_task_id]()
             {
-                if (!self
-                    || self->_demCancelFlag != cancel_flag
-                    || !self->_owner
-                    || !self->_projectData
-                    || !self->_owner->isCurrentSession(session))
+                if (!self || !self->demContextMatches(taskContext) ||
+                    cancel_flag->load(std::memory_order_relaxed))
                 {
                     return;
                 }
@@ -633,7 +679,7 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
     options.centralMeridianDeg = request.smallBodyOptions.centralMeridianDeg;
     options.maximumPixelCount = request.smallBodyOptions.maximumPixelCount;
     options.writeReportPreview = request.smallBodyOptions.writeReportPreview;
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [surface_path,
          output_dir,
@@ -657,39 +703,29 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
          project_report_path,
          project_root,
          options,
-         session,
+         taskContext,
          cancel_flag,
          background_task_id](
             ProjectTerrainProductsManager *manager,
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome)
         {
-            emit manager->backgroundTaskFinished(background_task_id);
             const auto rollback_generated_run = [&]()
             {
                 QFile::remove(project_report_path);
                 QDir(output_dir).removeRecursively();
             };
-            if (manager->_demTaskId != background_task_id)
+            if (!manager->demContextMatches(taskContext, false))
             {
                 rollback_generated_run();
                 return;
             }
-            manager->_demTaskId.clear();
-            if (manager->_demCancelFlag == cancel_flag)
+            if (!manager->_session || !manager->_session->isCurrent(taskContext.session))
             {
-                manager->_demCancelFlag.reset();
-                manager->_demTaskChunkId.clear();
-            }
-
-            if (!manager->_owner
-                || !manager->_projectData
-                || !manager->_owner->isCurrentSession(session))
-            {
+                manager->clearDemContextIfMatches(taskContext);
                 rollback_generated_run();
-                emit manager->demPipelineFinished(
-                    false, QStringLiteral("项目已切换，全球 DEM/DOM 结果未写入当前项目。"));
                 return;
             }
+            emit manager->backgroundTaskFinished(background_task_id);
 
             if (!outcome.succeeded())
             {
@@ -697,10 +733,13 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
                 const QString error = outcome.errorMessage.isEmpty()
                     ? QStringLiteral("小天体全球 DEM/DOM 后台任务失败。")
                     : outcome.errorMessage;
-                QMessageBox::warning(
-                    manager->_parentWidget,
-                    QStringLiteral("创建全球 DEM/DOM"),
-                    QStringLiteral("处理失败：%1").arg(error));
+                if (manager->_messages)
+                {
+                    manager->_messages->warning(nullptr,
+                                                QStringLiteral("创建全球 DEM/DOM"),
+                                                QStringLiteral("处理失败：%1").arg(error));
+                }
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, error);
                 return;
             }
@@ -710,6 +749,7 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
             {
                 rollback_generated_run();
                 const QString error = QStringLiteral("小天体全球 DEM/DOM 生成已取消。");
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, error);
                 return;
             }
@@ -722,12 +762,15 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
                     : terrain_run.error;
                 if (!cancelled)
                 {
-                    QMessageBox::warning(
-                        manager->_parentWidget,
-                        QStringLiteral("创建全球 DEM/DOM"),
-                        QStringLiteral("处理失败：%1").arg(error));
+                    if (manager->_messages)
+                    {
+                        manager->_messages->warning(nullptr,
+                                                    QStringLiteral("创建全球 DEM/DOM"),
+                                                    QStringLiteral("处理失败：%1").arg(error));
+                    }
                 }
                 rollback_generated_run();
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, error);
                 return;
             }
@@ -770,10 +813,11 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
                     rollback_generated_run();
                     const QString error = QStringLiteral(
                         "全球 DEM/DOM 管线返回成功，但必要产物不存在：%1").arg(path);
-                    QMessageBox::warning(
-                        manager->_parentWidget,
-                        QStringLiteral("创建全球 DEM/DOM"),
-                        error);
+                    if (manager->_messages)
+                    {
+                        manager->_messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), error);
+                    }
+                    manager->clearDemContextIfMatches(taskContext);
                     emit manager->demPipelineFinished(false, error);
                     return;
                 }
@@ -914,65 +958,89 @@ void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
             report_record[QStringLiteral("elevation_dem_tif")] = elevation_dem_storage;
             report_record[QStringLiteral("dom_tif")] = dom_storage;
 
-            const bool records_saved =
-                manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), radial_record, true) &&
-                manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("dem_results"), QStringLiteral("dem_path"), elevation_record, true) &&
-                manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("ortho_results"), QStringLiteral("output_path"), dom_record, true) &&
-                manager->_projectData->upsertResultRecordByPath(
-                    QStringLiteral("report_results"), QStringLiteral("path"), report_record, true);
+            if (!manager->demContextMatches(taskContext) ||
+                cancel_flag->load(std::memory_order_relaxed))
+            {
+                rollback_generated_run();
+                manager->clearDemContextIfMatches(taskContext);
+                emit manager->demPipelineFinished(
+                    false, QStringLiteral("小天体全球 DEM/DOM 生成已取消。"));
+                return;
+            }
+            const QVector<xjw::gui::project::ProjectResultRecordUpsert> records{
+                {QStringLiteral("dem_results"), QStringLiteral("dem_path"), radial_record, true},
+                {QStringLiteral("dem_results"), QStringLiteral("dem_path"), elevation_record, true},
+                {QStringLiteral("ortho_results"), QStringLiteral("output_path"), dom_record, true},
+                {QStringLiteral("report_results"), QStringLiteral("path"), report_record, true},
+            };
+            QString persistence_error;
+            const bool records_saved = manager->_session->upsertResultRecordsByPath(
+                taskContext.session, records, &persistence_error);
             if (!records_saved)
             {
                 const QString error = QStringLiteral(
-                    "全球 DEM/DOM 已生成，但写入当前 Chunk 的项目成果记录失败。");
-                QMessageBox::warning(
-                    manager->_parentWidget, QStringLiteral("创建全球 DEM/DOM"), error);
+                    "全球 DEM/DOM 已生成，但写入当前 Chunk 的项目成果记录失败。%1")
+                                          .arg(persistence_error.isEmpty()
+                                                   ? QString()
+                                                   : QStringLiteral("\n%1").arg(persistence_error));
+                if (manager->_messages)
+                {
+                    manager->_messages->warning(nullptr, QStringLiteral("创建全球 DEM/DOM"), error);
+                }
+                manager->clearDemContextIfMatches(taskContext);
                 emit manager->demPipelineFinished(false, error);
                 return;
             }
-            manager->_owner->refreshReconstructionQualityReport();
+            if (!manager->demContextMatches(taskContext) ||
+                cancel_flag->load(std::memory_order_relaxed))
+            {
+                manager->clearDemContextIfMatches(taskContext);
+                emit manager->demPipelineFinished(
+                    false, QStringLiteral("小天体全球 DEM/DOM 生成已取消。"));
+                return;
+            }
 
             emit manager->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+            manager->clearDemContextIfMatches(taskContext);
             emit manager->demPipelineFinished(
                 true, QStringLiteral("小天体全球 DEM/DOM 生成完成"));
-            QMessageBox::information(
-                manager->_parentWidget,
-                QStringLiteral("创建全球 DEM/DOM"),
-                QStringLiteral(
-                    "处理完成。\n径向 DEM: %1\n高程 DEM: %2\nDOM: %3\n报告: %4\n固体角加权覆盖率: %5%")
-                    .arg(radial_dem_path,
-                         elevation_dem_path,
-                         dom_path,
-                         project_report_path)
-                    .arg(solid_angle_coverage.toDouble() * 100.0,
-                         0,
-                         'f',
-                         2));
-        });
+            if (manager->_messages)
+            {
+                manager->_messages->information(
+                    nullptr,
+                    QStringLiteral("创建全球 DEM/DOM"),
+                    QStringLiteral(
+                        "处理完成。\n径向 DEM: %1\n高程 DEM: %2\nDOM: %3\n报告: %4\n固体角加权覆盖率: %5%")
+                        .arg(radial_dem_path,
+                             elevation_dem_path,
+                             dom_path,
+                             project_report_path)
+                        .arg(solid_angle_coverage.toDouble() * 100.0,
+                             0,
+                             'f',
+                             2));
+            }
+        }));
 }
 
 void ProjectTerrainProductsManager::startMapProjectAsync(
-    const xjw::gui::project::OrthoGenerationRequest &request)
+    const xjw::gui::project::OrthoGenerationRequest &request,
+    const xjw::gui::project::ProjectTaskContext &taskContext)
 {
-    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
+    _orthoContext = taskContext;
+    if (!_session || !_session->hasProject() || !_session->isCurrent(taskContext.session) ||
+        !taskContext.cancelFlag || taskContext.cancelFlag->load(std::memory_order_relaxed))
     {
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("提示"), QStringLiteral("请先打开项目"));
+        }
+        clearOrthoContextIfMatches(taskContext);
         emit orthoPipelineFinished(false, QStringLiteral("请先打开项目"), QJsonObject());
         return;
     }
 
-    if (_orthoCancelFlag)
-    {
-        emit orthoPipelineFinished(
-            false,
-            QStringLiteral("已有正射影像生成任务正在运行，请等待其完成或取消"),
-            QJsonObject());
-        return;
-    }
-
-    const auto session = _owner->currentSessionContext();
-    const QString projectPath = session.projectPath;
+    const QString projectPath = taskContext.session.projectPath;
     const QString projectRoot =
         xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath);
     const auto resolveProjectPath = [&projectPath](const QString &path)
@@ -992,11 +1060,11 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
     if (request.isRpc())
     {
-        startRpcDomAsync(request);
+        startRpcDomAsync(request, taskContext);
         return;
     }
 
-    QJsonObject meta = _projectData->metadata();
+    QJsonObject meta = _session->metadata();
     const bool pointCloudMode =
         request.options.surfaceType == xjw::OrthoSurfaceType::PointCloud;
     QString resolvedDem =
@@ -1098,7 +1166,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
     if (sourceImages.isEmpty() && !pointCloudMode)
     {
-        sourceImages = _owner->getAllImages();
+        sourceImages = _session->allImages();
         for (QString &imagePath : sourceImages)
         {
             imagePath = resolveProjectPath(imagePath);
@@ -1217,11 +1285,8 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
     runtimeMeta[QStringLiteral("dem_results")] = runtimeDemResults;
 
-    const auto cancelFlag = std::make_shared<std::atomic_bool>(false);
-    const QString background_task_id = QStringLiteral("ortho:%1").arg(
-        QUuid::createUuid().toString(QUuid::WithoutBraces));
-    _orthoCancelFlag = cancelFlag;
-    _orthoTaskChunkId = session.chunkId;
+    const auto cancelFlag = taskContext.cancelFlag;
+    const QString background_task_id = taskContext.taskId;
 
     emit backgroundTaskProgressChanged(background_task_id, 0, 100);
     emit orthoPipelineStarted();
@@ -1229,7 +1294,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
 
     QPointer<ProjectTerrainProductsManager> self(this);
     const auto progressCallback =
-        [self, cancelFlag, session, background_task_id](
+        [self, cancelFlag, taskContext, background_task_id](
             const QString &stage, int percent)
     {
         if (!self)
@@ -1239,13 +1304,10 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
 
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancelFlag, session, stage, percent, background_task_id]()
+            [self, cancelFlag, taskContext, stage, percent, background_task_id]()
             {
-                if (!self ||
-                    self->_orthoCancelFlag != cancelFlag ||
-                    !self->_owner ||
-                    !self->_projectData ||
-                    !self->_owner->isCurrentSession(session))
+                if (!self || !self->orthoContextMatches(taskContext) ||
+                    cancelFlag->load(std::memory_order_relaxed))
                 {
                     return;
                 }
@@ -1279,38 +1341,32 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                           resolvedSettings,
                           matchedDemRecord,
                           pointCloudMode,
-                          session,
+                          taskContext,
                           cancelFlag,
                           background_task_id](
                               ProjectTerrainProductsManager *manager,
                               xjw::core::project::TerrainPipelineResult orthoRun)
     {
-        emit manager->backgroundTaskFinished(background_task_id);
-        if (manager->_orthoCancelFlag == cancelFlag)
+        if (!manager->orthoContextMatches(taskContext, false))
         {
-            manager->_orthoCancelFlag.reset();
-            manager->_orthoTaskChunkId.clear();
+            return;
         }
+        if (!manager->_session || !manager->_session->isCurrent(taskContext.session))
+        {
+            manager->clearOrthoContextIfMatches(taskContext);
+            return;
+        }
+        emit manager->backgroundTaskFinished(background_task_id);
 
         const bool cancelled =
-            !orthoRun.ok
-            && orthoRun.error.contains(QStringLiteral("已取消"));
+            cancelFlag->load(std::memory_order_relaxed) ||
+            (!orthoRun.ok && orthoRun.error.contains(QStringLiteral("已取消")));
         if (cancelled)
         {
+            manager->clearOrthoContextIfMatches(taskContext);
             emit manager->orthoPipelineFinished(
                 false,
                 QStringLiteral("正射影像生成已取消"),
-                orthoRun.payload);
-            return;
-        }
-
-        if (!manager->_owner ||
-            !manager->_projectData ||
-            !manager->_owner->isCurrentSession(session))
-        {
-            emit manager->orthoPipelineFinished(
-                false,
-                QStringLiteral("项目已切换，正射影像结果未写入当前项目"),
                 orthoRun.payload);
             return;
         }
@@ -1320,6 +1376,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             const QString error = orthoRun.error.trimmed().isEmpty()
                 ? QStringLiteral("正射影像生成遇到未知错误，请检查控制台。")
                 : orthoRun.error;
+            manager->clearOrthoContextIfMatches(taskContext);
             emit manager->orthoPipelineFinished(false, error, orthoRun.payload);
             return;
         }
@@ -1353,20 +1410,30 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             record[QStringLiteral("dem_reference")] =
                 matchedDemRecord.value(QStringLiteral("dem_reference")).toString();
         }
-        if (!manager->_projectData->upsertResultRecordByPath(
-                QStringLiteral("ortho_results"),
-                QStringLiteral("output_path"),
-                record,
-                true))
+        QString persistence_error;
+        if (!manager->_session->upsertResultRecordByPath(taskContext.session,
+                                                         QStringLiteral("ortho_results"),
+                                                         QStringLiteral("output_path"),
+                                                         record,
+                                                         true,
+                                                         &persistence_error))
         {
+            manager->clearOrthoContextIfMatches(taskContext);
             emit manager->orthoPipelineFinished(
                 false,
-                QStringLiteral("正射影像已写出，但项目结果记录保存失败：%1")
-                    .arg(record.value(QStringLiteral("output_path")).toString()),
+                QStringLiteral("正射影像已写出，但项目结果记录保存失败：%1%2")
+                    .arg(record.value(QStringLiteral("output_path")).toString(),
+                         persistence_error.isEmpty() ? QString() : QStringLiteral("\n%1").arg(persistence_error)),
                 record);
             return;
         }
-        manager->_owner->refreshReconstructionQualityReport();
+        if (!manager->orthoContextMatches(taskContext) ||
+            cancelFlag->load(std::memory_order_relaxed))
+        {
+            manager->clearOrthoContextIfMatches(taskContext);
+            emit manager->orthoPipelineFinished(false, QStringLiteral("正射影像生成已取消"), record);
+            return;
+        }
 
         emit manager->orthoPipelineProgressChanged(QStringLiteral("完成"), 100);
         const QString completionMessage = pointCloudMode
@@ -1384,49 +1451,108 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                      'f',
                      1)
                 .arg(record.value(QStringLiteral("contributing_camera_count")).toInt());
+        manager->clearOrthoContextIfMatches(taskContext);
         emit manager->orthoPipelineFinished(
             true,
             completionMessage,
             record);
     };
 
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         std::move(orthoWork),
-        [orthoFinished = std::move(orthoFinished), cancelFlag, background_task_id](
+        [orthoFinished = std::move(orthoFinished), taskContext, background_task_id](
             ProjectTerrainProductsManager *manager,
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome) mutable
         {
             if (!outcome.succeeded())
             {
-                if (manager->_orthoCancelFlag == cancelFlag)
+                if (!manager->orthoContextMatches(taskContext, false))
                 {
-                    manager->_orthoCancelFlag.reset();
-                    manager->_orthoTaskChunkId.clear();
+                    return;
+                }
+                if (!manager->_session || !manager->_session->isCurrent(taskContext.session))
+                {
+                    manager->clearOrthoContextIfMatches(taskContext);
+                    return;
                 }
                 const QString error = outcome.errorMessage.isEmpty()
                     ? QStringLiteral("正射影像后台任务失败")
                     : outcome.errorMessage;
                 emit manager->backgroundTaskFinished(background_task_id);
+                manager->clearOrthoContextIfMatches(taskContext);
                 emit manager->orthoPipelineFinished(false, error, QJsonObject());
                 return;
             }
             orthoFinished(manager, std::move(*outcome.value));
-        });
+        }));
 }
 
-void ProjectTerrainProductsManager::cancelMapProject()
+void ProjectTerrainProductsManager::cancelMapProject(
+    const xjw::gui::project::ProjectTaskContext &taskContext)
 {
-    if (_orthoCancelFlag)
+    if (orthoContextMatches(taskContext, false) && taskContext.cancelFlag)
     {
-        _orthoCancelFlag->store(true, std::memory_order_relaxed);
+        taskContext.cancelFlag->store(true, std::memory_order_relaxed);
     }
 }
 
-void ProjectTerrainProductsManager::cancelDemGeneration()
+void ProjectTerrainProductsManager::cancelDemGeneration(
+    const xjw::gui::project::ProjectTaskContext &taskContext)
 {
-    if (_demCancelFlag)
+    if (demContextMatches(taskContext, false) && taskContext.cancelFlag)
     {
-        _demCancelFlag->store(true, std::memory_order_relaxed);
+        taskContext.cancelFlag->store(true, std::memory_order_relaxed);
     }
+}
+
+void ProjectTerrainProductsManager::waitForActiveTask()
+{
+    if (_demContext.cancelFlag)
+    {
+        _demContext.cancelFlag->store(true, std::memory_order_relaxed);
+    }
+    if (_orthoContext.cancelFlag)
+    {
+        _orthoContext.cancelFlag->store(true, std::memory_order_relaxed);
+    }
+    for (QFuture<void> &future : _futures)
+    {
+        if (future.isRunning())
+        {
+            future.waitForFinished();
+        }
+    }
+    _futures.clear();
+    _demContext = {};
+    _orthoContext = {};
+}
+
+bool ProjectTerrainProductsManager::hasPendingWork() const noexcept
+{
+    return std::any_of(_futures.cbegin(),
+                       _futures.cend(),
+                       [](const QFuture<void>& future) { return future.isValid() && !future.isFinished(); });
+}
+
+void ProjectTerrainProductsManager::pruneFinishedFutures()
+{
+    _futures.erase(std::remove_if(_futures.begin(),
+                                  _futures.end(),
+                                  [](const QFuture<void>& future) { return future.isFinished(); }),
+                   _futures.end());
+}
+
+void ProjectTerrainProductsManager::trackFuture(QFuture<void> future)
+{
+    pruneFinishedFutures();
+    if (future.isValid())
+    {
+        _futures.push_back(std::move(future));
+    }
+}
+
+void ProjectTerrainProductsManager::trackFutureForTesting(QFuture<void> future)
+{
+    trackFuture(std::move(future));
 }

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "DemDomTypes.h"
-#include "RpcCameraModel.h"
+#include "camera/models/rpc/RpcDefinition.h"
 
 #include <QString>
 
@@ -23,14 +23,15 @@ namespace xjw::stereo_dem
                         ProjectedCoordinateSystem* coordinateSystem,
                         QString* errorMessage);
 
-    bool geodeticToProjected(const std::vector<RpcCameraModel::GeodeticCoordinate>& geodetic,
+    bool geodeticToProjected(
+        const std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>& geodetic,
                              const ProjectedCoordinateSystem& coordinateSystem,
                              std::vector<std::array<double, 3>>* projected,
                              QString* errorMessage);
 
     bool projectedRowToGeodetic(const DemGridData& dem,
                                 int row,
-                                std::vector<RpcCameraModel::GeodeticCoordinate>* geodetic,
+                                std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>* geodetic,
                                 QString* errorMessage);
 
 } // namespace xjw::stereo_dem

@@ -4,7 +4,7 @@
  * @file SfmBundleAdjustCoordinator.h
  * @brief SfM 状态与独立 bundle_adjust 模块之间的适配/调度层。
  *
- * 协调器从当前 SfmReconstruction 构造 FramePinholeCamera/BATrack，选择局部或全局相机集合，
+ * 协调器从当前 SfmReconstruction 构造 FramePinholeNumericState/BATrack，选择局部或全局相机集合，
  * 调用 BundleAdjust 公共入口，再将通过质量门控的相机和点原子写回重建。
  */
 
@@ -124,15 +124,18 @@ namespace xjw
                                             const SfmAdaptiveCameraModelDiagnosticSnapshot& current);
 
         /// 首次见到影像时保存内参参考，后续独立全局 BA 调用仍按 ImageId 复用原锚点。
-        static std::vector<FramePinholeCamera>
-        buildPersistentIntrinsicReferences(const std::vector<ImageId>& imageIds,
-                                           const std::vector<FramePinholeCamera>& current,
-                                           std::unordered_map<ImageId, FramePinholeCamera>* referencesByImageId);
+        static std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+        buildPersistentIntrinsicReferences(
+            const std::vector<ImageId>& imageIds,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
+            std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>*
+                referencesByImageId);
 
         /// 按相机计算两轮内参最大归一化变化，避免多标定组反向变化在全局平均中抵消。
-        static double maximumCameraIntrinsicChange(const std::vector<FramePinholeCamera>& previous,
-                                                   const std::vector<FramePinholeCamera>& current,
-                                                   const std::vector<FramePinholeCamera>& stableReferences);
+        static double maximumCameraIntrinsicChange(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& previous,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences);
 
     private:
         IncrementalSfm& _owner;

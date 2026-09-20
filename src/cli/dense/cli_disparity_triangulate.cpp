@@ -7,7 +7,8 @@
 // =============================================================================
 #include "cli_common.h"
 #include "DisparityTriangulator.h"
-#include "FramePinholeCamera.h"
+#include "ProjectCameraIO.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -79,12 +80,24 @@ int main(int argc, char *argv[])
     fs["H2inv"] >> H2inv;
     fs.release();
 
-    // 加载相机
-    xjw::FramePinholeCamera camLObj, camRObj;
-    if (!camLObj.loadFromFile(camL))
+    // 相机文件是输入边界；数值内核只接收独立的数值状态。
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camLObj;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camRObj;
+    QJsonObject camLMetadata;
+    QJsonObject camRMetadata;
+    QString cameraError;
+    if (!xjw::common::project::parseTsaiCamera(
+            xjw::common::io::fromUtf8Path(camL), &camLMetadata, &cameraError) ||
+        !xjw::common::project::decodeFramePinholeNumericState(camLMetadata, &camLObj))
+    {
         cli::fatal("无法加载左相机: " + camL, cli::EXIT_IO_ERR);
-    if (!camRObj.loadFromFile(camR))
+    }
+    if (!xjw::common::project::parseTsaiCamera(
+            xjw::common::io::fromUtf8Path(camR), &camRMetadata, &cameraError) ||
+        !xjw::common::project::decodeFramePinholeNumericState(camRMetadata, &camRObj))
+    {
         cli::fatal("无法加载右相机: " + camR, cli::EXIT_IO_ERR);
+    }
 
     fprintf(stdout, "三角化: %s -> %s\n", dispPath.c_str(), outPath.c_str());
 

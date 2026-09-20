@@ -26,6 +26,40 @@ QMenuBar::item:selected {
     background: #e5edf7;
 }
 
+QWidget#windowControls {
+    background: transparent;
+}
+
+QWidget#windowControls QToolButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 0;
+    min-height: 0;
+}
+
+QWidget#windowControls QToolButton:hover,
+QWidget#windowControls QToolButton:focus {
+    background: #e5edf7;
+    border-color: #7aa7e8;
+}
+
+QWidget#windowControls QToolButton:pressed,
+QWidget#windowControls QToolButton:checked {
+    background: #dbeafe;
+    border-color: #2563eb;
+}
+
+QWidget#windowControls QToolButton#windowCloseButton:hover {
+    background: #fee2e2;
+    border-color: #ef4444;
+}
+
+QWidget#windowControls QToolButton:disabled {
+    background: transparent;
+    border-color: transparent;
+}
+
 QMenu {
     background: #ffffff;
     border: 1px solid #cbd5e1;

@@ -1,15 +1,14 @@
 #include "reporting/AerialTriangulationResultWriter.h"
 #include "reporting/QualityReportWriter.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "io/ImageIO.h"
 #include "reconstruction/SfmReconstruction.h"
 
 #include <gtest/gtest.h>
 
-#include <QColor>
 #include <QDir>
 #include <QFile>
-#include <QImage>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 
@@ -19,19 +18,36 @@
 #include <unordered_set>
 #include <vector>
 
+namespace
+{
+
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeBoundCamera(
+        const std::string& imageId, double focal, double centerX, double centerY = 0.0, double centerZ = 0.0)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(focal, focal, focal == 70.0 ? 32.0 : 320.0, focal == 70.0 ? 24.0 : 240.0);
+        camera.setPose({1.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0,
+                        0.0, 0.0, 1.0},
+                       {centerX, centerY, centerZ});
+        EXPECT_TRUE(camera.bindIdentity(xjw::camera_core::CameraInstanceId("instance-" + imageId),
+                                        xjw::camera_core::ImageId(imageId),
+                                        xjw::coordinate_system::CoordinateFrameId("local")));
+        return camera;
+    }
+
+} // namespace
+
 TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMetadata)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
 
     const QString imageAPath = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
     const QString imageBPath = QDir(tempDir.path()).filePath(QStringLiteral("b.png"));
-    QImage imageA(64, 48, QImage::Format_RGB888);
-    imageA.fill(QColor(20, 40, 60));
-    ASSERT_TRUE(imageA.save(imageAPath));
-    QImage imageB(64, 48, QImage::Format_RGB888);
-    imageB.fill(QColor(80, 100, 120));
-    ASSERT_TRUE(imageB.save(imageBPath));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageAPath, cv::Mat(48, 64, CV_8UC3, cv::Scalar(60, 40, 20))));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageBPath, cv::Mat(48, 64, CV_8UC3, cv::Scalar(120, 100, 80))));
 
     auto reconstruction = std::make_shared<xjw::SfmReconstruction>();
     xjw::ImageData imageAData;
@@ -46,11 +62,8 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     imageBData.keypoints = {{32.0f, 24.0f, 4.0f}};
     reconstruction->addImage(imageBData);
 
-    xjw::FramePinholeCamera cameraA;
-    cameraA.setIntrinsics(70.0, 70.0, 32.0, 24.0);
-    cameraA.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {-0.5, 0.0, 0.0});
-    xjw::FramePinholeCamera cameraB = cameraA;
-    cameraB.setCameraCenter({0.5, 0.0, 0.0});
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraA = makeBoundCamera("image-a", 70.0, -0.5);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraB = makeBoundCamera("image-b", 70.0, 0.5);
     reconstruction->registerImage(0, cameraA);
     reconstruction->registerImage(1, cameraB);
 
@@ -61,6 +74,7 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
 
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {imageAPath, imageBPath};
+    input.imageIds = {xjw::camera_core::ImageId("image-a"), xjw::camera_core::ImageId("image-b")};
     input.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("sfm"));
 
     xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
@@ -102,7 +116,7 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     const QJsonObject sidecarObject = QJsonDocument::fromJson(sidecar.readAll()).object();
     EXPECT_EQ(sidecarObject.value(QStringLiteral("clean_tie_points_metric_contract")).toString(),
               QStringLiteral("metashape-2.3.2-build-22956"));
-    EXPECT_EQ(sidecarObject.value(QStringLiteral("schema")).toString(), QStringLiteral("plascan.sfm_sparse_points.v2"));
+    EXPECT_EQ(sidecarObject.value(QStringLiteral("schema")).toString(), QStringLiteral("plascan.sfm_sparse_points.v3"));
     EXPECT_EQ(sidecarObject.value(QStringLiteral("images")).toArray().size(), 2);
     EXPECT_EQ(sidecarObject.value(QStringLiteral("points")).toArray().size(), 1);
     const QJsonObject sidecarPoint = sidecarObject.value(QStringLiteral("points")).toArray().first().toObject();
@@ -113,8 +127,10 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     EXPECT_TRUE(sidecarPoint.contains(QStringLiteral("projection_accuracy")));
     const QJsonArray observations = sidecarPoint.value(QStringLiteral("observations")).toArray();
     ASSERT_EQ(observations.size(), 2);
-    ASSERT_TRUE(observations.first().isArray());
-    EXPECT_EQ(observations.first().toArray().size(), 7);
+    ASSERT_TRUE(observations.first().isObject());
+    const QJsonObject firstObservation = observations.first().toObject();
+    EXPECT_EQ(firstObservation.value(QStringLiteral("image_id")).toString(), QStringLiteral("image-a"));
+    EXPECT_EQ(firstObservation.value(QStringLiteral("camera_index")).toInt(), 0);
     EXPECT_TRUE(sidecarPoint.value(QStringLiteral("reconstruction_uncertainty")).toDouble() >= 1.0);
     EXPECT_DOUBLE_EQ(sidecarPoint.value(QStringLiteral("projection_accuracy")).toDouble(), 3.0);
     const QJsonObject cleanTiePoints = sidecarPoint.value(QStringLiteral("clean_tie_points")).toObject();
@@ -133,12 +149,11 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
 TEST(AerialTriangulationResultWriterTest, RemovesWeakAndSpatiallyIsolatedPublishedPoints)
 {
     auto reconstruction = std::make_shared<xjw::SfmReconstruction>();
-    std::vector<xjw::FramePinholeCamera> cameras(3);
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras(3);
     for (int index = 0; index < 3; ++index)
     {
-        cameras[static_cast<std::size_t>(index)].setIntrinsics(500.0, 500.0, 320.0, 240.0);
-        cameras[static_cast<std::size_t>(index)].setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                                                         {static_cast<double>(index - 1), 0.0, 0.0});
+        cameras[static_cast<std::size_t>(index)] =
+            makeBoundCamera("synthetic-image-" + std::to_string(index), 500.0, static_cast<double>(index - 1));
     }
 
     std::vector<std::array<double, 3>> worldPoints;
@@ -189,6 +204,9 @@ TEST(AerialTriangulationResultWriterTest, RemovesWeakAndSpatiallyIsolatedPublish
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {
         QStringLiteral("synthetic_0.png"), QStringLiteral("synthetic_1.png"), QStringLiteral("synthetic_2.png")};
+    input.imageIds = {xjw::camera_core::ImageId("synthetic-image-0"),
+                      xjw::camera_core::ImageId("synthetic-image-1"),
+                      xjw::camera_core::ImageId("synthetic-image-2")};
     input.quality = 2;
 
     xjw::aerial_triangulation::AerialTriangulationReconstructionResult result;
@@ -232,15 +250,15 @@ TEST(AerialTriangulationResultWriterTest, MatureHighQualityNetworkKeepsAlgorithm
 {
     constexpr int kCameraCount = 8;
     auto reconstruction = std::make_shared<xjw::SfmReconstruction>();
-    std::vector<xjw::FramePinholeCamera> cameras(kCameraCount);
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras(kCameraCount);
     const std::vector<std::array<double, 3>> worldPoints = {{0.0, 0.0, 5.0}, {0.2, 0.1, 5.0}};
 
     for (int imageIndex = 0; imageIndex < kCameraCount; ++imageIndex)
     {
-        xjw::FramePinholeCamera& camera = cameras[static_cast<std::size_t>(imageIndex)];
-        camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                       {static_cast<double>(imageIndex) - 3.5, 0.0, 0.0});
+        const std::string imageId = "mature-image-" + std::to_string(imageIndex);
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+            cameras[static_cast<std::size_t>(imageIndex)];
+        camera = makeBoundCamera(imageId, 500.0, static_cast<double>(imageIndex) - 3.5);
 
         xjw::ImageData image;
         image.id = static_cast<xjw::ImageId>(imageIndex);
@@ -274,6 +292,7 @@ TEST(AerialTriangulationResultWriterTest, MatureHighQualityNetworkKeepsAlgorithm
     for (int imageIndex = 0; imageIndex < kCameraCount; ++imageIndex)
     {
         input.images.push_back(QStringLiteral("mature_network_%1.png").arg(imageIndex));
+        input.imageIds.push_back(xjw::camera_core::ImageId("mature-image-" + std::to_string(imageIndex)));
     }
 
     xjw::aerial_triangulation::AerialTriangulationReconstructionResult result;

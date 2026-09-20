@@ -151,7 +151,7 @@ cv::Mat readImageWithGdal(const QString &path,
     // channels, including for a single-band TIFF.  The previous GDAL path
     // returned CV_8UC1 for such files, so downstream vertex colorization
     // silently skipped every view that required CV_8UC3 input.
-    const bool color_requested = flags == cv::IMREAD_COLOR;
+    const bool color_requested = flags != cv::IMREAD_UNCHANGED && (flags & cv::IMREAD_COLOR) != 0;
     const bool gray = requestsGrayImage(flags)
         || (!color_requested && band_count < 3);
     const bool alpha = !gray

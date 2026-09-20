@@ -4,8 +4,9 @@
 #include "Logger.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectIO.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
 #include "tie_points/MatchPairSelectorDialog.h"
-#include "ProjectManager.h"
 #include "WorkspaceCenterWidget.h"
 
 #include <QDir>
@@ -17,13 +18,13 @@
 
 void MainWindow::showMatchViewer(const QString &initialImagePath, bool modal)
 {
-    if (!_projectManager)
+    if (!_projectServices)
     {
-        LOG_ERROR(QStringLiteral("无法打开匹配查看：ProjectManager 未初始化"));
+        LOG_ERROR(QStringLiteral("无法打开匹配查看：项目会话未初始化"));
         return;
     }
 
-    auto *dialog = new MatchPairSelectorDialog(_projectManager, this);
+    auto *dialog = new MatchPairSelectorDialog(&_projectServices->session(), this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     if (!initialImagePath.trimmed().isEmpty())
     {
@@ -51,7 +52,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
         errorMessage->clear();
     }
 
-    if (!_projectManager)
+    if (!_projectServices)
     {
         if (errorMessage)
         {
@@ -60,7 +61,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
         return false;
     }
 
-    const QString plascanPath = _projectManager->currentProjectPath();
+    const QString plascanPath = _projectServices->session().projectPath();
     if (plascanPath.isEmpty())
     {
         if (errorMessage)
@@ -71,7 +72,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
     }
 
     const QVector<QPair<QString, QString>> matchedPairs =
-        xjw::common::project::collectMatchedImageNamePairs(plascanPath, _projectManager->currentMeta());
+        xjw::common::project::collectMatchedImageNamePairs(plascanPath, _projectServices->session().metadata());
     if (matchedPairs.isEmpty())
     {
         if (errorMessage)

@@ -15,6 +15,9 @@
 不改变 `bundle_adjust` 的独立 target。SfM 和 LiDAR 继续共同依赖该 target，
 SfM 自己的局部/全局/分层 BA 调度仍位于 `sfm/pipeline`。
 
+BA 的静态面阵输入统一为 `FramePinholeNumericState`。能力校验只发生在项目/服务边界，
+求解器内部直接读取数值状态，不接收 `FramePinholeCamera` 或额外的针孔视图适配对象。
+
 ## 空三调用链
 
 ```text
@@ -130,7 +133,7 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 - LiDAR 点到面权重采用统计权重 `1/sigma^2`，并同步缩放残差和 Huber 阈值，使其物理米制
   阈值及目标函数保持一致。仅“存在 LiDAR 平面”不再被视为完整 7 自由度 gauge，
   联合 BA 默认仍使用与纯影像分支相同的相机锚点。
-- 点的前后方由 `FramePinholeCamera::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
+- 点的前后方由 `FramePinholeNumericState::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
   当作跨相机格式的统一正深度。
 
 ## 验证

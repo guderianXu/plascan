@@ -5,9 +5,9 @@
 namespace
 {
 
-    xjw::FramePinholeCamera makeCamera(const std::array<double, 3>& center)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(const std::array<double, 3>& center)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
         camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, center);
         return camera;
@@ -106,5 +106,38 @@ TEST(ProjectMatchInputReaderTest, RejectsFileNameAmbiguousInFullChunk)
 
     EXPECT_EQ(xjw::core::project::cameraIndexForRelocatedMatchToken(
                   QStringLiteral("D:/download/scene/frame.jpg"), cameras, allImages),
+              -1);
+}
+
+TEST(ProjectMatchInputReaderTest, RejectsAmbiguousNormalizedPathAliases)
+{
+    const QMap<QString, int> cameras{
+        {QStringLiteral("E:/project/./frame.jpg"), 0},
+        {QStringLiteral("E:/project/sub/../frame.jpg"), 1}};
+
+    EXPECT_EQ(xjw::core::project::cameraIndexForImageToken(
+                  QStringLiteral("E:/project/frame.jpg"), cameras),
+              -1);
+}
+
+TEST(ProjectMatchInputReaderTest, AcceptsEquivalentAliasesOnlyWhenTheyShareAnIndex)
+{
+    const QMap<QString, int> cameras{
+        {QStringLiteral("E:/project/./frame.jpg"), 0},
+        {QStringLiteral("E:/project/sub/../frame.jpg"), 0}};
+
+    EXPECT_EQ(xjw::core::project::cameraIndexForImageToken(
+                  QStringLiteral("E:/project/frame.jpg"), cameras),
+              0);
+}
+
+TEST(ProjectMatchInputReaderTest, ExactPathDoesNotHideConflictingAlias)
+{
+    const QMap<QString, int> cameras{
+        {QStringLiteral("E:/project/frame.jpg"), 0},
+        {QStringLiteral("E:/project/sub/../frame.jpg"), 1}};
+
+    EXPECT_EQ(xjw::core::project::cameraIndexForImageToken(
+                  QStringLiteral("E:/project/frame.jpg"), cameras),
               -1);
 }

@@ -4,7 +4,7 @@
 #include "BundleAdjustProblem.h"
 #include "BundleAdjustResult.h"
 #include "BundleAdjustTypes.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <vector>
 
@@ -33,8 +33,9 @@ namespace xjw
         static BABackendCapabilities backendCapabilities(BABackend backend);
 
         /// 统计 BA 实际可用的问题规模。
-        static BAProblemStats summarizeProblem(const std::vector<FramePinholeCamera>& cameras,
-                                               const std::vector<BATrack>& tracks);
+        static BAProblemStats
+        summarizeProblem(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                         const std::vector<BATrack>& tracks);
 
         /// 根据问题规模与配置选择实际执行后端。
         static BABackend selectBackendForProblem(const BAProblemStats& stats, const BAOptions& options);
@@ -54,9 +55,10 @@ namespace xjw
          * @param options  优化选项（可选，默认使用 BAOptions）
          * @return         BAResult，包含优化后点坐标、相机位姿及误差统计
          */
-        static BAResult optimizePoints(const std::vector<FramePinholeCamera>& cameras,
-                                       const std::vector<BATrack>& tracks,
-                                       const BAOptions& options = BAOptions());
+        static BAResult
+        optimizePoints(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                       const std::vector<BATrack>& tracks,
+                       const BAOptions& options = BAOptions());
     };
 
 } // namespace xjw

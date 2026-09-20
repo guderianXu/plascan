@@ -24,7 +24,7 @@ namespace xjw::core::project
  * 通过控制点 ID 解析到最终 track 索引，失败记录计数但不会使整次 BA 中止。
  */
 void appendSurveyControlBaInput(const QJsonObject &meta,
-                                const QMap<QString, int> &cameraIndexByPath,
+                                const QMap<QString, int> &cameraIndexByImageId,
                                 BaInputBuildResult *result);
 
 } // namespace xjw::core::project

@@ -89,9 +89,9 @@ constexpr int kHeight = 49;
 constexpr int kDisparity = 5;
 constexpr float kExpectedDepth = 10.0f;
 
-xjw::FramePinholeCamera makeCamera(double center_x)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double center_x)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(50.0, 50.0, kWidth * 0.5, kHeight * 0.5);
     camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
                    std::array<double, 3>{center_x, 0.0, 0.0});
@@ -167,20 +167,21 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
     EstimateResult result;
     std::string error;
     const std::vector<cv::Mat> source_masks{source_mask};
-    EXPECT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(reference,
-                                                             std::vector<cv::Mat>{source},
-                                                             makeCamera(0.0),
-                                                             std::vector<xjw::FramePinholeCamera>{makeCamera(1.0)},
-                                                             5.0f,
-                                                             15.0f,
-                                                             config,
-                                                             result.depth,
-                                                             &result.confidence,
-                                                             &error,
-                                                             include_optional_inputs ? &hint : nullptr,
-                                                             include_optional_inputs ? &radius : nullptr,
-                                                             include_optional_inputs ? &reference_mask : nullptr,
-                                                             include_optional_inputs ? &source_masks : nullptr))
+    EXPECT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        reference,
+        std::vector<cv::Mat>{source},
+        makeCamera(0.0),
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{makeCamera(1.0)},
+        5.0f,
+        15.0f,
+        config,
+        result.depth,
+        &result.confidence,
+        &error,
+        include_optional_inputs ? &hint : nullptr,
+        include_optional_inputs ? &radius : nullptr,
+        include_optional_inputs ? &reference_mask : nullptr,
+        include_optional_inputs ? &source_masks : nullptr))
         << error;
     return result;
 }

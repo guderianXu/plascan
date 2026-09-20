@@ -28,7 +28,7 @@ struct TriangulationServiceOptions
 struct TriangulationServiceResult
 {
     bool success = false; ///< PLY 与 resultJson 都成功生成。
-    QString errorMessage; ///< 输入、三角化或文件写出失败原因。
+    QString errorMessage; ///< 输入、三角化或文件写出失败原因；输入边界错误保留具体诊断。
     QString sparseCloudPath; ///< 成功时的绝对 PLY 路径。
     int exportedPointCount = 0; ///< 通过所有门控并写出的点数。
     int candidateTrackCount = 0; ///< 从匹配构建出的候选轨迹数。

@@ -1,11 +1,36 @@
 cmake_minimum_required(VERSION 3.16)
 
+find_package(nlohmann_json CONFIG REQUIRED)
+
+add_library(plascan_common_file STATIC
+  file/FileIO.cpp
+  file/AtomicFile.cpp
+)
+target_include_directories(plascan_common_file PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(plascan_common_file PUBLIC cxx_std_20)
+
+add_library(plascan_common_json_io STATIC file/JsonFile.cpp)
+target_include_directories(plascan_common_json_io PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(plascan_common_json_io PUBLIC plascan_common_file nlohmann_json::nlohmann_json)
+target_compile_features(plascan_common_json_io PUBLIC cxx_std_20)
+
+add_library(plascan_common_plafs STATIC
+  plafs/PlaChunkLayout.cpp
+  plafs/PlaDir.cpp
+  plafs/PlaFile.cpp
+  plafs/PlaProjectLayout.cpp
+)
+target_include_directories(plascan_common_plafs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(plascan_common_plafs PUBLIC plascan_common_file)
+target_compile_features(plascan_common_plafs PUBLIC cxx_std_20)
+
 add_library(plascan_common_log STATIC
   log/Logger.cpp
 )
 
 add_library(plascan_common_io STATIC
   io/ImageIO.cpp
+  io/ImageSizeReader.cpp
   io/ImageExifMetadata.cpp
   io/JsonObjectFile.cpp
   io/PathIO.cpp
@@ -97,6 +122,7 @@ endif()
 
 target_include_directories(plascan_common_project PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/src/core
 )
 
 target_compile_features(plascan_common_log PUBLIC cxx_std_20)
@@ -122,6 +148,7 @@ target_compile_definitions(plascan_common_model PRIVATE PLASCAN_SOURCE_DIR="${CM
 target_link_libraries(plascan_common_project PUBLIC
   Qt6::Core
   Qt6::Concurrent
+  plascan_common_plafs
   plascan_common_json
   plascan_common_log
   ${PLASCAN_LIBZIP_TARGET}
@@ -133,6 +160,8 @@ if(BUILD_TESTS)
   add_subdirectory(concurrency/test)
   add_subdirectory(log/test)
   add_subdirectory(io/test)
+  add_subdirectory(file/test)
+  add_subdirectory(plafs/test)
   add_subdirectory(string_utils/test)
   add_subdirectory(project/test)
 endif()

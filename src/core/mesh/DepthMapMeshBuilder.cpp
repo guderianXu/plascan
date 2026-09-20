@@ -1,9 +1,9 @@
 #include "DepthMapMeshBuilder.h"
 
-#include "FramePinholeCamera.h"
 #include "DepthFrameUtils.h"
 #include "StudioForegroundMask.h"
 #include "VisualHullReconstructor.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
 
 #include <QDir>
@@ -22,7 +22,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace xjw::mesh
@@ -96,9 +95,12 @@ bool parseDoubleArray(const QJsonValue &value, double *output, int count)
     return true;
 }
 
-bool parseCameraModel(const QJsonObject &object, FramePinholeCamera *camera)
+bool parseCameraModel(const QJsonObject& object,
+                      int image_width,
+                      int image_height,
+                      xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera)
 {
-    if (!camera || object.isEmpty())
+    if (!camera || object.isEmpty() || image_width <= 0 || image_height <= 0)
     {
         return false;
     }
@@ -126,13 +128,18 @@ bool parseCameraModel(const QJsonObject &object, FramePinholeCamera *camera)
         worldToCamera[1], worldToCamera[4], worldToCamera[7],
         worldToCamera[2], worldToCamera[5], worldToCamera[8]
     }};
-    FramePinholeCamera parsed;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
     parsed.setIntrinsics(focalX,
                          focalY,
                          object.value(QStringLiteral("cx")).toDouble(),
                          object.value(QStringLiteral("cy")).toDouble());
     parsed.setPose(cameraToWorld, center);
-    parsed.setDistortion(FramePinholeCamera::Distortion{});
+    parsed.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
+    parsed.setImageSize({image_width, image_height});
+    if (!parsed.validateNumericalState())
+    {
+        return false;
+    }
     *camera = parsed;
     return true;
 }
@@ -189,71 +196,6 @@ bool selectExistingPyramidArtifact(const QDir &directory,
     *grid_width = selected.value(QStringLiteral("artifact_width")).toInt();
     *grid_height = selected.value(QStringLiteral("artifact_height")).toInt();
     return true;
-}
-
-void attachLegacyReportCameras(const QDir &directory, QVector<DepthFrameArtifact> *frames)
-{
-    if (!frames)
-    {
-        return;
-    }
-    QJsonObject report;
-    const QStringList candidates = {
-        directory.filePath(QStringLiteral("report.json")),
-        QDir(directory.absolutePath() + QStringLiteral("/..")).filePath(QStringLiteral("report.json"))
-    };
-    for (const QString &candidate : candidates)
-    {
-        if (readJsonObject(candidate, &report))
-        {
-            break;
-        }
-    }
-    if (report.isEmpty())
-    {
-        return;
-    }
-
-    std::unordered_map<std::string, QString> cameras_by_image;
-    for (const QJsonValue &value : report.value(QStringLiteral("inputs")).toArray())
-    {
-        const QJsonObject input = value.toObject();
-        const QString image = input.value(QStringLiteral("image")).toString();
-        const QString camera = input.value(QStringLiteral("camera")).toString();
-        cameras_by_image[QFileInfo(image).fileName().toCaseFolded().toStdString()] = camera;
-    }
-
-    for (DepthFrameArtifact &frame : *frames)
-    {
-        if (frame.hasCameraModel || frame.refImage.isEmpty())
-        {
-            continue;
-        }
-        const auto it = cameras_by_image.find(
-            QFileInfo(frame.refImage).fileName().toCaseFolded().toStdString());
-        if (it == cameras_by_image.end())
-        {
-            continue;
-        }
-        FramePinholeCamera camera;
-        if (!camera.loadFromFile(xjw::common::io::toUtf8Path(it->second)))
-        {
-            continue;
-        }
-        FramePinholeCamera model = camera.normalizedForPositiveDepth();
-        model.setDistortion(FramePinholeCamera::Distortion{});
-        const cv::Mat image = xjw::common::io::readImage(
-            xjw::common::io::toUtf8Path(frame.refImage), cv::IMREAD_GRAYSCALE);
-        if (!image.empty() && frame.gridWidth > 0 && frame.gridHeight > 0 &&
-            (image.cols != frame.gridWidth || image.rows != frame.gridHeight))
-        {
-            model = model.scaledIntrinsics(
-                static_cast<double>(frame.gridWidth) / image.cols,
-                static_cast<double>(frame.gridHeight) / image.rows);
-        }
-        frame.cameraModel = model;
-        frame.hasCameraModel = model.isValid();
-    }
 }
 
 bool isUsableStudioSilhouette(const cv::Mat &color_image)
@@ -510,7 +452,10 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             frame.gridWidth = object.value(QStringLiteral("grid_width")).toInt();
             frame.gridHeight = object.value(QStringLiteral("grid_height")).toInt();
             frame.hasCameraModel = parseCameraModel(
-                object.value(QStringLiteral("camera_model")).toObject(), &frame.cameraModel);
+                object.value(QStringLiteral("camera_model")).toObject(),
+                frame.gridWidth,
+                frame.gridHeight,
+                &frame.cameraModel);
             const int full_grid_width = frame.gridWidth;
             const int full_grid_height = frame.gridHeight;
             if (!QFileInfo::exists(frame.depthPath) && selectExistingPyramidArtifact(
@@ -571,7 +516,6 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             frames.push_back(frame);
         }
     }
-    attachLegacyReportCameras(directory, &frames);
     std::sort(frames.begin(), frames.end(), [](const auto &left, const auto &right)
     {
         return left.refIndex < right.refIndex;

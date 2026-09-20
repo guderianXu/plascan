@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "ProjectCameraIO.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "project/PlascanArchive.h"
 #include "project/ProjectChunkStore.h"
 #include "project/ProjectResourceStore.h"
@@ -11,22 +13,31 @@
 #include "project/ProjectSharedImageStore.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
+#include "camera/project/CameraProjectRecords.h"
 
 #include <QDir>
 #include <QDirIterator>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDeadlineTimer>
 #include <QEventLoop>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
+#include <QFuture>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
 #include <QSemaphore>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QThreadPool>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
+
+#include <array>
+#include <atomic>
 
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
@@ -36,8 +47,233 @@ using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectResourceRef;
 using xjw::common::project::ProjectSharedImageStore;
 
+class ProjectDataPersistenceTestPeer
+{
+public:
+    struct Responsibilities
+    {
+        bool coreDirty = false;
+        bool resultsDirty = false;
+        bool configDirty = false;
+        bool uiStateDirty = false;
+        bool workspaceDirty = false;
+        bool fullSavePending = false;
+        bool archiveSyncPending = false;
+        bool temporarySavePending = false;
+    };
+
+    static QThreadPool* pool(ProjectData* project)
+    {
+        return project ? project->_persistencePool : nullptr;
+    }
+
+    static bool suspended(const ProjectData& project)
+    {
+        return project._bundleAdjustPersistenceSuspended;
+    }
+
+    static bool hasDeferredResult(const ProjectData& project)
+    {
+        return project._deferredPersistenceResult != nullptr;
+    }
+
+    static bool running(const ProjectData& project)
+    {
+        return project._persistenceRunning;
+    }
+
+    static bool hasPendingRequest(const ProjectData& project)
+    {
+        return project._fullSavePending || project._archiveSyncPending || project._temporarySavePending;
+    }
+
+    static quint64 persistenceGeneration(const ProjectData& project)
+    {
+        return project._persistenceCommitCoordinator
+                   ? project._persistenceCommitCoordinator->currentGeneration()
+                   : 0;
+    }
+
+    static std::shared_ptr<xjw::common::project::ProjectPersistenceCommitCoordinator>
+    coordinator(const ProjectData& project)
+    {
+        return project._persistenceCommitCoordinator;
+    }
+
+    static quint64 cleanupReservation(const ProjectData& project)
+    {
+        return project._resourceCleanupPersistenceGeneration;
+    }
+
+    static Responsibilities responsibilities(const ProjectData& project)
+    {
+        return {project._coreFileDirtyForArchive,
+                project._resultsDirtyForArchive,
+                project._configDirtyForArchive,
+                project._uiStateDirtyForArchive,
+                project._workspaceDirtyForArchive,
+                project._fullSavePending,
+                project._archiveSyncPending,
+                project._temporarySavePending};
+    }
+
+    static QJsonObject config(const ProjectData& project)
+    {
+        return project._configManager.data();
+    }
+
+    static bool archiveTimerActive(const ProjectData& project)
+    {
+        return project._archiveSyncTimer && project._archiveSyncTimer->isActive();
+    }
+
+    static int archiveTimerRemaining(const ProjectData& project)
+    {
+        return project._archiveSyncTimer ? project._archiveSyncTimer->remainingTime() : -1;
+    }
+
+    static void startArchiveTimer(ProjectData* project, int milliseconds)
+    {
+        ASSERT_NE(project, nullptr);
+        ASSERT_NE(project->_archiveSyncTimer, nullptr);
+        project->_archiveSyncTimer->start(milliseconds);
+    }
+
+    static void settleBundleAdjustForShutdown(ProjectData* project)
+    {
+        ASSERT_NE(project, nullptr);
+        project->_shuttingDown = true;
+        if (project->_archiveSyncTimer)
+        {
+            project->_archiveSyncTimer->stop();
+        }
+        project->settleBundleAdjustMetadataStageForShutdown();
+    }
+
+    static void deliverQueuedCompletions(ProjectData* project)
+    {
+        QCoreApplication::sendPostedEvents(project, QEvent::MetaCall);
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+    }
+
+    static void settle(ProjectData* project)
+    {
+        ASSERT_NE(project, nullptr);
+        ASSERT_NE(project->_persistencePool, nullptr);
+        for (int attempt = 0; attempt < 8; ++attempt)
+        {
+            project->_persistencePool->waitForDone();
+            deliverQueuedCompletions(project);
+            if (!project->_persistenceRunning && !hasPendingRequest(*project))
+            {
+                return;
+            }
+        }
+        FAIL() << "project persistence did not settle";
+    }
+};
+
 namespace
 {
+
+    class ScopedCoreApplication final
+    {
+    public:
+        ScopedCoreApplication()
+        {
+            if (!QCoreApplication::instance())
+            {
+                _arguments[0] = _applicationName;
+                _application = std::make_unique<QCoreApplication>(_argumentCount, _arguments);
+            }
+        }
+
+    private:
+        int _argumentCount = 1;
+        char _applicationName[32] = "test_project_data";
+        char* _arguments[2] = {nullptr, nullptr};
+        std::unique_ptr<QCoreApplication> _application;
+    };
+
+    class ScopedPersistencePoolBlocker final
+    {
+    public:
+        explicit ScopedPersistencePoolBlocker(QThreadPool* pool)
+            : _blocker(QtConcurrent::run(pool,
+                                         [this]()
+                                         {
+                                             _started.release();
+                                             _released.acquire();
+                                         }))
+        {
+        }
+
+        ~ScopedPersistencePoolBlocker()
+        {
+            release();
+            if (_generationWatcher.isValid())
+            {
+                _generationWatcher.waitForFinished();
+            }
+            _blocker.waitForFinished();
+        }
+
+        bool waitUntilStarted()
+        {
+            return _started.tryAcquire(1, 5000);
+        }
+
+        void release()
+        {
+            if (!_releaseIssued.exchange(true))
+            {
+                _released.release();
+            }
+        }
+
+        void releaseAndJoin()
+        {
+            release();
+            _blocker.waitForFinished();
+        }
+
+        void releaseAfterGenerationAdvance(
+            const std::shared_ptr<xjw::common::project::ProjectPersistenceCommitCoordinator>& coordinator,
+            quint64 initialGeneration)
+        {
+            _generationWatcher = QtConcurrent::run(
+                [this, coordinator, initialGeneration]()
+                {
+                    QDeadlineTimer deadline(5000);
+                    while (coordinator && coordinator->currentGeneration() == initialGeneration &&
+                           !deadline.hasExpired())
+                    {
+                        QThread::yieldCurrentThread();
+                    }
+                    const bool advanced = coordinator && coordinator->currentGeneration() != initialGeneration;
+                    _generationAdvanced.store(advanced);
+                    release();
+                });
+        }
+
+        bool waitForGenerationWatcher()
+        {
+            if (!_generationWatcher.isValid())
+            {
+                return false;
+            }
+            _generationWatcher.waitForFinished();
+            return _generationAdvanced.load();
+        }
+
+    private:
+        QSemaphore _started;
+        QSemaphore _released;
+        QFuture<void> _blocker;
+        QFuture<void> _generationWatcher;
+        std::atomic_bool _releaseIssued{false};
+        std::atomic_bool _generationAdvanced{false};
+    };
 
     QStringList allResultKeys()
     {
@@ -198,6 +434,96 @@ namespace
         const QJsonArray records = metadata.value(resultKey).toArray();
         EXPECT_FALSE(records.isEmpty()) << qPrintable(resultKey);
         return records.isEmpty() ? QString() : records.at(0).toObject().value(pathKey).toString();
+    }
+
+    QJsonObject canonicalFrameCamera(int width,
+                                     int height,
+                                     const std::array<double, 3>& center = {0.0, 0.0, 1.0})
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setPixelPitch(0.01);
+        camera.setIntrinsics(1200.0, 1200.0, width * 0.5, height * 0.5);
+        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, center);
+        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
+        result.insert(QStringLiteral("aligned"), true);
+        return result;
+    }
+
+    struct BundleAdjustStageFixture
+    {
+        xjw::camera_project::CameraInstanceUpdates cameraUpdates;
+        QJsonObject result;
+    };
+
+    BundleAdjustStageFixture prepareBundleAdjustStageFixture(ProjectData* project,
+                                                             const QString& directory,
+                                                             QString* errorMessage)
+    {
+        BundleAdjustStageFixture fixture;
+        if (!project)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("测试项目为空");
+            }
+            return fixture;
+        }
+
+        QStringList imagePaths;
+        for (const QString& name : {QStringLiteral("stage-a.jpg"), QStringLiteral("stage-b.jpg")})
+        {
+            const QString path = QDir(directory).filePath(name);
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write("image") != 5)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("无法创建测试影像: %1").arg(path);
+                }
+                return {};
+            }
+            imagePaths.append(path);
+        }
+        if (!project->addImages(imagePaths, errorMessage))
+        {
+            return {};
+        }
+
+        const QJsonObject camera = canonicalFrameCamera(1024, 768, {1.0, 2.0, 3.0});
+        int updatedCount = 0;
+        if (!project->setCameraInstances(
+                {{imagePaths.at(0), camera}, {imagePaths.at(1), camera}}, &updatedCount, errorMessage))
+        {
+            return {};
+        }
+
+        const QJsonObject core = project->coreFilesMeta();
+        const QString worldFrame = core.value(QStringLiteral("camera_definitions"))
+                                       .toArray()
+                                       .at(0)
+                                       .toObject()
+                                       .value(QStringLiteral("frame"))
+                                       .toString();
+        for (const QJsonValue& value : core.value(QStringLiteral("images")).toArray())
+        {
+            const QJsonObject image = value.toObject();
+            const QString imageId = image.value(QStringLiteral("image_uuid")).toString();
+            const QJsonObject instance =
+                xjw::camera_project::CameraProjectRecords::instanceForImage(core, imageId);
+            QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image);
+            update.insert(QStringLiteral("world_frame"), worldFrame);
+            update.insert(QStringLiteral("solution"), QStringLiteral("bundle-adjust-stage"));
+            fixture.cameraUpdates.push_back(
+                {xjw::camera_core::ImageId(imageId.toStdString()),
+                 xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
+                 xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
+                 update});
+        }
+        fixture.result = QJsonObject{{QStringLiteral("track_count"), 12},
+                                     {QStringLiteral("mean_rms_after"), 0.25},
+                                     {QStringLiteral("point_preview"), QJsonArray{QJsonObject{{"index", 1}}}}};
+        return fixture;
     }
 
 } // namespace
@@ -1268,12 +1594,12 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
         QJsonArray images = metadata.value(QStringLiteral("images")).toArray();
         QJsonObject imageRecord = images.at(0).toObject();
         imageRecord[QStringLiteral("mask_path")] = mask;
-        imageRecord[QStringLiteral("camera")] = QJsonObject{
-            {QStringLiteral("aligned"), true},
-            {QStringLiteral("fx"), 1200.0},
-            {QStringLiteral("pose"), QJsonArray{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}}};
         images[0] = imageRecord;
         metadata[QStringLiteral("images")] = images;
+        const QJsonObject cameraMetadata = canonicalFrameCamera(1280, 960, {0.0, 0.0, 10.0});
+        const auto cameraUpdate = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
+            &metadata, QMap<QString, QJsonObject>{{externalImage, cameraMetadata}});
+        ASSERT_TRUE(cameraUpdate.ok()) << cameraUpdate.errors.join(';').toStdString();
         metadata[QStringLiteral("image_match_results")] =
             QJsonArray{QJsonObject{{QStringLiteral("image"), externalImage},
                                    {QStringLiteral("output"), match},
@@ -1334,7 +1660,9 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
 
     const QJsonObject restored = reopened.metadata();
     const QJsonObject restoredImage = restored.value(QStringLiteral("images")).toArray().at(0).toObject();
-    EXPECT_TRUE(restoredImage.value(QStringLiteral("camera")).toObject().value(QStringLiteral("aligned")).toBool());
+    const QJsonObject restoredCamera =
+        xjw::camera_project::CameraProjectRecords::modelParametersForImage(restored, restoredImage);
+    EXPECT_TRUE(restoredCamera.value(QStringLiteral("aligned")).toBool());
     const QList<QPair<QString, QByteArray>> restoredFiles{
         {restoredImage.value(QStringLiteral("mask_path")).toString(), QByteArray("mask")},
         {resultPath(restored, QStringLiteral("image_match_results"), QStringLiteral("output")), QByteArray("match")},
@@ -1453,6 +1781,9 @@ TEST(ProjectDataTest, PackResourcePersistsFilesAndDirectoriesInsideProject)
         ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("资源打包")));
         ASSERT_TRUE(project.packResource(sourceFile));
         ASSERT_TRUE(project.packResource(sourceDir));
+        const QString packedRoot =
+            QDir(ProjectIO::projectRootFromPlascan(projectPath)).filePath(QStringLiteral("assets/packed"));
+        EXPECT_TRUE(QFileInfo(packedRoot).isDir());
         QString error;
         ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
         const QJsonArray archivedPacked = chunkSection(projectPath, PortableProjectFormat::ProjectFilesSection)
@@ -1796,39 +2127,42 @@ TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSol
     const QStringList projectImages = project.getAllImages();
     ASSERT_EQ(projectImages.size(), 3);
 
-    const QJsonObject oldCamera{{QStringLiteral("model"), QStringLiteral("pinhole")},
-                                {QStringLiteral("aligned"), true}};
+    const QJsonObject oldCamera = canonicalFrameCamera(32, 24, {0.0, 0.0, 0.0});
     int updatedCount = 0;
     QString error;
-    ASSERT_TRUE(project.setImageCameras(
+    ASSERT_TRUE(project.setCameraInstances(
         {{projectImages[0], oldCamera}, {projectImages[1], oldCamera}, {projectImages[2], oldCamera}},
         &updatedCount,
         &error))
         << qPrintable(error);
     ASSERT_EQ(updatedCount, 3);
 
-    const QJsonObject newCamera{{QStringLiteral("model"), QStringLiteral("pinhole")},
-                                {QStringLiteral("aligned"), true},
-                                {QStringLiteral("solution"), QStringLiteral("current")}};
+    QJsonObject newCamera = canonicalFrameCamera(32, 24, {0.0, 0.0, 0.0});
+    newCamera.insert(QStringLiteral("solution"), QStringLiteral("current"));
     int clearedCount = 0;
-    ASSERT_TRUE(project.replaceImageCameras(projectImages,
-                                            {{projectImages[0], newCamera}, {projectImages[1], newCamera}},
-                                            &updatedCount,
-                                            &clearedCount,
-                                            &error))
+    ASSERT_TRUE(project.replaceCameraInstances(projectImages,
+                                               {{projectImages[0], newCamera}, {projectImages[1], newCamera}},
+                                               &updatedCount,
+                                               &clearedCount,
+                                               &error))
         << qPrintable(error);
     EXPECT_EQ(updatedCount, 2);
     EXPECT_EQ(clearedCount, 1);
 
-    const QJsonArray images = project.coreFilesMeta().value(QStringLiteral("images")).toArray();
+    const QJsonObject core = project.coreFilesMeta();
+    const QJsonArray images = core.value(QStringLiteral("images")).toArray();
     ASSERT_EQ(images.size(), 3);
-    EXPECT_EQ(
-        images.at(0).toObject().value(QStringLiteral("camera")).toObject().value(QStringLiteral("solution")).toString(),
-        QStringLiteral("current"));
-    EXPECT_EQ(
-        images.at(1).toObject().value(QStringLiteral("camera")).toObject().value(QStringLiteral("solution")).toString(),
-        QStringLiteral("current"));
-    EXPECT_FALSE(images.at(2).toObject().contains(QStringLiteral("camera")));
+    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, images.at(0).toObject())
+                  .value(QStringLiteral("solution"))
+                  .toString(),
+              QStringLiteral("current"));
+    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, images.at(1).toObject())
+                  .value(QStringLiteral("solution"))
+                  .toString(),
+              QStringLiteral("current"));
+    EXPECT_TRUE(xjw::camera_project::CameraProjectRecords::instanceForImage(
+                    core, images.at(2).toObject().value(QStringLiteral("image_uuid")).toString())
+                    .isEmpty());
 }
 
 TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
@@ -2046,6 +2380,28 @@ TEST(ProjectDataTest, RemoveResourcesMatchesRelativeProjectPathsWithAbsoluteRequ
     EXPECT_EQ(images.first().toObject().value(QStringLiteral("path")).toString(), keptImage);
 }
 
+TEST(ProjectDataTest, RemovingImportedImageUsesStandardChunkLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("删除导入影像")));
+
+    const QString projectRoot = ProjectIO::projectRootFromPlascan(projectPath);
+    const QString importedPath = QDir(projectRoot).filePath(QStringLiteral("assets/imported/models/session/image.tif"));
+    writeTestFile(importedPath, QByteArray("imported"));
+
+    QJsonObject metadata = project.metadata();
+    metadata[QStringLiteral("images")] = QJsonArray{QJsonObject{{QStringLiteral("path"), importedPath}}};
+    project.updateMetadata(metadata, true);
+
+    ASSERT_TRUE(project.removeResource(importedPath));
+    EXPECT_FALSE(QFileInfo::exists(importedPath));
+    EXPECT_TRUE(project.metadata().value(QStringLiteral("images")).toArray().isEmpty());
+}
+
 TEST(ProjectDataTest, CoreOnlyMetadataUpdatePreservesLoadedResults)
 {
     QTemporaryDir dir;
@@ -2074,6 +2430,1132 @@ TEST(ProjectDataTest, CoreOnlyMetadataUpdatePreservesLoadedResults)
     EXPECT_FALSE(core.contains(QStringLiteral("depth_map_results")));
     ASSERT_TRUE(results.contains(QStringLiteral("depth_map_results")));
     EXPECT_EQ(results.value(QStringLiteral("depth_map_results")).toArray().size(), 1);
+}
+
+TEST(ProjectDataTest, BatchResultUpsertCommitsOneSnapshotAndEmitsMetadataOnce)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("batch result upsert")));
+    int metadataChangedCount = 0;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+    const QVector<ProjectResultRecordPathUpsert> records{
+        {QStringLiteral("dem_results"),
+         QStringLiteral("dem_path"),
+         QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("dem.tif")}},
+         false},
+        {QStringLiteral("ortho_results"),
+         QStringLiteral("output_path"),
+         QJsonObject{{QStringLiteral("output_path"), QStringLiteral("ortho.tif")}},
+         false},
+    };
+    QString errorMessage;
+
+    ASSERT_TRUE(project.upsertResultRecordsByPath(records, &errorMessage)) << qPrintable(errorMessage);
+
+    EXPECT_EQ(metadataChangedCount, 1);
+    EXPECT_FALSE(project.isDirty());
+    const QJsonObject results = project.metadataIncludingResults();
+    EXPECT_EQ(results.value(QStringLiteral("dem_results")).toArray().size(), 1);
+    EXPECT_EQ(results.value(QStringLiteral("ortho_results")).toArray().size(), 1);
+}
+
+TEST(ProjectDataTest, BatchResultUpsertRejectsLazyLoadFailureWithoutReplacingArchivedHistory)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+
+    {
+        ProjectData seed;
+        ASSERT_TRUE(seed.createProject(projectPath, QStringLiteral("lazy result history")));
+        ASSERT_TRUE(seed.upsertResultRecordByPath(
+            QStringLiteral("dem_results"),
+            QStringLiteral("dem_path"),
+            QJsonObject{{QStringLiteral("dem_path"), QStringLiteral("historical.tif")}},
+            true));
+        QString saveError;
+        ASSERT_TRUE(seed.saveProject(&saveError)) << qPrintable(saveError);
+        ASSERT_TRUE(seed.closeProject(&saveError)) << qPrintable(saveError);
+    }
+
+    ProjectData reopened;
+    QString openError;
+    ASSERT_TRUE(reopened.openProject(projectPath, &openError)) << qPrintable(openError);
+    const QString temporaryResults = ProjectIO::tempResultsPath(projectPath);
+    writeTestFile(temporaryResults,
+                  QJsonDocument(QJsonObject{
+                                    {QStringLiteral("dem_results"),
+                                     QJsonArray{QJsonObject{{QStringLiteral("dem_tif"),
+                                                            QStringLiteral("removed-alias.tif")}}}}})
+                      .toJson(QJsonDocument::Compact));
+
+    int metadataChangedCount = 0;
+    QObject::connect(&reopened,
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+    const QVector<ProjectResultRecordPathUpsert> replacement{
+        {QStringLiteral("ortho_results"),
+         QStringLiteral("output_path"),
+         QJsonObject{{QStringLiteral("output_path"), QStringLiteral("new-ortho.tif")}},
+         true},
+    };
+    QString writeError;
+
+    EXPECT_FALSE(reopened.upsertResultRecordsByPath(replacement, &writeError));
+    EXPECT_FALSE(writeError.isEmpty());
+    EXPECT_EQ(metadataChangedCount, 0);
+
+    ASSERT_TRUE(QFile::remove(temporaryResults));
+    const QJsonObject retained = reopened.metadataIncludingResults();
+    const QJsonArray historical = retained.value(QStringLiteral("dem_results")).toArray();
+    ASSERT_EQ(historical.size(), 1);
+    EXPECT_EQ(historical.at(0).toObject().value(QStringLiteral("dem_path")).toString(),
+              QStringLiteral("historical.tif"));
+    EXPECT_TRUE(retained.value(QStringLiteral("ortho_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustMetadataStageRollbackIsSilentAndCommitPublishesOnce)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba metadata stage")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    ASSERT_FALSE(project.isDirty());
+    const QJsonObject before = project.metadataIncludingResults();
+    int metadataChangedCount = 0;
+    int dirtyChangedCount = 0;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+    QObject::connect(&project,
+                     &ProjectData::dirtyStateChanged,
+                     [&dirtyChangedCount](bool) { ++dirtyChangedCount; });
+
+    ProjectBundleAdjustMetadataStageToken rollbackToken;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &rollbackToken, &errorMessage)) << qPrintable(errorMessage);
+    ASSERT_TRUE(rollbackToken.isValid());
+    EXPECT_EQ(metadataChangedCount, 0);
+    EXPECT_EQ(dirtyChangedCount, 0);
+    EXPECT_FALSE(project.isDirty());
+    QString stagedSaveError;
+    EXPECT_FALSE(project.saveProject(&stagedSaveError));
+    EXPECT_FALSE(stagedSaveError.isEmpty());
+    stagedSaveError.clear();
+    EXPECT_FALSE(project.saveProjectAsync(&stagedSaveError));
+    EXPECT_FALSE(stagedSaveError.isEmpty());
+    stagedSaveError.clear();
+    EXPECT_FALSE(project.exportPortableProjectAsync(
+        QDir(dir.path()).filePath(QStringLiteral("staged-export.zip")), &stagedSaveError));
+    EXPECT_FALSE(stagedSaveError.isEmpty());
+    stagedSaveError.clear();
+    EXPECT_FALSE(project.closeProject(&stagedSaveError));
+    EXPECT_FALSE(stagedSaveError.isEmpty());
+    const QJsonArray stagedResults =
+        project.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray();
+    ASSERT_EQ(stagedResults.size(), 1);
+    EXPECT_EQ(stagedResults.at(0).toObject().value(QStringLiteral("schema_version")).toInt(), 1);
+    EXPECT_FALSE(stagedResults.at(0).toObject().contains(QStringLiteral("point_preview")));
+
+    const auto rolledBack = project.resolveBundleAdjustMetadataStage(
+        rollbackToken, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    EXPECT_EQ(rolledBack.status, ProjectBundleAdjustMetadataStageStatus::RolledBack)
+        << qPrintable(rolledBack.errorMessage);
+    EXPECT_EQ(project.metadataIncludingResults(), before);
+    EXPECT_EQ(metadataChangedCount, 0);
+    EXPECT_EQ(dirtyChangedCount, 0);
+    EXPECT_FALSE(project.isDirty());
+
+    ProjectBundleAdjustMetadataStageToken commitToken;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &commitToken, &errorMessage)) << qPrintable(errorMessage);
+    const auto committed = project.resolveBundleAdjustMetadataStage(
+        commitToken, ProjectBundleAdjustMetadataStageDecision::Commit);
+    EXPECT_EQ(committed.status, ProjectBundleAdjustMetadataStageStatus::Committed)
+        << qPrintable(committed.errorMessage);
+    EXPECT_EQ(metadataChangedCount, 1);
+    EXPECT_EQ(dirtyChangedCount, 1);
+    EXPECT_TRUE(project.isDirty());
+    EXPECT_EQ(project.metadataIncludingResults()
+                  .value(QStringLiteral("bundle_adjust_results"))
+                  .toArray()
+                  .size(),
+              1);
+}
+
+TEST(ProjectDataTest, BundleAdjustMetadataStageLazyLoadFailureDoesNotMutateHistory)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    BundleAdjustStageFixture fixture;
+    {
+        ProjectData seed;
+        ASSERT_TRUE(seed.createProject(projectPath, QStringLiteral("ba lazy stage")));
+        QString errorMessage;
+        fixture = prepareBundleAdjustStageFixture(&seed, dir.path(), &errorMessage);
+        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ASSERT_TRUE(seed.appendBundleAdjustResult(
+            QJsonObject{{QStringLiteral("track_count"), 3}, {QStringLiteral("history"), true}}, &errorMessage));
+        ASSERT_TRUE(seed.saveProject(&errorMessage)) << qPrintable(errorMessage);
+        ASSERT_TRUE(seed.closeProject(&errorMessage)) << qPrintable(errorMessage);
+    }
+
+    ProjectData reopened;
+    QString errorMessage;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    const QJsonObject beforeCore = reopened.coreFilesMeta();
+    const QString temporaryResults = ProjectIO::tempResultsPath(projectPath);
+    writeTestFile(temporaryResults,
+                  QJsonDocument(QJsonObject{
+                                    {QStringLiteral("dem_results"),
+                                     QJsonArray{QJsonObject{{QStringLiteral("dem_tif"),
+                                                            QStringLiteral("removed-alias.tif")}}}}})
+                      .toJson(QJsonDocument::Compact));
+    int metadataChangedCount = 0;
+    QObject::connect(&reopened,
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+    ProjectBundleAdjustMetadataStageToken token;
+
+    EXPECT_FALSE(reopened.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage));
+    EXPECT_FALSE(errorMessage.isEmpty());
+    EXPECT_FALSE(token.isValid());
+    EXPECT_EQ(reopened.coreFilesMeta(), beforeCore);
+    EXPECT_EQ(metadataChangedCount, 0);
+    EXPECT_FALSE(reopened.isDirty());
+
+    ASSERT_TRUE(QFile::remove(temporaryResults));
+    const QJsonArray retained =
+        reopened.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray();
+    ASSERT_EQ(retained.size(), 1);
+    EXPECT_TRUE(retained.at(0).toObject().value(QStringLiteral("history")).toBool());
+}
+
+TEST(ProjectDataTest, BundleAdjustMetadataStageRejectsForeignTokenAndConflictingExternalCompletion)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData stagedProject;
+    ProjectData replacementProject;
+    ASSERT_TRUE(stagedProject.createProject(
+        QDir(dir.path()).filePath(QStringLiteral("staged.plascan")), QStringLiteral("staged")));
+    ASSERT_TRUE(replacementProject.createProject(
+        QDir(dir.path()).filePath(QStringLiteral("replacement.plascan")), QStringLiteral("replacement")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture =
+        prepareBundleAdjustStageFixture(&stagedProject, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    const BundleAdjustStageFixture replacementFixture =
+        prepareBundleAdjustStageFixture(&replacementProject, dir.path(), &errorMessage);
+    ASSERT_FALSE(replacementFixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(stagedProject.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+    ProjectBundleAdjustMetadataStageToken replacementToken;
+    ASSERT_TRUE(replacementProject.stageBundleAdjustMetadata(
+        replacementFixture.cameraUpdates, replacementFixture.result, &replacementToken, &errorMessage))
+        << qPrintable(errorMessage);
+
+    const QJsonObject replacementBeforeResolve = replacementProject.metadataIncludingResults();
+    const auto foreign = replacementProject.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+    EXPECT_EQ(foreign.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+    EXPECT_EQ(replacementProject.metadataIncludingResults(), replacementBeforeResolve);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(replacementProject));
+    const auto inverseForeign = stagedProject.resolveBundleAdjustMetadataStage(
+        replacementToken, ProjectBundleAdjustMetadataStageDecision::Commit);
+    EXPECT_EQ(inverseForeign.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(stagedProject));
+    const auto replacementRollback = replacementProject.resolveBundleAdjustMetadataStage(
+        replacementToken, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    ASSERT_EQ(replacementRollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack)
+        << qPrintable(replacementRollback.errorMessage);
+
+    QJsonObject conflicting = stagedProject.metadataIncludingResults();
+    conflicting[QStringLiteral("bundle_adjust_results")] = QJsonArray{};
+    conflicting[QStringLiteral("aerial_triangulation_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("reconstruction_generation_id"),
+                                QStringLiteral("incomplete-external-generation")}}};
+    for (const QString& key : {QStringLiteral("depth_map_results"),
+                               QStringLiteral("dense_cloud_results"),
+                               QStringLiteral("model_results"),
+                               QStringLiteral("dem_results"),
+                               QStringLiteral("ortho_results")})
+    {
+        conflicting[key] = QJsonArray{};
+    }
+    stagedProject.updateMetadata(conflicting, true);
+    const auto conflict = stagedProject.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+    EXPECT_EQ(conflict.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+    const QJsonObject retainedConflict = stagedProject.metadataIncludingResults();
+    EXPECT_EQ(retainedConflict.value(QStringLiteral("aerial_triangulation_results")).toArray().size(), 1);
+    EXPECT_TRUE(retainedConflict.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustMetadataStageRecognizesCompleteExternalCommitWithoutRepublishing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba external stage")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    for (const QString& key : {QStringLiteral("depth_map_results"),
+                               QStringLiteral("dense_cloud_results"),
+                               QStringLiteral("model_results"),
+                               QStringLiteral("dem_results"),
+                               QStringLiteral("ortho_results")})
+    {
+        ASSERT_TRUE(project.appendResultRecord(
+            key, QJsonObject{{QStringLiteral("stale_downstream"), key}}, false));
+    }
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+    int metadataChangedCount = 0;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+
+    QJsonObject externalCommit = project.metadataIncludingResults();
+    externalCommit[QStringLiteral("aerial_triangulation_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("reconstruction_generation_id"),
+                                QStringLiteral("external-generation")}}};
+    for (const QString& key : {QStringLiteral("depth_map_results"),
+                               QStringLiteral("dense_cloud_results"),
+                               QStringLiteral("model_results"),
+                               QStringLiteral("dem_results"),
+                               QStringLiteral("ortho_results")})
+    {
+        externalCommit[key] = QJsonArray{};
+    }
+    project.updateMetadata(externalCommit, true);
+    ASSERT_EQ(metadataChangedCount, 1);
+    const auto resolved = project.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+
+    EXPECT_EQ(resolved.status, ProjectBundleAdjustMetadataStageStatus::ExternalCommit)
+        << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(metadataChangedCount, 1);
+    EXPECT_EQ(project.metadataIncludingResults()
+                  .value(QStringLiteral("bundle_adjust_results"))
+                  .toArray()
+                  .size(),
+              1);
+    for (const QString& key : {QStringLiteral("depth_map_results"),
+                               QStringLiteral("dense_cloud_results"),
+                               QStringLiteral("model_results"),
+                               QStringLiteral("dem_results"),
+                               QStringLiteral("ortho_results")})
+    {
+        EXPECT_TRUE(project.metadataIncludingResults().value(key).toArray().isEmpty()) << qPrintable(key);
+    }
+}
+
+TEST(ProjectDataTest, BundleAdjustMetadataStageRejectsChunkReplacementWithoutOverwrite)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    const QString projectPath = tempProjectPath(dir);
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba chunk replacement")));
+    const QString originalChunkId = project.activeChunkId();
+    QString replacementChunkId;
+    QString errorMessage;
+    ASSERT_TRUE(project.createChunk(QStringLiteral("replacement"), &replacementChunkId, &errorMessage))
+        << qPrintable(errorMessage);
+    ASSERT_NE(replacementChunkId, originalChunkId);
+    const ProjectOpenSnapshot replacementSnapshot = ProjectData::loadProjectOpenSnapshot(projectPath);
+    ASSERT_TRUE(replacementSnapshot.success) << qPrintable(replacementSnapshot.errorMessage);
+    ASSERT_EQ(replacementSnapshot.chunkId, replacementChunkId);
+    const QJsonObject replacementCore = replacementSnapshot.filesMeta;
+    ASSERT_TRUE(project.switchChunk(originalChunkId, &errorMessage)) << qPrintable(errorMessage);
+
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+
+    ASSERT_TRUE(project.openProjectFromSnapshot(replacementSnapshot, &errorMessage)) << qPrintable(errorMessage);
+    ASSERT_EQ(project.activeChunkId(), replacementChunkId);
+    ASSERT_EQ(project.coreFilesMeta(), replacementCore);
+    const auto rejected = project.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+
+    EXPECT_EQ(rejected.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+    EXPECT_EQ(project.activeChunkId(), replacementChunkId);
+    EXPECT_EQ(project.coreFilesMeta(), replacementCore);
+    EXPECT_TRUE(project.metadataIncludingResults()
+                    .value(QStringLiteral("bundle_adjust_results"))
+                    .toArray()
+                    .isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustStageAndResourceCleanupPersistenceAreMutuallyExclusive)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba cleanup exclusion")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+
+    const QJsonObject original = project.metadataIncludingResults();
+    QJsonObject cleanupMetadata = original;
+    cleanupMetadata[QStringLiteral("fix3_cleanup_marker")] = true;
+    const ProjectResourceCleanupPersistence cleanup =
+        project.prepareResourceCleanupPersistence(cleanupMetadata);
+    ASSERT_TRUE(cleanup.isValid());
+    ProjectBundleAdjustMetadataStageToken blockedToken;
+    EXPECT_FALSE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &blockedToken, &errorMessage));
+    EXPECT_FALSE(blockedToken.isValid());
+    EXPECT_FALSE(errorMessage.isEmpty());
+    ASSERT_TRUE(project.finalizeResourceCleanupPersistence(cleanup, false, false));
+
+    ProjectBundleAdjustMetadataStageToken stageToken;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &stageToken, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_FALSE(project.prepareResourceCleanupPersistence(cleanupMetadata).isValid());
+    bool archiveCommitted = false;
+    EXPECT_FALSE(project.commitResourceCleanupMetadata(cleanupMetadata, &errorMessage, &archiveCommitted));
+    EXPECT_FALSE(archiveCommitted);
+    const auto rollback = project.resolveBundleAdjustMetadataStage(
+        stageToken, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    EXPECT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack)
+        << qPrintable(rollback.errorMessage);
+}
+
+TEST(ProjectDataTest, DirectCleanupReservationRejectsReentrantBundleAdjustAndNestedCleanup)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("direct cleanup reservation")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+
+    QJsonObject cleanupMetadata = project.metadataIncludingResults();
+    cleanupMetadata[QStringLiteral("fix5_direct_cleanup_marker")] = QStringLiteral("outer");
+    bool reentered = false;
+    bool nestedCleanupAccepted = false;
+    bool nestedArchiveCommitted = false;
+    bool stageAccepted = false;
+    bool suspendedDuringSignal = false;
+    quint64 reservationDuringSignal = 0;
+    ProjectBundleAdjustMetadataStageToken reentrantToken;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&]()
+                     {
+                         if (reentered)
+                         {
+                             return;
+                         }
+                         reentered = true;
+                         reservationDuringSignal = ProjectDataPersistenceTestPeer::cleanupReservation(project);
+                         QJsonObject nestedMetadata = project.metadataIncludingResults();
+                         nestedMetadata[QStringLiteral("fix5_direct_cleanup_marker")] = QStringLiteral("nested");
+                         QString nestedError;
+                         nestedCleanupAccepted = project.commitResourceCleanupMetadata(
+                             nestedMetadata, &nestedError, &nestedArchiveCommitted);
+                         stageAccepted = project.stageBundleAdjustMetadata(
+                             fixture.cameraUpdates, fixture.result, &reentrantToken, &nestedError);
+                         suspendedDuringSignal = ProjectDataPersistenceTestPeer::suspended(project);
+                     });
+
+    bool archiveCommitted = false;
+    const bool committed = project.commitResourceCleanupMetadata(cleanupMetadata, &errorMessage, &archiveCommitted);
+
+    EXPECT_TRUE(reentered);
+    EXPECT_NE(reservationDuringSignal, 0U);
+    EXPECT_FALSE(nestedCleanupAccepted);
+    EXPECT_FALSE(nestedArchiveCommitted);
+    EXPECT_FALSE(stageAccepted);
+    EXPECT_FALSE(reentrantToken.isValid());
+    EXPECT_FALSE(suspendedDuringSignal);
+    EXPECT_TRUE(committed) << qPrintable(errorMessage);
+    EXPECT_TRUE(archiveCommitted);
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::cleanupReservation(project), 0U);
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::suspended(project));
+
+    const QJsonObject archivedCore = chunkSection(projectPath, PortableProjectFormat::ProjectFilesSection);
+    const QJsonObject archivedResults = chunkSection(projectPath, PortableProjectFormat::ProjectResultsSection);
+    EXPECT_EQ(archivedCore.value(QStringLiteral("fix5_direct_cleanup_marker")).toString(), QStringLiteral("outer"));
+    EXPECT_TRUE(archivedResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+    const QJsonObject recoveryCore =
+        QJsonDocument::fromJson(readTestFile(ProjectIO::tempFilesPath(projectPath))).object();
+    const QJsonObject recoveryResults =
+        QJsonDocument::fromJson(qUncompress(readTestFile(ProjectIO::tempResultsPath(projectPath)))).object();
+    EXPECT_EQ(recoveryCore.value(QStringLiteral("fix5_direct_cleanup_marker")).toString(), QStringLiteral("outer"));
+    EXPECT_TRUE(recoveryResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+
+    if (reentrantToken.isValid())
+    {
+        project.resolveBundleAdjustMetadataStage(reentrantToken, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    }
+    ProjectBundleAdjustMetadataStageToken legitimateToken;
+    ASSERT_TRUE(
+        project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &legitimateToken, &errorMessage))
+        << qPrintable(errorMessage);
+    EXPECT_TRUE(legitimateToken.isValid());
+    const auto rollback =
+        project.resolveBundleAdjustMetadataStage(legitimateToken, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    EXPECT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack);
+}
+
+TEST(ProjectDataTest, DirectCleanupStaleGenerationReleasesReservationAndStartsPendingRecovery)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("direct cleanup stale")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+
+    ScopedPersistencePoolBlocker blocker(ProjectDataPersistenceTestPeer::pool(&project));
+    ASSERT_TRUE(blocker.waitUntilStarted());
+    QJsonObject cleanupMetadata = project.metadataIncludingResults();
+    cleanupMetadata[QStringLiteral("fix5_direct_cleanup_stale_marker")] = true;
+    bool scheduled = false;
+    bool reservedDuringSignal = false;
+    bool pendingDuringSignal = false;
+    bool runningDuringSignal = false;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&]()
+                     {
+                         if (scheduled)
+                         {
+                             return;
+                         }
+                         scheduled = true;
+                         project.scheduleTemporaryMetadataSave();
+                         reservedDuringSignal = ProjectDataPersistenceTestPeer::cleanupReservation(project) != 0;
+                         pendingDuringSignal = ProjectDataPersistenceTestPeer::hasPendingRequest(project);
+                         runningDuringSignal = ProjectDataPersistenceTestPeer::running(project);
+                     });
+
+    bool archiveCommitted = true;
+    EXPECT_FALSE(project.commitResourceCleanupMetadata(cleanupMetadata, &errorMessage, &archiveCommitted));
+    EXPECT_TRUE(scheduled);
+    EXPECT_TRUE(reservedDuringSignal);
+    EXPECT_TRUE(pendingDuringSignal);
+    EXPECT_FALSE(runningDuringSignal);
+    EXPECT_FALSE(archiveCommitted);
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::cleanupReservation(project), 0U);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::running(project));
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::hasPendingRequest(project));
+
+    blocker.releaseAndJoin();
+    ProjectDataPersistenceTestPeer::settle(&project);
+    const QJsonObject recoveryCore =
+        QJsonDocument::fromJson(readTestFile(ProjectIO::tempFilesPath(projectPath))).object();
+    const QJsonObject recoveryResults =
+        QJsonDocument::fromJson(qUncompress(readTestFile(ProjectIO::tempResultsPath(projectPath)))).object();
+    EXPECT_TRUE(recoveryCore.value(QStringLiteral("fix5_direct_cleanup_stale_marker")).toBool());
+    EXPECT_TRUE(recoveryResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustCommitSignalReentryPreservesLiveConflictAndReleasesBarrier)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba commit signal conflict")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+
+    bool reentered = false;
+    QObject::connect(&project,
+                     &ProjectData::metadataChanged,
+                     [&]()
+                     {
+                         if (reentered)
+                         {
+                             return;
+                         }
+                         reentered = true;
+                         QJsonObject conflict = project.metadataIncludingResults();
+                         conflict[QStringLiteral("fix3_commit_signal_conflict")] = true;
+                         project.updateMetadata(conflict, true);
+                     });
+
+    const auto resolved = project.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+    EXPECT_TRUE(reentered);
+    EXPECT_EQ(resolved.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::suspended(project));
+    EXPECT_TRUE(project.metadataIncludingResults()
+                    .value(QStringLiteral("fix3_commit_signal_conflict"))
+                    .toBool());
+    EXPECT_EQ(project.metadataIncludingResults()
+                  .value(QStringLiteral("bundle_adjust_results"))
+                  .toArray()
+                  .size(),
+              1);
+}
+
+TEST(ProjectDataTest, BundleAdjustStageBlocksDirectTemporarySaveAndRollbackReopensOriginalState)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba direct temporary barrier")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    const QJsonObject before = project.metadataIncludingResults();
+    ASSERT_TRUE(project.saveTemporaryMetadata());
+    const QJsonObject beforeCore = project.coreFilesMeta();
+    const QByteArray baselineCore = readTestFile(ProjectIO::tempFilesPath(projectPath));
+    const QByteArray baselineResults = readTestFile(ProjectIO::tempResultsPath(projectPath));
+
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(project));
+    EXPECT_FALSE(project.saveTemporaryMetadata());
+    EXPECT_EQ(readTestFile(ProjectIO::tempFilesPath(projectPath)), baselineCore);
+    EXPECT_EQ(readTestFile(ProjectIO::tempResultsPath(projectPath)), baselineResults);
+
+    const auto rollback = project.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    ASSERT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack)
+        << qPrintable(rollback.errorMessage);
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::suspended(project));
+    ASSERT_TRUE(project.closeProject(&errorMessage)) << qPrintable(errorMessage);
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_EQ(reopened.coreFilesMeta(), beforeCore);
+    EXPECT_EQ(reopened.metadataIncludingResults(), before);
+    EXPECT_TRUE(reopened.metadataIncludingResults()
+                    .value(QStringLiteral("bundle_adjust_results"))
+                    .toArray()
+                    .isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustStageDefersScheduledTemporarySaveUntilRollbackRestoresState)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba scheduled temporary barrier")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    const QJsonObject before = project.metadataIncludingResults();
+    ASSERT_TRUE(project.saveTemporaryMetadata());
+    const QByteArray baselineCore = readTestFile(ProjectIO::tempFilesPath(projectPath));
+    const QByteArray baselineResults = readTestFile(ProjectIO::tempResultsPath(projectPath));
+    const quint64 generationBeforeStage = ProjectDataPersistenceTestPeer::persistenceGeneration(project);
+
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(
+        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+    project.scheduleTemporaryMetadataSave();
+
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(project));
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::persistenceGeneration(project), generationBeforeStage);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::hasPendingRequest(project));
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::running(project));
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::pool(&project)->activeThreadCount(), 0);
+    EXPECT_EQ(readTestFile(ProjectIO::tempFilesPath(projectPath)), baselineCore);
+    EXPECT_EQ(readTestFile(ProjectIO::tempResultsPath(projectPath)), baselineResults);
+
+    const auto rollback = project.resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    ASSERT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack)
+        << qPrintable(rollback.errorMessage);
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::persistenceGeneration(project), generationBeforeStage + 1);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    const QByteArray restoredResults = qUncompress(readTestFile(ProjectIO::tempResultsPath(projectPath)));
+    const QJsonObject recoveredResults = QJsonDocument::fromJson(restoredResults).object();
+    EXPECT_TRUE(recoveredResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+    EXPECT_EQ(project.metadataIncludingResults(), before);
+}
+
+TEST(ProjectDataTest, BundleAdjustRollbackMergesConfigWorkspaceResponsibilitiesAndKeepsEarlierTimer)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba rollback responsibilities")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    ASSERT_FALSE(project.isDirty());
+
+    ScopedPersistencePoolBlocker blocker(ProjectDataPersistenceTestPeer::pool(&project));
+    ASSERT_TRUE(blocker.waitUntilStarted());
+    project.scheduleTemporaryMetadataSave();
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(project));
+    ProjectDataPersistenceTestPeer::startArchiveTimer(&project, 4000);
+
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+        << qPrintable(errorMessage);
+    QJsonObject config = ProjectDataPersistenceTestPeer::config(project);
+    config[QStringLiteral("fix5_config_marker")] = QStringLiteral("during-stage");
+    project.updateConfig(config, true);
+    project.markWorkspaceDirty();
+    ProjectDataPersistenceTestPeer::startArchiveTimer(&project, 1000);
+
+    const auto rollback =
+        project.resolveBundleAdjustMetadataStage(token, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    ASSERT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack) << qPrintable(rollback.errorMessage);
+    EXPECT_EQ(ProjectDataPersistenceTestPeer::config(project).value(QStringLiteral("fix5_config_marker")).toString(),
+              QStringLiteral("during-stage"));
+    EXPECT_TRUE(project.isDirty());
+    const auto responsibilities = ProjectDataPersistenceTestPeer::responsibilities(project);
+    EXPECT_TRUE(responsibilities.configDirty);
+    EXPECT_TRUE(responsibilities.workspaceDirty);
+    EXPECT_TRUE(responsibilities.archiveSyncPending);
+    EXPECT_TRUE(responsibilities.temporarySavePending);
+    EXPECT_TRUE(ProjectDataPersistenceTestPeer::archiveTimerActive(project));
+    EXPECT_GT(ProjectDataPersistenceTestPeer::archiveTimerRemaining(project), 0);
+    EXPECT_LE(ProjectDataPersistenceTestPeer::archiveTimerRemaining(project), 1500);
+    EXPECT_TRUE(project.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+
+    blocker.releaseAndJoin();
+    ProjectDataPersistenceTestPeer::settle(&project);
+    const QJsonObject archivedConfig = chunkSection(projectPath, PortableProjectFormat::ProjectConfigSection);
+    const QJsonObject archivedResults = chunkSection(projectPath, PortableProjectFormat::ProjectResultsSection);
+    EXPECT_EQ(archivedConfig.value(QStringLiteral("fix5_config_marker")).toString(), QStringLiteral("during-stage"));
+    EXPECT_TRUE(archivedResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustRollbackPreservesUiOnlyResponsibilityWithoutDirtyingProject)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba rollback ui responsibility")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    ASSERT_FALSE(project.isDirty());
+
+    ScopedPersistencePoolBlocker blocker(ProjectDataPersistenceTestPeer::pool(&project));
+    ASSERT_TRUE(blocker.waitUntilStarted());
+    project.scheduleTemporaryMetadataSave();
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(project));
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+        << qPrintable(errorMessage);
+    project.saveUiSettings(QJsonObject{{QStringLiteral("show_interest_points"), false}});
+
+    const auto rollback =
+        project.resolveBundleAdjustMetadataStage(token, ProjectBundleAdjustMetadataStageDecision::Rollback);
+    ASSERT_EQ(rollback.status, ProjectBundleAdjustMetadataStageStatus::RolledBack) << qPrintable(rollback.errorMessage);
+    EXPECT_FALSE(project.isDirty());
+    EXPECT_FALSE(project.loadUiSettings().value(QStringLiteral("show_interest_points")).toBool(true));
+    const auto responsibilities = ProjectDataPersistenceTestPeer::responsibilities(project);
+    EXPECT_TRUE(responsibilities.uiStateDirty);
+    EXPECT_TRUE(responsibilities.archiveSyncPending);
+    EXPECT_TRUE(responsibilities.temporarySavePending);
+
+    blocker.releaseAndJoin();
+    ProjectDataPersistenceTestPeer::settle(&project);
+    const QJsonObject archivedUi = projectDocument(projectPath)
+                                       .value(QString::fromLatin1(PortableProjectFormat::ProjectUiStateSection))
+                                       .toObject()
+                                       .value(QStringLiteral("display_settings"))
+                                       .toObject();
+    EXPECT_FALSE(archivedUi.value(QStringLiteral("show_interest_points")).toBool(true));
+    EXPECT_TRUE(chunkSection(projectPath, PortableProjectFormat::ProjectResultsSection)
+                    .value(QStringLiteral("bundle_adjust_results"))
+                    .toArray()
+                    .isEmpty());
+
+    ASSERT_TRUE(project.closeProject(&errorMessage)) << qPrintable(errorMessage);
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_FALSE(reopened.loadUiSettings().value(QStringLiteral("show_interest_points")).toBool(true));
+    EXPECT_TRUE(reopened.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustShutdownRollbackSuppressesArchiveTimer)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba shutdown timer")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(&project);
+    ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::startArchiveTimer(&project, 4000);
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+        << qPrintable(errorMessage);
+
+    ProjectDataPersistenceTestPeer::settleBundleAdjustForShutdown(&project);
+
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::suspended(project));
+    EXPECT_FALSE(ProjectDataPersistenceTestPeer::archiveTimerActive(project));
+    EXPECT_TRUE(project.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, BundleAdjustStageDefersRunningWorkerAcrossEveryTerminalPath)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    enum class TerminalPath
+    {
+        Rollback,
+        Commit,
+        Conflict
+    };
+    const QVector<TerminalPath> terminals{TerminalPath::Rollback, TerminalPath::Commit, TerminalPath::Conflict};
+    for (int terminalIndex = 0; terminalIndex < terminals.size(); ++terminalIndex)
+    {
+        const TerminalPath terminal = terminals.at(terminalIndex);
+        const QString caseRoot = QDir(dir.path()).filePath(QStringLiteral("handoff-%1").arg(terminalIndex));
+        ASSERT_TRUE(QDir().mkpath(caseRoot));
+        const QString projectPath = QDir(caseRoot).filePath(QStringLiteral("handoff.plascan"));
+        ProjectData project;
+        ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba worker handoff")));
+        QString errorMessage;
+        const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, caseRoot, &errorMessage);
+        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ProjectDataPersistenceTestPeer::settle(&project);
+        ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
+        const QJsonObject before = project.metadataIncludingResults();
+
+        QSemaphore blockerStarted;
+        QSemaphore releaseBlocker;
+        QFuture<void> blocker = QtConcurrent::run(
+            ProjectDataPersistenceTestPeer::pool(&project),
+            [&]()
+            {
+                blockerStarted.release();
+                releaseBlocker.acquire();
+            });
+        ASSERT_TRUE(blockerStarted.tryAcquire(1, 5000));
+        project.scheduleTemporaryMetadataSave();
+        ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(project));
+
+        ProjectBundleAdjustMetadataStageToken token;
+        ASSERT_TRUE(project.stageBundleAdjustMetadata(
+            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        const QJsonObject staged = project.metadataIncludingResults();
+        project.scheduleTemporaryMetadataSave();
+        if (terminal == TerminalPath::Conflict)
+        {
+            QJsonObject conflict = project.metadataIncludingResults();
+            conflict[QStringLiteral("fix3_conflict_marker")] = true;
+            project.updateMetadata(conflict, true);
+        }
+
+        releaseBlocker.release();
+        blocker.waitForFinished();
+        ProjectDataPersistenceTestPeer::pool(&project)->waitForDone();
+        ProjectDataPersistenceTestPeer::deliverQueuedCompletions(&project);
+        EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(project));
+        EXPECT_TRUE(ProjectDataPersistenceTestPeer::hasDeferredResult(project));
+        EXPECT_TRUE(ProjectDataPersistenceTestPeer::running(project));
+        EXPECT_TRUE(ProjectDataPersistenceTestPeer::hasPendingRequest(project));
+        EXPECT_EQ(ProjectDataPersistenceTestPeer::pool(&project)->activeThreadCount(), 0);
+
+        const auto resolved = project.resolveBundleAdjustMetadataStage(
+            token,
+            terminal == TerminalPath::Rollback ? ProjectBundleAdjustMetadataStageDecision::Rollback
+                                               : ProjectBundleAdjustMetadataStageDecision::Commit);
+        if (terminal == TerminalPath::Rollback)
+        {
+            EXPECT_EQ(resolved.status, ProjectBundleAdjustMetadataStageStatus::RolledBack);
+        }
+        else if (terminal == TerminalPath::Commit)
+        {
+            EXPECT_EQ(resolved.status, ProjectBundleAdjustMetadataStageStatus::Committed);
+        }
+        else
+        {
+            EXPECT_EQ(resolved.status, ProjectBundleAdjustMetadataStageStatus::Rejected);
+        }
+        ProjectDataPersistenceTestPeer::settle(&project);
+        ASSERT_TRUE(project.closeProject(&errorMessage)) << qPrintable(errorMessage);
+
+        ProjectData reopened;
+        ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+        const QJsonObject recovered = reopened.metadataIncludingResults();
+        const int expectedBaCount = terminal == TerminalPath::Rollback ? 0 : 1;
+        EXPECT_EQ(recovered.value(QStringLiteral("bundle_adjust_results")).toArray().size(), expectedBaCount);
+        if (terminal == TerminalPath::Rollback)
+        {
+            EXPECT_EQ(recovered, before);
+        }
+        else if (terminal == TerminalPath::Commit)
+        {
+            EXPECT_EQ(recovered, staged);
+        }
+        else
+        {
+            EXPECT_TRUE(recovered.value(QStringLiteral("fix3_conflict_marker")).toBool());
+        }
+        ASSERT_TRUE(reopened.closeProject(&errorMessage)) << qPrintable(errorMessage);
+    }
+}
+
+TEST(ProjectDataTest, DestructorSettlesUnresolvedBundleAdjustStageBeforePersistence)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    QJsonObject before;
+    {
+        auto project = std::make_unique<ProjectData>();
+        ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("ba destructor rollback")));
+        QString errorMessage;
+        const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
+        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ProjectDataPersistenceTestPeer::settle(project.get());
+        QJsonObject marked = project->metadataIncludingResults();
+        marked[QStringLiteral("fix3_pre_stage_marker")] = QStringLiteral("preserve-before-stage");
+        project->updateMetadata(marked, true);
+        ProjectDataPersistenceTestPeer::settle(project.get());
+        ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
+        before = project->metadataIncludingResults();
+        ProjectBundleAdjustMetadataStageToken token;
+        ASSERT_TRUE(project->stageBundleAdjustMetadata(
+            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+    }
+
+    ProjectData reopened;
+    QString errorMessage;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_EQ(reopened.metadataIncludingResults(), before);
+    EXPECT_EQ(reopened.metadataIncludingResults().value(QStringLiteral("fix3_pre_stage_marker")).toString(),
+              QStringLiteral("preserve-before-stage"));
+    EXPECT_TRUE(reopened.metadataIncludingResults()
+                    .value(QStringLiteral("bundle_adjust_results"))
+                    .toArray()
+                    .isEmpty());
+}
+
+TEST(ProjectDataTest, DestructorPreservesCompleteExternalBundleAdjustState)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    {
+        auto project = std::make_unique<ProjectData>();
+        ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("ba destructor external")));
+        QString errorMessage;
+        const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
+        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ProjectDataPersistenceTestPeer::settle(project.get());
+        ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
+        ProjectBundleAdjustMetadataStageToken token;
+        ASSERT_TRUE(project->stageBundleAdjustMetadata(
+            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        QJsonObject external = project->metadataIncludingResults();
+        external[QStringLiteral("aerial_triangulation_results")] =
+            QJsonArray{QJsonObject{{QStringLiteral("reconstruction_generation_id"),
+                                    QStringLiteral("destructor-external")}}};
+        for (const QString& key : {QStringLiteral("depth_map_results"),
+                                   QStringLiteral("dense_cloud_results"),
+                                   QStringLiteral("model_results"),
+                                   QStringLiteral("dem_results"),
+                                   QStringLiteral("ortho_results")})
+        {
+            external[key] = QJsonArray{};
+        }
+        project->updateMetadata(external, true);
+    }
+
+    ProjectData reopened;
+    QString errorMessage;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    const QJsonObject recovered = reopened.metadataIncludingResults();
+    EXPECT_EQ(recovered.value(QStringLiteral("bundle_adjust_results")).toArray().size(), 1);
+    EXPECT_EQ(recovered.value(QStringLiteral("aerial_triangulation_results")).toArray().size(), 1);
+    EXPECT_EQ(recovered.value(QStringLiteral("aerial_triangulation_results"))
+                  .toArray()
+                  .at(0)
+                  .toObject()
+                  .value(QStringLiteral("reconstruction_generation_id"))
+                  .toString(),
+              QStringLiteral("destructor-external"));
+}
+
+TEST(ProjectDataTest, DestructorForceDrainPreservesLiveMarkerAfterRunningWorkerTurnsStale)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    QJsonArray originalDefinitions;
+    QJsonArray originalInstances;
+    auto project = std::make_unique<ProjectData>();
+    ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("destructor forced running drain")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(project.get());
+    ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
+    originalDefinitions = project->coreFilesMeta().value(QStringLiteral("camera_definitions")).toArray();
+    originalInstances = project->coreFilesMeta().value(QStringLiteral("camera_instances")).toArray();
+
+    QJsonObject live = project->metadataIncludingResults();
+    live[QStringLiteral("fix5_running_force_marker")] = QStringLiteral("live-before-stage");
+    project->updateMetadata(live, false);
+    ASSERT_FALSE(project->isDirty());
+
+    ScopedPersistencePoolBlocker blocker(ProjectDataPersistenceTestPeer::pool(project.get()));
+    ASSERT_TRUE(blocker.waitUntilStarted());
+    project->scheduleTemporaryMetadataSave();
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(*project));
+    ASSERT_FALSE(ProjectDataPersistenceTestPeer::hasPendingRequest(*project));
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+        << qPrintable(errorMessage);
+    const quint64 stagedGeneration = ProjectDataPersistenceTestPeer::persistenceGeneration(*project);
+    blocker.releaseAfterGenerationAdvance(ProjectDataPersistenceTestPeer::coordinator(*project), stagedGeneration);
+
+    project.reset();
+
+    EXPECT_TRUE(blocker.waitForGenerationWatcher());
+    const QJsonObject archivedCore = chunkSection(projectPath, PortableProjectFormat::ProjectFilesSection);
+    const QJsonObject archivedResults = chunkSection(projectPath, PortableProjectFormat::ProjectResultsSection);
+    EXPECT_EQ(archivedCore.value(QStringLiteral("fix5_running_force_marker")).toString(),
+              QStringLiteral("live-before-stage"));
+    EXPECT_EQ(archivedCore.value(QStringLiteral("camera_definitions")).toArray(), originalDefinitions);
+    EXPECT_EQ(archivedCore.value(QStringLiteral("camera_instances")).toArray(), originalInstances);
+    EXPECT_TRUE(archivedResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+
+    const QJsonObject temporaryCore =
+        QJsonDocument::fromJson(readTestFile(ProjectIO::tempFilesPath(projectPath))).object();
+    const QJsonObject temporaryResults =
+        QJsonDocument::fromJson(qUncompress(readTestFile(ProjectIO::tempResultsPath(projectPath)))).object();
+    EXPECT_EQ(temporaryCore.value(QStringLiteral("fix5_running_force_marker")).toString(),
+              QStringLiteral("live-before-stage"));
+    EXPECT_EQ(temporaryCore.value(QStringLiteral("camera_definitions")).toArray(), originalDefinitions);
+    EXPECT_EQ(temporaryCore.value(QStringLiteral("camera_instances")).toArray(), originalInstances);
+    EXPECT_TRUE(temporaryResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_EQ(reopened.coreFilesMeta().value(QStringLiteral("fix5_running_force_marker")).toString(),
+              QStringLiteral("live-before-stage"));
+    EXPECT_EQ(reopened.coreFilesMeta().value(QStringLiteral("camera_definitions")).toArray(), originalDefinitions);
+    EXPECT_EQ(reopened.coreFilesMeta().value(QStringLiteral("camera_instances")).toArray(), originalInstances);
+    EXPECT_TRUE(reopened.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+}
+
+TEST(ProjectDataTest, DestructorBundleAdjustForceDrainDiscardsDeferredResultWithoutMetadataSignal)
+{
+    ScopedCoreApplication application;
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString projectPath = tempProjectPath(dir);
+    auto project = std::make_unique<ProjectData>();
+    ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("destructor deferred drain")));
+    QString errorMessage;
+    const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
+    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ProjectDataPersistenceTestPeer::settle(project.get());
+    ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
+
+    ScopedPersistencePoolBlocker blocker(ProjectDataPersistenceTestPeer::pool(project.get()));
+    ASSERT_TRUE(blocker.waitUntilStarted());
+    project->scheduleTemporaryMetadataSave();
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(*project));
+    ProjectBundleAdjustMetadataStageToken token;
+    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+        << qPrintable(errorMessage);
+    QJsonObject config = ProjectDataPersistenceTestPeer::config(*project);
+    config[QStringLiteral("fix5_deferred_force_marker")] = QStringLiteral("post-stage-live");
+    project->updateConfig(config, false);
+    int metadataChangedCount = 0;
+    QObject::connect(project.get(),
+                     &ProjectData::metadataChanged,
+                     [&metadataChangedCount](const QJsonObject&) { ++metadataChangedCount; });
+
+    blocker.releaseAndJoin();
+    ProjectDataPersistenceTestPeer::pool(project.get())->waitForDone();
+    ProjectDataPersistenceTestPeer::deliverQueuedCompletions(project.get());
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::suspended(*project));
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::hasDeferredResult(*project));
+    ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(*project));
+
+    project.reset();
+
+    EXPECT_EQ(metadataChangedCount, 0);
+    const QJsonObject archivedConfig = chunkSection(projectPath, PortableProjectFormat::ProjectConfigSection);
+    const QJsonObject archivedResults = chunkSection(projectPath, PortableProjectFormat::ProjectResultsSection);
+    EXPECT_EQ(archivedConfig.value(QStringLiteral("fix5_deferred_force_marker")).toString(),
+              QStringLiteral("post-stage-live"));
+    EXPECT_TRUE(archivedResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+    const QJsonObject temporaryConfig =
+        QJsonDocument::fromJson(readTestFile(ProjectIO::tempConfigPath(projectPath))).object();
+    const QJsonObject temporaryResults =
+        QJsonDocument::fromJson(qUncompress(readTestFile(ProjectIO::tempResultsPath(projectPath)))).object();
+    EXPECT_EQ(temporaryConfig.value(QStringLiteral("fix5_deferred_force_marker")).toString(),
+              QStringLiteral("post-stage-live"));
+    EXPECT_TRUE(temporaryResults.value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &errorMessage)) << qPrintable(errorMessage);
+    EXPECT_EQ(
+        ProjectDataPersistenceTestPeer::config(reopened).value(QStringLiteral("fix5_deferred_force_marker")).toString(),
+        QStringLiteral("post-stage-live"));
+    EXPECT_TRUE(reopened.metadataIncludingResults().value(QStringLiteral("bundle_adjust_results")).toArray().isEmpty());
 }
 
 TEST(ProjectDataTest, PortableExportCapturesUnsavedSnapshotAndReopensEveryChunk)
@@ -2153,7 +3635,8 @@ TEST(ProjectDataTest, PortableExportCapturesUnsavedSnapshotAndReopensEveryChunk)
     ASSERT_TRUE(archive.isValid());
     for (const QString& entry : archive.listEntries())
     {
-        ASSERT_TRUE(archive.extractEntryToFile(entry, QDir(extractedRoot).filePath(entry), &error)) << qPrintable(error);
+        ASSERT_TRUE(archive.extractEntryToFile(entry, QDir(extractedRoot).filePath(entry), &error))
+            << qPrintable(error);
     }
     ASSERT_TRUE(QDir(sourceRoot).removeRecursively());
 

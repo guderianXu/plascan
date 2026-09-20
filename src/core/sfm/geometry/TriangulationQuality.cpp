@@ -17,9 +17,9 @@ namespace
 
 constexpr double kMaximumReconstructionUncertainty = 1.0e6;
 
-bool pointProjectionJacobian(const FramePinholeCamera &camera,
-                             const std::array<double, 3> &worldPoint,
-                             cv::Matx<double, 2, 3> *jacobian)
+bool pointProjectionJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                             const std::array<double, 3>& worldPoint,
+                             cv::Matx<double, 2, 3>* jacobian)
 {
     if (!jacobian)
     {
@@ -66,7 +66,7 @@ bool pointProjectionJacobian(const FramePinholeCamera &camera,
     return true;
 }
 
-bool cleanTiePointProjectionJacobian(const FramePinholeCamera& camera,
+bool cleanTiePointProjectionJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                      const std::array<double, 3>& worldPoint,
                                      cv::Matx<double, 2, 3>* jacobian)
 {
@@ -94,7 +94,7 @@ bool cleanTiePointProjectionJacobian(const FramePinholeCamera& camera,
     const double y = local[1] * inverse_z;
     const double r2 = x * x + y * y;
     const double r4 = r2 * r2;
-    const FramePinholeCamera::Distortion distortion = camera.distortion();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
     const double radial = 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r4 + distortion.radialK3 * r4 * r2;
     const double radial_derivative =
         distortion.radialK1 + 2.0 * distortion.radialK2 * r2 + 3.0 * distortion.radialK3 * r4;
@@ -107,7 +107,7 @@ bool cleanTiePointProjectionJacobian(const FramePinholeCamera& camera,
     const double distorted_y_y =
         radial + y * radial_y + 6.0 * distortion.tangentialP1 * y + 2.0 * distortion.tangentialP2 * x;
 
-    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
     const double u_scale = static_cast<double>(intrinsics.uAxisSign) * intrinsics.focalX;
     const double v_scale = static_cast<double>(intrinsics.vAxisSign) * intrinsics.focalY;
     const std::array<double, 3> local_u{u_scale * distorted_x_x * inverse_z,
@@ -276,9 +276,10 @@ double projectionAccuracy(
     return sum / static_cast<double>(observations.size());
 }
 
-double minimumTriangulationAngleDeg(const std::vector<FramePinholeCamera> &cameras,
-                                    const BATrack &track,
-                                    const std::array<double, 3> &worldPoint)
+double
+minimumTriangulationAngleDeg(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                             const BATrack& track,
+                             const std::array<double, 3>& worldPoint)
 {
     if (track.observations.size() < 2)
     {
@@ -308,29 +309,49 @@ double minimumTriangulationAngleDeg(const std::vector<FramePinholeCamera> &camer
                 continue;
             }
 
-            const CameraBaseline baseline = CameraBaseline::evaluate(
-                cameras[static_cast<std::size_t>(leftObservation.cameraIndex)],
-                cameras[static_cast<std::size_t>(rightObservation.cameraIndex)],
-                worldPoint);
-            if (!baseline.isValid()
-                || !baseline.hasPointGeometry()
-                || !baseline.isPointInFrontOfBothCameras()
-                || !baseline.triangulationAngleDeg().has_value())
+            const auto& leftCamera = cameras[static_cast<std::size_t>(leftObservation.cameraIndex)];
+            const auto& rightCamera = cameras[static_cast<std::size_t>(rightObservation.cameraIndex)];
+            if (!leftCamera.isPointInFront(worldPoint.data()) || !rightCamera.isPointInFront(worldPoint.data()))
             {
                 continue;
             }
-            minimumAngleDeg = std::min(minimumAngleDeg, *baseline.triangulationAngleDeg());
+            const auto leftCenter = leftCamera.cameraCenter();
+            const auto rightCenter = rightCamera.cameraCenter();
+            const std::array<double, 3> leftVector{worldPoint[0] - leftCenter[0],
+                                                    worldPoint[1] - leftCenter[1],
+                                                    worldPoint[2] - leftCenter[2]};
+            const std::array<double, 3> rightVector{worldPoint[0] - rightCenter[0],
+                                                     worldPoint[1] - rightCenter[1],
+                                                     worldPoint[2] - rightCenter[2]};
+            const double leftNorm = std::sqrt(leftVector[0] * leftVector[0] + leftVector[1] * leftVector[1] +
+                                              leftVector[2] * leftVector[2]);
+            const double rightNorm = std::sqrt(rightVector[0] * rightVector[0] + rightVector[1] * rightVector[1] +
+                                               rightVector[2] * rightVector[2]);
+            if (!std::isfinite(leftNorm) || !std::isfinite(rightNorm) || leftNorm <= 1.0e-12 || rightNorm <= 1.0e-12)
+            {
+                continue;
+            }
+            const double cosine = std::clamp(
+                (leftVector[0] * rightVector[0] + leftVector[1] * rightVector[1] + leftVector[2] * rightVector[2]) /
+                    (leftNorm * rightNorm),
+                -1.0,
+                1.0);
+            const double angle = std::acos(cosine) * 180.0 / std::acos(-1.0);
+            if (std::isfinite(angle))
+            {
+                minimumAngleDeg = std::min(minimumAngleDeg, angle);
+            }
         }
     }
 
     return std::isfinite(minimumAngleDeg) ? minimumAngleDeg : 0.0;
 }
 
-double pairRmsReprojectionErrorPx(const FramePinholeCamera &cameraA,
-                                  const std::array<double, 2> &pixelA,
-                                  const FramePinholeCamera &cameraB,
-                                  const std::array<double, 2> &pixelB,
-                                  const std::array<double, 3> &worldPoint)
+double pairRmsReprojectionErrorPx(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraA,
+                                  const std::array<double, 2>& pixelA,
+                                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraB,
+                                  const std::array<double, 2>& pixelB,
+                                  const std::array<double, 3>& worldPoint)
 {
     const double errorA = reprojectionErrorPx(cameraA, worldPoint, pixelA);
     const double errorB = reprojectionErrorPx(cameraB, worldPoint, pixelB);
@@ -341,19 +362,19 @@ double pairRmsReprojectionErrorPx(const FramePinholeCamera &cameraA,
     return std::sqrt(0.5 * (errorA * errorA + errorB * errorB));
 }
 
-PairIntersectionCandidate triangulatePairWithDirectionFallback(
-    const FramePinholeCamera &cameraA,
-    const std::array<double, 2> &pixelA,
-    const FramePinholeCamera &cameraB,
-    const std::array<double, 2> &pixelB)
+PairIntersectionCandidate
+triangulatePairWithDirectionFallback(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraA,
+                                     const std::array<double, 2>& pixelA,
+                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraB,
+                                     const std::array<double, 2>& pixelB)
 {
     PairIntersectionCandidate bestCandidate;
     // 历史 .tsai/工程相机可能错误标记局部前向轴。四种组合只用于寻找可优化初值，
     // 输入相机保持不变，后续严格正深度检查仍会暴露元数据问题。
     for (int flipMask = 0; flipMask < 4; ++flipMask)
     {
-        FramePinholeCamera testCameraA = cameraA;
-        FramePinholeCamera testCameraB = cameraB;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState testCameraA = cameraA;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState testCameraB = cameraB;
         if ((flipMask & 0x1) != 0)
         {
             testCameraA.setDepthAxisFlipped(!testCameraA.depthAxisFlipped());

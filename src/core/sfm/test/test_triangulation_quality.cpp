@@ -7,13 +7,13 @@
 
 TEST(TriangulationQualityTest, ComputesMinimumCameraRayAngle)
 {
-    xjw::FramePinholeCamera left;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState left;
     left.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     left.setPose({1.0, 0.0, 0.0,
                   0.0, 1.0, 0.0,
                   0.0, 0.0, 1.0},
                  {-1.0, 0.0, 0.0});
-    xjw::FramePinholeCamera right = left;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState right = left;
     right.setCameraCenter({1.0, 0.0, 0.0});
 
     xjw::BATrack track;
@@ -28,7 +28,7 @@ TEST(TriangulationQualityTest, ComputesMinimumCameraRayAngle)
 
 TEST(TriangulationQualityTest, ComputesPairRmsReprojectionError)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -43,15 +43,15 @@ TEST(TriangulationQualityTest, ComputesPairRmsReprojectionError)
 
 TEST(TriangulationQualityTest, ReconstructionUncertaintyRespondsToBaseline)
 {
-    xjw::FramePinholeCamera left;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState left;
     left.setIntrinsics(800.0, 800.0, 0.0, 0.0);
     left.setPose({1.0, 0.0, 0.0,
                   0.0, 1.0, 0.0,
                   0.0, 0.0, 1.0},
                  {-1.0, 0.0, 0.0});
-    xjw::FramePinholeCamera wideRight = left;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState wideRight = left;
     wideRight.setCameraCenter({1.0, 0.0, 0.0});
-    xjw::FramePinholeCamera narrowRight = left;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState narrowRight = left;
     narrowRight.setCameraCenter({-0.8, 0.0, 0.0});
 
     const std::array<double, 3> point{0.0, 0.0, 10.0};
@@ -68,7 +68,7 @@ TEST(TriangulationQualityTest, ReconstructionUncertaintyRespondsToBaseline)
 
 TEST(TriangulationQualityTest, ProjectionAccuracyAveragesEveryObservationScale)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     const std::vector<xjw::TiePointQualityObservation> observations{
         {&camera, 1.0}, {&camera, 2.0}, {&camera, 3.0}};
     EXPECT_DOUBLE_EQ(xjw::projectionAccuracy(observations), 2.0);
@@ -80,14 +80,14 @@ TEST(TriangulationQualityTest, ProjectionAccuracyAveragesEveryObservationScale)
 
 TEST(TriangulationQualityTest, CleanTiePointQualityMatchesReferenceContract)
 {
-    std::vector<xjw::FramePinholeCamera> cameras(3);
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras(3);
     const std::array<double, 3> camera_x{-1.0, 0.0, 1.0};
     const std::array<double, 3> scales{1.0, 2.0, 3.0};
     const std::array<double, 3> point{0.0, 0.0, 5.0};
     std::vector<xjw::TiePointQualityObservation> observations;
     for (std::size_t index = 0; index < cameras.size(); ++index)
     {
-        xjw::FramePinholeCamera& camera = cameras[index];
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameras[index];
         camera.setIntrinsics(1000.0, 1000.0, 0.0, 0.0);
         camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {camera_x[index], 0.0, 0.0});
         double projected[2]{};

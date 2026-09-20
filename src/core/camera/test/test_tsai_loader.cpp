@@ -13,7 +13,7 @@
 // ============================================================
 
 #include <gtest/gtest.h>
-#include "FramePinholeCamera.h"
+#include "FramePinholeTsaiIO.h"
 
 #include <cmath>
 #include <string>
@@ -44,23 +44,28 @@ static double vecLength(const double v[3])
     return std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
 }
 
+static bool loadCamera(const std::string& path, xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera)
+{
+    return camera_io::loadFramePinholeNumericStateFromTsaiFile(path, camera);
+}
+
 // ─── 测试用例 ─────────────────────────────────────────────────
 
 // 1. 加载单个 .tsai 文件并验证有效性
-TEST(FramePinholeCameraTest, LoadFromTsaiFile)
+TEST(FramePinholeTsaiIOTest, LoadFromTsaiFile)
 {
-    FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     std::string path = testDataDir() + "/tsai/1.tsai";
-    ASSERT_TRUE(cam.loadFromFile(path))
+    ASSERT_TRUE(loadCamera(path, &cam))
         << "Failed to load camera file: " << path;
     EXPECT_TRUE(cam.isValid());
 }
 
 // 2. 加载后内参不为零
-TEST(FramePinholeCameraTest, IntrinsicsNonZero)
+TEST(FramePinholeTsaiIOTest, IntrinsicsNonZero)
 {
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     EXPECT_GT(std::abs(cam.focalX()), 1e-6);
     EXPECT_GT(std::abs(cam.focalY()), 1e-6);
@@ -69,11 +74,11 @@ TEST(FramePinholeCameraTest, IntrinsicsNonZero)
     EXPECT_GT(std::abs(cam.principalY()), 0.0);
 }
 
-TEST(FramePinholeCameraTest, MetricIntrinsicAccessorsConsistent)
+TEST(FramePinholeTsaiIOTest, MetricIntrinsicAccessorsConsistent)
 {
     // mm accessor 应严格等于运行态 pixel 值乘回 pitch，验证 I/O 单位边界。
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     EXPECT_GT(cam.pixelPitch(), 0.0);
     EXPECT_NEAR(cam.focalXMillimeters(), cam.focalX() * cam.pixelPitch(), 1e-9);
@@ -83,10 +88,10 @@ TEST(FramePinholeCameraTest, MetricIntrinsicAccessorsConsistent)
 }
 
 // 3. 旋转矩阵正交性验证 (R * R^T ≈ I)
-TEST(FramePinholeCameraTest, RotationOrthogonality)
+TEST(FramePinholeTsaiIOTest, RotationOrthogonality)
 {
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     auto R = cam.cameraToWorldRotation();
     // R*R^T 应等于单位矩阵
@@ -104,10 +109,10 @@ TEST(FramePinholeCameraTest, RotationOrthogonality)
 }
 
 // 4. 旋转矩阵行列式 = +1（右手系）
-TEST(FramePinholeCameraTest, RotationDeterminant)
+TEST(FramePinholeTsaiIOTest, RotationDeterminant)
 {
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     auto R = cam.cameraToWorldRotation();
     double det = R[0]*(R[4]*R[8]-R[5]*R[7])
@@ -118,10 +123,10 @@ TEST(FramePinholeCameraTest, RotationDeterminant)
 }
 
 // 5. 投影：相机前方的点应投影成功
-TEST(FramePinholeCameraTest, ProjectPointInFront)
+TEST(FramePinholeTsaiIOTest, ProjectPointInFront)
 {
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     auto C = cam.cameraCenter();
     auto R = cam.cameraToWorldRotation();
@@ -146,10 +151,10 @@ TEST(FramePinholeCameraTest, ProjectPointInFront)
 }
 
 // 6. 用 R_cw 的光轴方向构造世界点，验证 worldToCamera 后得到正深度
-TEST(FramePinholeCameraTest, WorldToCameraConsistency)
+TEST(FramePinholeTsaiIOTest, WorldToCameraConsistency)
 {
-    FramePinholeCamera cam;
-    ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+    ASSERT_TRUE(loadCamera(testDataDir() + "/tsai/1.tsai", &cam));
 
     auto C = cam.cameraCenter();
     auto R = cam.cameraToWorldRotation();
@@ -170,7 +175,7 @@ TEST(FramePinholeCameraTest, WorldToCameraConsistency)
 }
 
 // 7. 批量加载所有可用相机文件
-TEST(FramePinholeCameraTest, LoadAllAvailableCameras)
+TEST(FramePinholeTsaiIOTest, LoadAllAvailableCameras)
 {
     // 遍历而不硬编码文件数量，使新增回归相机自动进入批量加载验证。
     std::string tsaiDir = testDataDir() + "/tsai";
@@ -183,14 +188,14 @@ TEST(FramePinholeCameraTest, LoadAllAvailableCameras)
         if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
             continue;
 
-        FramePinholeCamera cam;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
         std::string path = entry.path().string();
 
-        if (cam.loadFromFile(path)) {
-            EXPECT_TRUE(cam.isValid()) << "FramePinholeCamera " << path << " loaded but invalid";
+        if (loadCamera(path, &cam)) {
+            EXPECT_TRUE(cam.isValid()) << "FramePinholeNumericState " << path << " loaded but invalid";
             auto C = cam.cameraCenter();
             double dist = std::sqrt(C[0]*C[0] + C[1]*C[1] + C[2]*C[2]);
-            EXPECT_GT(dist, 1.0) << "FramePinholeCamera " << path << " center too close to origin";
+            EXPECT_GT(dist, 1.0) << "FramePinholeNumericState " << path << " center too close to origin";
             ++loaded;
         } else {
             ++failed;
@@ -203,7 +208,7 @@ TEST(FramePinholeCameraTest, LoadAllAvailableCameras)
 }
 
 // 8. 多相机中心距离合理性
-TEST(FramePinholeCameraTest, CameraCentersReasonable)
+TEST(FramePinholeTsaiIOTest, CameraCentersReasonable)
 {
     // 这是数据集级 sanity check：相机中心不应全部重合，也不应出现数量级爆炸。
     std::string tsaiDir = testDataDir() + "/tsai";
@@ -213,8 +218,8 @@ TEST(FramePinholeCameraTest, CameraCentersReasonable)
         if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
             continue;
 
-        FramePinholeCamera cam;
-        if (!cam.loadFromFile(entry.path().string())) continue;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+        if (!loadCamera(entry.path().string(), &cam)) continue;
         auto C = cam.cameraCenter();
         centers.push_back({C[0], C[1], C[2]});
     }
@@ -237,7 +242,7 @@ TEST(FramePinholeCameraTest, CameraCentersReasonable)
     // 最近相机对距离应 > 0（不重叠）
     EXPECT_GT(minDist, 0.0) << "Some cameras have identical positions";
     // 最远相机对距离应有限
-    EXPECT_LT(maxDist, 1e8) << "FramePinholeCamera baseline seems unreasonably large";
+    EXPECT_LT(maxDist, 1e8) << "FramePinholeNumericState baseline seems unreasonably large";
 
     // 3 个以上相机时验证距离比值合理
     if (centers.size() >= 3) {
@@ -246,10 +251,10 @@ TEST(FramePinholeCameraTest, CameraCentersReasonable)
 }
 
 // 9. 设置内参后投影一致性
-TEST(FramePinholeCameraTest, SetIntrinsicsAndProject)
+TEST(FramePinholeTsaiIOTest, SetIntrinsicsAndProject)
 {
     // 不经过文件 I/O，直接验证 setter 建立的标准针孔相机能把轴线点投到主点。
-    FramePinholeCamera cam;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
     // 设置简单针孔相机
     cam.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     // 设置单位旋转，中心在原点

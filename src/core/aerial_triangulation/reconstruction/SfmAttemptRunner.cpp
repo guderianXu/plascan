@@ -14,6 +14,9 @@
  */
 
 #include "reconstruction/SfmAttemptRunner.h"
+#include "engine/PinholeEngine.h"
+#include "engine/TiePointGraphReader.h"
+#include "file/FileIO.h"
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 #include "reconstruction/MarkerPriorLoader.h"
 #include "search/SfmSearchPolicy.h"
@@ -23,15 +26,16 @@
 #include "log/Logger.h"
 #include "ProjectCameraIO.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
+#include "camera/models/CameraModelFactories.h"
+#include "camera/project/CameraProjectRuntime.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
 #include "pipeline/IncrementalSfm.h"
 
-#include <QFile>
+#include <QMap>
+#include <QSet>
 #include <QFileInfo>
-#include <QImageReader>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSize>
 
@@ -41,24 +45,15 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
-#include <map>
 #include <memory>
 #include <optional>
-#include <set>
+#include <unordered_set>
 #include <utility>
 
 namespace xjw::aerial_triangulation
 {
     namespace
     {
-
-        /// 将无向影像 ID 对压缩为 64 位键，用于连接点展开时去重。
-        quint64 pairKey(ImageId imageA, ImageId imageB)
-        {
-            const quint64 first = std::min(imageA, imageB);
-            const quint64 second = std::max(imageA, imageB);
-            return (first << 32U) | second;
-        }
 
         bool fail(const QString& message, QString* errorMessage)
         {
@@ -104,12 +99,6 @@ namespace xjw::aerial_triangulation
             return -1;
         }
 
-        struct ParsedObservation
-        {
-            ImageId imageId = kInvalidImageId;            ///< 本次 SfM 连续影像 ID。
-            FeatureIdx featureIndex = kInvalidFeatureIdx; ///< 本影像内压缩后的关键点索引。
-        };
-
         /// 质量等级对初始化强度和 BA 调度频率的映射。
         struct SfmQualityPreset
         {
@@ -141,7 +130,292 @@ namespace xjw::aerial_triangulation
                    !cameraObject.value(QStringLiteral("pose_initialized_as_identity")).toBool(false);
         }
 
-        FramePinholeCamera cameraWithIdentityPose(FramePinholeCamera camera)
+        bool bindInputCameraIdentity(const PreparedAerialTriangulationInput& input,
+                                     int imageIndex,
+                                     const QString& imagePath,
+                                     xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera,
+                                     QString* errorMessage)
+        {
+            if (!camera)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("数值相机输出为空");
+                }
+                return false;
+            }
+
+            if (input.cameraBindings.empty())
+            {
+                if (!input.cameraReferencePosePriors.empty())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("外部相机姿态参考要求调用方提供与 images 对齐的显式 cameraBindings");
+                    }
+                    return false;
+                }
+                return true;
+            }
+            if (input.cameraBindings.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage =
+                        QStringLiteral("cameraBindings 必须与 images 一一对应；影像 %1 无法安全绑定").arg(imagePath);
+                }
+                return false;
+            }
+
+            const SolverCameraBinding& binding = input.cameraBindings.at(static_cast<std::size_t>(imageIndex));
+
+            std::string bindError;
+            if (!camera->hasBoundIdentity() &&
+                !camera->bindIdentity(binding.instanceId, binding.imageId, binding.worldFrame, &bindError))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("无法绑定影像 %1 的数值相机身份/frame: %2")
+                                        .arg(imagePath, QString::fromStdString(bindError));
+                }
+                return false;
+            }
+            if (camera->hasBoundIdentity() &&
+                (camera->instanceId() != binding.instanceId || camera->imageId() != binding.imageId ||
+                 camera->worldFrame() != binding.worldFrame))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("影像 %1 的数值相机身份/frame 与显式输入不一致").arg(imagePath);
+                }
+                return false;
+            }
+            return true;
+        }
+
+        bool validateInputCameraBindings(const PreparedAerialTriangulationInput& input, QString* errorMessage)
+        {
+            if (input.cameraBindings.empty())
+            {
+                if (!input.cameraReferencePosePriors.empty())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("外部相机姿态参考要求调用方提供与 images 对齐的显式 cameraBindings");
+                    }
+                    return false;
+                }
+                return true;
+            }
+            if (input.cameraBindings.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("cameraBindings 必须与 images 一一对应");
+                }
+                return false;
+            }
+            if (!input.imageIds.empty() && input.imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("imageIds 必须与 images 一一对应");
+                }
+                return false;
+            }
+
+            std::unordered_set<std::string> instanceIds;
+            std::unordered_set<std::string> imageIds;
+            instanceIds.reserve(input.cameraBindings.size());
+            imageIds.reserve(input.cameraBindings.size());
+            const xjw::coordinate_system::CoordinateFrameId& commonFrame = input.cameraBindings.front().worldFrame;
+            for (std::size_t index = 0; index < input.cameraBindings.size(); ++index)
+            {
+                const SolverCameraBinding& binding = input.cameraBindings.at(index);
+                if (binding.instanceId.value().empty() || binding.imageId.value().empty() ||
+                    binding.worldFrame.value().empty())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("cameraBindings 不能包含空的 instance/image/frame identity");
+                    }
+                    return false;
+                }
+                if (!instanceIds.insert(binding.instanceId.value()).second ||
+                    !imageIds.insert(binding.imageId.value()).second)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("cameraBindings 包含重复的 camera instance/image identity");
+                    }
+                    return false;
+                }
+                if (!input.imageIds.empty() && binding.imageId != input.imageIds.at(index))
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("cameraBindings[%1] 与 imageIds 顺序不一致")
+                                            .arg(static_cast<qulonglong>(index));
+                    }
+                    return false;
+                }
+                if (binding.worldFrame != commonFrame)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("cameraBindings 混用 world frame；必须先显式归一化");
+                    }
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        struct CanonicalBindingResolution
+        {
+            bool collectionPresent = false;
+            bool complete = false;
+            std::vector<SolverCameraBinding> bindings;
+            std::shared_ptr<const xjw::camera_project::CameraProjectRuntimeResult> runtime;
+            QString error;
+        };
+
+        /**
+         * Resolve identities from the canonical project camera collection.
+         *
+         * The image path is used only to select the already persisted image
+         * entry.  The returned identity and frame always come from the
+         * decoded camera instance; no identifier is derived from a path.
+         */
+        CanonicalBindingResolution resolveCanonicalBindings(const PreparedAerialTriangulationInput& input)
+        {
+            CanonicalBindingResolution result;
+            if (input.projectMeta.isEmpty())
+            {
+                return result;
+            }
+
+            const QJsonObject projectFiles = xjw::common::project::projectFilesRootObject(input.projectMeta);
+            if (!projectFiles.value(QStringLiteral("camera_instances")).isArray() ||
+                !projectFiles.value(QStringLiteral("camera_definitions")).isArray())
+            {
+                return result;
+            }
+            result.collectionPresent = true;
+            if (!input.imageIds.empty() && input.imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            {
+                result.error = QStringLiteral("imageIds 必须与 images 一一对应");
+                return result;
+            }
+
+            auto runtime = std::make_shared<xjw::camera_project::CameraProjectRuntimeResult>(
+                xjw::camera_project::CameraProjectRuntime::load(projectFiles,
+                                                                xjw::camera_models::makeBuiltinCameraModelRegistry()));
+            if (!runtime->ok())
+            {
+                result.error = QStringLiteral("canonical camera collection is invalid: %1")
+                                   .arg(runtime->errors.join(QStringLiteral("; ")));
+                return result;
+            }
+            result.runtime = runtime;
+
+            QMap<QString, QJsonObject> imageMetadata;
+            for (const QJsonValue& value : xjw::common::project::projectImageEntries(input.projectMeta))
+            {
+                const QJsonObject image = value.toObject();
+                const QString path =
+                    xjw::common::project::normalizePath(image.value(QStringLiteral("path")).toString());
+                if (path.isEmpty())
+                {
+                    continue;
+                }
+                if (imageMetadata.contains(path))
+                {
+                    result.error = QStringLiteral("canonical image path is ambiguous: %1").arg(path);
+                    return result;
+                }
+                imageMetadata.insert(path, image);
+            }
+            result.bindings.reserve(static_cast<std::size_t>(input.images.size()));
+            for (const QString& imagePath : input.images)
+            {
+                const auto imageIt = imageMetadata.constFind(xjw::common::project::normalizePath(imagePath));
+                if (imageIt == imageMetadata.constEnd())
+                {
+                    result.error = QStringLiteral("canonical image entry is missing for %1").arg(imagePath);
+                    result.bindings.clear();
+                    return result;
+                }
+                const QString imageUuid = imageIt.value().value(QStringLiteral("image_uuid")).toString().trimmed();
+                if (imageUuid.isEmpty())
+                {
+                    result.error = QStringLiteral("canonical image entry has no image_uuid for %1").arg(imagePath);
+                    result.bindings.clear();
+                    return result;
+                }
+                if (!input.imageIds.empty() &&
+                    imageUuid != QString::fromStdString(input.imageIds.at(result.bindings.size()).value()))
+                {
+                    result.error = QStringLiteral("canonical image_uuid 与输入 ImageId 不一致 for %1").arg(imagePath);
+                    result.bindings.clear();
+                    return result;
+                }
+
+                const auto lookup = runtime->instances.forImage(camera_core::ImageId(imageUuid.toStdString()));
+                if (!lookup.ok())
+                {
+                    result.error = QStringLiteral("canonical camera instance is missing for %1: %2")
+                                       .arg(imagePath, QString::fromStdString(lookup.error));
+                    result.bindings.clear();
+                    return result;
+                }
+                result.bindings.push_back({lookup.instance->instanceId(),
+                                           lookup.instance->imageId(),
+                                           lookup.instance->definition().worldFrame()});
+            }
+            result.complete = result.bindings.size() == static_cast<std::size_t>(input.images.size());
+            if (!result.complete)
+            {
+                result.bindings.clear();
+                result.error = QStringLiteral("canonical camera bindings do not cover every selected image");
+            }
+            return result;
+        }
+
+        bool bindingsMatchCanonical(const std::vector<SolverCameraBinding>& actual,
+                                    const std::vector<SolverCameraBinding>& expected,
+                                    QString* errorMessage)
+        {
+            if (actual.size() != expected.size())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("显式 cameraBindings 与 canonical camera_instances 数量不一致");
+                }
+                return false;
+            }
+            for (std::size_t index = 0; index < actual.size(); ++index)
+            {
+                if (actual[index].instanceId != expected[index].instanceId ||
+                    actual[index].imageId != expected[index].imageId ||
+                    actual[index].worldFrame != expected[index].worldFrame)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = QStringLiteral("显式 cameraBindings[%1] 与 canonical camera_instances "
+                                                       "不一致；禁止按路径或序号替换身份")
+                                            .arg(static_cast<qulonglong>(index));
+                    }
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+        cameraWithIdentityPose(xjw::camera_models::frame_pinhole::FramePinholeNumericState camera)
         {
             camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
             return camera;
@@ -295,25 +569,84 @@ namespace xjw::aerial_triangulation
 
     QSize SfmAttemptRunner::resolveInputImageSize(const QString& imagePath)
     {
-        QImageReader reader(imagePath);
-        const QSize headerSize = reader.size();
-        if (headerSize.isValid())
-        {
-            return headerSize;
-        }
-
-        // Qt 的 TIFF 插件或 Unicode 路径可能不可用，统一 IO 会按字节解码并兼容本地路径。
-        const cv::Mat decoded = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
-        if (!decoded.empty() && decoded.cols > 0 && decoded.rows > 0)
-        {
-            return QSize(decoded.cols, decoded.rows);
-        }
-        return {};
+        return xjw::common::io::readImageSize(imagePath);
     }
 
     SfmAttemptExecutionResult SfmAttemptRunner::run(const PreparedAerialTriangulationInput& input) const
     {
         SfmAttemptExecutionResult execution;
+        PreparedAerialTriangulationInput bindingInput = input;
+        const CanonicalBindingResolution canonicalBindings = resolveCanonicalBindings(input);
+        const bool autoBoundFromCanonical = input.cameraBindings.empty() && canonicalBindings.complete;
+        if (canonicalBindings.complete)
+        {
+            if (bindingInput.cameraBindings.empty())
+            {
+                bindingInput.cameraBindings = canonicalBindings.bindings;
+            }
+            else if (!bindingsMatchCanonical(
+                         bindingInput.cameraBindings, canonicalBindings.bindings, &execution.result.errorMessage))
+            {
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+        }
+        else if (canonicalBindings.collectionPresent && !canonicalBindings.error.isEmpty())
+        {
+            execution.result.errorMessage =
+                QStringLiteral("无法安全解析 canonical 相机绑定：%1").arg(canonicalBindings.error);
+            execution.result.summary = execution.result.errorMessage;
+            return execution;
+        }
+
+        if (!validateInputCameraBindings(bindingInput, &execution.result.errorMessage))
+        {
+            execution.result.summary = execution.result.errorMessage;
+            return execution;
+        }
+
+        std::vector<camera_core::ImageId> selectedImageIds;
+        if (!bindingInput.imageIds.empty())
+        {
+            if (bindingInput.imageIds.size() != static_cast<std::size_t>(bindingInput.images.size()))
+            {
+                execution.result.errorMessage = QStringLiteral("imageIds 必须与 images 一一对应");
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+            selectedImageIds = bindingInput.imageIds;
+        }
+        else if (bindingInput.cameraBindings.size() == static_cast<std::size_t>(bindingInput.images.size()))
+        {
+            selectedImageIds.reserve(bindingInput.cameraBindings.size());
+            for (const SolverCameraBinding& binding : bindingInput.cameraBindings)
+            {
+                selectedImageIds.push_back(binding.imageId);
+            }
+        }
+
+        // canonical camera instances are the only source of model identity.  Once the
+        // collection covers this selection, static SfM must pass the model-agnostic
+        // capability plan before any legacy pinhole numeric state can be constructed.
+        // RPC/line-scan inputs therefore fail here instead of being silently replaced
+        // by an estimated focal-length pinhole camera below.
+        if (canonicalBindings.complete)
+        {
+            if (!canonicalBindings.runtime)
+            {
+                execution.result.errorMessage = QStringLiteral("canonical camera runtime is unavailable");
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+            const camera_core::CameraOperationPlan plan = canonicalBindings.runtime->planOperationForImages(
+                selectedImageIds, camera_core::CameraOperation::StaticSfM);
+            if (!plan.ok())
+            {
+                execution.result.errorMessage = QString::fromStdString(plan.failureMessage());
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+        }
         std::optional<Logger::ScopedThreadMinimumLevel> coarseLogFilter;
         if (input.coarseFocalEvaluation)
         {
@@ -355,6 +688,7 @@ namespace xjw::aerial_triangulation
         IncrementalSfmOptions sfmOptions;
         const auto registeredProgress = std::make_shared<std::atomic<int>>(0);
         configureSfmOptions(input, registeredProgress, &sfmOptions);
+        sfmOptions.cameraReferencePosePriors = input.cameraReferencePosePriors;
 
         // 阶段 2：相机来源优先级为完整相机文件、可信工程相机、影像尺寸估算。
         const bool hasCompleteCameraFiles =
@@ -367,46 +701,103 @@ namespace xjw::aerial_triangulation
                             {
                                 return false;
                             }
-                            FramePinholeCamera camera;
-                            return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) && camera.isValid();
+                            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                            return xjw::common::project::loadFramePinholeNumericStateFromFile(path, &camera);
                         });
 
-        QMap<QString, QJsonObject> projectCameraByPath;
-        QSet<QString> projectPosePaths;
+        CameraIntrinsicsByImageId projectCameraByImageId;
+        FramePinholeStatesByImageId canonicalPinholeByImageId;
+        QSet<QString> projectPoseImageIds;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> canonicalPinholeStates;
+        if (canonicalBindings.complete)
+        {
+            std::string conversionError;
+            if (!canonicalBindings.runtime->framePinholeStatesForImages(
+                    selectedImageIds, &canonicalPinholeStates, &conversionError))
+            {
+                execution.result.errorMessage = QStringLiteral("canonical static SfM camera conversion failed: %1")
+                                                    .arg(QString::fromStdString(conversionError));
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+            canonicalPinholeByImageId.reserve(canonicalPinholeStates.size());
+            for (std::size_t index = 0; index < canonicalPinholeStates.size(); ++index)
+            {
+                canonicalPinholeByImageId.emplace(selectedImageIds.at(index), canonicalPinholeStates.at(index));
+            }
+        }
+        const bool projectCameraIdentityAvailable =
+            selectedImageIds.size() == static_cast<std::size_t>(bindingInput.images.size());
         int rejectedProjectIntrinsicCount = 0;
         if ((input.useProjectCameraIntrinsics || input.useProjectCameraPoses) && !input.projectMeta.isEmpty())
         {
-            const QMap<QString, QJsonObject> imageMetadata =
-                xjw::common::project::projectImageMetaByPath(input.projectMeta, true);
-            for (auto it = imageMetadata.cbegin(); it != imageMetadata.cend(); ++it)
+            if (!projectCameraIdentityAvailable)
             {
-                const QJsonObject cameraObject = it.value().value(QStringLiteral("camera")).toObject();
-                FramePinholeCamera camera;
-                if (!cameraObject.isEmpty() && xjw::common::project::cameraFromJson(cameraObject, &camera) &&
-                    camera.isValid())
+                execution.result.errorMessage =
+                    QStringLiteral("使用工程相机先验时必须提供与影像对齐的 canonical ImageId 或 cameraBindings");
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+            for (const QJsonValue& imageValue : xjw::common::project::projectImageEntries(input.projectMeta))
+            {
+                const QJsonObject image = imageValue.toObject();
+                const QString imageIdText = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+                if (imageIdText.isEmpty())
                 {
-                    const bool trustedIntrinsic = isTrustedProjectCameraIntrinsic(cameraObject);
-                    if (input.useProjectCameraPoses || trustedIntrinsic)
+                    continue;
+                }
+                try
+                {
+                    const camera_core::ImageId imageId = camera_core::ImageId(imageIdText.toStdString());
+                    const QJsonObject cameraObject =
+                        xjw::common::project::projectCameraModelParameters(input.projectMeta, image);
+                    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                    bool validCamera = false;
+                    if (canonicalBindings.complete)
                     {
-                        projectCameraByPath.insert(it.key(), cameraObject);
+                        validCamera = std::find(selectedImageIds.cbegin(), selectedImageIds.cend(), imageId) !=
+                                      selectedImageIds.cend();
                     }
                     else
                     {
-                        ++rejectedProjectIntrinsicCount;
+                        validCamera = !cameraObject.isEmpty() &&
+                                      xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) &&
+                                      camera.isValid();
                     }
-                    if (input.useProjectCameraPoses && cameraMetadataHasUsablePose(cameraObject))
+                    if (validCamera)
                     {
-                        projectPosePaths.insert(it.key());
+                        const bool trustedIntrinsic = isTrustedProjectCameraIntrinsic(cameraObject);
+                        if (input.useProjectCameraPoses || trustedIntrinsic)
+                        {
+                            projectCameraByImageId.emplace(imageId, cameraObject);
+                        }
+                        else
+                        {
+                            ++rejectedProjectIntrinsicCount;
+                        }
+                        if (input.useProjectCameraPoses && cameraMetadataHasUsablePose(cameraObject))
+                        {
+                            projectPoseImageIds.insert(imageIdText);
+                        }
                     }
+                }
+                catch (const std::exception& exception)
+                {
+                    Q_UNUSED(exception);
+                    continue;
                 }
             }
         }
 
         // 只有所有影像都具备真实外参时才进入 known-pose 路径，禁止混合已知/未知位姿。
         bool hasCompleteProjectPoseCameras = !input.images.isEmpty();
-        for (const QString& imagePath : input.images)
+        if (!projectCameraIdentityAvailable)
         {
-            if (!projectPosePaths.contains(xjw::common::project::normalizePath(imagePath)))
+            hasCompleteProjectPoseCameras = false;
+        }
+        for (const camera_core::ImageId& imageId : selectedImageIds)
+        {
+            if (!projectPoseImageIds.contains(QString::fromStdString(imageId.value())))
             {
                 hasCompleteProjectPoseCameras = false;
                 break;
@@ -418,7 +809,15 @@ namespace xjw::aerial_triangulation
         CameraIntrinsicPriorSanitizationResult intrinsicSanitization;
         if (!hasCompleteCameraFiles && input.useProjectCameraIntrinsics && !input.useProjectCameraPoses)
         {
-            intrinsicSanitization = sanitizeProjectCameraIntrinsicPriors(input.images, &projectCameraByPath);
+            if (canonicalBindings.complete)
+            {
+                intrinsicSanitization =
+                    sanitizeProjectCameraIntrinsicPriors(selectedImageIds, &canonicalPinholeByImageId);
+            }
+            else
+            {
+                intrinsicSanitization = sanitizeProjectCameraIntrinsicPriors(selectedImageIds, &projectCameraByImageId);
+            }
         }
         sfmOptions.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras;
         if (sfmOptions.useKnownCameraPoses)
@@ -447,42 +846,98 @@ namespace xjw::aerial_triangulation
             sfmOptions.pnpOptions.strictSmallSupportMinGridCells = 3;
         }
 
-        // 阶段 3：创建影像节点。重置对齐时工程 FramePinholeCamera 只保留内参并将外参置为单位位姿。
-        IncrementalSfm sfm(sfmOptions);
-        QMap<QString, ImageId> imageIdByPath;
+        // 阶段 3：创建影像节点。重置对齐时工程相机只保留内参并将外参置为单位位姿。
+        engine::PinholeInput numericalInput;
+        numericalInput.options = sfmOptions;
+        numericalInput.graph = execution.graph;
+        numericalInput.cancelFlag = input.cancelFlag;
+        QMap<QString, ImageId> imageIdByCanonicalId;
         for (int index = 0; index < input.images.size(); ++index)
         {
             const ImageId imageId = static_cast<ImageId>(index);
             const QString& imagePath = input.images.at(index);
             const std::string sensorKey = sensorKeyForImage(imagePath);
-            imageIdByPath.insert(xjw::common::project::normalizePath(imagePath), imageId);
-            const std::vector<FeatureKeypoint> keypoints = graph.keypointsByImage.value(imageId);
+            if (index < static_cast<int>(selectedImageIds.size()))
+            {
+                imageIdByCanonicalId.insert(
+                    QString::fromStdString(selectedImageIds.at(static_cast<std::size_t>(index)).value()), imageId);
+            }
+            const auto nativePath = xjw::common::file::pathFromUtf8(xjw::common::io::toUtf8Path(imagePath));
 
             if (hasCompleteCameraFiles)
             {
-                sfm.addImage(imageId,
-                             xjw::common::io::toUtf8Path(imagePath),
-                             xjw::common::io::toUtf8Path(input.cameraPaths.at(index)),
-                             keypoints,
-                             sensorKey);
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                if (!xjw::common::project::loadFramePinholeNumericStateFromFile(input.cameraPaths.at(index), &camera) ||
+                    !camera.isValid())
+                {
+                    execution.result.errorMessage =
+                        QStringLiteral("无法读取有效外部相机: %1").arg(input.cameraPaths.at(index));
+                    execution.result.summary = execution.result.errorMessage;
+                    return execution;
+                }
+                const QSize imageSize = resolveInputImageSize(imagePath);
+                if (imageSize.isValid())
+                {
+                    camera.setImageSize({imageSize.width(), imageSize.height()});
+                }
+                if (!bindInputCameraIdentity(bindingInput, index, imagePath, &camera, &execution.result.errorMessage))
+                {
+                    execution.result.summary = execution.result.errorMessage;
+                    return execution;
+                }
+                numericalInput.images.push_back({imageId, nativePath, std::move(camera), sensorKey});
                 continue;
             }
 
-            const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
-            const auto projectCamera = projectCameraByPath.constFind(normalizedPath);
+            const auto projectCamera =
+                projectCameraIdentityAvailable
+                    ? projectCameraByImageId.find(selectedImageIds.at(static_cast<std::size_t>(index)))
+                    : projectCameraByImageId.end();
             if ((input.useProjectCameraIntrinsics || input.useProjectCameraPoses) &&
-                projectCamera != projectCameraByPath.cend())
+                projectCamera != projectCameraByImageId.end())
             {
-                FramePinholeCamera camera;
-                if (xjw::common::project::cameraFromJson(projectCamera.value(), &camera) && camera.isValid())
+                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                bool resolved = false;
+                if (canonicalBindings.complete)
+                {
+                    if (static_cast<std::size_t>(index) >= selectedImageIds.size())
+                    {
+                        execution.result.errorMessage = QStringLiteral(
+                            "canonical static SfM camera selection is not aligned with the input image order");
+                        execution.result.summary = execution.result.errorMessage;
+                        return execution;
+                    }
+                    const auto canonicalState =
+                        canonicalPinholeByImageId.find(selectedImageIds.at(static_cast<std::size_t>(index)));
+                    if (canonicalState != canonicalPinholeByImageId.end())
+                    {
+                        camera = canonicalState->second;
+                        resolved = true;
+                    }
+                }
+                else
+                {
+                    resolved = xjw::common::project::decodeFramePinholeNumericState(projectCamera->second, &camera);
+                }
+                if (resolved && camera.isValid())
                 {
                     if (!input.useProjectCameraPoses)
                     {
                         // 重置对齐时只复用内参，外参重新由相对定向/增量注册估计。
                         camera = cameraWithIdentityPose(camera);
                     }
-                    sfm.addImageWithCamera(
-                        imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints, sensorKey);
+                    const QSize imageSize = resolveInputImageSize(imagePath);
+                    if (imageSize.isValid())
+                    {
+                        camera.setImageSize({imageSize.width(), imageSize.height()});
+                    }
+                    if (!bindInputCameraIdentity(
+                            bindingInput, index, imagePath, &camera, &execution.result.errorMessage))
+                    {
+                        execution.result.summary = execution.result.errorMessage;
+                        return execution;
+                    }
+                    numericalInput.images.push_back({imageId, nativePath, std::move(camera), sensorKey});
                     continue;
                 }
             }
@@ -497,55 +952,56 @@ namespace xjw::aerial_triangulation
             }
             const double focal =
                 std::max(imageSize.width(), imageSize.height()) * std::max(0.1, input.estimatedFocalScale);
-            FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
             camera.setIntrinsics(focal, focal, imageSize.width() * 0.5, imageSize.height() * 0.5);
-            sfm.addImageWithCamera(imageId, xjw::common::io::toUtf8Path(imagePath), camera, keypoints, sensorKey);
+            camera.setImageSize({imageSize.width(), imageSize.height()});
+            if (!bindInputCameraIdentity(bindingInput, index, imagePath, &camera, &execution.result.errorMessage))
+            {
+                execution.result.summary = execution.result.errorMessage;
+                return execution;
+            }
+            numericalInput.images.push_back({imageId, nativePath, std::move(camera), sensorKey});
         }
 
         // 阶段 4：人工标记和比例尺作为 prior track/control constraint 注入，
         // 不伪装成普通自动连接点。
-        const MarkerPriorLoadResult markerPriors =
-            MarkerPriorLoader::load(input.markerSetPath, input.projectMeta, imageIdByPath);
+        const MarkerPriorLoadResult markerPriors = MarkerPriorLoader::load(
+            input.markerSetPath, input.projectMeta, imageIdByCanonicalId, input.coordinateContext.get());
         if (!markerPriors.ok)
         {
             execution.result.errorMessage = markerPriors.errorMessage;
             execution.result.summary = markerPriors.errorMessage;
             return execution;
         }
-        for (const control_points::PriorTrack& track : markerPriors.tracks)
-        {
-            sfm.addPriorTrack(track);
-        }
-        for (const control_points::PriorScaleBar& scaleBar : markerPriors.scaleBars)
-        {
-            sfm.addPriorScaleBar(scaleBar);
-        }
+        numericalInput.priorTracks = markerPriors.tracks;
+        numericalInput.scaleBars = markerPriors.scaleBars;
 
-        // 阶段 5：连接点轨迹已展开为去重 pairwise 对应，交给 IncrementalSfm 建观测图。
-        for (const PreparedTiePointMatchPair& pair : graph.matchPairs)
+        // 工程数据适配到此结束；数值引擎只消费标准类型的相机、观测和回调。
+        numericalInput.progressFn = [&input, registeredProgress](int registered, int total, const std::string& message)
         {
-            sfm.addMatches(pair.imageA, pair.imageB, pair.matches);
-        }
-        sfm.setInputMultiViewTracks(graph.tracks);
-
-        // 阶段 6：运行初始对、增量 PnP/三角化、局部/全局 BA 和质量过滤。
-        const IncrementalSfmResult sfmResult = sfm.run(
-            [&input, registeredProgress](int registered, int total, const std::string& message)
+            if (input.cancelFlag && input.cancelFlag->load())
             {
-                if (input.cancelFlag && input.cancelFlag->load())
-                {
-                    return false;
-                }
-                const int percent = total > 0 ? std::clamp(static_cast<int>(100.0 * registered / total), 0, 100) : 0;
-                registeredProgress->store(percent);
-                if (input.progressFn)
-                {
-                    input.progressFn(QString::fromStdString(message), percent);
-                }
-                return true;
-            });
+                return false;
+            }
+            const int percent = total > 0 ? std::clamp(static_cast<int>(100.0 * registered / total), 0, 100) : 0;
+            registeredProgress->store(percent);
+            if (input.progressFn)
+            {
+                input.progressFn(QString::fromStdString(message), percent);
+            }
+            return true;
+        };
+        const IncrementalSfmResult sfmResult = engine::runPinhole(numericalInput);
 
         execution.reconstruction = sfmResult.reconstruction;
+        if (hasCompleteCameraFiles && execution.reconstruction)
+        {
+            for (int index = 0; index < input.cameraPaths.size(); ++index)
+            {
+                execution.reconstruction->image(static_cast<ImageId>(index)).cameraPath =
+                    xjw::common::io::toUtf8Path(input.cameraPaths.at(index));
+            }
+        }
         execution.result.success = sfmResult.success;
         execution.result.numRegisteredImages = sfmResult.numRegisteredImages;
         execution.result.numPoints3D = sfmResult.numPoints3D;
@@ -694,13 +1150,23 @@ namespace xjw::aerial_triangulation
                            intrinsicSanitization.dominantMedianFocalPixels);
         diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized"),
                            intrinsicSanitization.normalizedCameraCount);
-        diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized_images"),
-                           QJsonArray::fromStringList(intrinsicSanitization.normalizedImagePaths));
+        QJsonArray normalizedIntrinsicImageIds;
+        for (const camera_core::ImageId& imageId : intrinsicSanitization.normalizedImageIds)
+        {
+            normalizedIntrinsicImageIds.append(QString::fromStdString(imageId.value()));
+        }
+        diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized_image_ids"), normalizedIntrinsicImageIds);
         diagnostics.insert(QStringLiteral("project_intrinsic_prior_rejected"), rejectedProjectIntrinsicCount);
         diagnostics.insert(QStringLiteral("input_max_tracks_per_image"), sfmOptions.maxTracksPerImage);
         diagnostics.insert(QStringLiteral("input_max_tracks_per_grid_cell"), sfmOptions.maxTracksPerGridCell);
         diagnostics.insert(QStringLiteral("input_track_thinning_grid_columns"), sfmOptions.trackThinningGridColumns);
         diagnostics.insert(QStringLiteral("input_track_thinning_grid_rows"), sfmOptions.trackThinningGridRows);
+        diagnostics.insert(QStringLiteral("camera_binding_source"),
+                           autoBoundFromCanonical ? QStringLiteral("canonical_project_instances")
+                                                  : (input.cameraBindings.empty() ? QStringLiteral("caller_or_unbound")
+                                                                                  : QStringLiteral("explicit_input")));
+        diagnostics.insert(QStringLiteral("camera_binding_count"),
+                           static_cast<int>(bindingInput.cameraBindings.size()));
 
         std::vector<double> final_camera_focals;
         if (execution.reconstruction)
@@ -711,7 +1177,8 @@ namespace xjw::aerial_triangulation
                 {
                     continue;
                 }
-                const FramePinholeCamera& camera = execution.reconstruction->camera(image_id);
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                    execution.reconstruction->camera(image_id);
                 const double focal_x = camera.focalX();
                 const double focal_y = camera.focalY();
                 if (std::isfinite(focal_x) && focal_x > 0.0 && std::isfinite(focal_y) && focal_y > 0.0)
@@ -749,12 +1216,23 @@ namespace xjw::aerial_triangulation
                 const ImageId imageId = static_cast<ImageId>(index);
                 if (execution.reconstruction->isRegistered(imageId))
                 {
-                    QJsonObject cameraObject =
-                        xjw::common::project::cameraToJson(execution.reconstruction->camera(imageId));
+                    QJsonObject cameraObject = xjw::common::project::serializeFramePinholeNumericState(
+                        execution.reconstruction->camera(imageId));
                     cameraObject.insert(QStringLiteral("intrinsic_source"), QStringLiteral("sfm_estimated"));
                     cameraObject.insert(QStringLiteral("pose_source"), QStringLiteral("sfm_estimated"));
-                    execution.result.pendingCamUpdates.insert(
-                        xjw::common::project::normalizePath(input.images.at(index)), cameraObject);
+                    if (!execution.reconstruction->camera(imageId).hasBoundIdentity())
+                    {
+                        execution.result.errorMessage =
+                            QStringLiteral("SfM 相机写回缺少 canonical ImageId，拒绝按路径生成身份: %1")
+                                .arg(input.images.at(index));
+                        execution.result.summary = execution.result.errorMessage;
+                        return execution;
+                    }
+                    execution.result.cameraInstanceUpdates.push_back(
+                        {execution.reconstruction->camera(imageId).imageId(),
+                         execution.reconstruction->camera(imageId).instanceId(),
+                         execution.reconstruction->camera(imageId).worldFrame(),
+                         cameraObject});
                 }
             }
         }
@@ -766,273 +1244,28 @@ namespace xjw::aerial_triangulation
                                              PreparedTiePointGraph* graph,
                                              QString* errorMessage)
     {
-        if (errorMessage)
-        {
-            errorMessage->clear();
-        }
-        if (!graph)
-        {
-            return fail(QStringLiteral("连接点图输出参数为空"), errorMessage);
-        }
-        *graph = {};
-
-        QFile file(tiePointPath);
-        if (!file.open(QIODevice::ReadOnly))
-        {
-            return fail(QStringLiteral("无法读取连接点文件: %1").arg(tiePointPath), errorMessage);
-        }
-        const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
-        if (!document.isObject())
-        {
-            return fail(QStringLiteral("连接点文件不是有效 JSON 对象: %1").arg(tiePointPath), errorMessage);
-        }
-
-        const QJsonObject root = document.object();
-        const int formatVersion = root.value(QStringLiteral("format_version")).toInt();
-        if (root.value(QStringLiteral("format")).toString() != QLatin1String("plascan_tie_points") ||
-            (formatVersion < 1 || formatVersion > 3))
-        {
-            return fail(QStringLiteral("不支持的连接点文件格式或版本"), errorMessage);
-        }
-        if (selectedImages.size() < 2)
-        {
-            return fail(QStringLiteral("SfM 至少需要两张影像"), errorMessage);
-        }
-
-        // 持久化 image_id 可能与本次选择顺序不同，必须先按路径建立显式重映射。
-        QMap<int, ImageId> selectedIdByPersistedId;
-        QSet<int> coveredSelectedIds;
-        for (const QJsonValue& value : root.value(QStringLiteral("images")).toArray())
-        {
-            const QJsonObject imageObject = value.toObject();
-            const int persistedId = imageObject.value(QStringLiteral("image_id")).toInt(-1);
-            const int selectedId =
-                selectedImageIndex(imageObject.value(QStringLiteral("path")).toString(), selectedImages);
-            if (persistedId >= 0 && selectedId >= 0)
-            {
-                selectedIdByPersistedId.insert(persistedId, static_cast<ImageId>(selectedId));
-                coveredSelectedIds.insert(selectedId);
-            }
-        }
-        if (coveredSelectedIds.size() != selectedImages.size())
-        {
-            return fail(QStringLiteral("连接点文件的影像集合与当前空三影像集合不一致"), errorMessage);
-        }
-
-        graph->imagePaths.reserve(selectedImages.size());
+        std::vector<std::filesystem::path> paths;
+        paths.reserve(selectedImages.size());
         for (const QString& path : selectedImages)
         {
-            graph->imagePaths.append(xjw::common::project::normalizePath(path));
+            paths.push_back(xjw::common::file::pathFromUtf8(
+                xjw::common::io::toUtf8Path(xjw::common::project::normalizePath(path))));
         }
-
-        // 连接点文件保留原始特征索引；SfM 只需要轨迹实际引用的稀疏子集。
-        // 每张影像独立压缩索引可显著降低关键点内存，同时保持同一原始索引一致。
-        QMap<ImageId, QMap<qulonglong, FeatureIdx>> compactIndexByOriginal;
-        std::map<quint64, std::size_t> pairPosition;
-        std::map<quint64, std::set<std::pair<FeatureIdx, FeatureIdx>>> pairObservations;
-        qsizetype persistedObservationCount = 0;
-        qsizetype acceptedObservationCount = 0;
-        qsizetype persistedDirectEdgeCount = 0;
-        qsizetype acceptedDirectEdgeCount = 0;
-        graph->usesRawDirectEdges = formatVersion >= 2;
-
-        const auto addMatch = [&](ParsedObservation observationA,
-                                  ParsedObservation observationB,
-                                  float confidence,
-                                  bool synthesizedClosure)
+        std::string error;
+        const bool ok = engine::readTiePointGraph(
+            xjw::common::file::pathFromUtf8(xjw::common::io::toUtf8Path(tiePointPath)),
+            paths,
+            graph,
+            &error,
+            [&selectedImages](std::string_view token) {
+                return selectedImageIndex(QString::fromUtf8(token.data(), static_cast<qsizetype>(token.size())),
+                                          selectedImages);
+            });
+        if (errorMessage)
         {
-            if (observationA.imageId == observationB.imageId)
-            {
-                return false;
-            }
-            if (observationA.imageId > observationB.imageId)
-            {
-                std::swap(observationA, observationB);
-            }
-
-            const quint64 key = pairKey(observationA.imageId, observationB.imageId);
-            const std::pair<FeatureIdx, FeatureIdx> featurePair{observationA.featureIndex, observationB.featureIndex};
-            if (!pairObservations[key].insert(featurePair).second)
-            {
-                return false;
-            }
-
-            auto position = pairPosition.find(key);
-            if (position == pairPosition.end())
-            {
-                PreparedTiePointMatchPair pair;
-                pair.imageA = observationA.imageId;
-                pair.imageB = observationB.imageId;
-                graph->matchPairs.push_back(std::move(pair));
-                position = pairPosition.emplace(key, graph->matchPairs.size() - 1).first;
-            }
-            graph->matchPairs[position->second].matches.push_back(
-                {observationA.featureIndex, observationB.featureIndex, confidence});
-            if (synthesizedClosure)
-            {
-                ++graph->synthesizedClosureEdgeCount;
-            }
-            else
-            {
-                ++graph->directEdgeCount;
-            }
-            return true;
-        };
-
-        for (const QJsonValue& trackValue : root.value(QStringLiteral("tracks")).toArray())
-        {
-            const QJsonObject trackObject = trackValue.toObject();
-            const float confidence =
-                static_cast<float>(std::clamp(trackObject.value(QStringLiteral("confidence")).toDouble(1.0), 0.0, 1.0));
-            const QJsonArray persistedObservationArray = trackObject.value(QStringLiteral("observations")).toArray();
-            persistedObservationCount += persistedObservationArray.size();
-            std::vector<std::optional<ParsedObservation>> persistedObservations(
-                static_cast<std::size_t>(persistedObservationArray.size()));
-            std::vector<ParsedObservation> observations;
-
-            for (qsizetype persistedIndex = 0; persistedIndex < persistedObservationArray.size(); ++persistedIndex)
-            {
-                const QJsonValue observationValue = persistedObservationArray.at(persistedIndex);
-                const QJsonObject observationObject = observationValue.toObject();
-                const QJsonArray compactObservation = observationValue.toArray();
-                const bool compact = observationValue.isArray();
-                if (compact && compactObservation.size() < 4)
-                {
-                    continue;
-                }
-                const int persistedImageId = compact ? compactObservation.at(0).toInt(-1)
-                                                     : observationObject.value(QStringLiteral("image_id")).toInt(-1);
-                const qint64 originalFeatureIndex =
-                    compact ? compactObservation.at(1).toInteger(-1)
-                            : observationObject.value(QStringLiteral("feature_idx")).toInteger(-1);
-                const QJsonArray xy = observationObject.value(QStringLiteral("xy")).toArray();
-                if (!selectedIdByPersistedId.contains(persistedImageId) || originalFeatureIndex < 0 ||
-                    (!compact && xy.size() < 2))
-                {
-                    continue;
-                }
-
-                const double x =
-                    (compact ? compactObservation.at(2) : xy.at(0)).toDouble(std::numeric_limits<double>::quiet_NaN());
-                const double y =
-                    (compact ? compactObservation.at(3) : xy.at(1)).toDouble(std::numeric_limits<double>::quiet_NaN());
-                const double persistedScale =
-                    compact && compactObservation.size() >= 5
-                        ? compactObservation.at(4).toDouble(std::numeric_limits<double>::quiet_NaN())
-                    : observationObject.contains(QStringLiteral("scale"))
-                        ? observationObject.value(QStringLiteral("scale"))
-                              .toDouble(std::numeric_limits<double>::quiet_NaN())
-                        : std::numeric_limits<double>::quiet_NaN();
-                if (!std::isfinite(x) || !std::isfinite(y))
-                {
-                    continue;
-                }
-
-                const ImageId imageId = selectedIdByPersistedId.value(persistedImageId);
-                QMap<qulonglong, FeatureIdx>& indexMap = compactIndexByOriginal[imageId];
-                const qulonglong originalKey = static_cast<qulonglong>(originalFeatureIndex);
-                FeatureIdx compactIndex = indexMap.value(originalKey, kInvalidFeatureIdx);
-                if (compactIndex == kInvalidFeatureIdx)
-                {
-                    compactIndex = static_cast<FeatureIdx>(graph->keypointsByImage[imageId].size());
-                    indexMap.insert(originalKey, compactIndex);
-                    const double scale = std::isfinite(persistedScale) && persistedScale > 0.0 ? persistedScale : 1.0;
-                    graph->keypointsByImage[imageId].push_back(
-                        {static_cast<float>(x), static_cast<float>(y), static_cast<float>(scale)});
-                }
-                const ParsedObservation parsed{imageId, compactIndex};
-                persistedObservations[static_cast<std::size_t>(persistedIndex)] = parsed;
-                observations.push_back(parsed);
-                ++acceptedObservationCount;
-            }
-
-            // 一条多视轨迹在同一影像最多保留一个观测，避免生成自相矛盾 pair。
-            std::sort(observations.begin(),
-                      observations.end(),
-                      [](const ParsedObservation& left, const ParsedObservation& right)
-                      { return left.imageId < right.imageId; });
-            observations.erase(std::unique(observations.begin(),
-                                           observations.end(),
-                                           [](const ParsedObservation& left, const ParsedObservation& right)
-                                           { return left.imageId == right.imageId; }),
-                               observations.end());
-            if (observations.size() < 2)
-            {
-                continue;
-            }
-
-            Track track;
-            track.confidence = confidence;
-            track.elements.reserve(observations.size());
-            for (const ParsedObservation& observation : observations)
-            {
-                track.elements.push_back({observation.imageId, observation.featureIndex});
-            }
-            graph->tracks.push_back(std::move(track));
-
-            bool addedTrackEdge = false;
-            if (formatVersion >= 2)
-            {
-                // v2 明确保留前端几何验证的原始边。轨迹连通性与直接匹配语义不能
-                // 混为一谈，否则 A-B-C 的传递闭包会伪造并不存在的 A-C 匹配。
-                for (const QJsonValue& edgeValue : trackObject.value(QStringLiteral("direct_edges")).toArray())
-                {
-                    ++persistedDirectEdgeCount;
-                    const QJsonArray edge = edgeValue.toArray();
-                    if (edge.size() < 2)
-                    {
-                        continue;
-                    }
-                    const qint64 first = edge.at(0).toInteger(-1);
-                    const qint64 second = edge.at(1).toInteger(-1);
-                    if (first < 0 || second < 0 || first == second ||
-                        first >= static_cast<qint64>(persistedObservations.size()) ||
-                        second >= static_cast<qint64>(persistedObservations.size()))
-                    {
-                        continue;
-                    }
-                    const auto& firstObservation = persistedObservations[static_cast<std::size_t>(first)];
-                    const auto& secondObservation = persistedObservations[static_cast<std::size_t>(second)];
-                    if (!firstObservation || !secondObservation)
-                    {
-                        continue;
-                    }
-                    if (addMatch(*firstObservation, *secondObservation, confidence, false))
-                    {
-                        addedTrackEdge = true;
-                        ++acceptedDirectEdgeCount;
-                    }
-                }
-            }
-            else
-            {
-                // v1 没有保存边拓扑，只能保留历史兼容行为。诊断字段会明确记录这些
-                // 是合成闭包边，新生成的 v2 文件不再走此路径。
-                for (std::size_t first = 0; first + 1 < observations.size(); ++first)
-                {
-                    for (std::size_t second = first + 1; second < observations.size(); ++second)
-                    {
-                        addedTrackEdge |= addMatch(observations[first], observations[second], confidence, true);
-                    }
-                }
-            }
-            (void)addedTrackEdge;
+            *errorMessage = QString::fromStdString(error);
         }
-
-        graph->trackCount = static_cast<int>(graph->tracks.size());
-        if (graph->tracks.empty() || graph->matchPairs.empty())
-        {
-            return fail(QStringLiteral("连接点文件中没有可用于 SfM 的多视图轨迹（轨迹 %1，匹配对 %2，"
-                                       "接受观测 %3/%4，接受直接边 %5/%6）")
-                            .arg(graph->tracks.size())
-                            .arg(graph->matchPairs.size())
-                            .arg(acceptedObservationCount)
-                            .arg(persistedObservationCount)
-                            .arg(acceptedDirectEdgeCount)
-                            .arg(persistedDirectEdgeCount),
-                        errorMessage);
-        }
-        return true;
+        return ok;
     }
 
 } // namespace xjw::aerial_triangulation

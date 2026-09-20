@@ -95,6 +95,12 @@
   top-2，随后执行互选和 ratio 门控。新增对应与原对应合并后只运行一次 USAC，并删除新增外点再更新统计。
   参考相机索引、可靠观测邻接和软蒙版在任务级缓存；最终日志分别报告 graph、policy、descriptor、mask、
   filter 和 geometry 累计耗时，便于判断瓶颈来自候选搜索还是几何验证。
+- 引导极线几何会在构造相对姿态前比较两台参考针孔相机声明的 `world_frame`；已声明但不一致时直接拒绝，
+  不把不同坐标系的姿态拼成基础矩阵。参考投影几何使用
+  `camera_reference::ReferenceCameraGeometryMap`，按 `ImageId` 连接 canonical 内参、外参和
+  `CoordinateFrameId`；输入路径只用于定位影像。位置先验使用独立的
+  `ReferenceCameraPositionMap`，不能被引导极线投影器当作相机模型。重复文件名或无法唯一定位的路径别名
+  会被视为歧义并跳过，不会选用第一台相机。
 - 任务成功构建轨迹后追加稳定的 `matching_funnel` 阶段报告，并在 `MatchPhotosResult::matchingFunnel` 和
   `trackSummary.matching_funnel` 中保留结构化统计。漏斗依次记录全量/入选像对、有原始匹配像对与匹配数、
   guided 前几何通过像对/内点、guided 新增内点、最终几何边和轨迹数，同时输出预选率、匹配产出率、

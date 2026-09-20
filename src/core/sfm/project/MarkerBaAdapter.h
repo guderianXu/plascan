@@ -12,7 +12,6 @@
 #include "project/BaInputBuilder.h"
 
 #include <QMap>
-#include <QString>
 
 namespace xjw::core::project
 {
@@ -20,11 +19,12 @@ namespace xjw::core::project
 /**
  * @brief 追加人工标记相关轨迹、约束和回写绑定。
  *
- * `cameraIndexByPath` 是工程路径到 BA 相机块的唯一映射。无法解析影像、重复相机
- * 投影、少于两视或无法三角化的标记会计入 rejectedMarkerTrackCount。
+ * canonical ImageId 是投影唯一主键，路径快照只用于展示和审计，不能参与求解绑定。
+ * 无法解析影像、重复相机投影、少于两视或无法三角化的标记会计入
+ * rejectedMarkerTrackCount；缺少或未知 ImageId 会使整个输入返回 InvalidInput。
  */
 void appendMarkerBaInput(const MarkerBaInput *input,
-                         const QMap<QString, int> &cameraIndexByPath,
+                         const QMap<QString, int> &cameraIndexByImageId,
                          BaInputBuildResult *result);
 
 } // namespace xjw::core::project

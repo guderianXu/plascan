@@ -1,11 +1,8 @@
 #pragma once
 
-#include <array>
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
-namespace xjw
-{
-class FramePinholeCamera;
-}
+#include <array>
 
 namespace xjw::mesh
 {
@@ -44,10 +41,9 @@ public:
      * horizontal and vertical footprints.  Each axis footprint is measured
      * symmetrically against the two half-pixel boundary rays.
      */
-    static DepthRayMetricSample evaluate(
-        const FramePinholeCamera &camera,
-        const std::array<double, 2> &pixel,
-        double positiveCameraZDepth);
+    static DepthRayMetricSample evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                         const std::array<double, 2>& pixel,
+                                         double positiveCameraZDepth);
 
     /**
      * @brief Moves the sample by a signed camera-Z depth offset.

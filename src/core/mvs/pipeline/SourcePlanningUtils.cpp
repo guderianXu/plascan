@@ -5,10 +5,11 @@ namespace xjw::mvs::pipeline_detail
     using namespace pipeline_detail;
     using common::string_utils::asciiLowerCopy;
 
-    FramePinholeCamera mvsPinholeCamera(const FramePinholeCamera& camera)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    mvsPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
     {
-        FramePinholeCamera result = camera.normalizedForPositiveDepth();
-        result.setDistortion(FramePinholeCamera::Distortion{});
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState result = camera.normalizedForPositiveDepth();
+        result.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
         return result;
     }
 

@@ -33,13 +33,11 @@ namespace xjw::mvs
             std::lock_guard<std::mutex> lock(_preparedRasterArtifactsMutex);
             _preparedRasterArtifacts.assign(_views.size(), MvsPreparedRasterArtifact{});
         }
-        clearFrameCaches();
     }
 
     void MvsPipelineService::setSparseCloud(const SparseCloud& sparse)
     {
         _sparse = sparse;
-        clearFrameCaches();
     }
 
     void MvsPipelineService::setConfig(const DepthGenConfig& config)
@@ -71,7 +69,6 @@ namespace xjw::mvs
     void MvsPipelineService::clearRuntimeCachesAfterFailure()
     {
         _imageCache.reset();
-        clearFrameCaches();
         releaseStoredDepthFramePixelStorage(_depthFrames);
 
         std::lock_guard<std::mutex> lock(_filteredDepthsMutex);

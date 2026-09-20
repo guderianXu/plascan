@@ -1,4 +1,4 @@
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthRayMetric.h"
 
 #include <gtest/gtest.h>
@@ -12,16 +12,12 @@ namespace xjw::mesh
 namespace
 {
 
-FramePinholeCamera makeCamera()
-{
-    FramePinholeCamera camera;
-    camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
-    camera.setPose(
-        {1.0, 0.0, 0.0,
-         0.0, 1.0, 0.0,
-         0.0, 0.0, 1.0},
-        {0.0, 0.0, 0.0});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+        return camera;
 }
 
 TEST(DepthRayMetricTest, CentrePixelUsesCameraZAsRayDistance)
@@ -72,7 +68,7 @@ TEST(DepthRayMetricTest, OffAxisPixelSeparatesCameraZAndRayDistance)
 
 TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
 {
-    FramePinholeCamera camera = makeCamera();
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     camera.setCameraCenter({1.0, 2.0, 3.0});
     camera.setDepthAxisFlipped(true);
 
@@ -99,11 +95,11 @@ TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
 
 TEST(DepthRayMetricTest, RejectsInvalidCameraDepthPixelAndOffset)
 {
-    const FramePinholeCamera invalid_camera;
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState invalid_camera;
     EXPECT_FALSE(DepthRayMetric::evaluate(
         invalid_camera, {0.0, 0.0}, 1.0).valid);
 
-    const FramePinholeCamera camera = makeCamera();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, 0.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, -1.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(

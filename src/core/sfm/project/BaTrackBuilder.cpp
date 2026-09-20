@@ -55,8 +55,10 @@ namespace xjw::core::project
             return compactIndex;
         }
 
-        std::array<double, 3> midpointBetweenCameras(const xjw::FramePinholeCamera& cameraA,
-                                                     const xjw::FramePinholeCamera& cameraB)
+        using NumericCamera = xjw::camera_models::frame_pinhole::FramePinholeNumericState;
+
+        std::array<double, 3> midpointBetweenCameras(const NumericCamera& cameraA,
+                                                     const NumericCamera& cameraB)
         {
             const auto centerA = cameraA.cameraCenter();
             const auto centerB = cameraB.cameraCenter();
@@ -67,7 +69,7 @@ namespace xjw::core::project
         xjw::BATrack
         makeBaTrackFromIndexedTrack(const xjw::Track& track,
                                     const std::map<IndexedFeatureKey, IndexedObservation>& observationsByIndexedFeature,
-                                    const std::vector<xjw::FramePinholeCamera>& cameras)
+                                    const std::vector<NumericCamera>& cameras)
         {
             xjw::BATrack baTrack;
             std::vector<IndexedObservation> observations;
@@ -102,11 +104,11 @@ namespace xjw::core::project
                     {
                         continue;
                     }
-                    const xjw::PairIntersectionCandidate candidate =
-                        xjw::triangulatePairWithDirectionFallback(cameras[static_cast<std::size_t>(left.cameraIndex)],
-                                                                  left.pixel,
-                                                                  cameras[static_cast<std::size_t>(right.cameraIndex)],
-                                                                  right.pixel);
+                    const auto candidate = NumericCamera::triangulatePair(
+                        cameras[static_cast<std::size_t>(left.cameraIndex)],
+                        left.pixel,
+                        cameras[static_cast<std::size_t>(right.cameraIndex)],
+                        right.pixel);
                     if (candidate.valid)
                     {
                         baTrack.initialPoint = candidate.point;
@@ -153,8 +155,8 @@ namespace xjw::core::project
         std::map<int, std::vector<xjw::FeatureKeypoint>> keypointsByCamera;
         for (const ProjectMatchPair& pair : input.pairs)
         {
-            const xjw::FramePinholeCamera& cameraA = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexA));
-            const xjw::FramePinholeCamera& cameraB = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexB));
+            const NumericCamera& cameraA = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexA));
+            const NumericCamera& cameraB = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexB));
 
             if (pair.indexed)
             {
@@ -191,8 +193,8 @@ namespace xjw::core::project
             for (const ProjectMatchObservationPair& observation : pair.observations)
             {
                 xjw::BATrack track;
-                const xjw::PairIntersectionCandidate candidate =
-                    xjw::triangulatePairWithDirectionFallback(cameraA, observation.pixelA, cameraB, observation.pixelB);
+                const auto candidate = NumericCamera::triangulatePair(
+                    cameraA, observation.pixelA, cameraB, observation.pixelB);
                 track.initialPoint = candidate.valid ? candidate.point : midpointBetweenCameras(cameraA, cameraB);
 
                 const double weight = std::clamp(observation.score, 0.0, 1.0);

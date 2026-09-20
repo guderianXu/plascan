@@ -38,6 +38,10 @@ The standalone `run_tests.py --test-dir <build-tree>` entry binds Windows build-
 If `PROJ_DATA`/`PROJ_LIB` is not explicitly set, it also locates an existing `proj.db` through that build's
 `CMakeCache.txt` vcpkg installation directory and triplet. This matches the environment supplied by
 `configure_with_env.py` without requiring machine-specific paths in commands.
+The GUI also resolves GDAL/PROJ data on direct startup: installed `share/` directories take precedence over
+the vcpkg installation directory and source dependency prefix recorded in the main build's `CMakeCache.txt`.
+Valid explicit `PROJ_DATA`/`PROJ_LIB` and `GDAL_DATA` paths retain priority. Linux Vulkan loader manifests enable
+both XCB and Wayland surfaces; building them requires the host `libwayland-dev` package.
 
 The installed GUI checks for Python on startup. If no runtime is available, it can download a signed Python installer
 from python.org and create a per-user managed runtime without administrator privileges. The same workflow remains available
@@ -127,6 +131,21 @@ Build and install Qt 6.11.2, OpenCV 5.0.0, GDAL 3.12.4, AprilTag 3.4.5, OpenEXR 
 ```bash
 python scripts/env/configure_with_env.py --source-deps --build --test
 ```
+
+CPU headless builds without the desktop GUI or PDF/terrain report rendering use
+`<platform>-source-headless-release`, where platform is `linux`, `windows`, or `macos`:
+
+```bash
+python scripts/env/configure_with_env.py --source-deps --preset linux-source-headless-release \
+  --no-tensorrt-auto-install --build --test
+```
+
+The preset disables GUI tests, `PLASCAN_BUILD_QT_PRESENTATION`, CUDA, OpenCL, and TensorRT.
+Existing source dependency installations can be reused by omitting `--source-deps`.
+Marker detection and small-body terrain CLI targets remain available; marker printing is omitted.
+The small-body CLI defaults to GeoTIFF/JSON without PNG and rejects an explicit `--preview` request.
+Qt Core/Gui/Network/Concurrent remain required by image input, reconstruction, texture, and project code;
+headless does not mean a Qt-free engine. The desktop configuration requires Qt presentation enabled.
 
 To place the PlaScan build tree and all source-dependency build content below a custom directory, pass
 `--build-dir`; no `CMakeUserPresets.json` override is required:

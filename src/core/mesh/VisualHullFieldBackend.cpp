@@ -187,9 +187,11 @@ namespace xjw::mesh::detail
                     depth_rows = view.depthMap.rows;
                 }
 
-                const FramePinholeCamera::Intrinsics intrinsics = view.camera.intrinsics();
-                const FramePinholeCamera::Distortion distortion = view.camera.distortion();
-                const FramePinholeCamera::Pose pose = view.camera.pose();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
+                    view.camera.intrinsics();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
+                    view.camera.distortion();
+                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = view.camera.pose();
                 const std::size_t parameter_offset = input->cameraParameters.size();
                 input->cameraParameters.resize(parameter_offset + kVisualHullCameraParameterStride, 0.0f);
                 float* parameters = input->cameraParameters.data() + parameter_offset;

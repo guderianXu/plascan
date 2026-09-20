@@ -50,16 +50,16 @@ namespace
         std::string backends = "plamatrix_cpu";
         BenchmarkSettings settings;
     };
-    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double cx, double cy, double cz)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
         camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{cx, cy, cz}});
         return camera;
     }
-    std::vector<xjw::FramePinholeCamera> makeCameras(int count)
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> makeCameras(int count)
     {
-        std::vector<xjw::FramePinholeCamera> cameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
         cameras.reserve(static_cast<std::size_t>(count));
         for (int i = 0; i < count; ++i)
         {
@@ -69,7 +69,9 @@ namespace
         return cameras;
     }
     std::vector<xjw::BATrack>
-    makeTracks(const std::vector<xjw::FramePinholeCamera>& cameras, int trackCount, int viewsPerTrack)
+    makeTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+               int trackCount,
+               int viewsPerTrack)
     {
         std::mt19937 rng(7);
         std::uniform_real_distribution<double> xy(-4.0, 4.0);
@@ -160,10 +162,11 @@ namespace
         options->refineSharedHighOrderDistortion = true;
     }
 
-    CameraModelRunInfo configureCameraModel(const BenchmarkSettings& settings,
-                                            const std::vector<xjw::FramePinholeCamera>& cameras,
-                                            const std::vector<xjw::BATrack>& tracks,
-                                            xjw::BAOptions* options)
+    CameraModelRunInfo
+    configureCameraModel(const BenchmarkSettings& settings,
+                         const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                         const std::vector<xjw::BATrack>& tracks,
+                         xjw::BAOptions* options)
     {
         CameraModelRunInfo info;
         if (settings.cameraModel == "fixed")
@@ -229,7 +232,7 @@ namespace
     {
         for (int repetition = 1; repetition <= settings.repetitions; ++repetition)
         {
-            std::vector<xjw::FramePinholeCamera> cameras = dataset.cameras;
+            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = dataset.cameras;
             std::vector<xjw::BATrack> tracks = dataset.tracks;
             xjw::BAOptions options;
             options.backend = backend;

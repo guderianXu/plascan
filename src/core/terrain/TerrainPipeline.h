@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SmallBodyGlobalProducts.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <QString>
 #include <QJsonObject>
@@ -14,8 +15,6 @@ namespace cv { class Mat; }
 
 namespace xjw
 {
-
-class FramePinholeCamera;
 
 /**
  * @brief 地形产品生成流水线外观类。
@@ -51,11 +50,12 @@ public:
      * 直接在参考图像空间生成 DEM，避免点云中间步骤的覆盖率损失。
      * DEM 尺寸与参考深度图一致，覆盖率接近 100%。
      */
-    static bool generateDemFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                         const std::vector<FramePinholeCamera> &cameras,
-                                         const QString &outputDir,
-                                         QJsonObject *result,
-                                         QString *errorMsg = nullptr);
+    static bool
+    generateDemFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
+                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                             const QString& outputDir,
+                             QJsonObject* result,
+                             QString* errorMsg = nullptr);
 
     /**
      * @brief 结合 DEM 与输入影像生成 DOM。
@@ -128,14 +128,14 @@ public:
                                       QString *errorMsg = nullptr);
 
     /** 从体固连闭合网格生成全球径向 DEM、DOM、可靠性和四联图报告。 */
-    static bool generateSmallBodyGlobalProducts(
-        const QString &surfacePath,
-        const QString &outputDir,
-        const SmallBodyGlobalOptions &options,
-        QJsonObject *result,
-        QString *errorMsg = nullptr,
-        const std::atomic_bool *cancelFlag = nullptr,
-        const SmallBodyProgressCallback &progressCallback = {});
+    static bool generateSmallBodyGlobalProducts(const QString& surfacePath,
+                                                const QString& outputDir,
+                                                const SmallBodyGlobalOptions& options,
+                                                QJsonObject* result,
+                                                QString* errorMsg = nullptr,
+                                                const std::atomic_bool* cancelFlag = nullptr,
+                                                const SmallBodyProgressCallback& progressCallback = {},
+                                                const SmallBodyPreviewWriter& previewWriter = {});
 
     /**
      * @brief 从带纹理 OBJ 同时生成三种小天体投影的 DEM+DOM GeoTIFF 产品。

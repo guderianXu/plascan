@@ -4,18 +4,21 @@
 #include "search/SfmSearchPolicy.h"
 #include "workflow/AerialTriangulationPipeline.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "camera/project/CameraProjectRecords.h"
+#include "ProjectCameraIO.h"
+#include "io/ImageIO.h"
 
 #include <gtest/gtest.h>
 
 #include <QDir>
 #include <QFile>
-#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -23,50 +26,103 @@
 namespace
 {
 
-void writeKnownPoseTiePoints(const QString &path,
-                             const QString &imageA,
-                             const QString &imageB,
-                             const xjw::FramePinholeCamera &cameraA,
-                             const xjw::FramePinholeCamera &cameraB)
-{
-    QJsonArray tracks;
-    for (int featureIndex = 0; featureIndex < 30; ++featureIndex)
+    QJsonObject makeCanonicalPinholeProject(const QStringList& imagePaths,
+                                            const std::vector<std::array<double, 3>>& centers)
     {
-        const std::array<double, 3> point{
-            (featureIndex % 6 - 2.5) * 0.16,
-            (featureIndex / 6 - 2.0) * 0.14,
-            5.0 + 0.05 * (featureIndex % 3)};
-        double pixelA[2]{};
-        double pixelB[2]{};
-        ASSERT_TRUE(cameraA.projectWorldPoint(point.data(), pixelA));
-        ASSERT_TRUE(cameraB.projectWorldPoint(point.data(), pixelB));
-        tracks.append(QJsonObject{
-            {QStringLiteral("confidence"), 1.0},
-            {QStringLiteral("observations"),
-             QJsonArray{
-                 QJsonObject{{QStringLiteral("image_id"), 0},
-                             {QStringLiteral("feature_idx"), featureIndex},
-                             {QStringLiteral("xy"), QJsonArray{pixelA[0], pixelA[1]}}},
-                 QJsonObject{{QStringLiteral("image_id"), 1},
-                             {QStringLiteral("feature_idx"), featureIndex},
-                             {QStringLiteral("xy"), QJsonArray{pixelB[0], pixelB[1]}}},
-             }},
-        });
+        const QJsonObject definition{{QStringLiteral("id"), QStringLiteral("pipeline-pinhole-definition")},
+                                     {QStringLiteral("model_type"), QStringLiteral("frame_pinhole")},
+                                     {QStringLiteral("schema_version"), 1},
+                                     {QStringLiteral("frame"), QStringLiteral("pipeline-world")},
+                                     {QStringLiteral("parameters"),
+                                      QJsonObject{{QStringLiteral("intrinsics"),
+                                                   QJsonObject{{QStringLiteral("fx_px"), 700.0},
+                                                               {QStringLiteral("fy_px"), 700.0},
+                                                               {QStringLiteral("cx_px"), 320.0},
+                                                               {QStringLiteral("cy_px"), 240.0},
+                                                               {QStringLiteral("pixel_pitch_mm"), 0.01},
+                                                               {QStringLiteral("u_axis_sign"), 1},
+                                                               {QStringLiteral("v_axis_sign"), 1}}},
+                                                  {QStringLiteral("distortion"),
+                                                   QJsonObject{{QStringLiteral("k1"), 0.0},
+                                                               {QStringLiteral("k2"), 0.0},
+                                                               {QStringLiteral("k3"), 0.0},
+                                                               {QStringLiteral("p1"), 0.0},
+                                                               {QStringLiteral("p2"), 0.0}}},
+                                                  {QStringLiteral("pixel_convention"), QStringLiteral("center")},
+                                                  {QStringLiteral("depth_axis_flipped"), false}}}};
+
+        QJsonArray images;
+        QJsonArray instances;
+        for (int index = 0; index < imagePaths.size(); ++index)
+        {
+            const QString imageId = QStringLiteral("pipeline-image-%1").arg(index);
+            images.append(
+                QJsonObject{{QStringLiteral("image_uuid"), imageId}, {QStringLiteral("path"), imagePaths.at(index)}});
+            const std::array<double, 3> center = index < static_cast<int>(centers.size())
+                                                     ? centers.at(static_cast<std::size_t>(index))
+                                                     : std::array<double, 3>{{0.0, 0.0, 0.0}};
+            instances.append(
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("pipeline-instance-%1").arg(index)},
+                            {QStringLiteral("image_uuid"), imageId},
+                            {QStringLiteral("definition_id"), QStringLiteral("pipeline-pinhole-definition")},
+                            {QStringLiteral("schema_version"), 1},
+                            {QStringLiteral("image_size"),
+                             QJsonObject{{QStringLiteral("samples"), 640}, {QStringLiteral("lines"), 480}}},
+                            {QStringLiteral("pose"),
+                             QJsonObject{{QStringLiteral("frame"), QStringLiteral("pipeline-world")},
+                                         {QStringLiteral("center_m"), QJsonArray{center[0], center[1], center[2]}},
+                                         {QStringLiteral("camera_to_world_rotation"),
+                                          QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}}});
+        }
+        return QJsonObject{{QStringLiteral("images"), images},
+                           {QStringLiteral("camera_definitions"), QJsonArray{definition}},
+                           {QStringLiteral("camera_instances"), instances}};
     }
 
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    file.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("format"), QStringLiteral("plascan_tie_points")},
-        {QStringLiteral("format_version"), 1},
-        {QStringLiteral("images"),
-         QJsonArray{
-             QJsonObject{{QStringLiteral("image_id"), 0}, {QStringLiteral("path"), imageA}},
-             QJsonObject{{QStringLiteral("image_id"), 1}, {QStringLiteral("path"), imageB}},
-         }},
-        {QStringLiteral("tracks"), tracks},
-    }).toJson(QJsonDocument::Compact));
-}
+    void writeKnownPoseTiePoints(const QString& path,
+                                 const QString& imageA,
+                                 const QString& imageB,
+                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraA,
+                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraB)
+    {
+        QJsonArray tracks;
+        for (int featureIndex = 0; featureIndex < 30; ++featureIndex)
+        {
+            const std::array<double, 3> point{
+                (featureIndex % 6 - 2.5) * 0.16, (featureIndex / 6 - 2.0) * 0.14, 5.0 + 0.05 * (featureIndex % 3)};
+            double pixelA[2]{};
+            double pixelB[2]{};
+            ASSERT_TRUE(cameraA.projectWorldPoint(point.data(), pixelA));
+            ASSERT_TRUE(cameraB.projectWorldPoint(point.data(), pixelB));
+            tracks.append(QJsonObject{
+                {QStringLiteral("confidence"), 1.0},
+                {QStringLiteral("observations"),
+                 QJsonArray{
+                     QJsonObject{{QStringLiteral("image_id"), 0},
+                                 {QStringLiteral("feature_idx"), featureIndex},
+                                 {QStringLiteral("xy"), QJsonArray{pixelA[0], pixelA[1]}}},
+                     QJsonObject{{QStringLiteral("image_id"), 1},
+                                 {QStringLiteral("feature_idx"), featureIndex},
+                                 {QStringLiteral("xy"), QJsonArray{pixelB[0], pixelB[1]}}},
+                 }},
+            });
+        }
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(
+            QJsonDocument(QJsonObject{
+                              {QStringLiteral("format"), QStringLiteral("plascan_tie_points")},
+                              {QStringLiteral("format_version"), 1},
+                              {QStringLiteral("images"),
+                               QJsonArray{
+                                   QJsonObject{{QStringLiteral("image_id"), 0}, {QStringLiteral("path"), imageA}},
+                                   QJsonObject{{QStringLiteral("image_id"), 1}, {QStringLiteral("path"), imageB}},
+                               }},
+                              {QStringLiteral("tracks"), tracks},
+                          })
+                .toJson(QJsonDocument::Compact));
+    }
 
 } // namespace
 
@@ -128,7 +184,7 @@ TEST(AerialTriangulationPipelineTest, ReplaysBestCoarseFocalCandidateWhenBaseCov
     ASSERT_GE(attemptedScales.size(), 3);
     EXPECT_DOUBLE_EQ(attemptedScales.front(), 1.2);
     EXPECT_DOUBLE_EQ(attemptedScales.back(), 0.85);
-    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(),
+    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_seed_scale")).toDouble(),
                      0.85);
 }
 
@@ -173,7 +229,7 @@ TEST(AerialTriangulationPipelineTest, SearchesNarrowFieldFocalCandidatesEvenWhen
     ASSERT_TRUE(result.success);
     EXPECT_NE(std::find(attemptedScales.cbegin(), attemptedScales.cend(), 5.2),
               attemptedScales.cend());
-    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(),
+    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_seed_scale")).toDouble(),
                      5.2);
 }
 
@@ -374,7 +430,7 @@ TEST(AerialTriangulationPipelineTest, IncompleteCoarseSearchFallsBackToFullFocal
     EXPECT_NE(std::find(attemptedScales.cbegin(), attemptedScales.cend(), 10.0),
               attemptedScales.cend());
     EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(
-        QStringLiteral("adaptive_focal_scale")).toDouble(), 10.0);
+        QStringLiteral("adaptive_focal_seed_scale")).toDouble(), 10.0);
 }
 
 TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnlyWinnerAtFullScale)
@@ -488,7 +544,7 @@ TEST(AerialTriangulationPipelineTest, InitializesUnknownFocalEvenWhenAdaptiveMod
                             [](bool enabled) { return !enabled; }));
     EXPECT_TRUE(result.sfmDiagnostics.value(QStringLiteral("focal_initialization_search")).toBool());
     EXPECT_FALSE(result.sfmDiagnostics.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
-    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(),
+    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_seed_scale")).toDouble(),
                      5.2);
 }
 
@@ -721,31 +777,17 @@ TEST(AerialTriangulationPipelineTest, KeepsAdaptiveCalibrationFixedForCompletePr
         return true;
     };
 
-    QJsonArray images;
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    std::vector<std::array<double, 3>> centers;
     for (int index = 0; index < 3; ++index)
     {
         const QString path = QStringLiteral("known_pose_%1.tif").arg(index);
         input.images.append(path);
-        images.append(QJsonObject{
-            {QStringLiteral("path"), path},
-            {QStringLiteral("camera"),
-             QJsonObject{
-                 {QStringLiteral("fu"), 430.0},
-                 {QStringLiteral("fv"), 430.0},
-                 {QStringLiteral("cu"), 390.0},
-                 {QStringLiteral("cv"), 360.0},
-                 {QStringLiteral("pitch"), 1.0},
-                 {QStringLiteral("intrinsic_source"), QStringLiteral("sfm_estimated")},
-                 {QStringLiteral("pose_initialized_as_identity"), false},
-                 {QStringLiteral("C"), QJsonArray{static_cast<double>(index), 0.0, 0.0}},
-                 {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
-                                                  0.0, 1.0, 0.0,
-                                                  0.0, 0.0, 1.0}},
-             }},
-        });
+        input.imageIds.push_back(
+            xjw::camera_core::ImageId(QStringLiteral("pipeline-image-%1").arg(index).toStdString()));
+        centers.push_back({static_cast<double>(index), 0.0, 0.0});
     }
-    input.projectMeta.insert(QStringLiteral("images"), images);
+    input.projectMeta = makeCanonicalPinholeProject(input.images, centers);
     input.useProjectCameraIntrinsics = true;
     input.useProjectCameraPoses = true;
     input.adaptiveCameraModelFitting = true;
@@ -768,14 +810,73 @@ TEST(AerialTriangulationPipelineTest, KeepsAdaptiveCalibrationFixedForCompletePr
     EXPECT_EQ(result.sfmDiagnostics.value(
         QStringLiteral("adaptive_camera_model_fitting_skip_reason")).toString(),
         QStringLiteral("known_pose_input"));
-    EXPECT_EQ(result.sfmDiagnostics.value(
-        QStringLiteral("camera_self_calibration_status")).toString(),
-        QStringLiteral("known_pose_fixed_calibration"));
+    EXPECT_EQ(result.sfmDiagnostics.value(QStringLiteral("camera_self_calibration_status")).toString(),
+              QStringLiteral("known_pose_fixed_calibration"));
+}
+
+TEST(AerialTriangulationPipelineTest, RejectsCanonicalPushbroomBeforeStaticSfMFallback)
+{
+    const QString imagePath = QStringLiteral("pushbroom_pipeline.tif");
+    QJsonObject projectMeta{
+        {QStringLiteral("images"),
+         QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("pipeline-pushbroom-image")},
+                                {QStringLiteral("path"), imagePath},
+                                {QStringLiteral("samples"), 640},
+                                {QStringLiteral("lines"), 480}}}},
+        {QStringLiteral("camera_definitions"), QJsonArray{}},
+        {QStringLiteral("camera_instances"), QJsonArray{}}};
+    const QJsonObject trajectory{{QStringLiteral("representation"), QStringLiteral("direct_pose_samples")},
+                                 {QStringLiteral("time_scale"), QStringLiteral("tdb")},
+                                 {QStringLiteral("samples"),
+                                  QJsonArray{QJsonObject{{QStringLiteral("time_seconds"), 0.0},
+                                                         {QStringLiteral("center_m"), QJsonArray{0.0, 0.0, 0.0}},
+                                                         {QStringLiteral("camera_to_world_rotation"),
+                                                          QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}},
+                                             QJsonObject{{QStringLiteral("time_seconds"), 1.0},
+                                                         {QStringLiteral("center_m"), QJsonArray{0.0, 0.0, 1.0}},
+                                                         {QStringLiteral("camera_to_world_rotation"),
+                                                          QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}}}};
+    const QJsonObject optics{{QStringLiteral("focal_length_mm"), 10.0},
+                             {QStringLiteral("distortion_model"), QStringLiteral("radial_normalized")},
+                             {QStringLiteral("distortion_k1"), 0.0},
+                             {QStringLiteral("sample_geometry"),
+                              QJsonObject{{QStringLiteral("type"), QStringLiteral("uniform_pitch")},
+                                          {QStringLiteral("sample_pitch_mm"), 0.01},
+                                          {QStringLiteral("principal_sample"), 320.0}}}};
+    const QJsonObject lineTiming{{QStringLiteral("time_scale"), QStringLiteral("tdb")},
+                                 {QStringLiteral("segments"),
+                                  QJsonArray{QJsonObject{{QStringLiteral("start_line"), 0.5},
+                                                         {QStringLiteral("start_time_seconds"), 0.0},
+                                                         {QStringLiteral("seconds_per_line"), 0.01}}}}};
+    const QJsonObject lineScanMetadata{{QStringLiteral("model"), QStringLiteral("planetary_linescan")},
+                                       {QStringLiteral("world_frame"), QStringLiteral("pipeline-world")},
+                                       {QStringLiteral("image_samples"), 640},
+                                       {QStringLiteral("image_lines"), 480},
+                                       {QStringLiteral("optics"), optics},
+                                       {QStringLiteral("pixel_convention"), QStringLiteral("pixel_center")},
+                                       {QStringLiteral("trajectory"), trajectory},
+                                       {QStringLiteral("line_timing"), lineTiming}};
+    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
+        &projectMeta, QMap<QString, QJsonObject>{{imagePath, lineScanMetadata}});
+    ASSERT_TRUE(update.ok()) << update.errors.join('\n').toStdString();
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {imagePath};
+    input.imageIds = {xjw::camera_core::ImageId("pipeline-pushbroom-image")};
+    input.projectMeta = projectMeta;
+    input.tiePointPath = QStringLiteral("missing/pushbroom-tie-points.json");
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline().run(input);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("static_sfm"))) << qPrintable(result.errorMessage);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("static_pose"))) << qPrintable(result.errorMessage);
 }
 
 TEST(AerialTriangulationPipelineTest, DoesNotTrustMalformedExternalCameraFiles)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
     std::atomic<int> attemptCount{0};
     const auto attemptRunner = [&attemptCount](
@@ -888,37 +989,43 @@ TEST(AerialTriangulationPipelineTest, PrefersRigidPhotogrammetricNetworkOverMore
         xjw::aerial_triangulation::AerialTriangulationPipeline(attemptRunner, resultWriter).run(input);
 
     ASSERT_TRUE(result.success);
-    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(),
+    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_seed_scale")).toDouble(),
                      2.4);
 }
 
 TEST(AerialTriangulationPipelineTest, RunsSfmAndWritesPreparedReconstruction)
 {
-    QTemporaryDir tempDir;
+    QDir().mkpath(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR));
+    QTemporaryDir tempDir(QString::fromUtf8(PLASCAN_AERIAL_IO_TEST_TMP_DIR) + QStringLiteral("/run-XXXXXX"));
     ASSERT_TRUE(tempDir.isValid());
     const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("a.png"));
     const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("b.png"));
-    ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageA));
-    ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageB));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageA, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
+    ASSERT_TRUE(xjw::common::io::writeImage(imageB, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
 
-    xjw::FramePinholeCamera cameraA;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraA;
     cameraA.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraA.setPose({1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
                      0.0, 0.0, 1.0},
                     {-0.5, 0.0, 0.0});
-    xjw::FramePinholeCamera cameraB = cameraA;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraB = cameraA;
     cameraB.setCameraCenter({0.5, 0.0, 0.0});
     const QString cameraAPath = QDir(tempDir.path()).filePath(QStringLiteral("a.tsai"));
     const QString cameraBPath = QDir(tempDir.path()).filePath(QStringLiteral("b.tsai"));
-    ASSERT_TRUE(cameraA.saveToFile(cameraAPath.toStdString()));
-    ASSERT_TRUE(cameraB.saveToFile(cameraBPath.toStdString()));
+    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraA, cameraAPath.toStdString()));
+    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraB, cameraBPath.toStdString()));
 
     const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("tie_points.json"));
     writeKnownPoseTiePoints(tiePointPath, imageA, imageB, cameraA, cameraB);
 
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {imageA, imageB};
+    input.imageIds = {
+        xjw::camera_core::ImageId("pipeline-image-0"),
+        xjw::camera_core::ImageId("pipeline-image-1"),
+    };
+    input.projectMeta = makeCanonicalPinholeProject(input.images, {{-0.5, 0.0, 0.0}, {0.5, 0.0, 0.0}});
     input.cameraPaths = {cameraAPath, cameraBPath};
     input.tiePointPath = tiePointPath;
     input.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("output"));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BundleAdjustSolver.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -11,7 +12,7 @@ namespace xjw::ba_benchmark
 
 struct BenchmarkDataset
 {
-    std::vector<FramePinholeCamera> cameras;
+    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
     std::vector<BATrack> tracks;
     std::size_t observations = 0;
 };

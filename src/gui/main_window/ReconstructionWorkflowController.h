@@ -22,7 +22,12 @@
 #include "Logger.h"
 
 class QMainWindow;
-class ProjectManager;
+
+namespace xjw::gui::project
+{
+class ProjectSession;
+class ProjectTaskOrchestrator;
+}
 
 class ReconstructionWorkflowController : public QObject
 {
@@ -34,9 +39,9 @@ public:
     /// @param parent QObject 父对象。
     explicit ReconstructionWorkflowController(QMainWindow *mainWindow, QObject *parent = nullptr);
 
-    /// 注入项目管理器，供模型工作流程查询项目状态和提交任务。
-    /// @param pm 当前项目管理器，非拥有引用。
-    void setProjectManager(ProjectManager *pm);
+    /// 注入项目会话与任务编排器，供模型工作流程查询项目状态和提交任务。
+    void setProjectServices(xjw::gui::project::ProjectSession *session,
+                            xjw::gui::project::ProjectTaskOrchestrator *tasks);
 
 public slots:
     void openCreatePointCloudDialog();
@@ -68,7 +73,7 @@ private:
         auto *dlg = new DialogT(_mainWindow);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-        if (_projectManager)
+        if (_session)
         {
             if (!store)
             {
@@ -105,7 +110,8 @@ private:
     void markProjectWorkspaceDirty();
 
     QPointer<QMainWindow> _mainWindow;
-    ProjectManager       *_projectManager = nullptr;
+    xjw::gui::project::ProjectSession *_session = nullptr;
+    xjw::gui::project::ProjectTaskOrchestrator *_tasks = nullptr;
 
     DialogSettingStore *_createPointCloudStore = nullptr;
     DialogSettingStore *_generateModelStore = nullptr;

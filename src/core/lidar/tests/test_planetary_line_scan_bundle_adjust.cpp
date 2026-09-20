@@ -1,4 +1,5 @@
 #include "PlanetaryLineScanBundleAdjust.h"
+#include "PlanetaryLineScanIsdIO.h"
 
 #include <gtest/gtest.h>
 
@@ -84,12 +85,12 @@ double distance(const std::array<double, 3> &left, const std::array<double, 3> &
 
 TEST(PlanetaryLineScanBundleAdjustTest, TriangulatesCrossingForwardRays)
 {
-    xjw::PlanetaryLineScanCamera::ImagingRay first;
-    first.centerBodyFixedMeters = {{-1.0, 0.0, 0.0}};
-    first.directionBodyFixed = {{1.0, 0.0, 1.0}};
-    xjw::PlanetaryLineScanCamera::ImagingRay second;
-    second.centerBodyFixedMeters = {{1.0, 0.0, 0.0}};
-    second.directionBodyFixed = {{-1.0, 0.0, 1.0}};
+    xjw::camera_models::linescan::LineScanRay first;
+    first.origin = {{-1.0, 0.0, 0.0}};
+    first.direction = {{1.0, 0.0, 1.0}};
+    xjw::camera_models::linescan::LineScanRay second;
+    second.origin = {{1.0, 0.0, 0.0}};
+    second.direction = {{-1.0, 0.0, 1.0}};
 
     std::array<double, 3> point{};
     double separation = -1.0;
@@ -103,12 +104,12 @@ TEST(PlanetaryLineScanBundleAdjustTest, TriangulatesCrossingForwardRays)
 
 TEST(PlanetaryLineScanBundleAdjustTest, RejectsParallelRays)
 {
-    xjw::PlanetaryLineScanCamera::ImagingRay first;
-    first.centerBodyFixedMeters = {{0.0, 0.0, 0.0}};
-    first.directionBodyFixed = {{0.0, 0.0, 1.0}};
-    xjw::PlanetaryLineScanCamera::ImagingRay second;
-    second.centerBodyFixedMeters = {{1.0, 0.0, 0.0}};
-    second.directionBodyFixed = {{0.0, 0.0, 1.0}};
+    xjw::camera_models::linescan::LineScanRay first;
+    first.origin = {{0.0, 0.0, 0.0}};
+    first.direction = {{0.0, 0.0, 1.0}};
+    xjw::camera_models::linescan::LineScanRay second;
+    second.origin = {{1.0, 0.0, 0.0}};
+    second.direction = {{0.0, 0.0, 1.0}};
 
     std::array<double, 3> point{};
     EXPECT_FALSE(xjw::lidar::triangulatePlanetaryLineScanRays(
@@ -140,8 +141,17 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
     {
         const auto isdPath = directory.path / ("camera_" + std::to_string(index) + ".isd");
         ASSERT_TRUE(writeTextFile(isdPath, syntheticLineScanIsd(index == 0 ? -0.001 : 0.001)));
+        xjw::camera_models::linescan::PlanetaryLineScanIsdImport imported;
         std::string error;
-        ASSERT_TRUE(cameras[index].model.loadFromIsd(isdPath.string(), &error)) << error;
+        ASSERT_TRUE(xjw::camera_models::linescan::importPlanetaryLineScanIsd(
+            isdPath.string(),
+            xjw::camera_core::CameraDefinitionId("definition-" + std::to_string(index)),
+            xjw::camera_core::CameraInstanceId("instance-" + std::to_string(index)),
+            xjw::camera_core::ImageId("image-" + std::to_string(index)),
+            &imported,
+            &error))
+            << error;
+        cameras[index].instance = std::move(imported.instance);
     }
 
     xjw::lidar::IsisControlNetwork network;
@@ -158,11 +168,9 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
         point.type = xjw::lidar::IsisControlPointType::Free;
         for (const auto &camera : cameras)
         {
-            xjw::PlanetaryLineScanCamera::ImageCoordinate csm;
-            ASSERT_TRUE(camera.model.groundToImage(
-                ground,
-                xjw::PlanetaryLineScanCamera::PixelConvention::CsmPixelCenter,
-                &csm));
+            xjw::camera_models::linescan::LineScanProjectionResult csm;
+            ASSERT_TRUE(xjw::camera_models::linescan::LineScanProjection::project(
+                *camera.instance, ground, &csm));
             // Serialize as ISIS PVL coordinates: the first pixel centre is (1, 1).
             point.measures.push_back({camera.serialNumber,
                                       csm.sample + 0.5,
@@ -173,12 +181,13 @@ TEST(PlanetaryLineScanBundleAdjustTest, ConvertsIsisPixelsAndLaserRangeAnchorsFr
     }
 
     double shotEt = 0.0;
-    ASSERT_TRUE(cameras[0].model.absoluteEtForLine(
-        50.5,
-        xjw::PlanetaryLineScanCamera::PixelConvention::CsmPixelCenter,
-        &shotEt));
-    std::array<double, 3> nominalCenter{};
-    ASSERT_TRUE(cameras[0].model.sensorCenterBodyFixedAtEt(shotEt, &nominalCenter));
+    ASSERT_TRUE(cameras[0].instance->timeForLine(50.5, &shotEt));
+    const std::array<double, 3> nominalCenter =
+        cameras[0]
+            .instance->trajectory()
+            .poseAt(xjw::coordinate_system::TimeReference::create(xjw::coordinate_system::TimeScale::Tdb, shotEt),
+                    cameras[0].instance->definition().worldFrame())
+            .center;
     const std::array<double, 3> fixedLaserPoint{{0.0, 0.0, 1000.0}};
     std::array<double, 3> displacedCenter = nominalCenter;
     displacedCenter[2] += 20.0;

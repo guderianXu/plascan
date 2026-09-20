@@ -107,7 +107,7 @@ ProjectedDisplacementQuality evaluateProjectedDisplacement(
         const int height = frame.colorBgr.empty()
             ? frame.depth.rows
             : frame.colorBgr.rows;
-        FramePinholeCamera projection_camera = frame.camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState projection_camera = frame.camera;
         if (width != frame.depth.cols || height != frame.depth.rows)
         {
             projection_camera = frame.camera.scaledIntrinsics(

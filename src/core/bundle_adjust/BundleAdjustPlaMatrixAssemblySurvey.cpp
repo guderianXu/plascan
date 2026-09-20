@@ -159,12 +159,13 @@ namespace xjw::detail::plamatrix_ba::assembly_detail
             return cost;
         }
 
-        double assembleLaserRanges(const std::vector<FramePinholeCamera>& input_cameras,
-                                   const BAOptions& options,
-                                   const ActiveProblem& active,
-                                   const OptimizationState& state,
-                                   int iteration,
-                                   plamatrix::BlockNormalEquations<double>* equations)
+        double assembleLaserRanges(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+            const BAOptions& options,
+            const ActiveProblem& active,
+            const OptimizationState& state,
+            int iteration,
+            plamatrix::BlockNormalEquations<double>* equations)
         {
             if (!options.enableLaserRangeConstraints)
             {
@@ -254,12 +255,13 @@ namespace xjw::detail::plamatrix_ba::assembly_detail
 
     } // namespace
 
-    double assembleSurveyResiduals(const std::vector<FramePinholeCamera>& input_cameras,
-                                   const BAOptions& options,
-                                   const ActiveProblem& active,
-                                   const OptimizationState& state,
-                                   int iteration,
-                                   plamatrix::BlockNormalEquations<double>* equations)
+    double assembleSurveyResiduals(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        plamatrix::BlockNormalEquations<double>* equations)
     {
         return assemblePrimaryPriors(options, active, state, iteration, equations) +
                assembleScaleBars(options, active, state, equations) +

@@ -73,7 +73,8 @@ bool applyHomography(const cv::Mat &H, double u, double v,
     return std::isfinite(ox) && std::isfinite(oy);
 }
 
-std::array<double, 3> pixelToWorldRay(const FramePinholeCamera &cam, double u, double v)
+std::array<double, 3>
+pixelToWorldRay(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam, double u, double v)
 {
     const double x = (u - cam.principalX()) / (cam.uAxisSign() * cam.focalX());
     const double y = (v - cam.principalY()) / (cam.vAxisSign() * cam.focalY());
@@ -173,7 +174,9 @@ bool prepareHomography(const cv::Mat &input,
     return true;
 }
 
-bool validateCamera(const FramePinholeCamera &camera, const char *name, std::string &error)
+bool validateCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                    const char* name,
+                    std::string& error)
 {
     if (!camera.isValid()
         || !std::isfinite(camera.focalX())
@@ -235,9 +238,9 @@ bool validateConfig(const TriangulationConfig &config, std::string &error)
     return true;
 }
 
-bool validateStereoBaseline(const FramePinholeCamera &left,
-                            const FramePinholeCamera &right,
-                            std::string &error)
+bool validateStereoBaseline(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& left,
+                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& right,
+                            std::string& error)
 {
     const double baseline = norm3(sub3(left.cameraCenter(), right.cameraCenter()));
     if (!std::isfinite(baseline) || baseline <= 1e-12)
@@ -250,14 +253,14 @@ bool validateStereoBaseline(const FramePinholeCamera &left,
 
 } // namespace
 
-TriangulationResult DisparityTriangulator::triangulate(
-    const cv::Mat &disparity,
-    const cv::Mat &validMask,
-    const cv::Mat &H1inv,
-    const cv::Mat &H2inv,
-    const FramePinholeCamera &camL,
-    const FramePinholeCamera &camR,
-    const TriangulationConfig &cfg)
+TriangulationResult
+DisparityTriangulator::triangulate(const cv::Mat& disparity,
+                                   const cv::Mat& validMask,
+                                   const cv::Mat& H1inv,
+                                   const cv::Mat& H2inv,
+                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
+                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
+                                   const TriangulationConfig& cfg)
 {
     TriangulationResult result;
     std::size_t pixelCount = 0;
@@ -493,14 +496,14 @@ TriangulationResult DisparityTriangulator::triangulate(
     return result;
 }
 
-TriangulationResult DisparityTriangulator::triangulateFromDepth(
-    const cv::Mat &depthMap,
-    const cv::Mat &validMask,
-    const cv::Mat &H1inv,
-    const FramePinholeCamera &camL,
-    const FramePinholeCamera &camR,
-    const FramePinholeCamera &rectCam,
-    const TriangulationConfig &cfg)
+TriangulationResult
+DisparityTriangulator::triangulateFromDepth(const cv::Mat& depthMap,
+                                            const cv::Mat& validMask,
+                                            const cv::Mat& H1inv,
+                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
+                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
+                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectCam,
+                                            const TriangulationConfig& cfg)
 {
     TriangulationResult result;
     std::size_t pixelCount = 0;

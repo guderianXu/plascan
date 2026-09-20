@@ -68,6 +68,7 @@ gtest_discover_tests(test_project_chunk_index DISCOVERY_MODE PRE_TEST)
 add_executable(test_project_session test_project_session.cpp)
 target_link_libraries(test_project_session PRIVATE
   plascan_common_project
+  camera
   GTest::gtest_main
 )
 gtest_discover_tests(test_project_session DISCOVERY_MODE PRE_TEST)

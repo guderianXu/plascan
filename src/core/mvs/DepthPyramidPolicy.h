@@ -29,9 +29,10 @@ namespace xjw
                                                 MvsSceneProfile sceneProfile,
                                                 bool epipolarRectified) noexcept;
 
-        FramePinholeCamera cameraForDepthGrid(const FramePinholeCamera& rasterCamera,
-                                              const cv::Size& rasterSize,
-                                              const cv::Size& depthGridSize);
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState
+        cameraForDepthGrid(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rasterCamera,
+                           const cv::Size& rasterSize,
+                           const cv::Size& depthGridSize);
 
         /// Pixel-domain configuration is expressed in prepared full-raster pixels.
         /// These helpers quantize it onto the actual depth grid. Scalar distances use

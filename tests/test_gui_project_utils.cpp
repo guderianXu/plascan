@@ -18,8 +18,10 @@
 #include "ProjectReferenceTerrainBa.h"
 #include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraIO.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
+#include "camera/project/CameraProjectRecords.h"
 #include "ProjectSurveyControl.h"
 #include "io/MarkerSetStore.h"
 #include "TriangulationService.h"
@@ -65,8 +67,12 @@
 #include "LogEntryModel.h"
 #include "LogPanel.h"
 #include "WorkPanelWidget.h"
-#include "ProjectManager.h"
-#include "ProjectMaskWorkflowController.h"
+#include "project/services/ProjectLifecycleService.h"
+#include "project/services/ProjectResourceCleanupCoordinator.h"
+#include "project/services/ProjectResourceService.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
+#include "project/tasks/ProjectTaskOrchestrator.h"
 #include "ProjectPointCloudWorkflowController.h"
 #include "ProjectTaskStatusController.h"
 #include "ReferencePanelWidget.h"
@@ -84,7 +90,6 @@
 #include "LayerImageLoader.h"
 #include "LayerFeatureLoader.h"
 
-#include "FramePinholeCamera.h"
 #include "DemDomIO.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
@@ -167,9 +172,11 @@
 #include <cmath>
 #include <cstring>
 #include <future>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 TEST(DepthOverlayDataTest, ResolvesExactReferenceAndRequestedLevels)
@@ -742,9 +749,10 @@ TEST(CanvasDepthOverlayTest, ShowsCurrentFrameAsSoonAsItsDepthRecordArrives)
 namespace
 {
 
-    xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
     {
-        xjw::FramePinholeCamera cam;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
         cam.setIntrinsics(fu, fv, 512.0, 384.0);
         const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
         const std::array<double, 3> center = {cx, cy, cz};
@@ -752,7 +760,67 @@ namespace
         return cam;
     }
 
-    bool projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& xyz, double* u, double* v)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    makeBoundNumericCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+                           const std::string& instanceId = "stored-instance",
+                           const std::string& imageId = "stored-image",
+                           const std::string& worldFrame = "stored-world",
+                           int samples = 4,
+                           int lines = 4)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
+        state.setIntrinsics(source.focalX(), source.focalY(), source.principalX(), source.principalY());
+        state.setPixelPitch(source.pixelPitch());
+        state.setAxisDirections(source.uAxisSign(), source.vAxisSign());
+        state.setDepthAxisFlipped(source.depthAxisFlipped());
+        const auto distortion = source.distortion();
+        state.setDistortion(distortion.radialK1,
+                            distortion.radialK2,
+                            distortion.radialK3,
+                            distortion.tangentialP1,
+                            distortion.tangentialP2);
+        state.setPose(source.cameraToWorldRotation(), source.cameraCenter());
+        state.setImageSize(xjw::camera_core::ImageSize{samples, lines});
+        std::string error;
+        if (!state.bindIdentity(xjw::camera_core::CameraInstanceId(instanceId),
+                                xjw::camera_core::ImageId(imageId),
+                                xjw::coordinate_system::CoordinateFrameId(worldFrame),
+                                &error))
+        {
+            throw std::runtime_error(error);
+        }
+        return state;
+    }
+
+    QJsonObject mvsCameraJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    {
+        const auto rotation = camera.worldToCameraRotation();
+        const auto center = camera.cameraCenter();
+        QJsonArray rotationJson;
+        QJsonArray centerJson;
+        for (const double value : rotation)
+        {
+            rotationJson.append(value);
+        }
+        for (const double value : center)
+        {
+            centerJson.append(value);
+        }
+        return QJsonObject{{QStringLiteral("fx"), camera.focalX()},
+                           {QStringLiteral("fy"), camera.focalY()},
+                           {QStringLiteral("cx"), camera.principalX()},
+                           {QStringLiteral("cy"), camera.principalY()},
+                           {QStringLiteral("rotation_world_to_camera"), rotationJson},
+                           {QStringLiteral("camera_center"), centerJson},
+                           {QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value())},
+                           {QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value())},
+                           {QStringLiteral("world_frame"), QString::fromStdString(camera.worldFrame().value())}};
+    }
+
+    bool projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                      const std::array<double, 3>& xyz,
+                      double* u,
+                      double* v)
     {
         if (!u || !v)
         {
@@ -1083,7 +1151,7 @@ namespace
         EXPECT_NEAR(camera.value(QStringLiteral("k1")).toDouble(), -0.01, 1e-12);
     }
 
-    TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFile)
+    TEST(ProjectDataCameraMetadataTest, SetCameraInstancesRejectsLegacyCameraFileMetadata)
     {
         QTemporaryDir tempDir;
         ASSERT_TRUE(tempDir.isValid());
@@ -1110,31 +1178,21 @@ namespace
         core[QStringLiteral("images")] = images;
         data.updateMetadata(core, false);
 
-        QJsonObject camera;
-        camera[QStringLiteral("model")] = QStringLiteral("tsai");
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraState;
+        cameraState.setIntrinsics(1111.0, 1111.0, 500.0, 400.0);
+        cameraState.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+        cameraState.setImageSize(xjw::camera_core::ImageSize{1024, 768});
+        QJsonObject camera = xjw::common::project::serializeFramePinholeNumericState(cameraState);
         camera[QStringLiteral("source_file")] = QStringLiteral("fresh/new.tsai");
-        camera[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
-        camera[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
-        camera[QStringLiteral("pitch")] = 1.0;
-        camera[QStringLiteral("fu")] = 1111.0;
-        camera[QStringLiteral("fv")] = 1111.0;
-        camera[QStringLiteral("cu")] = 500.0;
-        camera[QStringLiteral("cv")] = 400.0;
-        camera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
-        camera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
 
+        const QJsonObject before = data.coreFilesMeta();
         int updated = 0;
         QString error;
-        ASSERT_TRUE(data.setImageCameras(QMap<QString, QJsonObject>{{projectImagePath, camera}}, &updated, &error))
-            << error.toStdString();
-        EXPECT_EQ(updated, 1);
+        EXPECT_FALSE(data.setCameraInstances(QMap<QString, QJsonObject>{{projectImagePath, camera}}, &updated, &error));
+        EXPECT_EQ(updated, 0);
+        EXPECT_TRUE(error.contains(QStringLiteral("camera_file")));
 
-        const QJsonObject updatedImage =
-            data.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
-        EXPECT_FALSE(updatedImage.contains(QStringLiteral("camera_file")));
-        EXPECT_EQ(
-            updatedImage.value(QStringLiteral("camera")).toObject().value(QStringLiteral("source_file")).toString(),
-            QStringLiteral("fresh/new.tsai"));
+        EXPECT_EQ(data.coreFilesMeta(), before);
     }
 
     TEST(ProjectDataCameraMetadataTest, ClearImageCamerasSkipsImagesWithoutCamera)
@@ -1157,7 +1215,7 @@ namespace
 
         int cleared = -1;
         QString error;
-        EXPECT_FALSE(data.clearImageCameras(QStringList{storedPath}, &cleared, &error));
+        EXPECT_FALSE(data.clearCameraInstances(QStringList{storedPath}, &cleared, &error));
         EXPECT_EQ(cleared, 0);
         EXPECT_EQ(data.coreFilesMeta(), before);
     }
@@ -1204,11 +1262,12 @@ namespace
         EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
     }
 
-    QJsonObject buildImageEntry(const QString& path, const xjw::FramePinholeCamera& camera)
+    QJsonObject buildImageEntry(const QString& path,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
     {
         QJsonObject imageObject;
         imageObject[QStringLiteral("path")] = path;
-        imageObject[QStringLiteral("camera")] = xjw::common::project::cameraToJson(camera);
+        imageObject[QStringLiteral("camera")] = xjw::common::project::serializeFramePinholeNumericState(camera);
         return imageObject;
     }
 
@@ -1300,6 +1359,70 @@ namespace
                 QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("output"), repository.shardPath(image)}});
         }
         return records;
+    }
+
+    QJsonObject makeCanonicalTriangulationMeta(
+        std::initializer_list<std::pair<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState>>
+            cameraEntries,
+        int samples = 1024,
+        int lines = 768)
+    {
+        QJsonObject meta;
+        QJsonArray images;
+        QMap<QString, QJsonObject> metadataByPath;
+        int imageIndex = 0;
+        for (const auto& entry : cameraEntries)
+        {
+            const QString& path = entry.first;
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = entry.second;
+            const QString imageId = QStringLiteral("triangulation-image-%1").arg(imageIndex++);
+            images.append(QJsonObject{{QStringLiteral("image_uuid"), imageId},
+                                      {QStringLiteral("path"), path},
+                                      {QStringLiteral("samples"), samples},
+                                      {QStringLiteral("lines"), lines}});
+
+            QJsonObject metadata = xjw::common::project::serializeFramePinholeNumericState(camera);
+            metadata.insert(QStringLiteral("image_width"), samples);
+            metadata.insert(QStringLiteral("image_height"), lines);
+            metadataByPath.insert(path, metadata);
+        }
+
+        meta.insert(QStringLiteral("images"), images);
+        meta.insert(QStringLiteral("camera_definitions"), QJsonArray{});
+        meta.insert(QStringLiteral("camera_instances"), QJsonArray{});
+        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, metadataByPath);
+        EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
+        return meta;
+    }
+
+    QJsonObject makeCanonicalDepthMetadata(const QStringList& imagePaths, int samples = 1024, int lines = 768)
+    {
+        QJsonObject metadata;
+        QJsonArray images;
+        QMap<QString, QJsonObject> cameraMetadataByPath;
+        for (int index = 0; index < imagePaths.size(); ++index)
+        {
+            const QString& imagePath = imagePaths.at(index);
+            const QString imageId = QStringLiteral("depth-image-%1").arg(index);
+            images.append(QJsonObject{{QStringLiteral("image_uuid"), imageId},
+                                      {QStringLiteral("path"), imagePath},
+                                      {QStringLiteral("samples"), samples},
+                                      {QStringLiteral("lines"), lines}});
+
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                makeCamera(static_cast<double>(index), 0.0, 10.0);
+            QJsonObject cameraMetadata = xjw::common::project::serializeFramePinholeNumericState(camera);
+            cameraMetadata.insert(QStringLiteral("image_width"), samples);
+            cameraMetadata.insert(QStringLiteral("image_height"), lines);
+            cameraMetadataByPath.insert(imagePath, cameraMetadata);
+        }
+        metadata.insert(QStringLiteral("images"), images);
+        metadata.insert(QStringLiteral("camera_definitions"), QJsonArray{});
+        metadata.insert(QStringLiteral("camera_instances"), QJsonArray{});
+        const auto update =
+            xjw::camera_project::CameraProjectRecords::upsertByImagePath(&metadata, cameraMetadataByPath);
+        EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
+        return metadata;
     }
 
     QLineEdit* findLineEditByPlaceholder(QWidget* root, const QString& text)
@@ -1398,6 +1521,43 @@ namespace
         return nullptr;
     }
 
+    QJsonObject v3SidecarImage(int cameraIndex, const QString& imageId, const QString& imagePath)
+    {
+        return {{QStringLiteral("camera_index"), cameraIndex},
+                {QStringLiteral("image_id"), imageId},
+                {QStringLiteral("image_path"), imagePath},
+                {QStringLiteral("image_name"), QFileInfo(imagePath).fileName()}};
+    }
+
+    QJsonObject v3SidecarObservation(int cameraIndex,
+                                     const QString& imageId,
+                                     const QJsonArray& observed,
+                                     const QJsonArray& projected = {},
+                                     int featureIndex = -1,
+                                     double scale = 1.0)
+    {
+        QJsonObject observation{{QStringLiteral("camera_index"), cameraIndex},
+                                {QStringLiteral("image_id"), imageId},
+                                {QStringLiteral("xy"), observed},
+                                {QStringLiteral("scale"), scale}};
+        if (featureIndex >= 0)
+        {
+            observation.insert(QStringLiteral("feature_idx"), featureIndex);
+        }
+        if (!projected.isEmpty())
+        {
+            observation.insert(QStringLiteral("projected_xy"), projected);
+        }
+        return observation;
+    }
+
+    QJsonObject v3Sidecar(const QJsonArray& images, const QJsonArray& points)
+    {
+        return {{QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v3")},
+                {QStringLiteral("images"), images},
+                {QStringLiteral("points"), points}};
+    }
+
 } // namespace
 
 TEST(ProjectSupportUtilsTest, CollectMatchedPairsUsesFilenameWithSuffix)
@@ -1447,15 +1607,20 @@ TEST(ProjectDashboardSummaryTest, EmptyMetadataShowsMissingReadOnlyWorkflow)
 
 TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
 {
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_001.tif")},
-                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_002.tif")},
-                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_003.tif")}});
+    const QString image0 = QStringLiteral("E:/data/img_001.tif");
+    const QString image1 = QStringLiteral("E:/data/img_002.tif");
+    const QString image2 = QStringLiteral("E:/data/img_003.tif");
+    QJsonObject projectFiles =
+        makeCanonicalTriangulationMeta({{image0, makeCamera(0.0, 0.0, 0.0)}, {image1, makeCamera(1.0, 0.0, 0.0)}});
+    QJsonArray images = projectFiles.value(QStringLiteral("images")).toArray();
+    images.append(QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("dashboard-image-2")},
+                              {QStringLiteral("path"), image2},
+                              {QStringLiteral("samples"), 1024},
+                              {QStringLiteral("lines"), 768}});
+    projectFiles.insert(QStringLiteral("images"), images);
 
     QJsonObject meta;
-    meta[QStringLiteral("project_files")] = QJsonObject{{QStringLiteral("images"), images}};
+    meta[QStringLiteral("project_files")] = projectFiles;
     meta[QStringLiteral("image_match_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/img_001.tif")},
                                {QStringLiteral("output"), QStringLiteral("img_001.pimatch")}}};
@@ -1598,15 +1763,16 @@ TEST(ProjectResultRecordsTest, DenseCloudAndMeshRecordsKeepDistinctProductKinds)
 
 TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection)
 {
-    xjw::FramePinholeCamera sourceCamera = makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState sourceCamera =
+        makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
     sourceCamera.setAxisDirections(-1, 1);
     sourceCamera.setDepthAxisFlipped(true);
     sourceCamera.setDistortion(0.01, -0.001, 0.0001, 0.0002, -0.0003);
 
-    const QJsonObject cameraJson = xjw::common::project::cameraToJson(sourceCamera);
+    const QJsonObject cameraJson = xjw::common::project::serializeFramePinholeNumericState(sourceCamera);
 
-    xjw::FramePinholeCamera restoredCamera;
-    ASSERT_TRUE(xjw::common::project::cameraFromJson(cameraJson, &restoredCamera));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState restoredCamera;
+    ASSERT_TRUE(xjw::common::project::decodeFramePinholeNumericState(cameraJson, &restoredCamera));
 
     EXPECT_DOUBLE_EQ(restoredCamera.focalX(), sourceCamera.focalX());
     EXPECT_DOUBLE_EQ(restoredCamera.focalY(), sourceCamera.focalY());
@@ -1813,28 +1979,22 @@ TEST(DepthFrameUtilsTest, StoredFusionUsesArtifactCameraInsteadOfCurrentProjectC
     // and must be scaled to the loaded raster instead of replaced by the current camera.
     stored.gridWidth = 4;
     stored.gridHeight = 4;
-    stored.cameraModel = QJsonObject{
-        {QStringLiteral("fx"), 400.0},
-        {QStringLiteral("fy"), 410.0},
-        {QStringLiteral("cx"), 1.0},
-        {QStringLiteral("cy"), 1.0},
-        {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
-        {QStringLiteral("camera_center"), QJsonArray{3.0, 4.0, 5.0}}};
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState current_camera =
+        makeBoundNumericCamera(makeCamera(30.0, 40.0, 50.0, 1200.0, 1210.0));
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState stored_camera = current_camera;
+    stored_camera.setCameraCenter({3.0, 4.0, 5.0});
+    stored_camera.setIntrinsics(400.0, 410.0, 1.0, 1.0);
+    stored.cameraModel = mvsCameraJson(stored_camera);
     stored.refImage = QStringLiteral("source.png");
     stored.preparedImage = QDir(temp_dir.path()).filePath(QStringLiteral("prepared.png"));
     QFile prepared_file(stored.preparedImage);
     ASSERT_TRUE(prepared_file.open(QIODevice::WriteOnly));
     ASSERT_GT(prepared_file.write("prepared"), 0);
     prepared_file.close();
-    stored.preparedCameraModel = QJsonObject{
-        {QStringLiteral("fx"), 800.0},
-        {QStringLiteral("fy"), 820.0},
-        {QStringLiteral("cx"), 2.0},
-        {QStringLiteral("cy"), 2.0},
-        {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
-        {QStringLiteral("camera_center"), QJsonArray{3.0, 4.0, 5.0}}};
-
-    const xjw::FramePinholeCamera current_camera = makeCamera(30.0, 40.0, 50.0, 1200.0, 1210.0);
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera = current_camera;
+    prepared_camera.setCameraCenter({3.0, 4.0, 5.0});
+    prepared_camera.setIntrinsics(800.0, 820.0, 2.0, 2.0);
+    stored.preparedCameraModel = mvsCameraJson(prepared_camera);
     xjw::mvs::FusionConfig fusion_config;
     fusion_config.confidenceThresh = 0.0f;
     fusion_config.enableAdaptiveConfidenceFilter = false;
@@ -1867,9 +2027,8 @@ TEST(DepthFrameUtilsTest, StoredFusionUsesArtifactCameraInsteadOfCurrentProjectC
     stored.gridWidth = 2;
     stored.gridHeight = 2;
     const auto legacy_result = xjw::core::project::buildStoredFusionFrame(stored, current_camera, fusion_config, 2);
-    ASSERT_TRUE(legacy_result.status.ok) << qPrintable(legacy_result.status.errorMessage);
-    EXPECT_DOUBLE_EQ(legacy_result.frame.cameraModel.focalX(), current_camera.focalX());
-    EXPECT_EQ(legacy_result.frame.cameraModel.cameraCenter(), current_camera.cameraCenter());
+    EXPECT_FALSE(legacy_result.status.ok);
+    EXPECT_TRUE(legacy_result.status.errorMessage.contains(QStringLiteral("缺少完整的面阵针孔 identity/frame")));
 }
 
 TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
@@ -1897,7 +2056,9 @@ TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
     fusion_config.doInpaint = false;
     fusion_config.enableLocalDepthOutlierFilter = false;
     fusion_config.enableSpeckleFilter = false;
-    const xjw::FramePinholeCamera camera = makeCamera(0.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+        makeBoundNumericCamera(makeCamera(0.0, 0.0, 0.0));
+    stored.cameraModel = mvsCameraJson(camera);
 
     const auto missing_evidence = xjw::core::project::buildStoredFusionFrame(stored, camera, fusion_config, 2, 2);
     EXPECT_FALSE(missing_evidence.status.ok);
@@ -2127,25 +2288,17 @@ TEST(ModelWorkflowPolicyTest, SparseScaffoldUsesCanonicalChunkFallbackAsPair)
 
 TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureTracksImagesCamerasAndAerialTriangulation)
 {
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] = QJsonArray{QJsonObject{
-        {QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")},
-        {QStringLiteral("camera"),
-         QJsonObject{{QStringLiteral("fu"), 1000.0}, {QStringLiteral("center"), QJsonArray{0.0, 0.0, 10.0}}}}}};
+    const QString imagePath = QStringLiteral("E:/tmp/image_0.jpg");
+    QJsonObject metadata = makeCanonicalTriangulationMeta({{imagePath, makeCamera(0.0, 0.0, 10.0)}});
     metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{QJsonObject{
         {QStringLiteral("operation"), QStringLiteral("sfm")}, {QStringLiteral("run_id"), QStringLiteral("run-a")}}};
 
     const QString initial_signature = xjw::gui::project::projectDepthInputSignature(metadata);
     ASSERT_FALSE(initial_signature.isEmpty());
 
-    QJsonObject camera_changed = metadata;
-    QJsonArray changed_images = camera_changed.value(QStringLiteral("images")).toArray();
-    QJsonObject changed_image = changed_images.at(0).toObject();
-    QJsonObject changed_camera = changed_image.value(QStringLiteral("camera")).toObject();
-    changed_camera[QStringLiteral("fu")] = 1001.0;
-    changed_image[QStringLiteral("camera")] = changed_camera;
-    changed_images[0] = changed_image;
-    camera_changed[QStringLiteral("images")] = changed_images;
+    QJsonObject camera_changed = makeCanonicalTriangulationMeta({{imagePath, makeCamera(0.0, 0.0, 10.0, 1001.0)}});
+    camera_changed[QStringLiteral("aerial_triangulation_results")] =
+        metadata.value(QStringLiteral("aerial_triangulation_results"));
     EXPECT_NE(xjw::gui::project::projectDepthInputSignature(camera_changed), initial_signature);
 
     QJsonObject at_changed = metadata;
@@ -2166,11 +2319,16 @@ TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureIgnoresArchivePathRewrit
     const QString external_path = QStringLiteral("G:/source/image_0.tif");
     const QString archived_path = QStringLiteral("plascan:///shared/images/abc123/image_0.tif");
 
-    QJsonObject image = buildImageEntry(external_path, makeCamera(1.0, 2.0, 3.0));
+    QJsonObject metadata = makeCanonicalTriangulationMeta({{external_path, makeCamera(1.0, 2.0, 3.0)}});
+    QJsonObject image = metadata.value(QStringLiteral("images")).toArray().at(0).toObject();
     image[QStringLiteral("image_uuid")] = QStringLiteral("stable-image-id");
     image[QStringLiteral("mask_path")] = QStringLiteral("G:/source/image_0_mask.png");
-    QJsonObject metadata;
     metadata[QStringLiteral("images")] = QJsonArray{image};
+    QJsonArray canonicalInstances = metadata.value(QStringLiteral("camera_instances")).toArray();
+    QJsonObject canonicalInstance = canonicalInstances.at(0).toObject();
+    canonicalInstance[QStringLiteral("image_uuid")] = QStringLiteral("stable-image-id");
+    canonicalInstances[0] = canonicalInstance;
+    metadata[QStringLiteral("camera_instances")] = canonicalInstances;
     metadata[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("run_id"), QStringLiteral("run-a")},
                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-a")},
@@ -2192,10 +2350,20 @@ TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureIgnoresArchivePathRewrit
 
     EXPECT_EQ(xjw::gui::project::projectDepthInputSignature(archived), external_signature);
 
-    QJsonObject changed_image = archived_image;
-    changed_image[QStringLiteral("camera")] = xjw::common::project::cameraToJson(makeCamera(1.01, 2.0, 3.0));
-    archived[QStringLiteral("images")] = QJsonArray{changed_image};
-    EXPECT_NE(xjw::gui::project::projectDepthInputSignature(archived), external_signature);
+    QJsonObject changedCanonical = makeCanonicalTriangulationMeta({{archived_path, makeCamera(1.01, 2.0, 3.0)}});
+    QJsonObject changedImage = changedCanonical.value(QStringLiteral("images")).toArray().at(0).toObject();
+    changedImage[QStringLiteral("image_uuid")] = QStringLiteral("stable-image-id");
+    changedImage[QStringLiteral("mask_path")] = archived_image.value(QStringLiteral("mask_path"));
+    changedImage[QStringLiteral("mask_updated_at")] = archived_image.value(QStringLiteral("mask_updated_at"));
+    changedCanonical[QStringLiteral("images")] = QJsonArray{changedImage};
+    QJsonArray changedInstances = changedCanonical.value(QStringLiteral("camera_instances")).toArray();
+    QJsonObject changedInstance = changedInstances.at(0).toObject();
+    changedInstance[QStringLiteral("image_uuid")] = QStringLiteral("stable-image-id");
+    changedInstances[0] = changedInstance;
+    changedCanonical[QStringLiteral("camera_instances")] = changedInstances;
+    changedCanonical[QStringLiteral("aerial_triangulation_results")] =
+        archived.value(QStringLiteral("aerial_triangulation_results"));
+    EXPECT_NE(xjw::gui::project::projectDepthInputSignature(changedCanonical), external_signature);
 }
 
 TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsOldReconstructionGeneration)
@@ -2203,9 +2371,7 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsOldReconstruct
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] =
-        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}}};
+    QJsonObject metadata = makeCanonicalDepthMetadata({QStringLiteral("E:/tmp/image_0.jpg")});
     metadata[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")},
                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-current")}}};
@@ -2248,11 +2414,9 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsIncompleteBatc
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] =
-        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}},
-                   QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_1.jpg")}},
-                   QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_2.jpg")}}};
+    QJsonObject metadata = makeCanonicalDepthMetadata({QStringLiteral("E:/tmp/image_0.jpg"),
+                                                       QStringLiteral("E:/tmp/image_1.jpg"),
+                                                       QStringLiteral("E:/tmp/image_2.jpg")});
     metadata[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")},
                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-current")},
@@ -2301,9 +2465,7 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityAcceptsCurrentLineage
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] =
-        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}}};
+    QJsonObject metadata = makeCanonicalDepthMetadata({QStringLiteral("E:/tmp/image_0.jpg")});
     metadata[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")},
                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-current")}}};
@@ -2346,7 +2508,8 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsLegacySignatur
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    const std::array<xjw::FramePinholeCamera, 2> cameras{makeCamera(1.0, 2.0, 3.0), makeCamera(-1.0, 2.5, 3.5)};
+    const std::array<xjw::camera_models::frame_pinhole::FramePinholeNumericState, 2> cameras{
+        makeCamera(1.0, 2.0, 3.0), makeCamera(-1.0, 2.5, 3.5)};
     QJsonArray images;
     QJsonArray selected_images;
     for (int index = 0; index < 2; ++index)
@@ -2757,6 +2920,29 @@ TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
     EXPECT_FALSE(source.contains(QStringLiteral("ProjectTerrainProductsManager::runOrthoProductOrWarn")));
 }
 
+TEST(TerrainPipelineAsyncTest, TerrainProductsUseSessionPortsAndAtomicSmallBodyPublication)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    const QString rpcSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainRpcProducts.cpp"));
+
+    for (const QString& text : {header, source, rpcSource})
+    {
+        EXPECT_FALSE(text.contains(QStringLiteral("ProjectManager")));
+        EXPECT_FALSE(text.contains(QStringLiteral("ProjectData")));
+        EXPECT_FALSE(text.contains(QStringLiteral("QMessageBox")));
+        EXPECT_FALSE(text.contains(QStringLiteral("ProjectOpenGuard")));
+    }
+    EXPECT_TRUE(source.contains(QStringLiteral("upsertResultRecordsByPath")));
+    EXPECT_EQ(source.count(QStringLiteral("ProjectResultRecordUpsert> records")), 1);
+    EXPECT_EQ(source.count(QStringLiteral("{QStringLiteral(\"dem_results\"), QStringLiteral(\"dem_path\")")), 2);
+    EXPECT_EQ(source.count(QStringLiteral("{QStringLiteral(\"ortho_results\"), QStringLiteral(\"output_path\")")), 1);
+    EXPECT_EQ(source.count(QStringLiteral("{QStringLiteral(\"report_results\"), QStringLiteral(\"path\")")), 1);
+}
+
 TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
 {
     QObject owner;
@@ -2826,19 +3012,21 @@ TEST(GuiTaskRunnerTest, DestroyedOwnerSuppressesFinishedCallback)
 
 TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectBundleAdjustController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int start = source.indexOf(QStringLiteral("void ProjectManager::startBundleAdjustAsync"));
+    const int start = source.indexOf(QStringLiteral("bool ProjectBundleAdjustController::startAsync"));
     ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void ProjectManager::startGenerateModelAsync"), start);
+    const int end = source.indexOf(QStringLiteral("bool ProjectBundleAdjustController::buildOptions"), start);
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
 
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "Bundle-adjust background execution should use the shared guarded task runner.";
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectBundleAdjustController> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_activeFutures.push_back")));
     EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run(")))
         << "Open-coded QtConcurrent lacks the shared owner check before work starts.";
 }
@@ -3164,9 +3352,9 @@ TEST(CodeStyleTest, ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberName
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("ProjectManager *_owner = nullptr;"),
-        QStringLiteral("ProjectData *_projectData = nullptr;"),
-        QStringLiteral("QWidget *_parentWidget = nullptr;"),
+        QStringLiteral("QPointer<xjw::gui::project::ProjectSession> _session;"),
+        QStringLiteral("ProjectUiMessageAdapter* _messages = nullptr;"),
+        QStringLiteral("QVector<QFuture<void>> _futures;"),
     };
     for (const QString& expectedMember : expectedMembers)
     {
@@ -3177,6 +3365,9 @@ TEST(CodeStyleTest, ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberName
         QStringLiteral("m_owner"),
         QStringLiteral("m_projectData"),
         QStringLiteral("m_parentWidget"),
+        QStringLiteral("_owner"),
+        QStringLiteral("_projectData"),
+        QStringLiteral("_parentWidget"),
     };
     for (const QString& oldName : oldMemberNames)
     {
@@ -4007,17 +4198,19 @@ TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, FramePinholeCameraStoresGroupedStateAsSingleSourceOfTruth)
+TEST(CodeStyleTest, FramePinholeNumericStateStoresGroupedSolverStateAsSingleSourceOfTruth)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("Intrinsics _intrinsics;")));
     EXPECT_TRUE(header.contains(QStringLiteral("Distortion _distortion;")));
     EXPECT_TRUE(header.contains(QStringLiteral("Pose _pose;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _isLoaded = false;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _isValid = false;")));
 
     const QStringList oldMemberNames = {
         QStringLiteral("_fu"),
@@ -4052,17 +4245,19 @@ TEST(CodeStyleTest, FramePinholeCameraStoresGroupedStateAsSingleSourceOfTruth)
 
 TEST(CodeStyleTest, StaticCameraKeepsPositiveDepthValueSemantics)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeCamera normalizedForPositiveDepth() const;")));
-    EXPECT_TRUE(
-        header.contains(QStringLiteral("FramePinholeCamera scaledIntrinsics(double scaleX, double scaleY) const;")));
-    EXPECT_TRUE(
-        source.contains(QStringLiteral("FramePinholeCamera FramePinholeCamera::normalizedForPositiveDepth() const")));
-    EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeCamera FramePinholeCamera::scaledIntrinsics")));
+    EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeNumericState normalizedForPositiveDepth() const;")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("FramePinholeNumericState scaledIntrinsics(double scaleX, double scaleY) const;")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("FramePinholeNumericState FramePinholeNumericState::normalizedForPositiveDepth() const")));
+    EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeNumericState FramePinholeNumericState::scaledIntrinsics")));
 }
 
 TEST(CodeStyleTest, ReferenceTrackBuilderUsesLowerCamelPrivateMemberNames)
@@ -4255,9 +4450,12 @@ TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_owner = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectData *_projectData = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QWidget *_parentWidget = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPointer<xjw::gui::project::ProjectSession> _session;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiMessageAdapter* _messages = nullptr;")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("xjw::gui::project::ProjectModelTaskLifecycle _taskLifecycle;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("ProjectManager")));
+    EXPECT_FALSE(header.contains(QStringLiteral("ProjectData")));
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_owner"),
@@ -4294,53 +4492,30 @@ TEST(GuiArchitectureTest, RedundantProjectForwardersAreRemoved)
     EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.cpp")).isEmpty());
 }
 
-TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
+TEST(GuiArchitectureTest, ProjectManagerIsThinServiceContainerFacade)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    const QStringList expectedMembers = {
-        QStringLiteral(R"(QWidget\s*\*\s*_parent\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectData\s*\*\s*_projectData\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(FileDialogStateManager\s*\*\s*_fileDialogState\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectSparseReconstructionManager\s*\*\s*_sparseReconstructionManager\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectModelManager\s*\*\s*_modelManager\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectTerrainProductsManager\s*\*\s*_terrainProductsManager\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectCameraSetupManager\s*\*\s*_cameraSetupManager\s*=\s*nullptr\s*;)"),
-        QStringLiteral(R"(ProjectUiCommands\s*\*\s*_uiCommands\s*=\s*nullptr\s*;)"),
-        QStringLiteral("std::shared_ptr<std::atomic<bool>> _atCancelFlag;"),
-        QStringLiteral("QMap<QString, QJsonObject> _pendingBaCameraMeta;"),
-        QStringLiteral("QMap<QString, QJsonObject> _pendingBaBeforeCameraMeta;"),
-        QStringLiteral("QJsonObject _pendingBaResult;"),
-        QStringLiteral("bool _hasPendingBaPreview = false;"),
-    };
-    for (const QString& expectedMember : expectedMembers)
-    {
-        EXPECT_TRUE(QRegularExpression(expectedMember).match(header).hasMatch()) << qPrintable(expectedMember);
-    }
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("std::unique_ptr<xjw::gui::project::ProjectServiceContainer> _serviceContainer;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("xjw::gui::project::ProjectServiceContainer& services() const;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::make_unique<xjw::gui::project::ProjectServiceContainer>")));
 
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_parent"),
-        QStringLiteral("m_projectData"),
-        QStringLiteral("m_fileDialogState"),
-        QStringLiteral("m_sparseReconstructionManager"),
-        QStringLiteral("m_modelManager"),
-        QStringLiteral("m_terrainProductsManager"),
-        QStringLiteral("m_cameraSetupManager"),
-        QStringLiteral("m_uiCommands"),
-        QStringLiteral("m_atCancelFlag"),
-        QStringLiteral("m_pendingBaCameraMeta"),
-        QStringLiteral("m_pendingBaBeforeCameraMeta"),
-        QStringLiteral("m_pendingBaResult"),
-        QStringLiteral("m_hasPendingBaPreview"),
+    const QStringList removedResponsibilities = {
+        QStringLiteral("_projectData"),
+        QStringLiteral("_fileDialogState"),
+        QStringLiteral("_uiCommands"),
+        QStringLiteral("_atCancelFlag"),
+        QStringLiteral("startGenerateModelAsync"),
+        QStringLiteral("clearMasksForImages"),
+        QStringLiteral("openProjectFromPath"),
     };
-    for (const QString& oldName : oldMemberNames)
+    for (const QString& removed : removedResponsibilities)
     {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(header.contains(removed)) << qPrintable(removed);
     }
 }
 
@@ -4350,12 +4525,58 @@ TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMembe
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.h"));
     const QString source =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
+    const QString serviceContainerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectServiceContainer.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(serviceContainerSource.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_owner = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectData *_projectData = nullptr;")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiMessageAdapter *_messages = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QWidget *_parentWidget = nullptr;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("ProjectManager")));
+    EXPECT_FALSE(header.contains(QStringLiteral("ProjectData")));
+    EXPECT_FALSE(source.contains(QStringLiteral("ProjectOpenGuard")));
+    EXPECT_FALSE(source.contains(QStringLiteral("QMessageBox")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectTaskContext& expected")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_tiePointResultWriter(taskContext")));
+    EXPECT_TRUE(serviceContainerSource.contains(QStringLiteral("const bool still_current")));
+    EXPECT_TRUE(serviceContainerSource.contains(QStringLiteral("_session->isCurrent(expected.session)")));
+    const int writeResult = serviceContainerSource.indexOf(
+        QStringLiteral("const TiePointMutationResult result = _session->replaceTiePointResult"));
+    const int postWriteCurrent = serviceContainerSource.indexOf(
+        QStringLiteral("const bool still_current"), writeResult);
+    const int failureBranch = serviceContainerSource.indexOf(
+        QStringLiteral("if (!result.success)"), postWriteCurrent);
+    const int currentFailureGate = serviceContainerSource.indexOf(
+        QStringLiteral("if (still_current)"), failureBranch);
+    const int bundleAdjustWarningGate = serviceContainerSource.indexOf(
+        QStringLiteral("expected.taskId != QLatin1String(\"bundle_adjust\")"), currentFailureGate);
+    const int warning = serviceContainerSource.indexOf(
+        QStringLiteral("_messages->warning"), bundleAdjustWarningGate);
+    const int successLogGate = serviceContainerSource.indexOf(
+        QStringLiteral("if (still_current)"), warning);
+    const int observerSetter = serviceContainerSource.indexOf(
+        QStringLiteral("setBundleAdjustPostExternalCommitObserver"), successLogGate);
+    const int observerCancelGate = serviceContainerSource.indexOf(
+        QStringLiteral("expected.cancelFlag->load(std::memory_order_relaxed)"), observerSetter);
+    const int observerSessionGate = serviceContainerSource.indexOf(
+        QStringLiteral("_session->isCurrent(expected.session)"), observerSetter);
+    const int refresh = serviceContainerSource.indexOf(
+        QStringLiteral("refreshReconstructionQualityReport()"), observerSetter);
+    ASSERT_GE(writeResult, 0);
+    EXPECT_GT(postWriteCurrent, writeResult);
+    EXPECT_GT(failureBranch, postWriteCurrent);
+    EXPECT_GT(currentFailureGate, failureBranch);
+    EXPECT_GT(bundleAdjustWarningGate, currentFailureGate);
+    EXPECT_LT(bundleAdjustWarningGate, warning);
+    EXPECT_GT(warning, currentFailureGate);
+    EXPECT_GT(successLogGate, warning);
+    EXPECT_GT(observerSetter, successLogGate);
+    EXPECT_GT(observerCancelGate, observerSetter);
+    EXPECT_GT(observerSessionGate, observerCancelGate);
+    EXPECT_GT(refresh, observerSessionGate);
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_owner"),
@@ -4434,11 +4655,6 @@ TEST(CodeStyleTest, DepthMapTaskUsesLowerCamelPrivateMemberNames)
         QStringLiteral("std::vector<DepthFrameResult> _depthFrames;"),
         QStringLiteral("std::vector<uint8_t> _skipFrameMask;"),
         QStringLiteral("std::unique_ptr<MvsImageCache> _imageCache;"),
-        QStringLiteral("std::vector<FrameMvsCache> _frameCaches;"),
-        QStringLiteral("std::vector<uint64_t> _visibilityBits;"),
-        QStringLiteral("std::vector<std::vector<MvsVisibilityNeighbor>> _visibilityAdjacency;"),
-        QStringLiteral("size_t _visibilityWordCount = 0;"),
-        QStringLiteral("bool _frameCachesReady = false;"),
         QStringLiteral("QString _workspaceManifestPath;"),
         QStringLiteral("QString _depthConfigHash;"),
         QStringLiteral("MvsWorkspaceManifest _workspaceManifest;"),
@@ -4586,7 +4802,7 @@ TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNam
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("ProjectManager *_projectManager{};"),
+        QStringLiteral("xjw::gui::project::ProjectSession *_session{};"),
         QStringLiteral("QComboBox *_image1Combo{};"),
         QStringLiteral("QComboBox *_image2Combo{};"),
         QStringLiteral("QComboBox *_pickModeCombo{};"),
@@ -4662,7 +4878,7 @@ TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberN
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager{};")));
+    EXPECT_TRUE(header.contains(QStringLiteral("xjw::gui::project::ProjectSession *_session{};")));
     EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_pairCombo{};")));
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonArray _allResults;")));
 
@@ -4890,7 +5106,7 @@ TEST(CodeStyleTest, OverlapAnalysisDialogUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;"),
         QStringLiteral("QListWidget *_imageList = nullptr;"),
         QStringLiteral("QLineEdit *_demPathEdit = nullptr;"),
         QStringLiteral("QCheckBox *_useFixedZCheck = nullptr;"),
@@ -4947,9 +5163,9 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("ProjectManager *_owner = nullptr;"),
-        QStringLiteral("ProjectData *_projectData = nullptr;"),
-        QStringLiteral("QWidget *_parentWidget = nullptr;"),
+        QStringLiteral("QPointer<xjw::gui::project::ProjectSession> _session;"),
+        QStringLiteral("ProjectUiMessageAdapter* _messages = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectTaskContext _sfmContext;"),
     };
     for (const QString& expectedMember : expectedMembers)
     {
@@ -4960,6 +5176,8 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_owner"),
         QStringLiteral("m_projectData"),
         QStringLiteral("m_parentWidget"),
+        QStringLiteral("ProjectManager"),
+        QStringLiteral("ProjectData"),
     };
     for (const QString& oldName : oldMemberNames)
     {
@@ -5533,7 +5751,7 @@ TEST(ReferenceCameraImportMenuTest, ReusesExistingImportFlowsAndTracksProjectSta
 
     EXPECT_TRUE(bindings.contains(QStringLiteral("importReferenceAction()")));
     EXPECT_TRUE(bindings.contains(QStringLiteral("_cameraReferenceController->importMetashapeReference()")));
-    EXPECT_TRUE(bindings.contains(QStringLiteral("_projectManager->openSurveyControlDialog()")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral("_projectServices->resources().openSurveyControlDialog()")));
     EXPECT_TRUE(workflow.contains(QStringLiteral(
         "connectAction(mainMenu->importCameraAction(), &MenuWorkflowController::openCameraCalibrationDialog)")));
 
@@ -5589,29 +5807,29 @@ TEST(MainMenuTest, ToolsMenuExposesCameraCalibrationAction)
 TEST(CameraCalibrationDataTest, ReconstructsInitialAndAdjustedValuesFromLatestReport)
 {
     const QString imagePath = QStringLiteral("D:/images/camera_001.jpg");
-    QJsonObject currentCamera{{QStringLiteral("model"), QStringLiteral("tsai")},
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState currentCamera;
+    currentCamera.setIntrinsics(5800.0, 5798.0, 2998.0, 2001.0);
+    currentCamera.setDistortion(-0.02, 0.0, 0.0, 0.0001, 0.0);
+    currentCamera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+    const QJsonObject metadata = makeCanonicalTriangulationMeta({{imagePath, currentCamera}}, 6000, 4000);
+    const QJsonObject initial{{QStringLiteral("model"), QStringLiteral("frame_pinhole")},
                               {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+                              {QStringLiteral("fu"), 5833.333},
+                              {QStringLiteral("fv"), 5833.333},
+                              {QStringLiteral("cu"), 3000.0},
+                              {QStringLiteral("cv"), 2000.0},
+                              {QStringLiteral("k1"), 0.0},
                               {QStringLiteral("image_width"), 6000},
-                              {QStringLiteral("image_height"), 4000},
-                              {QStringLiteral("fu"), 5800.0},
-                              {QStringLiteral("fv"), 5798.0},
-                              {QStringLiteral("cu"), 2998.0},
-                              {QStringLiteral("cv"), 2001.0},
-                              {QStringLiteral("k1"), -0.02},
-                              {QStringLiteral("p1"), 0.0001}};
-    const QJsonObject metadata{
-        {QStringLiteral("images"),
-         QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath}, {QStringLiteral("camera"), currentCamera}}}}};
+                              {QStringLiteral("image_height"), 4000}};
+    QJsonObject adjusted = initial;
+    adjusted[QStringLiteral("fu")] = 5800.0;
+    adjusted[QStringLiteral("k1")] = -0.02;
     const QJsonObject report{{QStringLiteral("camera_comparison"),
                               QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
                                                      {QStringLiteral("name"), QStringLiteral("camera_001.jpg")},
                                                      {QStringLiteral("had_before"), true},
-                                                     {QStringLiteral("fu_before"), 5833.333},
-                                                     {QStringLiteral("fv_before"), 5833.333},
-                                                     {QStringLiteral("cu_before"), 3000.0},
-                                                     {QStringLiteral("cv_before"), 2000.0},
-                                                     {QStringLiteral("k1_before"), 0.0},
-                                                     {QStringLiteral("fu_after"), 5800.0}}}}};
+                                                     {QStringLiteral("initial_camera"), initial},
+                                                     {QStringLiteral("adjusted_camera"), adjusted}}}}};
 
     const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(metadata, report);
     ASSERT_EQ(records.size(), 1);
@@ -5632,24 +5850,19 @@ TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 6000}, {QStringLiteral("height"), 4000}}}}};
-    const QJsonObject adjustedCamera{{QStringLiteral("model"), QStringLiteral("tsai")},
-                                     {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
-                                     {QStringLiteral("pitch"), 1.0},
-                                     {QStringLiteral("fu"), 5672.0},
-                                     {QStringLiteral("fv"), 5672.0},
-                                     {QStringLiteral("cu"), 2998.7},
-                                     {QStringLiteral("cv"), 1996.7},
-                                     {QStringLiteral("k1"), -0.042},
-                                     {QStringLiteral("k2"), -0.16},
-                                     {QStringLiteral("k3"), 0.21},
-                                     {QStringLiteral("p1"), -0.00008},
-                                     {QStringLiteral("p2"), 0.00018},
-                                     {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
-                                     {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}};
-    const QJsonObject diagnostics{{QStringLiteral("adaptive_focal_seed_scale"), 5833.333 / 6000.0},
-                                  {QStringLiteral("adaptive_camera_model_fitting"), true},
-                                  {QStringLiteral("adaptive_camera_model_refinement_accepted"), true},
-                                  {QStringLiteral("camera_self_calibration_status"), QStringLiteral("refined")}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
+        makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
+    adjustedState.setIntrinsics(5672.0, 5672.0, 2998.7, 1996.7);
+    adjustedState.setDistortion(-0.042, -0.16, 0.21, -0.00008, 0.00018);
+    adjustedState.setImageSize(xjw::camera_core::ImageSize{6000, 4000});
+    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_focal_seed_scale"), 5833.333 / 6000.0},
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), true},
+        {QStringLiteral("adaptive_camera_model_refinement_accepted"), true},
+        {QStringLiteral("ba_intrinsic_parameter_enabled"), QJsonObject{{QStringLiteral("f"), true}}},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("refined")}};
 
     const QJsonArray comparisons = xjw::gui::camera_calibration::buildCameraCalibrationComparison(
         metadata, QMap<QString, QJsonObject>{{imagePath, adjustedCamera}}, diagnostics);
@@ -5667,6 +5880,33 @@ TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics
     EXPECT_TRUE(comparison.value(QStringLiteral("optimized_parameters")).toArray().contains(QStringLiteral("f")));
 }
 
+TEST(CameraCalibrationDataTest, RequiresExplicitAdaptiveFittingApplication)
+{
+    const QString imagePath = QStringLiteral("D:/images/rx1r_legacy_diagnostics.jpg");
+    const QJsonObject metadata{
+        {QStringLiteral("images"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 6000}, {QStringLiteral("height"), 4000}}}}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
+        makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
+    adjustedState.setIntrinsics(5672.0, 5672.0, 2998.7, 1996.7);
+    adjustedState.setImageSize(xjw::camera_core::ImageSize{6000, 4000});
+    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_refinement_accepted"), true},
+        {QStringLiteral("ba_intrinsic_parameter_enabled"), QJsonObject{{QStringLiteral("f"), true}}},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("refined")}};
+
+    const QJsonObject comparison = xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+                                       metadata, QMap<QString, QJsonObject>{{imagePath, adjustedCamera}}, diagnostics)
+                                       .at(0)
+                                       .toObject();
+
+    EXPECT_FALSE(comparison.value(QStringLiteral("intrinsics_refined")).toBool());
+    EXPECT_TRUE(comparison.value(QStringLiteral("optimized_parameters")).toArray().isEmpty());
+}
+
 TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
 {
     const QString firstPath = QStringLiteral("D:/images/nas_001.tif");
@@ -5678,17 +5918,13 @@ TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
                                            QJsonObject{{QStringLiteral("path"), secondPath}}}}};
     const auto adjustedCamera = [](bool recordsResolution)
     {
-        QJsonObject camera{{QStringLiteral("model"), QStringLiteral("tsai")},
-                           {QStringLiteral("fu"), 42658.0},
-                           {QStringLiteral("fv"), 42658.0},
-                           {QStringLiteral("cu"), 1939.0},
-                           {QStringLiteral("cv"), 1444.0}};
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState state = makeCamera(0.0, 0.0, 0.0, 42658.0, 42658.0);
+        state.setIntrinsics(42658.0, 42658.0, 1939.0, 1444.0);
         if (recordsResolution)
         {
-            camera.insert(QStringLiteral("image_width"), 3878);
-            camera.insert(QStringLiteral("image_height"), 2888);
+            state.setImageSize(xjw::camera_core::ImageSize{3878, 2888});
         }
-        return camera;
+        return xjw::common::project::serializeFramePinholeNumericState(state);
     };
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_camera_model_fitting"), true},
@@ -5730,13 +5966,10 @@ TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
 
 TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
 {
-    const QJsonObject cameraA{{QStringLiteral("model"), QStringLiteral("tsai")},
-                              {QStringLiteral("fu"), 1000.0},
-                              {QStringLiteral("fv"), 1000.0},
-                              {QStringLiteral("cu"), 500.0},
-                              {QStringLiteral("cv"), 400.0},
-                              {QStringLiteral("image_width"), 1000},
-                              {QStringLiteral("image_height"), 800}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraState = makeCamera(0.0, 0.0, 0.0, 1000.0, 1000.0);
+    cameraState.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
+    cameraState.setImageSize(xjw::camera_core::ImageSize{1000, 800});
+    const QJsonObject cameraA = xjw::common::project::serializeFramePinholeNumericState(cameraState);
     QJsonObject cameraB = cameraA;
     cameraB.insert(QStringLiteral("image_width"), 2000);
     cameraB.insert(QStringLiteral("image_height"), 1600);
@@ -5766,22 +5999,39 @@ TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
               0);
 }
 
-TEST(CameraCalibrationDataTest, CompletedLegacySfmReportDoesNotRelabelAdjustedAsInitial)
+TEST(CameraCalibrationDataTest, ReportWithoutCanonicalComparisonKeepsProjectCameraAsInitial)
 {
-    const QJsonObject camera{{QStringLiteral("fu"), 900.0},
-                             {QStringLiteral("fv"), 900.0},
-                             {QStringLiteral("cu"), 600.0},
-                             {QStringLiteral("cv"), 400.0}};
-    const QJsonObject metadata{{QStringLiteral("images"),
-                                QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/one.jpg")},
-                                                       {QStringLiteral("camera"), camera}}}}};
-    const QJsonObject oldSfmReport{{QStringLiteral("type"), QStringLiteral("aerial_triangulation_sfm")},
-                                   {QStringLiteral("mode"), QStringLiteral("sfm")}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    camera.setIntrinsics(900.0, 900.0, 600.0, 400.0);
+    camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+    const QJsonObject metadata = makeCanonicalTriangulationMeta({{QStringLiteral("D:/images/one.jpg"), camera}});
+    const QJsonObject report{{QStringLiteral("type"), QStringLiteral("aerial_triangulation_sfm")},
+                             {QStringLiteral("mode"), QStringLiteral("sfm")}};
 
-    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(metadata, oldSfmReport);
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(metadata, report);
     ASSERT_EQ(records.size(), 1);
-    EXPECT_FALSE(records.front().hasInitial);
-    EXPECT_TRUE(records.front().hasAdjusted);
+    EXPECT_TRUE(records.front().hasInitial);
+    EXPECT_FALSE(records.front().hasAdjusted);
+}
+
+TEST(CameraCalibrationDataTest, IgnoresFlattenedLegacyComparisonFields)
+{
+    const QString imagePath = QStringLiteral("D:/images/one.jpg");
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    camera.setIntrinsics(900.0, 900.0, 600.0, 400.0);
+    camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+    const QJsonObject metadata = makeCanonicalTriangulationMeta({{imagePath, camera}});
+    const QJsonObject report{{QStringLiteral("camera_comparison"),
+                              QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
+                                                     {QStringLiteral("had_before"), true},
+                                                     {QStringLiteral("fu_before"), 1000.0},
+                                                     {QStringLiteral("fu_after"), 800.0}}}}};
+
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(metadata, report);
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_TRUE(records.front().hasInitial);
+    EXPECT_FALSE(records.front().hasAdjusted);
+    EXPECT_DOUBLE_EQ(records.front().initial.value(QStringLiteral("fu")).toDouble(), 900.0);
 }
 
 TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
@@ -5791,13 +6041,10 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 4000}, {QStringLiteral("height"), 3000}}}}};
-    const QJsonObject adjustedCamera{{QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
-                                     {QStringLiteral("fu"), 2985.0},
-                                     {QStringLiteral("fv"), 2985.0},
-                                     {QStringLiteral("cu"), 2000.0},
-                                     {QStringLiteral("cv"), 1500.0},
-                                     {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
-                                     {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
+        makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
+    adjustedState.setIntrinsics(2985.0, 2985.0, 2000.0, 1500.0);
+    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_focal_seed_scale"), 0.75},
         {QStringLiteral("adaptive_camera_model_fitting"), true},
@@ -5831,13 +6078,10 @@ TEST(CameraCalibrationDataTest, RequestedButFixedCalibrationIsNotReportedAsRefin
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 4000}, {QStringLiteral("height"), 3000}}}}};
-    const QJsonObject adjustedCamera{{QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
-                                     {QStringLiteral("fu"), 2985.0},
-                                     {QStringLiteral("fv"), 2985.0},
-                                     {QStringLiteral("cu"), 2000.0},
-                                     {QStringLiteral("cv"), 1500.0},
-                                     {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
-                                     {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
+        makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
+    adjustedState.setIntrinsics(2985.0, 2985.0, 2000.0, 1500.0);
+    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
     const QJsonObject diagnostics{{QStringLiteral("adaptive_camera_model_fitting"), true},
                                   {QStringLiteral("adaptive_camera_model_fitting_requested"), true},
                                   {QStringLiteral("adaptive_camera_model_fitting_scheduled"), false},
@@ -5859,21 +6103,17 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
 {
     const QString configuredImagePath = QStringLiteral("D:/images/one.jpg");
     const QString unconfiguredImagePath = QStringLiteral("D:/images/without_camera.jpg");
-    const QJsonObject camera{{QStringLiteral("model"), QStringLiteral("tsai")},
-                             {QStringLiteral("image_width"), 1200},
-                             {QStringLiteral("image_height"), 800},
-                             {QStringLiteral("fu"), 900.0},
-                             {QStringLiteral("fv"), 900.0},
-                             {QStringLiteral("cu"), 600.0},
-                             {QStringLiteral("cv"), 400.0}};
-    const QJsonObject metadata{
-        {QStringLiteral("images"),
-         QJsonArray{QJsonObject{{QStringLiteral("path"), configuredImagePath}, {QStringLiteral("camera"), camera}},
-                    QJsonObject{{QStringLiteral("path"), unconfiguredImagePath},
-                                {QStringLiteral("width"), 1200},
-                                {QStringLiteral("height"), 800}}}}};
+    const QJsonObject metadata =
+        makeCanonicalTriangulationMeta({{configuredImagePath, makeCamera(0.0, 0.0, 0.0, 900.0, 900.0)}}, 1200, 800);
+    QJsonObject metadataWithUnconfiguredImage = metadata;
+    QJsonArray images = metadataWithUnconfiguredImage.value(QStringLiteral("images")).toArray();
+    images.append(QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("unconfigured-image")},
+                              {QStringLiteral("path"), unconfiguredImagePath},
+                              {QStringLiteral("samples"), 1200},
+                              {QStringLiteral("lines"), 800}});
+    metadataWithUnconfiguredImage.insert(QStringLiteral("images"), images);
 
-    CameraCalibrationDialog dialog(metadata, QString());
+    CameraCalibrationDialog dialog(metadataWithUnconfiguredImage, QString());
     auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("cameraCalibrationTabs"));
     ASSERT_NE(tabs, nullptr);
     ASSERT_EQ(tabs->count(), 2);
@@ -5972,23 +6212,55 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
 
 TEST(CameraCalibrationDialogTest, ShowsRpcGeolocationParametersInsteadOfPinholeIntrinsics)
 {
-    const QJsonObject rpcCamera{{QStringLiteral("model"), QStringLiteral("rpc")},
-                                {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
-                                {QStringLiteral("image_samples"), 1024},
-                                {QStringLiteral("image_lines"), 768},
-                                {QStringLiteral("line_off"), 383.5},
-                                {QStringLiteral("samp_off"), 511.5},
-                                {QStringLiteral("lat_off"), 34.5},
-                                {QStringLiteral("long_off"), 113.5},
-                                {QStringLiteral("height_off"), 120.0},
-                                {QStringLiteral("line_scale"), 384.0},
-                                {QStringLiteral("samp_scale"), 512.0},
-                                {QStringLiteral("lat_scale"), 0.1},
-                                {QStringLiteral("long_scale"), 0.1},
-                                {QStringLiteral("height_scale"), 500.0}};
-    const QJsonObject metadata{{QStringLiteral("images"),
-                                QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/rpc.tif")},
-                                                       {QStringLiteral("camera"), rpcCamera}}}}};
+    const auto coefficients = [](double first)
+    {
+        QJsonArray values;
+        for (int index = 0; index < 20; ++index)
+        {
+            values.append(index == 0 ? first : 0.0);
+        }
+        return values;
+    };
+    const QString imagePath = QStringLiteral("D:/images/rpc.tif");
+    QJsonObject rpcCamera{{QStringLiteral("model"), QStringLiteral("rpc00b")},
+                          {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
+                          {QStringLiteral("world_frame"), QStringLiteral("EPSG:4978")},
+                          {QStringLiteral("ground_crs"), QStringLiteral("EPSG:4979")},
+                          {QStringLiteral("height_datum"), QStringLiteral("WGS84_ellipsoidal")},
+                          {QStringLiteral("pixel_convention"), QStringLiteral("opencv_zero_based_center")},
+                          {QStringLiteral("image_samples"), 1024},
+                          {QStringLiteral("image_lines"), 768},
+                          {QStringLiteral("line_off"), 383.5},
+                          {QStringLiteral("samp_off"), 511.5},
+                          {QStringLiteral("lat_off"), 34.5},
+                          {QStringLiteral("long_off"), 113.5},
+                          {QStringLiteral("height_off"), 120.0},
+                          {QStringLiteral("line_scale"), 384.0},
+                          {QStringLiteral("samp_scale"), 512.0},
+                          {QStringLiteral("lat_scale"), 0.1},
+                          {QStringLiteral("long_scale"), 0.1},
+                          {QStringLiteral("height_scale"), 500.0},
+                          {QStringLiteral("line_num_coeff"), coefficients(0.0)},
+                          {QStringLiteral("line_den_coeff"), coefficients(1.0)},
+                          {QStringLiteral("samp_num_coeff"), coefficients(0.0)},
+                          {QStringLiteral("samp_den_coeff"), coefficients(1.0)}};
+    QJsonObject metadata{{QStringLiteral("images"),
+                          QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-image")},
+                                                 {QStringLiteral("path"), imagePath},
+                                                 {QStringLiteral("samples"), 1024},
+                                                 {QStringLiteral("lines"), 768}}}},
+                         {QStringLiteral("camera_definitions"), QJsonArray{}},
+                         {QStringLiteral("camera_instances"), QJsonArray{}}};
+    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
+        &metadata, QMap<QString, QJsonObject>{{imagePath, rpcCamera}});
+    ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
+    const QJsonObject rpcDefinition = metadata.value(QStringLiteral("camera_definitions")).toArray().at(0).toObject();
+    EXPECT_EQ(rpcDefinition.value(QStringLiteral("frame")).toString(), QStringLiteral("EPSG:4978"));
+    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(
+                  metadata, metadata.value(QStringLiteral("images")).toArray().at(0).toObject())
+                  .value(QStringLiteral("world_frame"))
+                  .toString(),
+              QStringLiteral("EPSG:4978"));
 
     CameraCalibrationDialog dialog(metadata, QString());
     auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("cameraCalibrationTabs"));
@@ -6029,9 +6301,9 @@ TEST(ProjectWorkflowReportsTest, PreservesCompleteCalibrationSnapshots)
     const QJsonObject comparison = comparisons.at(0).toObject();
     EXPECT_EQ(comparison.value(QStringLiteral("initial_camera")).toObject(), initialCamera);
     EXPECT_EQ(comparison.value(QStringLiteral("adjusted_camera")).toObject(), adjustedCamera);
-    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_before")).toDouble(), -0.01);
-    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_after")).toDouble(), -0.015);
-    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("p2_before")).toDouble(), 0.0002);
+    EXPECT_FALSE(comparison.contains(QStringLiteral("k1_before")));
+    EXPECT_FALSE(comparison.contains(QStringLiteral("k1_after")));
+    EXPECT_FALSE(comparison.contains(QStringLiteral("p2_before")));
 }
 
 TEST(ProjectBundleAdjustWorkflowTest, BuildsActionableReferenceTerrainPreview)
@@ -6094,24 +6366,66 @@ TEST(ProjectBundleAdjustWorkflowTest, CommitUpdatesCameraAndStoresCompactResult)
     const QStringList projectImages = projectData.getAllImages();
     ASSERT_EQ(projectImages.size(), 1);
 
-    const QJsonObject adjustedCamera{{QStringLiteral("model"), QStringLiteral("pinhole")},
-                                     {QStringLiteral("aligned"), true},
-                                     {QStringLiteral("fu"), 1200.0},
-                                     {QStringLiteral("fv"), 1200.0},
-                                     {QStringLiteral("C"), QJsonArray{1.0, 2.0, 3.0}}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState = makeCamera(1.0, 2.0, 3.0);
+    adjustedState.setImageSize(xjw::camera_core::ImageSize{1024, 768});
+    QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    adjustedCamera.insert(QStringLiteral("aligned"), true);
     const QJsonObject baResult{
         {QStringLiteral("track_count"), 20},
         {QStringLiteral("mean_rms_after"), 0.6},
         {QStringLiteral("point_preview"), QJsonArray{QJsonObject{{QStringLiteral("index"), 1}}}}};
+    const QString imageId = projectData.coreFilesMeta()
+                                .value(QStringLiteral("images"))
+                                .toArray()
+                                .at(0)
+                                .toObject()
+                                .value(QStringLiteral("image_uuid"))
+                                .toString();
+    int initialCameraCount = 0;
+    QString initialCameraError;
+    ASSERT_TRUE(projectData.setCameraInstances(
+        QMap<QString, QJsonObject>{{sourceImagePath, adjustedCamera}}, &initialCameraCount, &initialCameraError))
+        << qPrintable(initialCameraError);
+    ASSERT_EQ(initialCameraCount, 1);
+    const QJsonObject canonicalCore = projectData.coreFilesMeta();
+    const QJsonObject canonicalInstance =
+        canonicalCore.value(QStringLiteral("camera_instances")).toArray().at(0).toObject();
+    const QString instanceId = canonicalInstance.value(QStringLiteral("id")).toString();
+    const QString worldFrame = canonicalCore.value(QStringLiteral("camera_definitions"))
+                                   .toArray()
+                                   .at(0)
+                                   .toObject()
+                                   .value(QStringLiteral("frame"))
+                                   .toString();
+    QJsonObject adjustedUpdate = adjustedCamera;
+    adjustedUpdate.insert(QStringLiteral("world_frame"), worldFrame);
 
     const auto commitResult = xjw::gui::project::commitBundleAdjustPreview(
-        &projectData, QMap<QString, QJsonObject>{{projectImages.front(), adjustedCamera}}, baResult);
+        &projectData,
+        xjw::camera_project::CameraInstanceUpdates{{xjw::camera_core::ImageId(imageId.toStdString()),
+                                                    xjw::camera_core::CameraInstanceId(instanceId.toStdString()),
+                                                    xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
+                                                    adjustedUpdate}},
+        baResult);
 
     ASSERT_TRUE(commitResult.success) << qPrintable(commitResult.errorMessage);
     EXPECT_EQ(commitResult.updatedCameraCount, 1);
-    const QJsonObject storedImage =
-        projectData.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
-    EXPECT_DOUBLE_EQ(storedImage.value(QStringLiteral("camera")).toObject().value(QStringLiteral("fu")).toDouble(),
+    const QJsonObject core = projectData.coreFilesMeta();
+    const QJsonObject storedImage = core.value(QStringLiteral("images")).toArray().at(0).toObject();
+    EXPECT_FALSE(storedImage.contains(QStringLiteral("camera")));
+    const QJsonObject instance = core.value(QStringLiteral("camera_instances")).toArray().at(0).toObject();
+    const QString definitionId = instance.value(QStringLiteral("definition_id")).toString();
+    const QJsonArray definitions = core.value(QStringLiteral("camera_definitions")).toArray();
+    ASSERT_EQ(definitions.size(), 1);
+    EXPECT_EQ(definitions.at(0).toObject().value(QStringLiteral("id")).toString(), definitionId);
+    EXPECT_DOUBLE_EQ(definitions.at(0)
+                         .toObject()
+                         .value(QStringLiteral("parameters"))
+                         .toObject()
+                         .value(QStringLiteral("intrinsics"))
+                         .toObject()
+                         .value(QStringLiteral("fx_px"))
+                         .toDouble(),
                      1200.0);
     const QJsonArray storedResults = projectData.getBundleAdjustResults();
     ASSERT_EQ(storedResults.size(), 1);
@@ -6626,19 +6940,18 @@ TEST(FeatureResidualLoaderTest, SelectsOnlyTheCurrentImagesTrueResidualVectors)
     ProjectData projectData;
     ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("residuals")));
 
-    const QJsonObject observation{{QStringLiteral("image_path"), imagePath},
-                                  {QStringLiteral("xy"), QJsonArray{10.0, 20.0}},
-                                  {QStringLiteral("projected_xy"), QJsonArray{13.0, 24.0}},
-                                  {QStringLiteral("residual_xy"), QJsonArray{3.0, 4.0}}};
-    const QJsonObject otherObservation{{QStringLiteral("image_path"), otherImagePath},
-                                       {QStringLiteral("xy"), QJsonArray{1.0, 2.0}},
-                                       {QStringLiteral("projected_xy"), QJsonArray{8.0, 9.0}}};
+    const QJsonObject observation =
+        v3SidecarObservation(0, QStringLiteral("canonical-image"), QJsonArray{10.0, 20.0}, QJsonArray{13.0, 24.0});
+    const QJsonObject otherObservation =
+        v3SidecarObservation(1, QStringLiteral("canonical-other"), QJsonArray{1.0, 2.0}, QJsonArray{8.0, 9.0});
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
-    sidecar.write(QJsonDocument(QJsonObject{{QStringLiteral("points"),
-                                             QJsonArray{QJsonObject{{QStringLiteral("observations"),
-                                                                     QJsonArray{observation, otherObservation}}}}}})
-                      .toJson());
+    sidecar.write(
+        QJsonDocument(v3Sidecar(QJsonArray{v3SidecarImage(0, QStringLiteral("canonical-image"), imagePath),
+                                           v3SidecarImage(1, QStringLiteral("canonical-other"), otherImagePath)},
+                                QJsonArray{QJsonObject{
+                                    {QStringLiteral("observations"), QJsonArray{observation, otherObservation}}}}))
+            .toJson());
     sidecar.close();
 
     ASSERT_TRUE(QDir().mkpath(xjw::common::project::ProjectIO::tmpDir(projectPath)));
@@ -6659,27 +6972,21 @@ TEST(FeatureResidualLoaderTest, SelectsOnlyTheCurrentImagesTrueResidualVectors)
     EXPECT_DOUBLE_EQ(residuals.first().magnitudePx, 5.0);
 }
 
-TEST(FeatureResidualLoaderTest, ReadsCompactAerialObservationRows)
+TEST(FeatureResidualLoaderTest, ReadsCanonicalAerialObservationRows)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     const QString sidecarPath = tempDir.filePath(QStringLiteral("compact_points.json"));
     const QString imagePath = tempDir.filePath(QStringLiteral("frame.jpg"));
-    const QJsonArray images{QJsonObject{{QStringLiteral("image_id"), 7},
-                                        {QStringLiteral("image_path"), imagePath},
-                                        {QStringLiteral("image_name"), QStringLiteral("frame.jpg")}}};
-    const QJsonArray observation{7, 19, 10.0, 20.0, 2.5, 13.0, 24.0};
+    const QJsonArray images{v3SidecarImage(0, QStringLiteral("canonical-frame"), imagePath)};
+    const QJsonObject observation = v3SidecarObservation(
+        0, QStringLiteral("canonical-frame"), QJsonArray{10.0, 20.0}, QJsonArray{13.0, 24.0}, 19, 2.5);
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
     sidecar.write(
-        QJsonDocument(
-            QJsonObject{
-                {QStringLiteral("schema"), QStringLiteral("plascan.sfm_sparse_points.v2")},
-                {QStringLiteral("images"), images},
-                {QStringLiteral("points"),
-                 QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
-                                        {QStringLiteral("observations"), QJsonArray{QJsonValue(observation)}}}}},
-            })
+        QJsonDocument(v3Sidecar(images,
+                                QJsonArray{QJsonObject{{QStringLiteral("rms_reproj_px"), 0.5},
+                                                       {QStringLiteral("observations"), QJsonArray{observation}}}}))
             .toJson(QJsonDocument::Compact));
     sidecar.close();
 
@@ -6701,16 +7008,13 @@ TEST(FeatureResidualLoaderTest, UsesAnUnambiguousPhotoNameAfterProjectRelocation
     const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
     const QString oldImagePath = QStringLiteral("/old/project/images/frame_001.jpg");
     const QString relocatedImagePath = tempDir.filePath(QStringLiteral("images/frame_001.jpg"));
-    const QJsonObject observation{{QStringLiteral("image_path"), oldImagePath},
-                                  {QStringLiteral("image_name"), QStringLiteral("frame_001.jpg")},
-                                  {QStringLiteral("feature_idx"), 19},
-                                  {QStringLiteral("xy"), QJsonArray{12.0, 18.0}},
-                                  {QStringLiteral("projected_xy"), QJsonArray{12.2, 17.9}}};
+    const QJsonObject observation = v3SidecarObservation(
+        0, QStringLiteral("canonical-relocated"), QJsonArray{12.0, 18.0}, QJsonArray{12.2, 17.9}, 19);
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
     sidecar.write(
-        QJsonDocument(QJsonObject{{QStringLiteral("points"),
-                                   QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+        QJsonDocument(v3Sidecar(QJsonArray{v3SidecarImage(0, QStringLiteral("canonical-relocated"), oldImagePath)},
+                                QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}))
             .toJson());
     sidecar.close();
 
@@ -6727,16 +7031,16 @@ TEST(FeatureResidualLoaderTest, RejectsAmbiguousPhotoNameFallback)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     const QString sidecarPath = tempDir.filePath(QStringLiteral("points.json"));
-    const QJsonObject first{{QStringLiteral("image_path"), QStringLiteral("/old/a/frame.jpg")},
-                            {QStringLiteral("xy"), QJsonArray{1.0, 2.0}}};
-    const QJsonObject second{{QStringLiteral("image_path"), QStringLiteral("/old/b/frame.jpg")},
-                             {QStringLiteral("xy"), QJsonArray{3.0, 4.0}}};
+    const QJsonObject first = v3SidecarObservation(0, QStringLiteral("canonical-first"), QJsonArray{1.0, 2.0});
+    const QJsonObject second = v3SidecarObservation(1, QStringLiteral("canonical-second"), QJsonArray{3.0, 4.0});
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
     sidecar.write(
         QJsonDocument(
-            QJsonObject{{QStringLiteral("points"),
-                         QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{first, second}}}}}})
+            v3Sidecar(
+                QJsonArray{v3SidecarImage(0, QStringLiteral("canonical-first"), QStringLiteral("/old/a/frame.jpg")),
+                           v3SidecarImage(1, QStringLiteral("canonical-second"), QStringLiteral("/old/b/frame.jpg"))},
+                QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{first, second}}}}))
             .toJson());
     sidecar.close();
 
@@ -6753,14 +7057,13 @@ TEST(FeatureResidualLoaderTest, ReusesTheSingleParsedObservationIndex)
     ASSERT_TRUE(tempDir.isValid());
     const QString sidecarPath = tempDir.filePath(QStringLiteral("cached_points.json"));
     const QString imagePath = tempDir.filePath(QStringLiteral("frame.jpg"));
-    const QJsonObject observation{{QStringLiteral("image_path"), imagePath},
-                                  {QStringLiteral("xy"), QJsonArray{4.0, 6.0}},
-                                  {QStringLiteral("projected_xy"), QJsonArray{4.2, 6.1}}};
+    const QJsonObject observation =
+        v3SidecarObservation(0, QStringLiteral("canonical-cache"), QJsonArray{4.0, 6.0}, QJsonArray{4.2, 6.1});
     QFile sidecar(sidecarPath);
     ASSERT_TRUE(sidecar.open(QIODevice::WriteOnly));
     sidecar.write(
-        QJsonDocument(QJsonObject{{QStringLiteral("points"),
-                                   QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}}})
+        QJsonDocument(v3Sidecar(QJsonArray{v3SidecarImage(0, QStringLiteral("canonical-cache"), imagePath)},
+                                QJsonArray{QJsonObject{{QStringLiteral("observations"), QJsonArray{observation}}}}))
             .toJson());
     sidecar.close();
 
@@ -7825,9 +8128,13 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
 
     const QString block = source.mid(start, end - start);
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"io/PathIO.h\"")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::writeImage(maskPath, generated)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(target.imagePath, cv::IMREAD_UNCHANGED)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(target.finalPath, cv::IMREAD_GRAYSCALE)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::writeImage(target.stagingPath, generated)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("xjw::common::io::writeImage(target.finalPath, generated)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QSaveFile output(destinationPath)")));
+    EXPECT_TRUE(
+        block.contains(QStringLiteral("copyFileAtomically(artifact.stagingPath, artifact.finalPath, &publish_error)")));
     EXPECT_FALSE(block.contains(QStringLiteral("QImage sourceImage(imagePath)")))
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
 }
@@ -7872,13 +8179,17 @@ TEST(GenerateMaskWorkflowTest, ClearsManagedMaskAndAllMaskMetadata)
     meta[QStringLiteral("images")] = images;
     projectData.updateMetadata(meta, false);
 
-    ProjectMaskWorkflowController controller(&projectData, nullptr);
-    QSignalSpy masksChangedSpy(&controller, &ProjectMaskWorkflowController::masksGenerated);
-    QSignalSpy metadataSpy(&controller, &ProjectMaskWorkflowController::projectMetadataUpdated);
+    xjw::gui::project::ProjectServiceContainer services(&projectData, nullptr);
+    QSignalSpy masksChangedSpy(&services.tasks(),
+                               &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
+    QSignalSpy metadataSpy(&services.tasks(),
+                           &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
+    bool confirmationClicked = false;
+    QString modalDriverError;
     QTimer dialogCloser;
     QObject::connect(&dialogCloser,
                      &QTimer::timeout,
-                     []()
+                     [&confirmationClicked, &modalDriverError]()
                      {
                          auto* messageBox = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
                          if (!messageBox)
@@ -7886,17 +8197,28 @@ TEST(GenerateMaskWorkflowTest, ClearsManagedMaskAndAllMaskMetadata)
                              return;
                          }
                          QAbstractButton* button = messageBox->button(QMessageBox::Yes);
-                         if (!button)
+                         if (button)
+                         {
+                             confirmationClicked = true;
+                         }
+                         else
                          {
                              button = messageBox->button(QMessageBox::Ok);
                          }
-                         ASSERT_NE(button, nullptr);
+                         if (!button)
+                         {
+                             modalDriverError = QStringLiteral("蒙版清除对话框没有 Yes 或 Ok 按钮");
+                             messageBox->reject();
+                             return;
+                         }
                          button->click();
                      });
     dialogCloser.start(10);
-    controller.clearMasksForImages(projectImages);
+    services.tasks().clearMasksForImages(projectImages);
     dialogCloser.stop();
 
+    EXPECT_TRUE(modalDriverError.isEmpty()) << qPrintable(modalDriverError);
+    EXPECT_TRUE(confirmationClicked);
     EXPECT_FALSE(QFileInfo::exists(maskPath));
     EXPECT_TRUE(QFileInfo::exists(enginePath));
     const QJsonObject updatedImage =
@@ -7938,13 +8260,17 @@ TEST(GenerateMaskWorkflowTest, RetainsMetadataWhenManagedMaskCannotBeDeleted)
     meta[QStringLiteral("images")] = images;
     projectData.updateMetadata(meta, false);
 
-    ProjectMaskWorkflowController controller(&projectData, nullptr);
-    QSignalSpy masksChangedSpy(&controller, &ProjectMaskWorkflowController::masksGenerated);
-    QSignalSpy metadataSpy(&controller, &ProjectMaskWorkflowController::projectMetadataUpdated);
+    xjw::gui::project::ProjectServiceContainer services(&projectData, nullptr);
+    QSignalSpy masksChangedSpy(&services.tasks(),
+                               &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
+    QSignalSpy metadataSpy(&services.tasks(),
+                           &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
+    bool confirmationClicked = false;
+    QString modalDriverError;
     QTimer dialogCloser;
     QObject::connect(&dialogCloser,
                      &QTimer::timeout,
-                     []()
+                     [&confirmationClicked, &modalDriverError]()
                      {
                          auto* messageBox = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
                          if (!messageBox)
@@ -7952,17 +8278,28 @@ TEST(GenerateMaskWorkflowTest, RetainsMetadataWhenManagedMaskCannotBeDeleted)
                              return;
                          }
                          QAbstractButton* button = messageBox->button(QMessageBox::Yes);
-                         if (!button)
+                         if (button)
+                         {
+                             confirmationClicked = true;
+                         }
+                         else
                          {
                              button = messageBox->button(QMessageBox::Ok);
                          }
-                         ASSERT_NE(button, nullptr);
+                         if (!button)
+                         {
+                             modalDriverError = QStringLiteral("蒙版清除对话框没有 Yes 或 Ok 按钮");
+                             messageBox->reject();
+                             return;
+                         }
                          button->click();
                      });
     dialogCloser.start(10);
-    controller.clearMasksForImages(projectImages);
+    services.tasks().clearMasksForImages(projectImages);
     dialogCloser.stop();
 
+    EXPECT_TRUE(modalDriverError.isEmpty()) << qPrintable(modalDriverError);
+    EXPECT_TRUE(confirmationClicked);
     EXPECT_TRUE(QFileInfo(maskPath).isDir());
     const QJsonObject updatedImage =
         projectData.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
@@ -8022,7 +8359,10 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
 {
     const QString source =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
+    const QString orchestrator =
+        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.cpp"));
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(orchestrator.isEmpty());
 
     const int start = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
     const int end = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
@@ -8032,9 +8372,9 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
     const QString block = source.mid(start, end - start);
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "AI mask generation must not run on the GUI thread.";
-    EXPECT_TRUE(block.contains(QStringLiteral("cancellation.isCancellationRequested()")))
+    EXPECT_TRUE(block.contains(QStringLiteral("context.cancelFlag->load")))
         << "Mask generation should use the shared cancellation vocabulary.";
-    EXPECT_TRUE(block.contains(QStringLiteral("if (_running)")))
+    EXPECT_TRUE(orchestrator.contains(QStringLiteral("_maskLaneMode != MaskLaneMode::Idle")))
         << "Without a modal progress dialog, duplicate mask generation runs must be rejected.";
     EXPECT_TRUE(block.contains(QStringLiteral("report()")))
         << "The worker should report per-image progress while generating masks.";
@@ -8046,14 +8386,15 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
 
 TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDialog)
 {
-    const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString taskHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.h"));
     const QString managerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     const QString mainHeader =
         readProjectSourceFile(QStringLiteral("src/gui/main_window/ProjectTaskStatusController.h"));
     const QString mainSource =
         readProjectSourceFile(QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
-    ASSERT_FALSE(managerHeader.isEmpty());
+    ASSERT_FALSE(taskHeader.isEmpty());
     ASSERT_FALSE(managerSource.isEmpty());
     ASSERT_FALSE(mainHeader.isEmpty());
     ASSERT_FALSE(mainSource.isEmpty());
@@ -8069,20 +8410,20 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
         QRegularExpression(
             QStringLiteral(
                 R"(void\s+maskGenerationProgressChanged\s*\(\s*const\s+QString\s*&\s*stage\s*,\s*int\s+done\s*,\s*int\s+total\s*\)\s*;)"))
-            .match(managerHeader)
+            .match(taskHeader)
             .hasMatch());
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
+    EXPECT_TRUE(taskHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
+    EXPECT_TRUE(taskHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
     EXPECT_TRUE(block.contains(QStringLiteral("emit self->progressChanged")));
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->finished")));
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self_guard->finished")));
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area, not a modal dialog.";
 
     EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget* _maskStatus")));
     EXPECT_TRUE(mainHeader.contains(QStringLiteral("void updateMask(const QString& stage, int done, int total);")));
     EXPECT_TRUE(mainHeader.contains(QStringLiteral("void finishMask(bool success);")));
-    EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationProgressChanged")));
-    EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationFinished")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("ProjectTaskOrchestrator::maskGenerationProgressChanged")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("ProjectTaskOrchestrator::maskGenerationFinished")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("_maskStatus = createStatus")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("生成蒙版 %1/%2")));
 }
@@ -9030,54 +9371,40 @@ TEST(MainWindowTest, DesignerViewMenuDoesNotDuplicateRuntimeOrdering)
     EXPECT_FALSE(viewSection.contains(QStringLiteral("<addaction name=\"menuWindow\"/>")));
 }
 
-TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThread)
+TEST(ProjectOpenResponsivenessTest, LifecycleServiceLoadsProjectSnapshotOffGuiThread)
 {
-    const QString managerHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectLifecycleController.h"));
-    const QString managerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectLifecycleController.cpp"));
-    const QString commandsHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.h"));
-    const QString commandsSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
-    ASSERT_FALSE(managerHeader.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-    ASSERT_FALSE(commandsHeader.isEmpty());
-    ASSERT_FALSE(commandsSource.isEmpty());
+    const QString lifecycleHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectLifecycleService.h"));
+    const QString lifecycleSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectLifecycleService.cpp"));
+    ASSERT_FALSE(lifecycleHeader.isEmpty());
+    ASSERT_FALSE(lifecycleSource.isEmpty());
 
     EXPECT_TRUE(QRegularExpression(
                     QStringLiteral(R"(void\s+projectOpenStarted\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
-                    .match(managerHeader)
+                    .match(lifecycleHeader)
                     .hasMatch());
     EXPECT_TRUE(
         QRegularExpression(
             QStringLiteral(
                 R"(void\s+projectOpenProgressChanged\s*\(\s*const\s+QString\s*&\s*message\s*,\s*int\s+percent\s*\)\s*;)"))
-            .match(managerHeader)
+            .match(lifecycleHeader)
             .hasMatch());
     EXPECT_TRUE(
         QRegularExpression(
             QStringLiteral(
                 R"(void\s+projectOpenFinished\s*\(\s*bool\s+success\s*,\s*const\s+QString\s*&\s*message\s*\)\s*;)"))
-            .match(managerHeader)
+            .match(lifecycleHeader)
             .hasMatch());
-    EXPECT_TRUE(
-        QRegularExpression(
-            QStringLiteral(R"(void\s+loadProjectResultsAsync\s*\(\s*const\s+QString\s*&\s*projectPath\s*\)\s*;)"))
-            .match(managerHeader)
-            .hasMatch());
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("bool _openInProgress")));
-    EXPECT_TRUE(
-        QRegularExpression(
-            QStringLiteral(R"(bool\s+selectProjectByDialog\s*\(\s*QString\s*\*\s*selectedPath\s*\)\s*const\s*;)"))
-            .match(commandsHeader)
-            .hasMatch());
+    EXPECT_TRUE(lifecycleHeader.contains(QStringLiteral("void loadProjectResultsAsync(")));
+    EXPECT_TRUE(lifecycleHeader.contains(QStringLiteral("bool _openInProgress")));
 
-    const int openStart = managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::openProjectFromPath"));
+    const int openStart = lifecycleSource.indexOf(QStringLiteral("void ProjectLifecycleService::openProjectFromPath"));
     const int saveStart =
-        managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::saveProject"), openStart);
+        lifecycleSource.indexOf(QStringLiteral("void ProjectLifecycleService::saveProject"), openStart);
     ASSERT_GE(openStart, 0);
     ASSERT_GT(saveStart, openStart);
-    const QString openBlock = managerSource.mid(openStart, saveStart - openStart);
+    const QString openBlock = lifecycleSource.mid(openStart, saveStart - openStart);
 
     EXPECT_TRUE(openBlock.contains(QStringLiteral("emit projectOpenStarted(projectPath);")));
     EXPECT_TRUE(openBlock.contains(QStringLiteral("xjw::gui::tasks::runGuardedWithOutcome(")));
@@ -9085,76 +9412,59 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
         << "Archive IO and JSON parsing should happen in the worker, not inside ProjectData on the GUI thread.";
     EXPECT_TRUE(openBlock.contains(QStringLiteral("openProjectFromSnapshot(snapshot")))
         << "The GUI thread should only apply the already-loaded snapshot.";
-    EXPECT_TRUE(openBlock.contains(QStringLiteral("loadProjectResultsAsync(projectPath);")))
+    EXPECT_TRUE(openBlock.contains(QStringLiteral("loadProjectResultsAsync(projectPath, context);")))
         << "Heavy result metadata should be loaded after the core project opens.";
     EXPECT_FALSE(openBlock.contains(QStringLiteral("snapshot.resultsLoaded")))
         << "The core-only open snapshot must not carry the removed result-loading compatibility flag.";
-    EXPECT_FALSE(openBlock.contains(QStringLiteral("_uiCommands->openProjectFromPath(plascanPath)")))
+    EXPECT_FALSE(openBlock.contains(QStringLiteral("ProjectLifecycleController")))
         << "The old synchronous UI command path blocks the GUI while the archive is read.";
-
-    EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectProjectByDialog")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("selectProjectByDialog(&projectPath)")));
+    EXPECT_TRUE(lifecycleSource.contains(QStringLiteral("_messages->selectOpenFile(")));
 }
 
-TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
+TEST(ProjectOpenResponsivenessTest, ResourceServiceScansImageFoldersOffGuiThread)
 {
-    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString commandsHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.h"));
-    const QString commandsSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
-    ASSERT_FALSE(managerSource.isEmpty());
-    ASSERT_FALSE(commandsHeader.isEmpty());
-    ASSERT_FALSE(commandsSource.isEmpty());
+    const QString resourceHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.h"));
+    const QString resourceSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.cpp"));
+    ASSERT_FALSE(resourceHeader.isEmpty());
+    ASSERT_FALSE(resourceSource.isEmpty());
 
-    EXPECT_TRUE(QRegularExpression(
-                    QStringLiteral(R"(bool\s+selectImageFolder\s*\(\s*QString\s*\*\s*selectedFolder\s*\)\s*const\s*;)"))
-                    .match(commandsHeader)
-                    .hasMatch())
-        << "Folder selection should be separated from the potentially slow folder scan.";
-    EXPECT_TRUE(QRegularExpression(
-                    QStringLiteral(R"(bool\s+selectPhotos\s*\(\s*QStringList\s*\*\s*selectedFiles\s*\)\s*const\s*;)"))
-                    .match(commandsHeader)
-                    .hasMatch())
-        << "File selection should be separated from slow image hashing and copying.";
-    EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectImageFolder")))
-        << "The UI command layer should keep the directory dialog logic reusable.";
-    EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectPhotos")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("OperationResult addFolder();")));
+    EXPECT_TRUE(resourceHeader.contains(QStringLiteral("OperationResult addFolder(const QString& folderPath);")));
+    EXPECT_TRUE(resourceSource.contains(QStringLiteral("_messages->selectDirectory(")));
 
-    const int addStart = managerSource.indexOf(QStringLiteral("void ProjectManager::addFolder"));
-    const int nextStart = managerSource.indexOf(QStringLiteral("bool ProjectManager::importCameraForImage"), addStart);
-    ASSERT_GE(addStart, 0);
-    ASSERT_GT(nextStart, addStart);
-    const QString addBlock = managerSource.mid(addStart, nextStart - addStart);
+    const int importStart = resourceSource.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::startImageImportTask"));
+    const int addPhotoStart = resourceSource.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::addPhoto"), importStart);
+    ASSERT_GE(importStart, 0);
+    ASSERT_GT(addPhotoStart, importStart);
+    const QString importBlock = resourceSource.mid(importStart, addPhotoStart - importStart);
 
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("selectImageFolder(&folder)")));
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("xjw::gui::tasks::runGuardedWithOutcome")))
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("xjw::gui::tasks::runGuardedWithOutcome")))
         << "Directory scanning can touch slow disks or large folders and must not run on the GUI thread.";
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("scanImageFolder(folder)")));
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("startImageImport(scan.imagePaths")))
-        << "The scanned files should continue through the asynchronous import path.";
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("imageImportProgressChanged")))
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("if (scanFolder)")));
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("directory.entryInfoList(")));
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("parseRpcCameraRaster(")));
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("imageImportProgressChanged")))
         << "Large image imports should report determinate GUI progress.";
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("QtConcurrent::blockingMapped(")))
-        << "External-image validation should use the dedicated parallel import pool.";
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("importPool.setMaxThreadCount(")))
-        << "Parallel imports must use bounded concurrency instead of flooding the global pool.";
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("validateExternalImages(")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("parseRpcCameraRaster(")));
-    EXPECT_FALSE(addBlock.contains(QStringLiteral("importImagesToSharedStore(")));
-    EXPECT_FALSE(addBlock.contains(QStringLiteral("prepareImport(")));
-    EXPECT_FALSE(managerSource.contains(QStringLiteral("addValidatedExternalImages(batch.projectImagePaths")));
-    EXPECT_FALSE(addBlock.contains(QStringLiteral("_projectData->addImages(scan.imagePaths")))
-        << "The GUI thread must not hash and copy every image.";
-    EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
-        << "The old synchronous path scans and updates metadata inside the action handler.";
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("self->_session->data()->addImages(work.newPaths")));
+    EXPECT_FALSE(importBlock.contains(QStringLiteral("ProjectManager")));
 }
 
-TEST(ProjectUiCommandsTest, ImageDialogsExcludeDotDirectoryEntries)
+TEST(ProjectUiMessagePolicyTest, ImageDialogsExcludeDotDirectoryEntries)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
-    ASSERT_FALSE(source.isEmpty());
+    const QString lifecycle =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectLifecycleService.cpp"));
+    const QString resources =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.cpp"));
+    ASSERT_FALSE(lifecycle.isEmpty());
+    ASSERT_FALSE(resources.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("QDir::NoDotAndDotDot")))
+    EXPECT_TRUE(lifecycle.contains(QStringLiteral("QDir::NoDotAndDotDot")))
+        << "Project lifecycle dialogs must not expose '.' or '..'.";
+    EXPECT_TRUE(resources.contains(QStringLiteral("QDir::NoDotAndDotDot")))
         << "Ctrl+A must not select '.' or '..' and navigate away from the image directory.";
 }
 
@@ -9172,9 +9482,9 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
     EXPECT_TRUE(header.contains(QStringLiteral("void updateOpenProgress")));
     EXPECT_TRUE(header.contains(QStringLiteral("void finishOpenProgress")));
 
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenStarted")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenProgressChanged")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenFinished")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectLifecycleService::projectOpenStarted")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectLifecycleService::projectOpenProgressChanged")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectLifecycleService::projectOpenFinished")));
     EXPECT_TRUE(
         source.contains(QStringLiteral("new QProgressDialog(tr(\"正在打开项目...\"), QString(), 0, 100, _window)")));
 
@@ -9183,14 +9493,14 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
     ASSERT_GE(openSlotStart, 0);
     ASSERT_GT(closedSlotStart, openSlotStart);
     const QString openSlot = lifecycle.mid(openSlotStart, closedSlotStart - openSlotStart);
-    EXPECT_TRUE(
-        openSlot.contains(QStringLiteral("scheduleProjectMetadataRefresh(_projectManager->coreProjectMeta())")));
-    EXPECT_TRUE(openSlot.contains(QStringLiteral("coreProjectMeta()")));
-    EXPECT_FALSE(openSlot.contains(QStringLiteral("_projectManager->currentMeta()")))
+    EXPECT_TRUE(openSlot.contains(
+        QStringLiteral("scheduleProjectMetadataRefresh(_projectServices->session().coreMetadata())")));
+    EXPECT_TRUE(openSlot.contains(QStringLiteral("coreMetadata()")));
+    EXPECT_FALSE(openSlot.contains(QStringLiteral("session().metadata()")))
         << "Opening the first viewport must not synchronously trigger project_results.json loading.";
 
-    const int projectOpenedLambda =
-        lifecycle.indexOf(QStringLiteral("connect(_projectManager, &ProjectManager::projectOpened, this, [this]"));
+    const int projectOpenedLambda = lifecycle.indexOf(
+        QStringLiteral("connect(_projectServices, &ProjectServiceContainer::projectOpened, this, [this]"));
     EXPECT_LT(projectOpenedLambda, 0)
         << "The extra projectOpened lambda duplicated refresh work and called currentMeta() during open.";
 }
@@ -9213,9 +9523,9 @@ TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
 
     EXPECT_TRUE(setupBlock.contains(QStringLiteral("scheduleProjectMetadataRefresh(meta)")));
     EXPECT_FALSE(setupBlock.contains(
-        QStringLiteral("connect(_projectManager, &ProjectManager::projectMetadataChanged, _dashboard")));
+        QStringLiteral("connect(&_projectServices->session(), &ProjectSession::metadataChanged, _dashboard")));
     EXPECT_FALSE(setupBlock.contains(
-        QStringLiteral("connect(_projectManager, &ProjectManager::projectMetadataChanged, _dataTree")));
+        QStringLiteral("connect(&_projectServices->session(), &ProjectSession::metadataChanged, _dataTree")));
     EXPECT_TRUE(setupBlock.contains(QStringLiteral("_projectUiHydrator->setStages")));
     EXPECT_TRUE(setupBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(meta)")))
         << "Model view refresh should be one of the hydrator stages.";
@@ -9246,7 +9556,9 @@ TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("DialogSettingStore *_workflowSettingsStore = nullptr;"),
         QStringLiteral("FeatureVisualizationController *_featureVisualizationController = nullptr;"),
         QStringLiteral("QPointer<QMainWindow> _mainWindow;"),
-        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectTaskOrchestrator *_tasks = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectResourceService *_resources = nullptr;"),
     };
     for (const QString& expectedMember : expectedMembers)
     {
@@ -9294,7 +9606,8 @@ TEST(CodeStyleTest, ReconstructionWorkflowControllerUsesLowerCamelPrivateMemberN
 
     const QStringList expectedMembers = {
         QStringLiteral("QPointer<QMainWindow> _mainWindow;"),
-        QStringLiteral("ProjectManager       *_projectManager = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;"),
+        QStringLiteral("xjw::gui::project::ProjectTaskOrchestrator *_tasks = nullptr;"),
         QStringLiteral("DialogSettingStore *_generateModelStore = nullptr;"),
         QStringLiteral("DialogSettingStore *_texStore          = nullptr;"),
     };
@@ -10137,8 +10450,18 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     QStatusBar statusBar;
     ProjectDashboardWidget dashboard;
     ProjectData projectData;
-    ProjectManager projectManager(&projectData, &window);
-    ProjectTaskStatusController controller(&projectManager, &dashboard, &statusBar, &window);
+    xjw::gui::project::ProjectServiceContainer projectServices(&projectData, &window);
+    auto& tasks = projectServices.tasks();
+    auto& resources = projectServices.resources();
+    auto& lifecycle = projectServices.lifecycle();
+    ProjectTaskStatusController controller(&tasks,
+                                           &resources,
+                                           &projectServices.cleanup(),
+                                           &lifecycle,
+                                           &projectServices.session(),
+                                           &dashboard,
+                                           &statusBar,
+                                           &window);
     QJsonArray dashboardTasks;
     QObject::connect(&dashboard,
                      &ProjectDashboardWidget::taskSnapshotsChanged,
@@ -10156,25 +10479,25 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     }
     ASSERT_NE(taskbar, nullptr);
 
-    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
-    emit projectManager.backgroundTaskProgressChanged(QStringLiteral("dem:first"), 25, 100);
+    emit tasks.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit tasks.backgroundTaskProgressChanged(QStringLiteral("dem:first"), 25, 100);
     EXPECT_EQ(taskbar->currentProgress().value, 375);
 
-    emit projectManager.backgroundTaskFinished(QStringLiteral("dem:first"));
+    emit tasks.backgroundTaskFinished(QStringLiteral("dem:first"));
     EXPECT_EQ(taskbar->currentProgress().value, 500);
 
-    emit projectManager.saveStarted();
+    emit lifecycle.saveStarted();
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::Indeterminate);
-    emit projectManager.saveFinished(true);
+    emit lifecycle.saveFinished(true);
     EXPECT_EQ(taskbar->currentProgress().value, 500);
 
-    emit projectManager.imageImportProgressChanged(QStringLiteral("导入影像"), 2, 10);
+    emit resources.imageImportProgressChanged(QStringLiteral("导入影像"), 2, 10);
     controller.updateImageLoading(QStringLiteral("加载照片列表"), 8, 10);
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("image_import")));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
 
-    emit projectManager.atProgressChanged(QStringLiteral("空中三角测量: 特征提取"), 10);
-    emit projectManager.atComputeDeviceChanged(QStringLiteral("CUDA · NVIDIA Test GPU"));
+    emit tasks.sparseProgressChanged(QStringLiteral("空中三角测量: 特征提取"), 10);
+    emit tasks.sparseComputeDeviceChanged(QStringLiteral("CUDA · NVIDIA Test GPU"));
     TaskStatusWidget* aerialStatus = nullptr;
     for (TaskStatusWidget* status : statusBar.findChildren<TaskStatusWidget*>())
     {
@@ -10186,7 +10509,7 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     }
     ASSERT_NE(aerialStatus, nullptr);
     EXPECT_EQ(aerialStatus->detailText(), QStringLiteral("计算设备：CUDA · NVIDIA Test GPU"));
-    emit projectManager.atProgressFinished(true);
+    emit tasks.sparseFinished(true);
     EXPECT_TRUE(aerialStatus->detailText().isEmpty());
 
     const auto dashboardHasTask = [&dashboardTasks](const QString& name)
@@ -10203,18 +10526,18 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("导入影像")));
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
 
-    emit projectManager.imageImportFinished(true, QString());
+    emit resources.imageImportFinished(true, QString());
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("image_import")));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("导入影像")));
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
 
     controller.finishImageLoading(true);
-    emit projectManager.meshProgressFinished(true);
+    emit tasks.meshProgressFinished(true);
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::NoProgress);
 
-    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
-    emit projectManager.projectOpenStarted(QStringLiteral("next.plascan"));
+    emit tasks.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit lifecycle.projectOpenStarted(QStringLiteral("next.plascan"));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("project_open")));
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("mesh")));
     emit projectData.projectOpened(QStringLiteral("next.plascan"));
@@ -10222,58 +10545,61 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("mesh")));
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::NoProgress);
 
-    emit projectManager.projectOpenProgressChanged(QStringLiteral("正在启动结果数据后台加载..."), 95);
+    emit lifecycle.projectOpenProgressChanged(QStringLiteral("正在启动结果数据后台加载..."), 95);
     EXPECT_TRUE(taskbar->hasTask(QStringLiteral("project_open")));
     EXPECT_EQ(taskbar->currentProgress().value, 950);
-    emit projectManager.projectOpenFinished(true, QStringLiteral("项目已打开"));
+    emit lifecycle.projectOpenFinished(true, QStringLiteral("项目已打开"));
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("project_open")));
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::NoProgress);
 
-    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit tasks.meshProgressChanged(QStringLiteral("模型生成"), 50);
     emit projectData.activeChunkChanged(QStringLiteral("chunk-2"), QStringLiteral("Chunk 2"), 1);
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("mesh")));
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::NoProgress);
 }
 
-TEST(ProjectManagerTaskLifecycleTest, ProjectOpenedCancelsAndReleasesOwnedAtTask)
+TEST(ProjectTaskOrchestratorLifecycleTest, ProjectOpenedCancelsAndReleasesOwnedAtTask)
 {
     QWidget window;
     ProjectData projectData;
-    ProjectManager projectManager(&projectData, &window);
-    const auto first = std::make_shared<std::atomic<bool>>(false);
+    xjw::gui::project::ProjectServiceContainer services(&projectData, &window);
+    auto& tasks = services.tasks();
 
-    projectManager.setAtCancelFlag(first);
-    ASSERT_TRUE(projectManager.hasActiveAtTask());
-    ASSERT_TRUE(projectManager.ownsAtCancelFlag(first));
+    ASSERT_TRUE(tasks.beginTask(QStringLiteral("aerial_triangulation")));
+    const auto first = tasks.context(QStringLiteral("aerial_triangulation"));
+    ASSERT_TRUE(tasks.hasActiveTask());
+    ASSERT_TRUE(tasks.isTaskActive(first));
 
     emit projectData.projectOpened(QStringLiteral("next.plascan"));
-    EXPECT_TRUE(first->load(std::memory_order_relaxed));
-    EXPECT_FALSE(projectManager.hasActiveAtTask());
-    EXPECT_FALSE(projectManager.ownsAtCancelFlag(first));
+    EXPECT_TRUE(first.cancelFlag->load(std::memory_order_relaxed));
+    EXPECT_FALSE(tasks.hasActiveTask());
+    EXPECT_FALSE(tasks.isTaskActive(first));
 
-    const auto second = std::make_shared<std::atomic<bool>>(false);
-    projectManager.setAtCancelFlag(second);
-    projectManager.clearAtCancelFlag(first);
+    ASSERT_TRUE(tasks.beginTask(QStringLiteral("aerial_triangulation")));
+    const auto second = tasks.context(QStringLiteral("aerial_triangulation"));
+    EXPECT_TRUE(tasks.isTaskActive(second));
+    EXPECT_FALSE(second.cancelFlag->load(std::memory_order_relaxed));
 
-    EXPECT_TRUE(projectManager.hasActiveAtTask());
-    EXPECT_TRUE(projectManager.ownsAtCancelFlag(second));
-    EXPECT_FALSE(second->load(std::memory_order_relaxed));
-
-    projectManager.clearAtCancelFlag(second);
-    EXPECT_FALSE(projectManager.hasActiveAtTask());
+    EXPECT_TRUE(tasks.finishTask(second, true));
+    EXPECT_FALSE(tasks.hasActiveTask());
 }
 
 TEST(ProjectDashboardWidgetTest, LoadsMetadataIntoReadOnlyWorkflowAndReferenceSummary)
 {
     ProjectDashboardWidget widget;
 
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_001.tif")},
-                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_002.tif")}});
+    const QString image0 = QStringLiteral("E:/data/img_001.tif");
+    const QString image1 = QStringLiteral("E:/data/img_002.tif");
+    QJsonObject projectFiles = makeCanonicalTriangulationMeta({{image0, makeCamera(0.0, 0.0, 0.0)}});
+    QJsonArray images = projectFiles.value(QStringLiteral("images")).toArray();
+    images.append(QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("dashboard-widget-image-1")},
+                              {QStringLiteral("path"), image1},
+                              {QStringLiteral("samples"), 1024},
+                              {QStringLiteral("lines"), 768}});
+    projectFiles.insert(QStringLiteral("images"), images);
 
     QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
+    meta[QStringLiteral("project_files")] = projectFiles;
     meta[QStringLiteral("image_match_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/img_001.tif")},
                                {QStringLiteral("output"), QStringLiteral("img_001.pimatch")}}};
@@ -10736,7 +11062,7 @@ TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCamer
         source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"), dialogStart);
     ASSERT_GT(workflowStart, dialogStart);
     const QString dialogBody = source.mid(dialogStart, workflowStart - dialogStart);
-    EXPECT_TRUE(dialogBody.contains(QStringLiteral("getCamerasForImages(images, &hasAllReferenceCameras)")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("getReferenceCameraGeometriesForImages(images,")));
     EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.setReferencePreselectionAvailable")))
         << "空三参数对话框要在无相机文件时禁用参考预选。";
 
@@ -10749,7 +11075,7 @@ TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCamer
     ASSERT_GT(helperEnd, helperStart);
     const QString helperBody = source.mid(helperStart, helperEnd - helperStart);
     EXPECT_TRUE(helperBody.contains(QStringLiteral("settings[QStringLiteral(\"reference_preselection\")] = false")));
-    EXPECT_TRUE(helperBody.contains(QStringLiteral("referenceCamerasForMode")))
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("referenceCameraGeometriesForMode")))
         << "后端启动前也要按用户选择的位姿来源重新检查相机，不能只依赖 UI。";
     EXPECT_TRUE(helperBody.contains(QStringLiteral("参考预选已关闭")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose_source")));
@@ -10880,7 +11206,7 @@ TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhen
 
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("reuseExistingMatches")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality && reuseExistingMatches)")));
-    EXPECT_TRUE(callbackBody.contains(QStringLiteral("atProgressFinished(false)")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("finishTask(task_context, false)")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("return;")));
     EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality && reuseExistingMatches)")),
               callbackBody.indexOf(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
@@ -10916,8 +11242,9 @@ TEST(AerialTriangulationWorkflowTest, PreflightScansMatchCatalogOnceAndReportsFi
         << "Upstream inspection must not parse the same match directory twice.";
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("catalogConfig.progressCallback = progressCallback")));
     EXPECT_TRUE(source.contains(QStringLiteral("检查上游匹配索引 %1/%2")));
-    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::tasks::postGuarded(pmGuard")))
-        << "Worker progress must be delivered to ProjectManager on its owning thread.";
+    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::tasks::postGuarded(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("task_guard")))
+        << "Worker progress must be delivered through the task orchestrator on its owning thread.";
 }
 
 TEST(AerialTriangulationWorkflowTest, DoesNotAutoRematchWhenPrerequisitesArePresent)
@@ -11087,26 +11414,32 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
 {
     const QString mainWindowSource =
         readProjectSourceFile(QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
-    const QString projectManagerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectBundleAdjustController.cpp"));
     const QString bundleAdjustHeader =
         readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustOptions.h"));
     const QString bundleAdjustSource =
         readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustPlaMatrix.cpp"));
     const QString serviceSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
+    const QString executionSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/support/ProjectBundleAdjustExecution.cpp"));
     ASSERT_FALSE(mainWindowSource.isEmpty());
-    ASSERT_FALSE(projectManagerSource.isEmpty());
+    ASSERT_FALSE(controllerSource.isEmpty());
     ASSERT_FALSE(bundleAdjustHeader.isEmpty());
     ASSERT_FALSE(bundleAdjustSource.isEmpty());
     ASSERT_FALSE(serviceSource.isEmpty());
+    ASSERT_FALSE(executionSource.isEmpty());
 
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("正在取消空三/光束法平差")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("std::make_shared<std::atomic<bool>>(false)")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("opts.baOpt.cancelFlag = cancelFlag")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("opts.baOpt.progressCallback")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("光束法平差优化中")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("emit self->atProgressFinished")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("std::make_shared<std::atomic<bool>>(false)")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.cancelFlag = _taskContext.cancelFlag")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.progressCallback")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("光束法平差优化中")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("completeOnce")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("executionResult.serviceResult.errorMessage")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("!detail.trimmed().isEmpty()")));
+    EXPECT_TRUE(executionSource.contains(QStringLiteral("firstShardReadError")));
     EXPECT_TRUE(bundleAdjustHeader.contains(QStringLiteral("std::shared_ptr<std::atomic<bool>> cancelFlag")));
     EXPECT_TRUE(bundleAdjustHeader.contains(QStringLiteral("progressCallback")));
     EXPECT_TRUE(bundleAdjustSource.contains(QStringLiteral("isCancelled(options)")));
@@ -11723,8 +12056,8 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
     const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
 
-    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
 
     const std::vector<std::array<double, 3>> points = {{3.0, -1.0, 35.0}, {4.0, 0.5, 40.0}, {5.0, 1.2, 45.0}};
 
@@ -11755,12 +12088,7 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
         {makeVerifiedPair(image0Path, image1Path, matchedPoints0, matchedPoints1, featureIds0, featureIds1)}, false);
     ASSERT_TRUE(writeResult.success) << writeResult.errorMessage.toStdString();
 
-    QJsonArray images;
-    images.append(buildImageEntry(image0Path, camera0));
-    images.append(buildImageEntry(image1Path, camera1));
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
+    QJsonObject meta = makeCanonicalTriangulationMeta({{image0Path, camera0}, {image1Path, camera1}});
     meta[QStringLiteral("image_match_results")] = imageMatchResultRecords(repository, {image0Path, image1Path});
 
     xjw::core::project::TriangulationServiceOptions options;
@@ -11801,9 +12129,9 @@ TEST(TriangulationServiceTest, UsesBinaryShardFeatureIdsForMultiViewTracks)
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
     const QString image2Path = QDir(tempDir.path()).filePath(QStringLiteral("3.jpg"));
 
-    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::FramePinholeCamera camera2 = makeCamera(16.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
     const std::array<double, 3> point = {6.0, 0.5, 36.0};
 
     double u0 = 0.0;
@@ -11823,10 +12151,8 @@ TEST(TriangulationServiceTest, UsesBinaryShardFeatureIdsForMultiViewTracks)
     const auto writeResult = repository.writePairs(pairs, false);
     ASSERT_TRUE(writeResult.success) << writeResult.errorMessage.toStdString();
 
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{buildImageEntry(image0Path, camera0),
-                                                buildImageEntry(image1Path, camera1),
-                                                buildImageEntry(image2Path, camera2)};
+    QJsonObject meta =
+        makeCanonicalTriangulationMeta({{image0Path, camera0}, {image1Path, camera1}, {image2Path, camera2}});
     meta[QStringLiteral("image_match_results")] =
         imageMatchResultRecords(repository, {image0Path, image1Path, image2Path});
 
@@ -12937,19 +13263,21 @@ TEST(DataTreeWidgetTest, ShowsAlignedPhotoRatioAndHidesEmptySections)
 {
     DataTreeWidget tree;
 
-    QJsonObject alignedCamera;
-    alignedCamera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
-    alignedCamera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const QString image0Path = QStringLiteral("/tmp/images/image_001.jpg");
+    QJsonObject canonicalCameraMeta = makeCanonicalTriangulationMeta({{image0Path, makeCamera(0.0, 0.0, 0.0)}});
+    QJsonArray images = canonicalCameraMeta.value(QStringLiteral("images")).toArray();
 
-    QJsonObject image0;
-    image0[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_001.jpg");
-    image0[QStringLiteral("camera")] = alignedCamera;
+    const QJsonObject image1{{QStringLiteral("image_uuid"), QStringLiteral("alignment-image-1")},
+                             {QStringLiteral("path"), QStringLiteral("/tmp/images/image_002.jpg")},
+                             {QStringLiteral("samples"), 1024},
+                             {QStringLiteral("lines"), 768}};
 
-    QJsonObject image1;
-    image1[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_002.jpg");
-
-    QJsonObject image2;
-    image2[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_003.jpg");
+    const QJsonObject image2{{QStringLiteral("image_uuid"), QStringLiteral("alignment-image-2")},
+                             {QStringLiteral("path"), QStringLiteral("/tmp/images/image_003.jpg")},
+                             {QStringLiteral("samples"), 1024},
+                             {QStringLiteral("lines"), 768}};
+    images.append(image1);
+    images.append(image2);
 
     QJsonObject atRecord;
     atRecord[QStringLiteral("sparse_point_count")] = 1873;
@@ -12960,8 +13288,8 @@ TEST(DataTreeWidgetTest, ShowsAlignedPhotoRatioAndHidesEmptySections)
     QJsonObject reportRecord;
     reportRecord[QStringLiteral("path")] = QStringLiteral("/tmp/reports/quality.json");
 
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{image0, image1, image2};
+    QJsonObject meta = canonicalCameraMeta;
+    meta[QStringLiteral("images")] = images;
     meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{atRecord};
     meta[QStringLiteral("depth_map_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("result_type"), QStringLiteral("mvs_depth")}}};
@@ -13211,44 +13539,55 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
     }
 }
 
-TEST(TiePointResultIntegrationTest, ProjectManagerRoutesTiePointDeletionToDedicatedService)
+TEST(TiePointResultIntegrationTest, ResourceServiceRoutesTiePointDeletionToDedicatedCoordinator)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
+    const QString resourceService =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.cpp"));
+    const QString coordinator =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupCoordinator.cpp"));
+    ASSERT_FALSE(resourceService.isEmpty());
+    ASSERT_FALSE(coordinator.isEmpty());
 
-    const int methodStart = source.indexOf(QStringLiteral("void ProjectManager::deleteGeneratedData"));
-    const int methodEnd = source.indexOf(QStringLiteral("void ProjectManager::packResource"), methodStart);
+    const int methodStart = resourceService.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
+    const int methodEnd = resourceService.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::importReferenceDataset"), methodStart);
     ASSERT_GE(methodStart, 0);
     ASSERT_GT(methodEnd, methodStart);
-    const QString method = source.mid(methodStart, methodEnd - methodStart);
-    EXPECT_TRUE(method.contains(QStringLiteral("ProjectTiePointResultService::deleteAll")));
-    EXPECT_TRUE(method.contains(QStringLiteral("prepareGeneratedDataCleanup")));
-    EXPECT_TRUE(method.contains(QStringLiteral("runGuardedWithOutcome")));
-    EXPECT_TRUE(method.contains(QStringLiteral("executePreparedCleanup")));
-    EXPECT_TRUE(method.contains(QStringLiteral("finalizePreparedCleanup")));
-    EXPECT_TRUE(method.contains(QStringLiteral("_resourceCleanupFuture =")));
-    EXPECT_TRUE(method.contains(QStringLiteral("requestWidget->setEnabled(false)")));
-    EXPECT_TRUE(method.contains(QStringLiteral("backgroundTaskProgressChanged(taskId, 0, 0)")));
-    EXPECT_FALSE(method.contains(QStringLiteral("cleanupGeneratedData(_projectData")));
-    const int finalizeIndex = method.lastIndexOf(QStringLiteral("finalizePreparedCleanup"));
-    const int unlockIndex = method.indexOf(QStringLiteral("_resourceCleanupRunning = false"), finalizeIndex);
-    EXPECT_GE(finalizeIndex, 0);
-    EXPECT_GT(unlockIndex, finalizeIndex);
+    const QString method = resourceService.mid(methodStart, methodEnd - methodStart);
+    EXPECT_TRUE(method.contains(QStringLiteral("_cleanup->rejectLifecycleChange(QStringLiteral(\"删除数据\"))")));
+    EXPECT_TRUE(method.contains(QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
+    EXPECT_FALSE(method.contains(QStringLiteral("ProjectTiePointResultService")));
+    EXPECT_FALSE(method.contains(QStringLiteral("cleanupGeneratedData")));
+
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("ProjectTiePointResultService::deleteAll")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("prepareGeneratedDataCleanup")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("runGuardedWithOutcome")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("executePreparedCleanup")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("finalizePreparedCleanup")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("_requestWidget->setEnabled(false)")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("emit progressChanged(_taskId, 0, 0)")));
 }
 
-TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAndManagerDestruction)
+TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAndContainerDestruction)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString lifecycle =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectLifecycleService.cpp"));
+    const QString coordinator =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupCoordinator.cpp"));
     const QString mainWindow = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(lifecycle.isEmpty());
+    ASSERT_FALSE(coordinator.isEmpty());
     ASSERT_FALSE(mainWindow.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QFuture<void> _resourceCleanupFuture")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_resourceCleanupFuture.waitForFinished()")));
-    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_projectManager->waitForResourceCleanup()")));
-    EXPECT_GE(source.count(QStringLiteral("rejectLifecycleChangeDuringResourceCleanup(")), 8);
+    EXPECT_TRUE(coordinator.contains(
+        QStringLiteral("ProjectResourceCleanupCoordinator::~ProjectResourceCleanupCoordinator()")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("waitForFinished();")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("_future.waitForFinished();")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("_session->tryBeginOperation(_operationName)")));
+    EXPECT_TRUE(coordinator.contains(QStringLiteral("_session->endOperation(_operationName)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_projectServices->cleanup().waitForFinished()")));
+    EXPECT_TRUE(lifecycle.contains(QStringLiteral("return _cleanup && _cleanup->rejectLifecycleChange(operation);")));
     for (const QString& operation : {QStringLiteral("新建项目"),
                                      QStringLiteral("打开项目"),
                                      QStringLiteral("保存项目"),
@@ -13258,21 +13597,54 @@ TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAnd
                                      QStringLiteral("删除 Chunk"),
                                      QStringLiteral("切换 Chunk")})
     {
-        EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\"%1\")").arg(operation))) << qPrintable(operation);
+        EXPECT_TRUE(lifecycle.contains(
+            QStringLiteral("rejectLifecycleChange(QStringLiteral(\"%1\"))").arg(operation)))
+            << qPrintable(operation);
     }
 }
 
-TEST(TiePointResultIntegrationTest, PortableExportGuardsGeneratedDataDeletionAndManagerDestruction)
+TEST(TiePointResultIntegrationTest, PortableExportGuardsGeneratedDataDeletionAndContainerDestruction)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-    const int methodStart = source.indexOf(QStringLiteral("void ProjectManager::deleteGeneratedData"));
-    const int methodEnd = source.indexOf(QStringLiteral("void ProjectManager::packResource"), methodStart);
+    const QString lifecycle =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectLifecycleService.cpp"));
+    const QString resourceService =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.cpp"));
+    const QString coordinator =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupCoordinator.cpp"));
+    ASSERT_FALSE(lifecycle.isEmpty());
+    ASSERT_FALSE(resourceService.isEmpty());
+    ASSERT_FALSE(coordinator.isEmpty());
+    const int exportStart = lifecycle.indexOf(QStringLiteral("bool ProjectLifecycleService::startPortableExport"));
+    const int exportEnd = lifecycle.indexOf(QStringLiteral("void ProjectLifecycleService::closeProject"), exportStart);
+    ASSERT_GE(exportStart, 0);
+    ASSERT_GT(exportEnd, exportStart);
+    const QString exportMethod = lifecycle.mid(exportStart, exportEnd - exportStart);
+    EXPECT_TRUE(exportMethod.contains(
+        QStringLiteral("rejectLifecycleChange(QStringLiteral(\"导出项目\"))")));
+    EXPECT_TRUE(exportMethod.contains(QStringLiteral("beginOperation(QStringLiteral(\"导出项目\"))")));
+    EXPECT_TRUE(exportMethod.contains(QStringLiteral("exportPortableProjectAsync(outputPath, &error)")));
+
+    const int deleteStart = resourceService.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
+    const int deleteEnd = resourceService.indexOf(
+        QStringLiteral("OperationResult ProjectResourceService::importReferenceDataset"), deleteStart);
+    ASSERT_GE(deleteStart, 0);
+    ASSERT_GT(deleteEnd, deleteStart);
+    const QString deleteMethod = resourceService.mid(deleteStart, deleteEnd - deleteStart);
+    EXPECT_TRUE(deleteMethod.contains(
+        QStringLiteral("_cleanup->rejectLifecycleChange(QStringLiteral(\"删除数据\"))")));
+    EXPECT_TRUE(deleteMethod.contains(
+        QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
+
+    const int methodStart =
+        coordinator.indexOf(QStringLiteral("bool ProjectResourceCleanupCoordinator::deleteGeneratedData"));
+    const int methodEnd =
+        coordinator.indexOf(QStringLiteral("void ProjectResourceCleanupCoordinator::waitForFinished"), methodStart);
     ASSERT_GE(methodStart, 0);
     ASSERT_GT(methodEnd, methodStart);
-    const QString method = source.mid(methodStart, methodEnd - methodStart);
-    const QString guard = QStringLiteral("rejectLifecycleChangeDuringResourceCleanup(QStringLiteral(\"删除数据\"))");
-    const int confirmation = method.indexOf(QStringLiteral("QMessageBox::question"));
+    const QString method = coordinator.mid(methodStart, methodEnd - methodStart);
+    const QString guard = QStringLiteral("rejectLifecycleChange(QStringLiteral(\"删除数据\"))");
+    const int confirmation = method.indexOf(QStringLiteral("question"));
     const int firstGuard = method.indexOf(guard);
     const int secondGuard = method.indexOf(guard, firstGuard + guard.size());
     ASSERT_GE(confirmation, 0);
@@ -13295,9 +13667,9 @@ TEST(TiePointResultIntegrationTest, PortableExportGuardsGeneratedDataDeletionAnd
     ASSERT_TRUE(project->addImages({imagePath}));
     QString error;
     ASSERT_TRUE(project->saveProject(&error)) << qPrintable(error);
-    auto manager = std::make_unique<ProjectManager>(project.get(), nullptr);
-    ASSERT_TRUE(project->exportPortableProjectAsync(outputPath, &error)) << qPrintable(error);
-    manager.reset();
+    auto services = std::make_unique<xjw::gui::project::ProjectServiceContainer>(project.get(), nullptr);
+    ASSERT_TRUE(services->lifecycle().startPortableExport(outputPath, &error)) << qPrintable(error);
+    services.reset();
     project.reset();
     EXPECT_TRUE(QFileInfo::exists(outputPath));
 }
@@ -14304,20 +14676,52 @@ TEST(ProjectReferenceTerrainBaTest, AppliesReferenceDemAsBundleAdjustSoftPrior)
     EXPECT_TRUE(tracks[1].laserPlaneConstraints.empty());
 }
 
-TEST(ProjectReferenceTerrainBaTest, MenuWorkflowStartsBundleAdjustWithReferenceTerrainSettings)
+TEST(ProjectReferenceTerrainBaTest, MenuWorkflowRoutesReferenceTerrainBundleAdjustThroughNarrowServices)
 {
-    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(managerSource.isEmpty());
+    const QString menu = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString resources =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceService.cpp"));
+    const QString container =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectServiceContainer.cpp"));
+    const QString orchestrator =
+        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.cpp"));
+    ASSERT_FALSE(menu.isEmpty());
+    ASSERT_FALSE(resources.isEmpty());
+    ASSERT_FALSE(container.isEmpty());
+    ASSERT_FALSE(orchestrator.isEmpty());
 
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("void ProjectManager::prepareReferenceTerrainBundleAdjust()")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("firstReferenceDemPriorPath")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("firstReferenceLaserPriorPath")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("enable_reference_terrain_prior")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("reference_terrain_dem_path")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("enable_laser_constraints")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("laser_constraint_cloud_path")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("laser_missing_normals_as_height_planes")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("startBundleAdjustAsync(images, outputDir")));
+    EXPECT_TRUE(menu.contains(QStringLiteral("referenceTerrainBundleAdjustAction()")));
+    EXPECT_TRUE(menu.contains(QStringLiteral("_resources->prepareReferenceTerrainBundleAdjust()")));
+    EXPECT_FALSE(menu.contains(QStringLiteral("startBundleAdjustAsync")));
+
+    const int prepareStart = resources.indexOf(
+        QStringLiteral("void ProjectResourceService::prepareReferenceTerrainBundleAdjust"));
+    const int prepareEnd = resources.indexOf(
+        QStringLiteral("void ProjectResourceService::refreshReconstructionQualityReport"), prepareStart);
+    ASSERT_GE(prepareStart, 0);
+    ASSERT_GT(prepareEnd, prepareStart);
+    const QString prepare = resources.mid(prepareStart, prepareEnd - prepareStart);
+    EXPECT_TRUE(prepare.contains(QStringLiteral("firstReferenceDemPriorPath")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("firstReferenceLaserPriorPath")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("enable_reference_terrain_prior")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("reference_terrain_dem_path")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("enable_laser_constraints")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("laser_constraint_cloud_path")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral("laser_missing_normals_as_height_planes")));
+    EXPECT_TRUE(prepare.contains(
+        QStringLiteral("_bundleAdjustLauncher(images, output_dir, qMax(1, QThread::idealThreadCount()), false, extra)")));
+
+    EXPECT_TRUE(container.contains(
+        QStringLiteral("_tasks->startBundleAdjustAsync(images, outputDir, threads, dryRun, extraSettings)")));
+    const int launchStart = orchestrator.indexOf(
+        QStringLiteral("bool ProjectTaskOrchestrator::startBundleAdjustAsync"));
+    const int launchEnd = orchestrator.indexOf(
+        QStringLiteral("bool ProjectTaskOrchestrator::acceptBundleAdjustPreview"), launchStart);
+    ASSERT_GE(launchStart, 0);
+    ASSERT_GT(launchEnd, launchStart);
+    const QString launch = orchestrator.mid(launchStart, launchEnd - launchStart);
+    EXPECT_TRUE(launch.contains(
+        QStringLiteral("_bundleAdjust->startAsync(images, outputDir, threads, dryRun, extraSettings)")));
 }
 
 TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjectMetadata)
@@ -15476,6 +15880,89 @@ TEST(GeospatialRuntimePathsTest, FindsProjDatabaseInVcpkgBuildTree)
     EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(proj_directory));
 }
 
+TEST(GeospatialRuntimePathsTest, FindsSeparateSourceDependenciesFromBuildCache)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString application_directory = temporary_directory.filePath(QStringLiteral("main/bin"));
+    const QString proj_directory =
+        temporary_directory.filePath(QStringLiteral("separate deps/vcpkg_installed/x64-linux-dynamic/share/proj"));
+    const QString gdal_directory = temporary_directory.filePath(QStringLiteral("separate deps/install/share/gdal"));
+    ASSERT_TRUE(QDir().mkpath(application_directory));
+    ASSERT_TRUE(QDir().mkpath(proj_directory));
+    ASSERT_TRUE(QDir().mkpath(gdal_directory));
+    QFile proj_database(QDir(proj_directory).filePath(QStringLiteral("proj.db")));
+    ASSERT_TRUE(proj_database.open(QIODevice::WriteOnly));
+    proj_database.close();
+    QFile gdal_schema(QDir(gdal_directory).filePath(QStringLiteral("gdalvrt.xsd")));
+    ASSERT_TRUE(gdal_schema.open(QIODevice::WriteOnly));
+    gdal_schema.close();
+
+    QFile cache(temporary_directory.filePath(QStringLiteral("main/CMakeCache.txt")));
+    ASSERT_TRUE(cache.open(QIODevice::WriteOnly));
+    const QByteArray cache_contents = "// Unrelated entries and comments must be ignored\n"
+                                      "UNRELATED:STRING=unused\n"
+                                      "VCPKG_INSTALLED_DIR:PATH=../separate deps/vcpkg_installed\n"
+                                      "PLASCAN_SOURCE_DEPENDENCY_PREFIX:PATH=" +
+                                      temporary_directory.filePath(QStringLiteral("separate deps/install")).toUtf8() +
+                                      "\n";
+    ASSERT_EQ(cache.write(cache_contents), cache_contents.size());
+    cache.close();
+
+    const auto paths = xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, QProcessEnvironment());
+    EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(proj_directory));
+    EXPECT_EQ(QDir::cleanPath(paths.gdalData), QDir::cleanPath(gdal_directory));
+}
+
+TEST(GeospatialRuntimePathsTest, ExplicitEnvironmentAndInstalledLayoutTakePriorityOverCache)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString application_directory = temporary_directory.filePath(QStringLiteral("bin"));
+    const QString installed_directory = temporary_directory.filePath(QStringLiteral("share/proj"));
+    const QString configured_directory = temporary_directory.filePath(QStringLiteral("configured/share/proj"));
+    const QString environment_directory = temporary_directory.filePath(QStringLiteral("environment"));
+    ASSERT_TRUE(QDir().mkpath(application_directory));
+    for (const QString& directory : {installed_directory, configured_directory, environment_directory})
+    {
+        ASSERT_TRUE(QDir().mkpath(directory));
+        QFile database(QDir(directory).filePath(QStringLiteral("proj.db")));
+        ASSERT_TRUE(database.open(QIODevice::WriteOnly));
+    }
+    QFile cache(temporary_directory.filePath(QStringLiteral("CMakeCache.txt")));
+    ASSERT_TRUE(cache.open(QIODevice::WriteOnly));
+    ASSERT_GT(cache.write("PLASCAN_SOURCE_DEPENDENCY_PREFIX:PATH=configured\n"), 0);
+    cache.close();
+
+    QProcessEnvironment environment;
+    environment.insert(QStringLiteral("PROJ_DATA"), environment_directory);
+    auto paths = xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, environment);
+    EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(environment_directory));
+    environment.insert(QStringLiteral("PROJ_DATA"), QStringLiteral("/nonexistent/plascan/proj"));
+    paths = xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, environment);
+    EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(installed_directory));
+    ASSERT_TRUE(cache.remove());
+    paths = xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, QProcessEnvironment());
+    EXPECT_EQ(QDir::cleanPath(paths.projData), QDir::cleanPath(installed_directory));
+}
+
+TEST(GeospatialRuntimePathsTest, RejectsMissingDataAndDirectoriesNamedLikeRequiredFiles)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString application_directory = temporary_directory.filePath(QStringLiteral("bin"));
+    ASSERT_TRUE(QDir().mkpath(application_directory));
+    ASSERT_TRUE(QDir().mkpath(temporary_directory.filePath(QStringLiteral("share/proj/proj.db"))));
+    QFile cache(temporary_directory.filePath(QStringLiteral("CMakeCache.txt")));
+    ASSERT_TRUE(cache.open(QIODevice::WriteOnly));
+    ASSERT_GT(cache.write("VCPKG_INSTALLED_DIR:PATH=\nPLASCAN_SOURCE_DEPENDENCY_PREFIX:PATH=missing\n"), 0);
+    cache.close();
+
+    const auto paths = xjw::gui::runtime::resolveGeospatialDataPaths(application_directory, QProcessEnvironment());
+    EXPECT_TRUE(paths.projData.isEmpty());
+    EXPECT_TRUE(paths.gdalData.isEmpty());
+}
+
 namespace
 {
 
@@ -15490,17 +15977,16 @@ namespace
             return {};
         }
 
-        QJsonArray images;
+        QStringList image_paths;
         QJsonArray selected_images;
         for (int index = 0; index < static_cast<int>(scene_profiles.size()); ++index)
         {
             const QString image_path = QStringLiteral("E:/policy/image_%1.jpg").arg(index);
-            images.append(QJsonObject{{QStringLiteral("path"), image_path}});
+            image_paths.append(image_path);
             selected_images.append(image_path);
         }
 
-        QJsonObject metadata;
-        metadata[QStringLiteral("images")] = images;
+        QJsonObject metadata = makeCanonicalDepthMetadata(image_paths);
         const QJsonObject aerial_geometry{{QStringLiteral("detected"), aerial_block_detected}};
         const QJsonObject sfm_diagnostics{{QStringLiteral("aerial_block_geometry"), aerial_geometry}};
         const QJsonObject at_record{

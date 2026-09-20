@@ -5,8 +5,11 @@
 #include <cstdint>
 #include <string>
 
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+
 namespace xjw
 {
+
 
     /**
      * @brief BA 求解后端。

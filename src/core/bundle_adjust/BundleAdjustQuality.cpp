@@ -79,7 +79,7 @@ namespace xjw::detail
             return stats;
         }
 
-        double computedLaserRange(const FramePinholeCamera& camera,
+        double computedLaserRange(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                   const std::array<double, 3>& leverArmCameraMeters,
                                   const std::array<double, 3>& point)
         {
@@ -101,10 +101,11 @@ namespace xjw::detail
             return std::sqrt(dx * dx + dy * dy + dz * dz);
         }
 
-        void updateLaserRangeStats(const std::vector<FramePinholeCamera>& inputCameras,
-                                   const std::vector<FramePinholeCamera>& refinedCameras,
-                                   const BAOptions& options,
-                                   BAResult* result)
+        void updateLaserRangeStats(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& inputCameras,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& refinedCameras,
+            const BAOptions& options,
+            BAResult* result)
         {
             if (!options.enableLaserRangeConstraints)
             {
@@ -261,11 +262,12 @@ namespace xjw::detail
             return stats;
         }
 
-        void updateConstraintStats(const std::vector<FramePinholeCamera>& inputCameras,
-                                   const std::vector<FramePinholeCamera>& refinedCameras,
-                                   const std::vector<BATrack>& tracks,
-                                   const BAOptions& options,
-                                   BAResult* result)
+        void updateConstraintStats(
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& inputCameras,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& refinedCameras,
+            const std::vector<BATrack>& tracks,
+            const BAOptions& options,
+            BAResult* result)
         {
             updateLaserRangeStats(inputCameras, refinedCameras, options, result);
             if (options.enableLaserPlaneConstraints)
@@ -298,7 +300,7 @@ namespace xjw::detail
             }
         }
 
-        double strictTrackRms(const std::vector<FramePinholeCamera>& cameras,
+        double strictTrackRms(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
                               const BATrack& track,
                               const std::array<double, 3>& point,
                               bool whitenByMeasurementScale)
@@ -399,10 +401,11 @@ namespace xjw::detail
         return std::max(threshold, medianFactor * median);
     }
 
-    void finalizeBundleAdjustResult(const std::vector<FramePinholeCamera>& inputCameras,
-                                    const std::vector<BATrack>& tracks,
-                                    const BAOptions& options,
-                                    BAResult* result)
+    void finalizeBundleAdjustResult(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& inputCameras,
+        const std::vector<BATrack>& tracks,
+        const BAOptions& options,
+        BAResult* result)
     {
         if (!result)
         {
@@ -414,7 +417,7 @@ namespace xjw::detail
         {
             result->points.resize(tracks.size());
         }
-        const std::vector<FramePinholeCamera>& refinedCameras =
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& refinedCameras =
             result->refinedCameras.size() == inputCameras.size() ? result->refinedCameras : inputCameras;
         constexpr bool useMeasurementScale = true;
 

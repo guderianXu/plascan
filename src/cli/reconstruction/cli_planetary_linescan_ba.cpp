@@ -3,6 +3,7 @@
 
 #include "IsisControlNetworkPvl.h"
 #include "PlanetaryLaserJson.h"
+#include "PlanetaryLineScanIsdIO.h"
 #include "PlanetaryLineScanBaCliOutput.h"
 #include "PlanetaryLineScanBundleAdjust.h"
 
@@ -191,11 +192,19 @@ int main(int argc, char* argv[])
     {
         xjw::lidar::PlanetaryLineScanBaCamera camera;
         camera.serialNumber = serialNumbers[index];
+        xjw::camera_models::linescan::PlanetaryLineScanIsdImport imported;
         std::string error;
-        if (!camera.model.loadFromIsd(isdPaths[index], &error))
+        if (!xjw::camera_models::linescan::importPlanetaryLineScanIsd(
+                isdPaths[index],
+                xjw::camera_core::CameraDefinitionId("linescan-definition-" + std::to_string(index)),
+                xjw::camera_core::CameraInstanceId("linescan-instance-" + std::to_string(index)),
+                xjw::camera_core::ImageId(serialNumbers[index]),
+                &imported,
+                &error))
         {
             cli::fatal("failed to load line-scan ISD " + isdPaths[index] + ": " + error, cli::EXIT_IO_ERR);
         }
+        camera.instance = std::move(imported.instance);
         cameras.push_back(std::move(camera));
     }
 

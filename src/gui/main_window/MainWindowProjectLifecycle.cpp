@@ -12,7 +12,8 @@
 #include "ProjectDashboardWidget.h"
 #include "project/ProjectSessionModel.h"
 #include "ProjectLifecyclePresenter.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectServiceContainer.h"
+#include "project/services/ProjectSession.h"
 #include "ProjectUiHydrator.h"
 #include "ReferencePanelWidget.h"
 #include "reference/ProjectCameraReferenceRepository.h"
@@ -134,9 +135,9 @@ void MainWindow::onProjectOpened(const QString& plascanPath)
     {
         _photoStrip->setProjectPath(plascanPath);
     }
-    if (_projectManager)
+    if (_projectServices)
     {
-        scheduleProjectMetadataRefresh(_projectManager->coreProjectMeta());
+        scheduleProjectMetadataRefresh(_projectServices->session().coreMetadata());
     }
 
     if (_config && _mainMenu)
@@ -145,12 +146,12 @@ void MainWindow::onProjectOpened(const QString& plascanPath)
         _mainMenu->setRecentProjects(_config->recentProjects()->recentProjects());
     }
 
-    if (!_projectManager)
+    if (!_projectServices)
     {
         return;
     }
 
-    const QJsonObject ui = _projectManager->loadUiSettings();
+    const QJsonObject ui = _projectServices->session().loadUiSettings();
     applyUiSettings(ui);
 }
 
@@ -357,13 +358,13 @@ void MainWindow::applyUiSettings(const QJsonObject& ui)
         const QString imagePath = projectImagePathForStateKey(stateKey);
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
-            const auto session =
-                _projectManager ? _projectManager->currentSessionContext() : xjw::gui::project::ProjectSessionContext{};
+            const auto session = _projectServices ? _projectServices->session().context()
+                                                  : xjw::gui::project::ProjectSessionContext{};
             QTimer::singleShot(100,
                                this,
                                [this, imagePath, session]()
                                {
-                                   if (!_projectManager || !_projectManager->isCurrentSession(session))
+                                   if (!_projectServices || !_projectServices->session().isCurrent(session))
                                    {
                                        return;
                                    }
@@ -394,13 +395,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
 
-    const bool hasProject = _projectManager && !_projectManager->currentProjectPath().trimmed().isEmpty();
+    const bool hasProject = _projectServices && !_projectServices->session().projectPath().trimmed().isEmpty();
     if (hasProject)
     {
         persistCurrentUiSettings();
     }
 
-    if (hasProject && _projectManager->isDirty())
+    if (hasProject && _projectServices->session().isDirty())
     {
         auto btn = QMessageBox::warning(this,
                                         tr("未保存的更改"),
@@ -422,7 +423,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
         else if (btn == QMessageBox::Discard)
         {
-            _projectManager->discardTemporaryMeta();
+            _projectServices->session().discardTemporaryMetadata();
         }
     }
 

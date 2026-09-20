@@ -23,7 +23,8 @@ cv::Mat cameraToWorldMatrix(const std::array<double, 9> &rotation)
 
 } // namespace
 
-cv::Mat openCvCameraMatrix(const FramePinholeCamera &camera, bool positiveDepthConvention)
+cv::Mat openCvCameraMatrix(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                           bool positiveDepthConvention)
 {
     return openCvCameraMatrix(camera.focalX(),
                               camera.focalY(),
@@ -92,7 +93,7 @@ cv::Mat openCvTvecFromCameraPose(
     return translation;
 }
 
-cv::Mat openCvProjectionMatrix(const FramePinholeCamera &camera)
+cv::Mat openCvProjectionMatrix(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
 {
     const cv::Mat cameraToWorld = cameraToWorldMatrix(camera.cameraToWorldRotation());
     const cv::Mat worldToCamera = cameraToWorld.t();

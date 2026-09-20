@@ -7,8 +7,12 @@
 #include <QPointer>
 
 class DialogSettingStore;
-class ProjectManager;
 class QMainWindow;
+
+namespace xjw::gui::project
+{
+class ProjectSession;
+}
 
 // Owns the feature-overlay dialog and its project-scoped persistence. Keeping
 // this workflow separate prevents menu binding from also becoming a settings
@@ -21,7 +25,7 @@ public:
     explicit FeatureVisualizationController(QMainWindow *mainWindow,
                                             QObject *parent = nullptr);
 
-    void setProjectManager(ProjectManager *projectManager);
+    void setProjectSession(xjw::gui::project::ProjectSession *session);
 
 public slots:
     void openDialog();
@@ -35,6 +39,6 @@ private:
     QJsonObject loadSettings(const QJsonObject &fallback = QJsonObject());
 
     QPointer<QMainWindow> _mainWindow;
-    ProjectManager *_projectManager = nullptr;
+    xjw::gui::project::ProjectSession *_session = nullptr;
     DialogSettingStore *_settingStore = nullptr;
 };

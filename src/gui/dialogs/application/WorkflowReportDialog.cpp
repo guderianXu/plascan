@@ -910,37 +910,54 @@ QWidget *WorkflowReportDialog::buildAtReportPage(const QJsonObject &r)
                                "border:1px solid #e0e0e0;font-weight:bold;}");
 
         // 用于创建携带数值 UserRole 的 item（便于数字列排序）
-        auto makeNumItem = [](double v, const QString &display) -> QTableWidgetItem* {
+        auto makeNumItem = [](double v, const QString& display) -> QTableWidgetItem*
+        {
             auto *it = new QTableWidgetItem(display);
             it->setData(Qt::UserRole, v);
             return it;
         };
 
-        for (int i = 0; i < camCompArr.size(); ++i) {
-            const QJsonObject &cam = camCompArr[i].toObject();
-            const bool   hadBefore = cam.value(QStringLiteral("had_before")).toBool();
-            const QString name     = cam.value(QStringLiteral("name")).toString();
-            const double fuB = cam.value(QStringLiteral("fu_before")).toDouble();
-            const double fuA = cam.value(QStringLiteral("fu_after")).toDouble();
+        for (int i = 0; i < camCompArr.size(); ++i)
+        {
+            const QJsonObject& cam = camCompArr[i].toObject();
+            const bool hadBefore = cam.value(QStringLiteral("had_before")).toBool();
+            const QString name = cam.value(QStringLiteral("name")).toString();
+            const QJsonObject initialCamera = cam.value(QStringLiteral("initial_camera")).toObject();
+            const QJsonObject adjustedCamera = cam.value(QStringLiteral("adjusted_camera")).toObject();
+            const auto pixelParameter = [](const QJsonObject& camera, const QString& key)
+            {
+                const double value = camera.value(key).toDouble();
+                if (camera.value(QStringLiteral("intrinsics_unit")).toString() != QStringLiteral("mm"))
+                {
+                    return value;
+                }
+                const double pitch = camera.value(QStringLiteral("pitch")).toDouble();
+                return pitch > 0.0 ? value / pitch : 0.0;
+            };
+            const double fuB = pixelParameter(initialCamera, QStringLiteral("fu"));
+            const double fuA = pixelParameter(adjustedCamera, QStringLiteral("fu"));
             const double dfu = hadBefore && fuB > 1e-6 ? (fuA - fuB) / fuB * 100.0 : 0.0;
-            const double posDelta   = cam.value(QStringLiteral("pos_delta")).toDouble(-1.0);
-            const double yawB       = cam.value(QStringLiteral("yaw_before")).toDouble();
-            const double yawA       = cam.value(QStringLiteral("yaw_after")).toDouble();
-            const double pitchB     = cam.value(QStringLiteral("pitch_before")).toDouble();
-            const double pitchA     = cam.value(QStringLiteral("pitch_after")).toDouble();
-            const double rollB      = cam.value(QStringLiteral("roll_before")).toDouble();
-            const double rollA      = cam.value(QStringLiteral("roll_after")).toDouble();
-            const double dYaw   = std::abs(yawA - yawB);
+            const double posDelta = cam.value(QStringLiteral("pos_delta")).toDouble(-1.0);
+            const double yawB = initialCamera.value(QStringLiteral("yaw_deg")).toDouble();
+            const double yawA = adjustedCamera.value(QStringLiteral("yaw_deg")).toDouble();
+            const double pitchB = initialCamera.value(QStringLiteral("pitch_deg")).toDouble();
+            const double pitchA = adjustedCamera.value(QStringLiteral("pitch_deg")).toDouble();
+            const double rollB = initialCamera.value(QStringLiteral("roll_deg")).toDouble();
+            const double rollA = adjustedCamera.value(QStringLiteral("roll_deg")).toDouble();
+            const double dYaw = std::abs(yawA - yawB);
             const double dPitch = std::abs(pitchA - pitchB);
-            const double dRoll  = std::abs(rollA - rollB);
+            const double dRoll = std::abs(rollA - rollB);
 
             ccTable->setItem(i, 0, new QTableWidgetItem(name));
             ccTable->setItem(i, 1, makeNumItem(fuB, hadBefore ? fmtNum(fuB) : QStringLiteral("—")));
             ccTable->setItem(i, 2, makeNumItem(fuA, fmtNum(fuA)));
             // Δfu% 着色：> 1% 黄色，> 3% 红色
-            auto *dfuItem = makeNumItem(std::abs(dfu), hadBefore ? QString::asprintf("%+.3f%%", dfu) : QStringLiteral("—"));
-            if (hadBefore) {
-                if (std::abs(dfu) > 3.0)      dfuItem->setForeground(QColor(200,70,60));
+            auto* dfuItem =
+                makeNumItem(std::abs(dfu), hadBefore ? QString::asprintf("%+.3f%%", dfu) : QStringLiteral("—"));
+            if (hadBefore)
+            {
+                if (std::abs(dfu) > 3.0)
+                    dfuItem->setForeground(QColor(200, 70, 60));
                 else if (std::abs(dfu) > 1.0)  dfuItem->setForeground(QColor(200,140,60));
                 else                           dfuItem->setForeground(QColor(40,160,80));
             }

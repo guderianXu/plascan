@@ -1,13 +1,11 @@
 #include "ProjectSparseReconstructionManager.h"
 
-#include "ProjectManager.h"
-#include "project/ProjectSessionModel.h"
+#include "project/services/ProjectSession.h"
+#include "project/services/ProjectUiMessageAdapter.h"
 #include "project/ProjectIO.h"
-#include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSparseWorkflow.h"
 #include "ProjectWorkflowOperations.h"
-#include "ProjectOpenGuard.h"
 #include "TriangulationService.h"
 #include "project/SparseResultQuality.h"
 #include "tasks/GuiTaskRunner.h"
@@ -17,13 +15,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QMessageBox>
-#include <QPointer>
+
+#include <utility>
 
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::core::project::findLatestAtResultIndex;
 using xjw::gui::project::mergeSparseQualityIntoRecord;
-using xjw::gui::project::projectFilesMeta;
 using xjw::core::project::resolveSparsePointContextResult;
 using xjw::gui::project::runSparsePointWorkflowResult;
 using xjw::core::project::SparsePointContext;
@@ -34,39 +31,161 @@ using xjw::gui::project::SparsePointWorkflowSpec;
 using xjw::gui::project::sparsePointWorkflowSpec;
 using xjw::core::project::writeJsonObjectFile;
 
-ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(ProjectManager *owner,
-                                                                       ProjectData *projectData,
-                                                                       QWidget *parentWidget,
-                                                                       QObject *parent)
+namespace
+{
+
+bool isCurrentTask(xjw::gui::project::ProjectSession* session,
+                   const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    return session && taskContext.cancelFlag &&
+           !taskContext.cancelFlag->load(std::memory_order_relaxed) &&
+           session->isCurrent(taskContext.session);
+}
+
+void showWarning(ProjectUiMessageAdapter* messages,
+                 QWidget* parent,
+                 const QString& title,
+                 const QString& text)
+{
+    if (messages)
+    {
+        messages->warning(parent, title, text);
+    }
+}
+
+} // namespace
+
+ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(
+    xjw::gui::project::ProjectSession *session,
+    ProjectUiMessageAdapter *messages,
+    QWidget *parentWidget,
+    TiePointResultWriter tiePointResultWriter,
+    QObject *parent)
     : QObject(parent)
-    , _owner(owner)
-    , _projectData(projectData)
+    , _session(session)
+    , _messages(messages)
     , _parentWidget(parentWidget)
+    , _tiePointResultWriter(std::move(tiePointResultWriter))
 {
 }
 
-void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObject &settings)
+void ProjectSparseReconstructionManager::setTiePointResultWriter(TiePointResultWriter tiePointResultWriter)
 {
-    if (!xjw::gui::project::requireOpenProject(
-            _projectData,
-            _parentWidget,
-            QStringLiteral("请先打开项目后再执行三角化"),
-            QStringLiteral("生成两视预览云")))
+    _tiePointResultWriter = std::move(tiePointResultWriter);
+}
+
+void ProjectSparseReconstructionManager::waitForActiveTask()
+{
+    for (QFuture<void>& future : _activeFutures)
+    {
+        if (future.isValid() && !future.isFinished())
+        {
+            future.waitForFinished();
+        }
+    }
+    _activeFutures.clear();
+    _taskReservation = false;
+}
+
+bool ProjectSparseReconstructionManager::reserveTask()
+{
+    reapFinishedFutures();
+    if (_taskReservation || hasRunningTask())
+    {
+        return false;
+    }
+    _taskReservation = true;
+    return true;
+}
+
+void ProjectSparseReconstructionManager::releaseTaskReservation()
+{
+    _taskReservation = false;
+}
+
+bool ProjectSparseReconstructionManager::hasRunningTask() const noexcept
+{
+    if (_taskReservation)
+    {
+        return true;
+    }
+    for (const QFuture<void>& future : _activeFutures)
+    {
+        if (!future.isFinished())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ProjectSparseReconstructionManager::trackFutureForTesting(QFuture<void> future)
+{
+    trackFuture(std::move(future));
+}
+
+void ProjectSparseReconstructionManager::reapFinishedFutures()
+{
+    QVector<QFuture<void>> pending;
+    pending.reserve(_activeFutures.size());
+    for (const QFuture<void>& future : _activeFutures)
+    {
+        if (!future.isFinished())
+        {
+            pending.append(future);
+        }
+    }
+    _activeFutures = std::move(pending);
+}
+
+void ProjectSparseReconstructionManager::trackFuture(QFuture<void> future)
+{
+    reapFinishedFutures();
+    _taskReservation = false;
+    _activeFutures.append(std::move(future));
+}
+
+void ProjectSparseReconstructionManager::startTriangulationAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    if (!isCurrentTask(_session, taskContext))
     {
         return;
     }
+    if (!_session->hasProject())
+    {
+        showWarning(_messages,
+                    _parentWidget,
+                    QStringLiteral("生成两视预览云"),
+                    QStringLiteral("请先打开项目后再执行三角化"));
+        if (isCurrentTask(_session, taskContext))
+        {
+            emit atProgressFinished(false);
+        }
+        return;
+    }
 
-    const QStringList selectedImages = _owner->getAllImages();
+    const QStringList selectedImages = _session ? _session->allImages() : QStringList();
     if (selectedImages.size() < 2)
     {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("生成两视预览云"),
-                             QStringLiteral("至少需要两张影像才能执行三角化"));
+        showWarning(_messages,
+                    _parentWidget,
+                    QStringLiteral("生成两视预览云"),
+                    QStringLiteral("至少需要两张影像才能执行三角化"));
+        if (isCurrentTask(_session, taskContext))
+        {
+            emit atProgressFinished(false);
+        }
         return;
     }
 
-    QJsonObject mergedMeta = projectFilesMeta(_projectData);
-    const QJsonObject runtimeMeta = _owner->currentMeta();
+    QJsonObject mergedMeta = _session->coreMetadata();
+    if (mergedMeta.value(QStringLiteral("project_files")).isObject())
+    {
+        mergedMeta = mergedMeta.value(QStringLiteral("project_files")).toObject();
+    }
+    const QJsonObject runtimeMeta = _session->metadata();
     for (auto it = runtimeMeta.begin(); it != runtimeMeta.end(); ++it)
     {
         if (it.key() != QLatin1String("images") && it.key() != QLatin1String("project_files"))
@@ -75,7 +194,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         }
     }
 
-    const auto session = _owner->currentSessionContext();
+    const auto session = taskContext.session;
     const QString projectPath = session.projectPath;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const bool overwriteExistingResult = settings.value(QStringLiteral("overwriteExistingResult")).toBool(false);
@@ -109,30 +228,41 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
     options.ignoreTwoViewTracks = settings.value(QStringLiteral("ignoreTwoView")).toBool(false);
     options.minTrackLength = settings.value(QStringLiteral("minTrackLen")).toInt(2);
 
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
     emit atProgressChanged(QStringLiteral("正在构建两视预览云..."), 10);
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
 
-    QPointer<ProjectManager> ownerGuard(_owner);
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [mergedMeta, selectedImages, options]()
         {
             return xjw::core::project::TriangulationService::run(mergedMeta, selectedImages, options);
         },
-        [selectedImages, options, ownerGuard, session](
+        [selectedImages, options, session, taskContext](
             ProjectSparseReconstructionManager *self,
             xjw::gui::tasks::TaskOutcome<xjw::core::project::TriangulationServiceResult> outcome)
         {
-            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
+            if (!isCurrentTask(self->_session, taskContext) || !taskContext.session.matches(session))
             {
                 return;
             }
 
             if (!outcome.succeeded())
             {
-                emit self->atProgressFinished(false);
-                QMessageBox::warning(self->_parentWidget,
-                                     QStringLiteral("生成两视预览云"),
-                                     outcome.errorMessage);
+                showWarning(self->_messages,
+                            self->_parentWidget,
+                            QStringLiteral("生成两视预览云"),
+                            outcome.errorMessage);
+                if (isCurrentTask(self->_session, taskContext))
+                {
+                    emit self->atProgressFinished(false);
+                }
                 return;
             }
 
@@ -140,36 +270,57 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
 
             if (!result.success)
             {
-                emit self->atProgressFinished(false);
-                QMessageBox::warning(self->_parentWidget,
-                                     QStringLiteral("生成两视预览云"),
-                                     result.errorMessage);
+                showWarning(self->_messages,
+                            self->_parentWidget,
+                            QStringLiteral("生成两视预览云"),
+                            result.errorMessage);
+                if (isCurrentTask(self->_session, taskContext))
+                {
+                    emit self->atProgressFinished(false);
+                }
                 return;
             }
-            self->finalizeTriangulationSuccess(result, selectedImages, options);
-        });
+            self->finalizeTriangulationSuccess(result, selectedImages, options, taskContext);
+        }));
 }
 
-void ProjectSparseReconstructionManager::startSparseCloudOutlierRemovalAsync(const QJsonObject &settings)
+void ProjectSparseReconstructionManager::startSparseCloudOutlierRemovalAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
-    startSparsePointWorkflow(SparsePointWorkflowKind::OutlierRemoval, settings);
+    startSparsePointWorkflow(SparsePointWorkflowKind::OutlierRemoval, settings, taskContext);
 }
 
-void ProjectSparseReconstructionManager::startSparseCloudLocalOptimAsync(const QJsonObject &settings)
+void ProjectSparseReconstructionManager::startSparseCloudLocalOptimAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
-    startSparsePointWorkflow(SparsePointWorkflowKind::LocalOptim, settings);
+    startSparsePointWorkflow(SparsePointWorkflowKind::LocalOptim, settings, taskContext);
 }
 
-void ProjectSparseReconstructionManager::startSparseCloudRefineAsync(const QJsonObject &settings)
+void ProjectSparseReconstructionManager::startSparseCloudRefineAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
-    startSparsePointWorkflow(SparsePointWorkflowKind::Refine, settings);
+    startSparsePointWorkflow(SparsePointWorkflowKind::Refine, settings, taskContext);
 }
 
 void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
     const xjw::core::project::TriangulationServiceResult &result,
     const QStringList &selectedImages,
-    const xjw::core::project::TriangulationServiceOptions &options)
+    const xjw::core::project::TriangulationServiceOptions &options,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
+    if (!_tiePointResultWriter)
+    {
+        emit atProgressFinished(false);
+        return;
+    }
+
     QJsonObject extraRecord;
     QJsonObject files;
     const QString sidecarPath = QDir(options.outputDir).filePath(QStringLiteral("sparse_cloud_points.json"));
@@ -192,13 +343,21 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
         extraRecord = mergeSparseQualityIntoRecord(extraRecord, quality);
     }
 
-    if (!_owner->replaceTiePointResult(result.sparseCloudPath,
-                                       result.exportedPointCount,
-                                       selectedImages,
-                                       options.outputDir,
-                                       extraRecord))
+    if (!_tiePointResultWriter(taskContext,
+                               result.sparseCloudPath,
+                               result.exportedPointCount,
+                               selectedImages,
+                               options.outputDir,
+                               extraRecord))
     {
-        emit atProgressFinished(false);
+        if (isCurrentTask(_session, taskContext))
+        {
+            emit atProgressFinished(false);
+        }
+        return;
+    }
+    if (!isCurrentTask(_session, taskContext))
+    {
         return;
     }
 
@@ -208,22 +367,40 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
                  .arg(result.sparseCloudPath));
 
     emit tiePointResultReady(result.sparseCloudPath, sidecarPath);
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
     emit atProgressFinished(true);
-    QMessageBox::information(_parentWidget,
-                             QStringLiteral("生成两视预览云"),
-                             QStringLiteral("两视预览云生成完成。\n候选轨迹: %1\n导出点数: %2\n输出文件: %3")
-                                 .arg(result.candidateTrackCount)
-                                 .arg(result.exportedPointCount)
-                                 .arg(result.sparseCloudPath));
+    if (_messages && isCurrentTask(_session, taskContext))
+    {
+        _messages->information(
+            _parentWidget,
+            QStringLiteral("生成两视预览云"),
+            QStringLiteral("两视预览云生成完成。\n候选轨迹: %1\n导出点数: %2\n输出文件: %3")
+                .arg(result.candidateTrackCount)
+                .arg(result.exportedPointCount)
+                .arg(result.sparseCloudPath));
+    }
 }
 
-void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWorkflowKind kind,
-                                                                  const QJsonObject &settings)
+void ProjectSparseReconstructionManager::startSparsePointWorkflow(
+    SparsePointWorkflowKind kind,
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext& taskContext)
 {
     const SparsePointWorkflowSpec spec = sparsePointWorkflowSpec(kind);
-    if (!xjw::gui::project::requireOpenProject(
-            _projectData, _parentWidget, spec.projectOpenMessage, spec.title))
+    if (!isCurrentTask(_session, taskContext))
     {
+        return;
+    }
+    if (!_session->hasProject())
+    {
+        showWarning(_messages, _parentWidget, spec.title, spec.projectOpenMessage);
+        if (isCurrentTask(_session, taskContext))
+        {
+            emit atProgressFinished(false);
+        }
         return;
     }
 
@@ -234,9 +411,14 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             settings.value(QStringLiteral("externalSparseCloudPath")).toString().trimmed());
         if (path.isEmpty() || !QFileInfo::exists(path))
         {
-            QMessageBox::warning(_parentWidget,
-                                 spec.title,
-                                 QStringLiteral("外部 PLY 点云不存在: %1").arg(path));
+            showWarning(_messages,
+                        _parentWidget,
+                        spec.title,
+                        QStringLiteral("外部 PLY 点云不存在: %1").arg(path));
+            if (isCurrentTask(_session, taskContext))
+            {
+                emit atProgressFinished(false);
+            }
             return;
         }
         context.sourceResultIndex = -1;
@@ -245,11 +427,15 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
     else
     {
         const auto contextResult = resolveSparsePointContextResult(
-            _owner->currentMeta(),
+            _session ? _session->metadata() : QJsonObject(),
             settings.value(QStringLiteral("sourceAtIndex")).toInt(-1));
         if (!contextResult.status.ok)
         {
-            QMessageBox::warning(_parentWidget, spec.title, contextResult.status.errorMessage);
+            showWarning(_messages, _parentWidget, spec.title, contextResult.status.errorMessage);
+            if (isCurrentTask(_session, taskContext))
+            {
+                emit atProgressFinished(false);
+            }
             return;
         }
         context = contextResult.context;
@@ -267,10 +453,14 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
         {
             if (!QFileInfo(sparseCloudOverride).isFile())
             {
-                QMessageBox::warning(
-                    _parentWidget,
-                    spec.title,
-                    QStringLiteral("稀疏点云文件不存在: %1").arg(sparseCloudOverride));
+                showWarning(_messages,
+                            _parentWidget,
+                            spec.title,
+                            QStringLiteral("稀疏点云文件不存在: %1").arg(sparseCloudOverride));
+                if (isCurrentTask(_session, taskContext))
+                {
+                    emit atProgressFinished(false);
+                }
                 return;
             }
             context.sparseCloudPath = sparseCloudOverride;
@@ -279,17 +469,21 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
         {
             if (!QFileInfo(sidecarOverride).isFile())
             {
-                QMessageBox::warning(
-                    _parentWidget,
-                    spec.title,
-                    QStringLiteral("连接点逐点数据文件不存在: %1").arg(sidecarOverride));
+                showWarning(_messages,
+                            _parentWidget,
+                            spec.title,
+                            QStringLiteral("连接点逐点数据文件不存在: %1").arg(sidecarOverride));
+                if (isCurrentTask(_session, taskContext))
+                {
+                    emit atProgressFinished(false);
+                }
                 return;
             }
             context.sidecarPath = sidecarOverride;
         }
     }
 
-    const auto session = _owner->currentSessionContext();
+    const auto session = taskContext.session;
     const QString projectPath = session.projectPath;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const QString outputDir = QDir(assetsDir).filePath(
@@ -297,34 +491,42 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             .arg(spec.outputDirPrefix,
                  QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
 
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
     emit atProgressChanged(spec.progressMessage, 20);
+    if (!isCurrentTask(_session, taskContext))
+    {
+        return;
+    }
 
     QJsonObject operationSettings = settings;
     operationSettings.remove(QStringLiteral("sourceSparseCloudPath"));
     operationSettings.remove(QStringLiteral("sourceSidecarPath"));
-    QPointer<ProjectManager> ownerGuard(_owner);
-    xjw::gui::tasks::runGuardedWithOutcome(
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [kind, context, operationSettings, outputDir]()
         {
             return runSparsePointWorkflowResult(
                 kind, context, operationSettings, outputDir);
         },
-        [spec, context, ownerGuard, session](
+        [spec, context, session, taskContext](
             ProjectSparseReconstructionManager *self,
             xjw::gui::tasks::TaskOutcome<SparsePointWorkflowResult> outcome)
         {
-            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
+            if (!isCurrentTask(self->_session, taskContext) || !taskContext.session.matches(session))
             {
                 return;
             }
 
             if (!outcome.succeeded())
             {
-                emit self->atProgressFinished(false);
-                QMessageBox::warning(self->_parentWidget,
-                                     spec.title,
-                                     outcome.errorMessage);
+                showWarning(self->_messages, self->_parentWidget, spec.title, outcome.errorMessage);
+                if (isCurrentTask(self->_session, taskContext))
+                {
+                    emit self->atProgressFinished(false);
+                }
                 return;
             }
 
@@ -332,30 +534,49 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
             if (!workflowResult.status.ok)
             {
-                emit self->atProgressFinished(false);
-                QMessageBox::warning(self->_parentWidget,
-                                     spec.title,
-                                     workflowResult.status.errorMessage);
+                showWarning(
+                    self->_messages, self->_parentWidget, spec.title, workflowResult.status.errorMessage);
+                if (isCurrentTask(self->_session, taskContext))
+                {
+                    emit self->atProgressFinished(false);
+                }
                 return;
             }
 
             const SparsePointOperationResult &operationResult = workflowResult.operation;
 
-            if (!self->_owner->replaceTiePointResult(operationResult.sparseCloudPath,
-                                                      operationResult.outputCount,
-                                                      context.selectedImages,
-                                                      operationResult.outputDir,
-                                                      operationResult.extraRecord))
+            if (!self->_tiePointResultWriter ||
+                !self->_tiePointResultWriter(taskContext,
+                                              operationResult.sparseCloudPath,
+                                              operationResult.outputCount,
+                                              context.selectedImages,
+                                              operationResult.outputDir,
+                                              operationResult.extraRecord))
             {
-                emit self->atProgressFinished(false);
+                if (isCurrentTask(self->_session, taskContext))
+                {
+                    emit self->atProgressFinished(false);
+                }
+                return;
+            }
+            if (!isCurrentTask(self->_session, taskContext))
+            {
                 return;
             }
 
             emit self->tiePointResultReady(operationResult.sparseCloudPath,
                                            operationResult.sidecarPath);
+            if (!isCurrentTask(self->_session, taskContext))
+            {
+                return;
+            }
             emit self->atProgressFinished(true);
-            QMessageBox::information(self->_parentWidget,
-                                     spec.title,
-                                     buildSparsePointWorkflowSuccessMessage(spec, operationResult));
-        });
+            if (self->_messages && isCurrentTask(self->_session, taskContext))
+            {
+                self->_messages->information(
+                    self->_parentWidget,
+                    spec.title,
+                    buildSparsePointWorkflowSuccessMessage(spec, operationResult));
+            }
+        }));
 }

@@ -1,14 +1,13 @@
 #include "ProjectModelManager.h"
 
-#include "ProjectManager.h"
-#include "project/ProjectSessionModel.h"
+#include "project/services/ProjectSession.h"
+#include "project/services/ProjectUiMessageAdapter.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectModelResultPolicy.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowOperations.h"
 #include "GuiTaskRunner.h"
-#include "ProjectOpenGuard.h"
 #include "Logger.h"
 #include "ModelWorkflowService.h"
 #include "project/ProjectCommonUtils.h"
@@ -18,18 +17,16 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QMessageBox>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
-
-using xjw::gui::project::resolveLatestDenseCloudPath;
 
 #ifndef PLASCAN_VERSION
 #define PLASCAN_VERSION "unknown"
@@ -187,14 +184,15 @@ QString utcNowIso()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-void showTaskFailure(QWidget *parentWidget,
+void showTaskFailure(ProjectUiMessageAdapter *messages,
                      const QString &title,
                      const QString &prefix,
                      const QString &errorMessage)
 {
-    QMessageBox::warning(parentWidget,
-                         title,
-                         QStringLiteral("%1：%2").arg(prefix, errorMessage));
+    if (messages)
+    {
+        messages->warning(nullptr, title, QStringLiteral("%1：%2").arg(prefix, errorMessage));
+    }
 }
 
 void cleanupUnpublishedTask(
@@ -216,13 +214,13 @@ void cleanupUnpublishedTask(
 void mergeJsonObject(QJsonObject *target, const QJsonObject &source);
 
 auto makeProgressReporter(QPointer<ProjectModelManager> manager,
-                          QPointer<ProjectManager> owner,
-                          const xjw::gui::project::ProjectModelTaskPtr &task)
+                          const xjw::gui::project::ProjectModelTaskPtr &task,
+                          std::function<bool(const xjw::gui::project::ProjectModelTaskPtr &)> acceptsTask)
 {
     const auto log_state = std::make_shared<ModelProgressLogState>();
-    return [manager, owner, task, log_state](const QString &stage, int percent)
+    return [manager, task, acceptsTask = std::move(acceptsTask), log_state](const QString &stage, int percent)
     {
-        if (!manager || !owner || !task
+        if (!manager || !task
             || task->isCancellationRequested())
         {
             return;
@@ -251,13 +249,11 @@ auto makeProgressReporter(QPointer<ProjectModelManager> manager,
             xjw::gui::project::ProjectModelTaskContext> weakTask(task);
         xjw::gui::tasks::postGuarded(
             manager,
-            [owner, weakTask, stage, monotonic_percent](
+            [weakTask, acceptsTask, stage, monotonic_percent](
                 ProjectModelManager *currentManager)
         {
             const auto currentTask = weakTask.lock();
-            if (!owner
-                || !currentTask
-                || !currentManager->acceptsTaskCallback(currentTask))
+            if (!currentTask || !acceptsTask(currentTask))
             {
                 return;
             }
@@ -469,54 +465,6 @@ void mergeJsonObject(QJsonObject *target, const QJsonObject &source)
     {
         target->insert(it.key(), it.value());
     }
-}
-
-bool persistNewModelResult(
-    ProjectData *projectData,
-    const QJsonObject &modelRecord,
-    xjw::mesh::workflow::ModelOutputPolicy outputPolicy,
-    QString *errorMessage)
-{
-    if (!projectData)
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QStringLiteral("项目未就绪");
-        }
-        return false;
-    }
-
-    QJsonObject metadata = projectData->metadataIncludingResults();
-    if (!xjw::gui::project::registerCompletedModelRun(
-            &metadata, modelRecord, outputPolicy, errorMessage))
-    {
-        return false;
-    }
-    xjw::gui::project::persistProjectMeta(projectData, metadata, true);
-    return true;
-}
-
-bool persistUpdatedModelResult(ProjectData *projectData,
-                               const QJsonObject &modelRecord,
-                               QString *errorMessage)
-{
-    if (!projectData)
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QStringLiteral("项目未就绪");
-        }
-        return false;
-    }
-
-    QJsonObject metadata = projectData->metadataIncludingResults();
-    if (!xjw::gui::project::updateCompletedModelRun(
-            &metadata, modelRecord, errorMessage))
-    {
-        return false;
-    }
-    xjw::gui::project::persistProjectMeta(projectData, metadata, true);
-    return true;
 }
 
 bool pathBelongsToDirectory(const QString &path, const QString &directory)
@@ -932,7 +880,10 @@ QString depthSourceRoot(const QString &sourcePath)
     return QDir::cleanPath(info.absolutePath());
 }
 
-QString findDenseCloudForDepthSource(ProjectData *projectData, const QString &depthSourcePath)
+QString findDenseCloudForDepthSource(xjw::gui::project::ProjectSession *session,
+                                     const xjw::gui::project::ProjectTaskContext &taskContext,
+                                     const QJsonObject &metadata,
+                                     const QString &depthSourcePath)
 {
     const QString root = depthSourceRoot(depthSourcePath);
     if (!root.isEmpty())
@@ -944,10 +895,7 @@ QString findDenseCloudForDepthSource(ProjectData *projectData, const QString &de
         }
     }
 
-    const QJsonArray denseResults = projectData
-        ? projectData->metadataIncludingResults()
-              .value(QStringLiteral("dense_cloud_results")).toArray()
-        : QJsonArray();
+    const QJsonArray denseResults = metadata.value(QStringLiteral("dense_cloud_results")).toArray();
     for (int index = denseResults.size() - 1; index >= 0; --index)
     {
         const QString densePath = existingDenseCloudPathFromRecord(denseResults.at(index).toObject());
@@ -963,14 +911,16 @@ QString findDenseCloudForDepthSource(ProjectData *projectData, const QString &de
 
     QString latestDensePath;
     QString ignoredError;
-    if (projectData && resolveLatestDenseCloudPath(projectData, &latestDensePath, &ignoredError))
+    if (session && session->resolveLatestDenseCloudPath(taskContext.session, &latestDensePath, &ignoredError))
     {
         return latestDensePath;
     }
     return QString();
 }
 
-bool resolveModelSourceForMeshing(ProjectData *projectData,
+bool resolveModelSourceForMeshing(xjw::gui::project::ProjectSession *session,
+                                  const xjw::gui::project::ProjectTaskContext &taskContext,
+                                  const QJsonObject &metadata,
                                   const QJsonObject &settings,
                                   ResolvedModelSource *resolvedSource,
                                   QString *errorMessage)
@@ -1013,7 +963,7 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
         resolvedSource->requestedSourcePath = left_image;
         resolvedSource->sourcePointCloudPath.clear();
         resolvedSource->outputRoot = xjw::gui::project::resolveProjectOutputDir(
-            projectData ? projectData->currentProjectPath() : QString(),
+            session ? session->projectPath() : QString(),
             QString(),
             QStringLiteral("assets/models"));
         return !resolvedSource->outputRoot.isEmpty();
@@ -1030,11 +980,11 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
             return false;
         }
 
-        resolvedSource->sourcePointCloudPath = findDenseCloudForDepthSource(projectData, sourcePath);
+        resolvedSource->sourcePointCloudPath =
+            findDenseCloudForDepthSource(session, taskContext, metadata, sourcePath);
         const xjw::gui::project::SparseScaffoldSource sparse_scaffold =
             xjw::gui::project::resolveSparseScaffoldSource(
-                projectData ? projectData->metadataIncludingResults()
-                            : QJsonObject(),
+                metadata,
                 sourcePath);
         resolvedSource->sparseScaffoldPointCloudPath =
             sparse_scaffold.pointCloudPath;
@@ -1067,7 +1017,7 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
 
     QString latestDensePath;
     QString latestError;
-    if (!resolveLatestDenseCloudPath(projectData, &latestDensePath, &latestError))
+    if (!session || !session->resolveLatestDenseCloudPath(taskContext.session, &latestDensePath, &latestError))
     {
         if (errorMessage)
         {
@@ -1083,7 +1033,7 @@ bool resolveModelSourceForMeshing(ProjectData *projectData,
 }
 
 template <typename OnSuccess>
-bool handleTaskResult(QWidget *parentWidget,
+bool handleTaskResult(ProjectUiMessageAdapter *messages,
                       const QString &title,
                       const QString &failurePrefix,
                       const ModelTaskResult &task,
@@ -1095,7 +1045,7 @@ bool handleTaskResult(QWidget *parentWidget,
         {
             return false;
         }
-        showTaskFailure(parentWidget, title, failurePrefix, task.errMsg);
+        showTaskFailure(messages, title, failurePrefix, task.errMsg);
         return false;
     }
 
@@ -1104,11 +1054,11 @@ bool handleTaskResult(QWidget *parentWidget,
 }
 
 template <typename Owner, typename Worker, typename OnFinished>
-void runModelAsyncTask(Owner *owner,
-                       Worker &&worker,
-                       OnFinished &&onFinished)
+QFuture<void> runModelAsyncTask(Owner *owner,
+                                Worker &&worker,
+                                OnFinished &&onFinished)
 {
-    xjw::gui::tasks::runGuardedWithOutcome(
+    return xjw::gui::tasks::runGuardedWithOutcome(
         owner,
         std::forward<Worker>(worker),
         [onFinished = std::forward<OnFinished>(onFinished)](
@@ -1133,41 +1083,48 @@ void runModelAsyncTask(Owner *owner,
 
 } // namespace
 
-ProjectModelManager::ProjectModelManager(ProjectManager *owner,
-                                         ProjectData *projectData,
-                                         QWidget *parentWidget,
+ProjectModelManager::ProjectModelManager(xjw::gui::project::ProjectSession *session,
+                                         ProjectUiMessageAdapter *messages,
                                          QObject *parent)
     : QObject(parent)
-    , _owner(owner)
-    , _projectData(projectData)
-    , _parentWidget(parentWidget)
+    , _session(session)
+    , _messages(messages)
 {
 }
 
 ProjectModelManager::~ProjectModelManager()
 {
     _taskLifecycle.requestCancelActive();
+    waitForActiveTask();
 }
 
 bool ProjectModelManager::acceptsTaskCallback(
     const xjw::gui::project::ProjectModelTaskPtr &task) const
 {
-    return _owner
-        && _taskLifecycle.acceptsCallback(
-            task, _owner->currentSessionContext());
+    return _session && _taskLifecycle.acceptsCallback(task, _session->context());
 }
 
-bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settings)
+bool ProjectModelManager::startMeshReconstructionAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext &task_context)
 {
-    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
+    if (!_session || !_session->hasProject() || !_session->isCurrent(task_context.session) ||
+        !task_context.cancelFlag || task_context.cancelFlag->load(std::memory_order_relaxed))
     {
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("项目未打开"), QStringLiteral("请先打开一个项目。"));
+        }
         return false;
     }
     if (_taskLifecycle.isRunning())
     {
-        QMessageBox::information(_parentWidget,
-                                 QStringLiteral("生成模型"),
-                                 QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
+        if (_messages)
+        {
+            _messages->information(nullptr,
+                                   QStringLiteral("生成模型"),
+                                   QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
+        }
         return false;
     }
 
@@ -1175,7 +1132,10 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     QString canonicalizationError;
     if (!canonicalModelGenerationSettings(settings, &effectiveSettings, &canonicalizationError))
     {
-        QMessageBox::warning(_parentWidget, QStringLiteral("生成模型"), canonicalizationError);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("生成模型"), canonicalizationError);
+        }
         return false;
     }
 
@@ -1190,7 +1150,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
                 .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
         const QJsonObject project_metadata =
-            _projectData->metadataIncludingResults();
+            _session->metadata();
         const auto sparse_scaffold =
             xjw::gui::project::resolveSparseScaffoldSource(
                 project_metadata,
@@ -1211,19 +1171,27 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                     effectiveSettings));
         if (!batch_compatibility.compatible)
         {
-            QMessageBox::warning(_parentWidget,
-                                 dialogTitle,
-                                 QStringLiteral("不能使用当前深度图生成模型：\n%1")
-                                     .arg(batch_compatibility.reason));
+            if (_messages)
+            {
+                _messages->warning(nullptr,
+                                   dialogTitle,
+                                   QStringLiteral("不能使用当前深度图生成模型：\n%1")
+                                       .arg(batch_compatibility.reason));
+            }
             return false;
         }
     }
 
     ResolvedModelSource resolvedSource;
     QString sourceError;
-    if (!resolveModelSourceForMeshing(_projectData, effectiveSettings, &resolvedSource, &sourceError))
+    const QJsonObject project_metadata = _session->metadata();
+    if (!resolveModelSourceForMeshing(
+            _session.get(), task_context, project_metadata, effectiveSettings, &resolvedSource, &sourceError))
     {
-        QMessageBox::warning(_parentWidget, dialogTitle, sourceError);
+        if (_messages)
+        {
+            _messages->warning(nullptr, dialogTitle, sourceError);
+        }
         return false;
     }
 
@@ -1255,30 +1223,36 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         effectiveSettings[QStringLiteral("resolved_sparse_points_json_path")] =
             resolvedSource.sparseScaffoldPointsPath;
     }
-    const auto session = _owner->currentSessionContext();
-    const QString taskId = xjw::mesh::workflow::createModelRunId();
+    const QString taskId = task_context.taskId;
     const QString runDirectory = QDir(resolvedSource.outputRoot)
         .filePath(QStringLiteral("model_runs/%1").arg(taskId));
     const auto taskContext = _taskLifecycle.startTask(
         taskId,
-        session,
+        task_context.session,
+        task_context.cancelFlag,
         xjw::gui::project::ProjectModelRunKind::Model,
         resolvedSource.outputRoot,
         runDirectory);
     if (!taskContext)
     {
-        QMessageBox::warning(
-            _parentWidget,
-            dialogTitle,
-            QStringLiteral("无法创建隔离的模型任务上下文。"));
+        if (_messages)
+        {
+            _messages->warning(nullptr, dialogTitle, QStringLiteral("无法创建隔离的模型任务上下文。"));
+        }
         return false;
     }
     effectiveSettings[QStringLiteral("model_task_id")] = taskId;
 
     {
-        QJsonObject meta = _projectData->metadataIncludingResults();
+        QJsonObject meta = _session->metadata();
         meta[QStringLiteral("mesh_reconstruction_settings")] = effectiveSettings;
-        xjw::gui::project::persistProjectMeta(_projectData, meta, false);
+        if (!_session->persistMetadata(task_context.session, meta, false) || !acceptsTaskCallback(taskContext) ||
+            taskContext->isCancellationRequested())
+        {
+            _taskLifecycle.finishIfActive(taskContext);
+            cleanupUnpublishedTask(taskContext, QStringLiteral("过期模型"));
+            return false;
+        }
     }
 
     LOG_INFO(QStringLiteral(
@@ -1298,15 +1272,10 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
     emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
-    QPointer<ProjectManager> ownerGuard(_owner);
-    runModelAsyncTask(
+    trackFuture(runModelAsyncTask(
         this,
-        [self,
-         ownerGuard,
-         resolvedSource,
-         effectiveSettings,
-         outputPolicy,
-         taskContext]() -> ModelTaskResult {
+        [self, resolvedSource, effectiveSettings, outputPolicy, taskContext]() -> ModelTaskResult
+        {
             if (!self || taskContext->isCancellationRequested())
             {
                 return cancelledTaskResult(
@@ -1332,7 +1301,11 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             request.runId = taskContext->taskId();
             request.execution.cancellationCheck = [taskContext]() { return taskContext->isCancellationRequested(); };
             const auto progress_reporter =
-                makeProgressReporter(self, ownerGuard, taskContext);
+                makeProgressReporter(
+                    self,
+                    taskContext,
+                    [self](const xjw::gui::project::ProjectModelTaskPtr &task)
+                    { return self && self->acceptsTaskCallback(task); });
             request.execution.progress =
                 [taskContext, progress_reporter](const xjw::task_runtime::WorkflowProgress& progress)
             {
@@ -1360,19 +1333,13 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self,
-         ownerGuard,
-         resolvedSource,
-         effectiveSettings,
-         outputPolicy,
-         taskContext,
-         dialogTitle](const ModelTaskResult &task) {
+        [self, resolvedSource, effectiveSettings, outputPolicy, taskContext, dialogTitle](const ModelTaskResult& task)
+        {
             if (!self)
             {
                 return;
             }
-            const bool acceptsCallback = ownerGuard
-                && self->acceptsTaskCallback(taskContext);
+            const bool acceptsCallback = self->acceptsTaskCallback(taskContext);
             if (!acceptsCallback)
             {
                 const bool wasActive =
@@ -1381,10 +1348,6 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                     taskContext,
                     wasActive ? QStringLiteral("过期模型")
                               : QStringLiteral("旧模型"));
-                if (wasActive)
-                {
-                    emit self->meshProgressFinished(false);
-                }
                 return;
             }
             if (task.cancelled || taskContext->isCancellationRequested())
@@ -1399,70 +1362,59 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             }
             bool persisted = false;
             const bool workflowSucceeded = handleTaskResult(
-                self->_parentWidget,
+                self->_messages,
                 dialogTitle,
                 QStringLiteral("模型生成失败"),
                 task,
-                [self,
-                 resolvedSource,
-                 effectiveSettings,
-                 outputPolicy,
-                 dialogTitle,
-                 taskContext,
-                 &persisted](const QJsonObject &taskResult) {
-                if (!self)
+                [self, resolvedSource, effectiveSettings, outputPolicy, dialogTitle, taskContext, &persisted](
+                    const QJsonObject& taskResult)
                 {
-                    return;
-                }
-                const QString sourcePointCloudPath =
-                    taskResult.value(QStringLiteral("source_point_cloud_path"))
-                        .toString(resolvedSource.sourcePointCloudPath);
-                const QJsonObject modelRecord = buildMeshReconstructionRecord(
-                    taskResult,
-                    sourcePointCloudPath,
-                    effectiveSettings,
-                    self->_projectData->metadataIncludingResults());
-                QString persistenceError;
-                persisted = persistNewModelResult(self->_projectData,
-                                                  modelRecord,
-                                                  outputPolicy,
-                                                  &persistenceError);
-                if (!persisted)
-                {
-                    QMessageBox::warning(
-                        self->_parentWidget,
-                        dialogTitle,
-                        QStringLiteral(
-                            "模型产物未能安全登记，将清理本次隔离目录：%1")
-                            .arg(persistenceError));
-                    return;
-                }
-                taskContext->markPublished();
-                if (!effectiveSettings.value(QStringLiteral("pipeline_mode")).toBool(false))
-                {
-                    QMessageBox::information(self->_parentWidget,
-                                             dialogTitle,
-                                             meshReconstructionSuccessMessage(taskResult));
-                }
-            });
+                    if (!self)
+                    {
+                        return;
+                    }
+                    const QString sourcePointCloudPath = taskResult.value(QStringLiteral("source_point_cloud_path"))
+                                                             .toString(resolvedSource.sourcePointCloudPath);
+                    const QJsonObject modelRecord = buildMeshReconstructionRecord(
+                        taskResult, sourcePointCloudPath, effectiveSettings, self->_session->metadata());
+                    QString persistenceError;
+                    persisted = self->_session->registerCompletedModelRun(
+                        taskContext->session(), modelRecord, outputPolicy, &persistenceError);
+                    if (!persisted)
+                    {
+                        if (self->_messages && self->acceptsTaskCallback(taskContext) &&
+                            !taskContext->isCancellationRequested())
+                        {
+                            self->_messages->warning(
+                                nullptr,
+                                dialogTitle,
+                                QStringLiteral("模型产物未能安全登记，将清理本次隔离目录：%1").arg(persistenceError));
+                        }
+                        return;
+                    }
+                    taskContext->markPublished();
+                    if (self->acceptsTaskCallback(taskContext) && !taskContext->isCancellationRequested() &&
+                        self->_messages && !effectiveSettings.value(QStringLiteral("pipeline_mode")).toBool(false))
+                    {
+                        self->_messages->information(
+                            nullptr, dialogTitle, meshReconstructionSuccessMessage(taskResult));
+                    }
+                });
             if (self)
             {
-                const bool stillAcceptsCallback =
-                    self->acceptsTaskCallback(taskContext);
-                const bool finishedCurrentTask =
-                    self->_taskLifecycle.finishIfActive(taskContext);
+                const bool sameTaskAndSession = self->acceptsTaskCallback(taskContext);
+                const bool terminalSuccess = workflowSucceeded && persisted && !taskContext->isCancellationRequested();
+                const bool finishedCurrentTask = self->_taskLifecycle.finishIfActive(taskContext);
                 if (!persisted)
                 {
-                    cleanupUnpublishedTask(
-                        taskContext, QStringLiteral("未发布模型"));
+                    cleanupUnpublishedTask(taskContext, QStringLiteral("未发布模型"));
                 }
-                if (stillAcceptsCallback && finishedCurrentTask)
+                if (sameTaskAndSession && finishedCurrentTask)
                 {
-                    emit self->meshProgressFinished(
-                        workflowSucceeded && persisted);
+                    emit self->meshProgressFinished(terminalSuccess);
                 }
             }
-        });
+        }));
     return true;
 }
 
@@ -1477,128 +1429,148 @@ void ProjectModelManager::cancelActiveTask()
     emit meshProgressChanged(tr("正在取消模型生成..."), 99);
 }
 
-void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
+void ProjectModelManager::waitForActiveTask()
 {
-    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
+    cancelActiveTask();
+    for (QFuture<void> &future : _futures)
     {
-        return;
+        if (future.isRunning())
+        {
+            future.waitForFinished();
+        }
+    }
+    _futures.clear();
+}
+
+bool ProjectModelManager::startTextureMappingAsync(
+    const QJsonObject &settings,
+    const xjw::gui::project::ProjectTaskContext &task_context)
+{
+    if (!_session || !_session->hasProject() || !_session->isCurrent(task_context.session) ||
+        !task_context.cancelFlag || task_context.cancelFlag->load(std::memory_order_relaxed))
+    {
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("项目未打开"), QStringLiteral("请先打开一个项目。"));
+        }
+        return false;
     }
     if (_taskLifecycle.isRunning())
     {
-        QMessageBox::information(_parentWidget,
-                                 QStringLiteral("纹理映射"),
-                                 QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
-        return;
-    }
-
-    if (!_projectData)
-    {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("纹理映射"),
-                             QStringLiteral("项目未就绪"));
-        return;
+        if (_messages)
+        {
+            _messages->information(nullptr,
+                                   QStringLiteral("纹理映射"),
+                                   QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
+        }
+        return false;
     }
 
     const auto lookup = xjw::gui::project::resolveDefaultModelResult(
-        _projectData->metadataIncludingResults());
+        _session->metadata());
     if (!lookup.ok)
     {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("纹理映射"),
-                             lookup.errorMessage);
-        return;
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("纹理映射"), lookup.errorMessage);
+        }
+        return false;
     }
 
     const QString meshPath = lookup.meshPath;
     const QJsonObject baseRecord = lookup.modelRecord;
     const QString recorded_depth_source =
         baseRecord.value(QStringLiteral("depth_map_source_path")).toString();
-    const QString depthMapSourcePath = !recorded_depth_source.trimmed().isEmpty()
-        ? recorded_depth_source
-        : (baseRecord.value(QStringLiteral("source_data")).toString() ==
-                   QStringLiteral("depth_maps")
-               ? baseRecord.value(QStringLiteral("source_path")).toString()
-               : QString());
+    const QString depthMapSourcePath =
+        !recorded_depth_source.trimmed().isEmpty()
+            ? recorded_depth_source
+            : (baseRecord.value(QStringLiteral("source_data")).toString() == QStringLiteral("depth_maps")
+                   ? baseRecord.value(QStringLiteral("source_path")).toString()
+                   : QString());
     bool allow_vertex_color_fallback = false;
     if (depthMapSourcePath.trimmed().isEmpty())
     {
-        const auto answer = QMessageBox::question(
-            _parentWidget,
-            QStringLiteral("纹理映射"),
-            QStringLiteral(
-                "当前模型没有深度图与相机证据，无法执行多视图纹理映射。\n"
-                "是否改用网格顶点色生成平面投影纹理？"));
-        if (answer != QMessageBox::Yes)
+        const UiAnswer answer =
+            _messages ? _messages->question(nullptr,
+                                            QStringLiteral("纹理映射"),
+                                            QStringLiteral("当前模型没有深度图与相机证据，无法执行多视图纹理映射。\n"
+                                                           "是否改用网格顶点色生成平面投影纹理？"),
+                                            UiAnswer::No)
+                      : UiAnswer::No;
+        if (answer != UiAnswer::Yes)
         {
-            return;
+            return false;
+        }
+        if (!_session || !_session->isCurrent(task_context.session) || !task_context.cancelFlag ||
+            task_context.cancelFlag->load(std::memory_order_relaxed))
+        {
+            return false;
         }
         allow_vertex_color_fallback = true;
     }
 
     QDir meshDirectory(QFileInfo(meshPath).absolutePath());
     QString textureRunBase = meshDirectory.absolutePath();
-    if (meshDirectory.dirName() == QStringLiteral("products")
-        && meshDirectory.cdUp())
+    if (meshDirectory.dirName() == QStringLiteral("products") && meshDirectory.cdUp())
     {
         textureRunBase = meshDirectory.absolutePath();
     }
     QString textureRunId;
     QString textureRunDirectory;
     QString textureRunError;
-    const QString requestedTaskId =
-        xjw::mesh::workflow::createModelRunId();
+    const QString requestedTaskId = task_context.taskId;
     if (!xjw::mesh::workflow::createTextureRunOutputDirectory(
-            textureRunBase,
-            requestedTaskId,
-            &textureRunId,
-            &textureRunDirectory,
-            &textureRunError))
+            textureRunBase, requestedTaskId, &textureRunId, &textureRunDirectory, &textureRunError))
     {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("纹理映射"),
-                             textureRunError);
-        return;
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("纹理映射"), textureRunError);
+        }
+        return false;
     }
-    const auto session = _owner->currentSessionContext();
-    const auto taskContext = _taskLifecycle.startTask(
-        textureRunId,
-        session,
-        xjw::gui::project::ProjectModelRunKind::Texture,
-        textureRunBase,
-        textureRunDirectory);
+    const auto taskContext = _taskLifecycle.startTask(textureRunId,
+                                                      task_context.session,
+                                                      task_context.cancelFlag,
+                                                      xjw::gui::project::ProjectModelRunKind::Texture,
+                                                      textureRunBase,
+                                                      textureRunDirectory);
     if (!taskContext)
     {
-        xjw::mesh::workflow::removeUnpublishedTextureRunDirectory(
-            textureRunBase, textureRunId, textureRunDirectory);
-        QMessageBox::warning(
-            _parentWidget,
-            QStringLiteral("纹理映射"),
-            QStringLiteral("无法创建隔离的纹理任务上下文。"));
-        return;
+        xjw::mesh::workflow::removeUnpublishedTextureRunDirectory(textureRunBase, textureRunId, textureRunDirectory);
+        if (_messages)
+        {
+            _messages->warning(nullptr, QStringLiteral("纹理映射"), QStringLiteral("无法创建隔离的纹理任务上下文。"));
+        }
+        return false;
     }
 
     {
-        QJsonObject meta = _projectData->metadataIncludingResults();
+        QJsonObject meta = _session->metadata();
         QJsonObject effectiveSettings = settings;
         effectiveSettings[QStringLiteral("texture_task_id")] = textureRunId;
         meta[QStringLiteral("texture_mapping_settings")] = effectiveSettings;
-        xjw::gui::project::persistProjectMeta(_projectData, meta, false);
+        if (!_session->persistMetadata(task_context.session, meta, false) || !acceptsTaskCallback(taskContext) ||
+            taskContext->isCancellationRequested())
+        {
+            _taskLifecycle.finishIfActive(taskContext);
+            cleanupUnpublishedTask(taskContext, QStringLiteral("过期纹理"));
+            return false;
+        }
     }
 
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
     QPointer<ProjectModelManager> self(this);
-    QPointer<ProjectManager> ownerGuard(_owner);
-    runModelAsyncTask(
+    trackFuture(runModelAsyncTask(
         this,
         [self,
-         ownerGuard,
          meshPath,
          textureRunId,
          textureRunDirectory,
          depthMapSourcePath,
          settings,
          taskContext,
-         allow_vertex_color_fallback]() -> ModelTaskResult {
+         allow_vertex_color_fallback]() -> ModelTaskResult
+        {
             if (!self || taskContext->isCancellationRequested())
             {
                 return cancelledTaskResult(
@@ -1614,7 +1586,11 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             request.allowVertexColorFallback = allow_vertex_color_fallback;
             request.execution.cancellationCheck = [taskContext]() { return taskContext->isCancellationRequested(); };
             const auto progress_reporter =
-                makeProgressReporter(self, ownerGuard, taskContext);
+                makeProgressReporter(
+                    self,
+                    taskContext,
+                    [self](const xjw::gui::project::ProjectModelTaskPtr &task)
+                    { return self && self->acceptsTaskCallback(task); });
             request.execution.progress =
                 [taskContext, progress_reporter](const xjw::task_runtime::WorkflowProgress& progress)
             {
@@ -1637,17 +1613,13 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self,
-         ownerGuard,
-         meshPath,
-         baseRecord,
-         taskContext](const ModelTaskResult &task) {
+        [self, meshPath, baseRecord, taskContext](const ModelTaskResult& task)
+        {
             if (!self)
             {
                 return;
             }
-            const bool acceptsCallback = ownerGuard
-                && self->acceptsTaskCallback(taskContext);
+            const bool acceptsCallback = self->acceptsTaskCallback(taskContext);
             if (!acceptsCallback)
             {
                 const bool wasActive =
@@ -1656,10 +1628,6 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
                     taskContext,
                     wasActive ? QStringLiteral("过期纹理")
                               : QStringLiteral("旧纹理"));
-                if (wasActive)
-                {
-                    emit self->meshProgressFinished(false);
-                }
                 return;
             }
             if (task.cancelled || taskContext->isCancellationRequested())
@@ -1674,62 +1642,88 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             }
             bool persisted = false;
             const bool workflowSucceeded = handleTaskResult(
-                self->_parentWidget,
+                self->_messages,
                 QStringLiteral("纹理映射"),
                 QStringLiteral("纹理映射失败"),
                 task,
-                [self,
-                 meshPath,
-                 baseRecord,
-                 taskContext,
-                 &persisted](const QJsonObject &taskResult) {
-                if (!self)
+                [self, meshPath, baseRecord, taskContext, &persisted](const QJsonObject& taskResult)
                 {
-                    return;
-                }
-                const QJsonObject modelRecord = buildTextureMappingRecord(baseRecord,
-                                                                           taskResult,
-                                                                           meshPath);
-                QString persistenceError;
-                persisted = persistUpdatedModelResult(self->_projectData,
-                                                       modelRecord,
-                                                       &persistenceError);
-                if (!persisted)
-                {
-                    QMessageBox::warning(
-                        self->_parentWidget,
-                        QStringLiteral("纹理映射"),
-                        QStringLiteral(
-                            "纹理产物未能安全登记，将清理本次隔离目录：%1")
-                            .arg(persistenceError));
-                    return;
-                }
-                taskContext->markPublished();
-                QMessageBox::information(self->_parentWidget,
-                                         QStringLiteral("纹理映射"),
-                                         textureMappingSuccessMessage(taskResult));
-            });
+                    if (!self)
+                    {
+                        return;
+                    }
+                    const QJsonObject modelRecord = buildTextureMappingRecord(baseRecord, taskResult, meshPath);
+                    QString persistenceError;
+                    persisted =
+                        self->_session->updateCompletedModelRun(taskContext->session(), modelRecord, &persistenceError);
+                    if (!persisted)
+                    {
+                        if (self->_messages && self->acceptsTaskCallback(taskContext) &&
+                            !taskContext->isCancellationRequested())
+                        {
+                            self->_messages->warning(
+                                nullptr,
+                                QStringLiteral("纹理映射"),
+                                QStringLiteral("纹理产物未能安全登记，将清理本次隔离目录：%1").arg(persistenceError));
+                        }
+                        return;
+                    }
+                    taskContext->markPublished();
+                    if (self->acceptsTaskCallback(taskContext) && !taskContext->isCancellationRequested() &&
+                        self->_messages)
+                    {
+                        self->_messages->information(
+                            nullptr, QStringLiteral("纹理映射"), textureMappingSuccessMessage(taskResult));
+                    }
+                });
             if (self)
             {
-                const bool stillAcceptsCallback =
-                    self->acceptsTaskCallback(taskContext);
-                const bool finishedCurrentTask =
-                    self->_taskLifecycle.finishIfActive(taskContext);
+                const bool sameTaskAndSession = self->acceptsTaskCallback(taskContext);
+                const bool terminalSuccess = workflowSucceeded && persisted && !taskContext->isCancellationRequested();
+                const bool finishedCurrentTask = self->_taskLifecycle.finishIfActive(taskContext);
                 if (!persisted)
                 {
-                    cleanupUnpublishedTask(
-                        taskContext, QStringLiteral("未发布纹理"));
+                    cleanupUnpublishedTask(taskContext, QStringLiteral("未发布纹理"));
                 }
-                if (stillAcceptsCallback && finishedCurrentTask)
+                if (sameTaskAndSession && finishedCurrentTask)
                 {
-                    emit self->meshProgressFinished(
-                        workflowSucceeded && persisted);
+                    emit self->meshProgressFinished(terminalSuccess);
                 }
             }
-        });
+        }));
+    return true;
 }
 
 bool ProjectModelManager::isRunning() const
 {
     return _taskLifecycle.isRunning();
+}
+
+bool ProjectModelManager::hasPendingWork() const noexcept
+{
+    return std::any_of(_futures.cbegin(),
+                       _futures.cend(),
+                       [](const QFuture<void>& future) { return future.isValid() && !future.isFinished(); });
+}
+
+void ProjectModelManager::pruneFinishedFutures()
+{
+    _futures.erase(std::remove_if(_futures.begin(),
+                                  _futures.end(),
+                                  [](const QFuture<void>& future) { return future.isFinished(); }),
+                   _futures.end());
+}
+
+void ProjectModelManager::trackFuture(QFuture<void> future)
+{
+    pruneFinishedFutures();
+    if (future.isValid())
+    {
+        _futures.push_back(std::move(future));
+    }
+}
+
+void ProjectModelManager::trackFutureForTesting(QFuture<void> future)
+{
+    trackFuture(std::move(future));
 }

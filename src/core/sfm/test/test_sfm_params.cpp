@@ -468,7 +468,7 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
     }};
     const std::array<double, 3> trueCenter{{0.25, -0.12, 0.35}};
 
-    FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(820.0, 790.0, 640.0, 480.0);
     camera.setDistortion(-0.32, 0.11, -0.014, 0.004, -0.003);
     camera.setPose(identity, trueCenter);
@@ -532,7 +532,7 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
         EXPECT_NEAR(result.R[index], identity[index], 1.0e-6);
     }
 
-    FramePinholeCamera recovered = camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState recovered = camera;
     recovered.setPose(result.R, result.C);
     for (std::size_t index = 0; index < worldPoints.size(); ++index)
     {
@@ -558,10 +558,10 @@ TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
     }};
     const std::array<double, 3> trueCenter{{0.31, -0.18, 0.42}};
 
-    FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(1160.0, 1140.0, 640.0, 480.0);
     camera.setDistortion(-0.08, 0.015, -0.001, 0.0007, -0.0005);
-    camera.setImageSize(CameraImageSize{1280, 960});
+    camera.setImageSize(camera_core::ImageSize{1280, 960});
     camera.setPose(identity, trueCenter);
 
     std::vector<std::array<double, 3>> worldPoints;
@@ -631,12 +631,12 @@ TEST(IntersectionDistortionTest, RecoversWorldPointFromDistortedPixels)
         0.0,
         1.0,
     }};
-    FramePinholeCamera camera1;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
     camera1.setIntrinsics(900.0, 875.0, 640.0, 480.0);
     camera1.setDistortion(-0.28, 0.09, -0.012, 0.003, -0.004);
     camera1.setPose(identity, {{-1.0, 0.10, 0.0}});
 
-    FramePinholeCamera camera2 = camera1;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = camera1;
     camera2.setPose(identity, {{1.0, -0.05, 0.10}});
 
     const std::array<double, 3> expectedPoint{{0.75, -0.55, 3.70}};

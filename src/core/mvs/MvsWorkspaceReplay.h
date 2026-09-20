@@ -18,7 +18,15 @@ struct MvsPairAuditSummary
     int missingStatisticsPairCount = 0;
 };
 
-bool cameraFromMvsWorkspaceJson(const QJsonObject &object, FramePinholeCamera *camera);
+/**
+ * Decode the MVS-specific numeric camera record.  Storage-only callers must
+ * explicitly pass false when they intentionally need a temporary numeric
+ * value; replay and fusion paths pass true so the camera cannot lose its
+ * project image and world-frame binding at the persistence boundary.
+ */
+bool cameraFromMvsWorkspaceJson(const QJsonObject& object,
+                                xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera,
+                                bool requireBoundIdentity);
 
 bool loadMvsReplayViews(const QString &manifestPath,
                         const QString &maskDirectory,

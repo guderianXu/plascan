@@ -10,21 +10,19 @@
 namespace
 {
 
-xjw::FramePinholeCamera makeCamera(double centerX)
-{
-    xjw::FramePinholeCamera camera;
-    camera.setIntrinsics(900.0, 900.0, 512.0, 384.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {centerX, 0.0, 0.0});
-    return camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double centerX)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setIntrinsics(900.0, 900.0, 512.0, 384.0);
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {centerX, 0.0, 0.0});
+        return camera;
 }
 
-xjw::control_points::PriorObservation observation(xjw::ImageId imageId,
-                                                   const xjw::FramePinholeCamera &camera,
-                                                   const std::array<double, 3> &point,
-                                                   xjw::control_points::PriorObservationState state)
+xjw::control_points::PriorObservation
+observation(xjw::ImageId imageId,
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+            const std::array<double, 3>& point,
+            xjw::control_points::PriorObservationState state)
 {
     double xyz[3] = {point[0], point[1], point[2]};
     double uv[2] = {0.0, 0.0};
@@ -58,7 +56,8 @@ TEST(SfmPriorTrackTest, InjectsPinnedTracksWithoutChangingFeatureCaches)
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
+        makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
     {
@@ -103,7 +102,8 @@ TEST(SfmPriorTrackTest, RejectsPredictedBlockedStaleAndDuplicateImageObservation
     xjw::IncrementalSfmOptions options;
     options.useKnownCameraPoses = true;
     options.iterativeBARounds = 1;
-    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-1.0), makeCamera(1.0)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(-1.0),
+                                                                                              makeCamera(1.0)};
     xjw::IncrementalSfm sfm(options);
     sfm.addImageWithCamera(0, "a.png", cameras[0], {});
     sfm.addImageWithCamera(1, "b.png", cameras[1], {});
@@ -157,7 +157,8 @@ TEST(SfmPriorTrackTest, AppliesControlNetworkButKeepsCheckPointsOutOfBaConstrain
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
+        makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
     {

@@ -4,6 +4,9 @@
 #include "project/ProjectIO.h"
 #include "project/ProjectPackageLayout.h"
 #include "project/ProjectSession.h"
+#include "ProjectCameraIO.h"
+#include "camera/project/CameraProjectRecords.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <gtest/gtest.h>
 
@@ -32,6 +35,18 @@ namespace
         const QByteArray bytes = archive.readEntry(QString::fromLatin1(PortableProjectFormat::DocumentEntry), &error);
         EXPECT_TRUE(error.isEmpty()) << qPrintable(error);
         return QJsonDocument::fromJson(bytes).object();
+    }
+
+    QJsonObject canonicalFrameCamera(int width, int height)
+    {
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        camera.setPixelPitch(0.01);
+        camera.setIntrinsics(1200.0, 1200.0, width * 0.5, height * 0.5);
+        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
+        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 1.0});
+        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
+        result.insert(QStringLiteral("registered"), true);
+        return result;
     }
 
 } // namespace
@@ -149,7 +164,10 @@ TEST(ProjectSessionTest, UpdatesImportedImageCameraFromOriginalSourcePath)
     ProjectSession session;
     QString error;
     ASSERT_TRUE(session.create(projectPath, QStringLiteral("相机写回工程"), &error)) << qPrintable(error);
-    ASSERT_TRUE(session.mergeImages(QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath}}}, &error))
+    ASSERT_TRUE(session.mergeImages(QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
+                                                           {QStringLiteral("samples"), 64},
+                                                           {QStringLiteral("lines"), 48}}},
+                                    &error))
         << qPrintable(error);
 
     const QString importedPath = session.projectFiles()
@@ -161,19 +179,40 @@ TEST(ProjectSessionTest, UpdatesImportedImageCameraFromOriginalSourcePath)
                                      .toString();
     ASSERT_EQ(QDir::cleanPath(importedPath), QDir::cleanPath(imagePath));
 
-    const QJsonObject camera{{QStringLiteral("fx"), 1200.0}, {QStringLiteral("registered"), true}};
+    const QJsonObject camera = canonicalFrameCamera(64, 48);
     int updatedCount = 0;
-    ASSERT_TRUE(session.updateImageCameras(QMap<QString, QJsonObject>{{imagePath, camera}}, &updatedCount, &error))
+    ASSERT_TRUE(session.updateCameraInstances(QMap<QString, QJsonObject>{{imagePath, camera}}, &updatedCount, &error))
         << qPrintable(error);
     EXPECT_EQ(updatedCount, 1);
-    EXPECT_EQ(session.projectFiles()
-                  .value(QStringLiteral("images"))
-                  .toArray()
-                  .first()
-                  .toObject()
-                  .value(QStringLiteral("camera"))
-                  .toObject(),
-              camera);
+    const QJsonObject projectFiles = session.projectFiles();
+    EXPECT_EQ(projectFiles.value(QStringLiteral("camera_instances")).toArray().size(), 1);
+    const QJsonObject imageEntry = projectFiles.value(QStringLiteral("images")).toArray().first().toObject();
+    const QJsonObject storedCamera =
+        xjw::camera_project::CameraProjectRecords::modelParametersForImage(projectFiles, imageEntry);
+    EXPECT_EQ(storedCamera.value(QStringLiteral("model")).toString(), QStringLiteral("frame_pinhole"));
+    EXPECT_DOUBLE_EQ(storedCamera.value(QStringLiteral("fu")).toDouble(), 12.0);
+}
+
+TEST(ProjectSessionTest, RejectsLegacyCameraFileOnImageMerge)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString projectPath = QDir(temporary.path()).filePath(QStringLiteral("legacy-camera-file.plascan"));
+    const QString imagePath = QDir(temporary.path()).filePath(QStringLiteral("source.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    ASSERT_EQ(imageFile.write("image"), 5);
+    imageFile.close();
+
+    ProjectSession session;
+    QString error;
+    ASSERT_TRUE(session.create(projectPath, QStringLiteral("拒绝旧相机字段"), &error)) << qPrintable(error);
+    EXPECT_FALSE(session.mergeImages(
+        QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
+                               {QStringLiteral("camera_file"), QStringLiteral("old.tsai")}}},
+        &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("camera_file")));
+    EXPECT_TRUE(session.projectFiles().value(QStringLiteral("images")).toArray().isEmpty());
 }
 
 TEST(ProjectSessionTest, SavePrunesOnlyEmptyLegacyWorkflowDirectories)
@@ -235,7 +274,9 @@ TEST(ProjectSessionTest, SharesIdenticalImagesAcrossChunks)
     ProjectChunkStore store(projectPath);
     xjw::common::project::ProjectChunkRecord second;
     ASSERT_TRUE(store.createChunk(QStringLiteral("区块 2"),
-                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}}},
+                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}},
+                                              {QStringLiteral("camera_definitions"), QJsonArray{}},
+                                              {QStringLiteral("camera_instances"), QJsonArray{}}},
                                   QJsonObject{},
                                   QJsonObject{},
                                   xjw::common::project::ProjectResourceIndex().toJson(),
@@ -293,7 +334,9 @@ TEST(ProjectSessionTest, SharesIdenticalImagesAcrossChunks)
 
     xjw::common::project::ProjectChunkRecord third;
     ASSERT_TRUE(store.createChunk(QStringLiteral("区块 3"),
-                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}}},
+                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}},
+                                              {QStringLiteral("camera_definitions"), QJsonArray{}},
+                                              {QStringLiteral("camera_instances"), QJsonArray{}}},
                                   QJsonObject{},
                                   QJsonObject{},
                                   xjw::common::project::ProjectResourceIndex().toJson(),
@@ -344,7 +387,9 @@ TEST(ProjectSessionTest, OpensTheDefaultChunkInsteadOfAssumingDirectoryOne)
     ProjectChunkStore store(projectPath);
     xjw::common::project::ProjectChunkRecord second;
     ASSERT_TRUE(store.createChunk(QStringLiteral("区块 2"),
-                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}}},
+                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}},
+                                              {QStringLiteral("camera_definitions"), QJsonArray{}},
+                                              {QStringLiteral("camera_instances"), QJsonArray{}}},
                                   QJsonObject{},
                                   QJsonObject{},
                                   xjw::common::project::ProjectResourceIndex().toJson(),
@@ -373,7 +418,9 @@ TEST(ProjectSessionTest, SelectsChunkByNameAndUpdatesDefault)
     ProjectChunkStore store(projectPath);
     xjw::common::project::ProjectChunkRecord second;
     ASSERT_TRUE(store.createChunk(QStringLiteral("处理方案 B"),
-                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}}},
+                                  QJsonObject{{QStringLiteral("images"), QJsonArray{}},
+                                              {QStringLiteral("camera_definitions"), QJsonArray{}},
+                                              {QStringLiteral("camera_instances"), QJsonArray{}}},
                                   QJsonObject{},
                                   QJsonObject{},
                                   xjw::common::project::ProjectResourceIndex().toJson(),

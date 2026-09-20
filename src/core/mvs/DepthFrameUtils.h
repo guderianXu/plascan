@@ -1,8 +1,9 @@
 #pragma once
 
 #include "result/OperationResult.h"
+#include "DepthMatStorage.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthMapFusion.h"
 #include "MvsWorkspaceManifest.h"
 
@@ -88,8 +89,6 @@ QString rawInverseDepthSpreadStoragePath(const QString &pngPath);
 QString rawAdaptiveGeometrySupportWeightStoragePath(const QString &pngPath);
 QString rawAdaptiveGeometryEffectiveViewCountStoragePath(const QString &pngPath);
 QString rawAdaptiveGeometryConflictRatioStoragePath(const QString &pngPath);
-xjw::common::OperationResult loadDepthMatStorage(const QString &path, cv::Mat *matrix);
-xjw::common::OperationResult writeDepthMatStorage(const QString &path, const cv::Mat &matrix);
 bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = false);
 bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 
@@ -105,9 +104,9 @@ std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRec
                                            int referenceIndex);
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim);
-FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
-                                              const xjw::FramePinholeCamera &camera,
-                                              const xjw::mvs::FusionConfig &fusionConfig,
+FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord& stored,
+                                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                              const xjw::mvs::FusionConfig& fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim = 0);
 

@@ -181,11 +181,11 @@ int bitCount(std::uint16_t mask)
     return count;
 }
 
-bool surfaceNormalAt(const cv::Mat &depth,
+bool surfaceNormalAt(const cv::Mat& depth,
                      int row,
                      int column,
-                     const FramePinholeCamera &camera,
-                     cv::Vec3f *normal)
+                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                     cv::Vec3f* normal)
 {
     if (!normal || depth.type() != CV_32FC1 || !camera.isValid() ||
         row <= 0 || row + 1 >= depth.rows ||
@@ -236,12 +236,12 @@ bool surfaceNormalAt(const cv::Mat &depth,
     return true;
 }
 
-bool normalsAgree(const cv::Mat &surface,
+bool normalsAgree(const cv::Mat& surface,
                   int first_row,
                   int first_column,
                   int second_row,
                   int second_column,
-                  const FramePinholeCamera &camera,
+                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                   float maximum_angle_degrees)
 {
     cv::Vec3f first;
@@ -326,15 +326,15 @@ bool agreesWithLocalReference(const cv::Mat &reference_depth,
 
 } // namespace
 
-cv::Mat projectSourceDepthToReference(
-    const cv::Mat &source_depth,
-    const FramePinholeCamera &source_camera,
-    const FramePinholeCamera &reference_camera,
-    const cv::Size &reference_size,
-    float maximum_projection_distance_pixels,
-    std::uint64_t *projected_candidate_count,
-    int row_worker_count,
-    const std::atomic<bool> *cancelled)
+cv::Mat
+projectSourceDepthToReference(const cv::Mat& source_depth,
+                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                              const cv::Size& reference_size,
+                              float maximum_projection_distance_pixels,
+                              std::uint64_t* projected_candidate_count,
+                              int row_worker_count,
+                              const std::atomic<bool>* cancelled)
 {
     if (projected_candidate_count)
     {
@@ -955,22 +955,22 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
 }
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
-    cv::Mat &reference_depth,
-    const cv::Mat &support_mask,
-    const std::vector<cv::Mat> &projected_source_depths,
-    const CrossViewHoleRepairOptions &options,
-    cv::Mat *reference_confidence,
-    cv::Mat *consistent_source_votes,
-    cv::Mat *repaired_mask,
-    cv::Mat *geometry_source_mask,
-    cv::Mat *source_inverse_depth_sum,
-    cv::Mat *source_inverse_depth_squared_sum,
-    const FramePinholeCamera *reference_camera,
-    const cv::Mat *guide_gray,
-    cv::Mat *anchored_interpolation_mask,
+    cv::Mat& reference_depth,
+    const cv::Mat& support_mask,
+    const std::vector<cv::Mat>& projected_source_depths,
+    const CrossViewHoleRepairOptions& options,
+    cv::Mat* reference_confidence,
+    cv::Mat* consistent_source_votes,
+    cv::Mat* repaired_mask,
+    cv::Mat* geometry_source_mask,
+    cv::Mat* source_inverse_depth_sum,
+    cv::Mat* source_inverse_depth_squared_sum,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* reference_camera,
+    const cv::Mat* guide_gray,
+    cv::Mat* anchored_interpolation_mask,
     int row_worker_count,
-    const std::atomic<bool> *cancelled,
-    const cv::Mat *native_interpolation_anchor_eligibility_mask)
+    const std::atomic<bool>* cancelled,
+    const cv::Mat* native_interpolation_anchor_eligibility_mask)
 {
     CrossViewHoleRepairStats stats;
     if (reference_depth.empty() || reference_depth.type() != CV_32FC1 ||

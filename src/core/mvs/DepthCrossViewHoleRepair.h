@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthAnchoredHoleInterpolator.h"
 #include "DepthGeometryHypothesisReranker.h"
 #include "DepthLayerReliability.h"
@@ -107,15 +107,15 @@ struct DominantDepthLayerSelectionStats
     bool reliabilityGuidedOnlyMode = false;
 };
 
-cv::Mat projectSourceDepthToReference(
-    const cv::Mat &sourceDepth,
-    const FramePinholeCamera &sourceCamera,
-    const FramePinholeCamera &referenceCamera,
-    const cv::Size &referenceSize,
-    float maximumProjectionDistancePixels,
-    std::uint64_t *projectedCandidateCount = nullptr,
-    int rowWorkerCount = 1,
-    const std::atomic<bool> *cancelled = nullptr);
+cv::Mat
+projectSourceDepthToReference(const cv::Mat& sourceDepth,
+                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+                              const cv::Size& referenceSize,
+                              float maximumProjectionDistancePixels,
+                              std::uint64_t* projectedCandidateCount = nullptr,
+                              int rowWorkerCount = 1,
+                              const std::atomic<bool>* cancelled = nullptr);
 
 /// Selects one occlusion-aware depth layer from source depths projected into
 /// the reference view. Stable source clusters may refine a matching native
@@ -150,24 +150,24 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     DepthGeometryHypothesisRerankMaps *geometryRerankMaps = nullptr);
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
-    cv::Mat &referenceDepth,
-    const cv::Mat &supportMask,
-    const std::vector<cv::Mat> &projectedSourceDepths,
-    const CrossViewHoleRepairOptions &options = {},
-    cv::Mat *referenceConfidence = nullptr,
-    cv::Mat *consistentSourceVotes = nullptr,
-    cv::Mat *repairedMask = nullptr,
-    cv::Mat *geometrySourceMask = nullptr,
-    cv::Mat *sourceInverseDepthSum = nullptr,
-    cv::Mat *sourceInverseDepthSquaredSum = nullptr,
-    const FramePinholeCamera *referenceCamera = nullptr,
-    const cv::Mat *guideGray = nullptr,
-    cv::Mat *anchoredInterpolationMask = nullptr,
+    cv::Mat& referenceDepth,
+    const cv::Mat& supportMask,
+    const std::vector<cv::Mat>& projectedSourceDepths,
+    const CrossViewHoleRepairOptions& options = {},
+    cv::Mat* referenceConfidence = nullptr,
+    cv::Mat* consistentSourceVotes = nullptr,
+    cv::Mat* repairedMask = nullptr,
+    cv::Mat* geometrySourceMask = nullptr,
+    cv::Mat* sourceInverseDepthSum = nullptr,
+    cv::Mat* sourceInverseDepthSquaredSum = nullptr,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* referenceCamera = nullptr,
+    const cv::Mat* guideGray = nullptr,
+    cv::Mat* anchoredInterpolationMask = nullptr,
     int rowWorkerCount = 1,
-    const std::atomic<bool> *cancelled = nullptr,
+    const std::atomic<bool>* cancelled = nullptr,
     /// Optional CV_8U mask for valid native-depth interpolation anchors.
     /// A non-null incompatible mask fails closed and admits no native anchor.
-    const cv::Mat *nativeInterpolationAnchorEligibilityMask = nullptr);
+    const cv::Mat* nativeInterpolationAnchorEligibilityMask = nullptr);
 
 QJsonObject crossViewHoleRepairStatsToJson(
     const CrossViewHoleRepairStats &stats);

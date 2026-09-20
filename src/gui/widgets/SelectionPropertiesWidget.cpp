@@ -1,5 +1,7 @@
 #include "SelectionPropertiesWidget.h"
 
+#include "project/ProjectMetadata.h"
+
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QCoreApplication>
@@ -310,7 +312,8 @@ void SelectionPropertiesWidget::showPhotoProperties(const QJsonObject& meta, con
 
     rows.push_back({tr("名称"), info.fileName()});
     rows.push_back({tr("路径"), imagePath});
-    rows.push_back({tr("定向状态"), imageAlignedText(entry)});
+    const QJsonObject camera = xjw::common::project::projectCameraModelParameters(meta, entry);
+    rows.push_back({tr("定向状态"), imageAlignedText(entry, camera)});
 
     QImageReader reader(imagePath);
     reader.setAutoTransform(true);
@@ -324,19 +327,17 @@ void SelectionPropertiesWidget::showPhotoProperties(const QJsonObject& meta, con
 
     appendFileRows(&rows, imagePath);
 
-    const QJsonObject camera = entry.value(QStringLiteral("camera")).toObject();
-    const bool isRpcCamera =
-        camera.value(QStringLiteral("model")).toString().compare(QStringLiteral("rpc"), Qt::CaseInsensitive) == 0;
+    const bool isRpcCamera = camera.value(QStringLiteral("model")).toString() == QStringLiteral("rpc00b");
     if (!camera.isEmpty())
     {
         rows.push_back({tr("相机类型"), isRpcCamera ? tr("RPC 相机") : tr("针孔相机")});
     }
-    const QString center = cameraCenterText(entry);
+    const QString center = cameraCenterText(entry, camera);
     if (!center.isEmpty())
     {
         rows.push_back({tr("相机中心"), center});
     }
-    const QString intrinsics = isRpcCamera ? QString() : intrinsicsText(entry);
+    const QString intrinsics = isRpcCamera ? QString() : intrinsicsText(entry, camera);
     if (!intrinsics.isEmpty())
     {
         rows.push_back({tr("内方位"), intrinsics});
@@ -722,20 +723,19 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
     return rows;
 }
 
-QString SelectionPropertiesWidget::imageAlignedText(const QJsonObject& entry) const
+QString SelectionPropertiesWidget::imageAlignedText(const QJsonObject& entry, const QJsonObject& camera) const
 {
     if (entry.isEmpty())
     {
         return tr("未知");
     }
-    const QJsonObject camera = entry.value(QStringLiteral("camera")).toObject();
     const bool hasCenter = entry.contains(QStringLiteral("center")) ||
                            entry.contains(QStringLiteral("camera_center")) || camera.contains(QStringLiteral("C"));
     const bool aligned = entry.value(QStringLiteral("aligned")).toBool(hasCenter);
     return aligned ? tr("已定向") : tr("未定向");
 }
 
-QString SelectionPropertiesWidget::cameraCenterText(const QJsonObject& entry) const
+QString SelectionPropertiesWidget::cameraCenterText(const QJsonObject& entry, const QJsonObject& camera) const
 {
     QJsonArray center = entry.value(QStringLiteral("center")).toArray();
     if (center.isEmpty())
@@ -744,7 +744,6 @@ QString SelectionPropertiesWidget::cameraCenterText(const QJsonObject& entry) co
     }
     if (center.isEmpty())
     {
-        const QJsonObject camera = entry.value(QStringLiteral("camera")).toObject();
         center = camera.value(QStringLiteral("C")).toArray();
     }
     if (center.size() < 3)
@@ -757,7 +756,7 @@ QString SelectionPropertiesWidget::cameraCenterText(const QJsonObject& entry) co
         .arg(center.at(2).toDouble(), 0, 'f', 3);
 }
 
-QString SelectionPropertiesWidget::intrinsicsText(const QJsonObject& entry) const
+QString SelectionPropertiesWidget::intrinsicsText(const QJsonObject& entry, const QJsonObject& camera) const
 {
     const QJsonObject intrinsics = entry.value(QStringLiteral("intrinsics")).toObject();
     if (!intrinsics.isEmpty())
@@ -769,7 +768,6 @@ QString SelectionPropertiesWidget::intrinsicsText(const QJsonObject& entry) cons
             .arg(intrinsics.value(QStringLiteral("cy")).toDouble(), 0, 'f', 2);
     }
 
-    const QJsonObject camera = entry.value(QStringLiteral("camera")).toObject();
     if (camera.isEmpty())
     {
         return {};

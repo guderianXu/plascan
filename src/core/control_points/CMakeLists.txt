@@ -29,13 +29,12 @@ add_library(control_points STATIC
     reference/CoordinateReference.cpp
     quality/MarkerQualityReport.cpp
     detection/AprilTagDetector.cpp
+    detection/MarkerImageInput.cpp
     detection/DetectionMerger.cpp
     detection/DetectionIntegrator.cpp
     detection/DetectionReviewStore.cpp
     detection/NonCodedTargetDetector.cpp
     detection/MarkerDetectorFactory.cpp
-    print/MarkerSheetRenderer.cpp
-    print/MarkerPdfWriter.cpp
 )
 
 target_include_directories(control_points PUBLIC
@@ -47,8 +46,8 @@ target_include_directories(control_points PRIVATE
 
 target_link_libraries(control_points PUBLIC
     control_network
+    coordinate_system_gdal
     Qt6::Core
-    Qt6::Gui
     ${OpenCV_LIBS}
     ${PLASCAN_GDAL_TARGET}
     apriltag::apriltag
@@ -142,23 +141,34 @@ if(BUILD_TESTS)
     )
     gtest_discover_tests(test_marker_quality_report DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_apriltag_detector
-        tests/test_apriltag_detector.cpp
-    )
-    target_link_libraries(test_apriltag_detector PRIVATE
-        control_points
-        GTest::gtest_main
-    )
-    gtest_discover_tests(test_apriltag_detector DISCOVERY_MODE PRE_TEST)
+    if(PLASCAN_BUILD_QT_PRESENTATION)
+        add_executable(test_apriltag_detector
+            tests/test_apriltag_detector.cpp
+        )
+        target_link_libraries(test_apriltag_detector PRIVATE
+            marker_print_qt
+            marker_detection_qt
+            GTest::gtest_main
+        )
+        gtest_discover_tests(test_apriltag_detector DISCOVERY_MODE PRE_TEST)
+    endif()
 
     add_executable(test_non_coded_target_detector
         tests/test_non_coded_target_detector.cpp
     )
     target_link_libraries(test_non_coded_target_detector PRIVATE
-        control_points
+        marker_detection_qt
         GTest::gtest_main
     )
     gtest_discover_tests(test_non_coded_target_detector DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_marker_detector_input tests/test_marker_detector_input.cpp)
+    target_link_libraries(test_marker_detector_input PRIVATE control_points GTest::gtest_main)
+    gtest_discover_tests(test_marker_detector_input DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_marker_image_adapter tests/test_marker_image_adapter.cpp)
+    target_link_libraries(test_marker_image_adapter PRIVATE marker_detection_qt GTest::gtest_main)
+    gtest_discover_tests(test_marker_image_adapter DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_detection_integrator
         tests/test_detection_integrator.cpp
@@ -187,23 +197,26 @@ if(BUILD_TESTS)
     )
     gtest_discover_tests(test_marker_detector_factory DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_marker_pdf_writer
-        tests/test_marker_pdf_writer.cpp
-    )
-    target_link_libraries(test_marker_pdf_writer PRIVATE
-        control_points
-        GTest::gtest
-    )
-    if(APPLE AND TARGET Qt6::QOffscreenIntegrationPlugin)
-        qt_import_plugins(test_marker_pdf_writer INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    if(PLASCAN_BUILD_QT_PRESENTATION)
+        add_executable(test_marker_pdf_writer
+            tests/test_marker_pdf_writer.cpp
+        )
+        target_link_libraries(test_marker_pdf_writer PRIVATE
+            marker_print_qt
+            marker_detection_qt
+            GTest::gtest
+        )
+        if(APPLE AND TARGET Qt6::QOffscreenIntegrationPlugin)
+            qt_import_plugins(test_marker_pdf_writer INCLUDE Qt6::QOffscreenIntegrationPlugin)
+        endif()
+        set(_marker_pdf_qt_platform_plugin_path
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+        gtest_discover_tests(test_marker_pdf_writer
+            DISCOVERY_MODE PRE_TEST
+            PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                ENVIRONMENT_MODIFICATION
+                    "QT_QPA_PLATFORM_PLUGIN_PATH=set:${_marker_pdf_qt_platform_plugin_path}"
+        )
     endif()
-    set(_marker_pdf_qt_platform_plugin_path
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
-    gtest_discover_tests(test_marker_pdf_writer
-        DISCOVERY_MODE PRE_TEST
-        PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-            ENVIRONMENT_MODIFICATION
-                "QT_QPA_PLATFORM_PLUGIN_PATH=set:${_marker_pdf_qt_platform_plugin_path}"
-    )
 endif()

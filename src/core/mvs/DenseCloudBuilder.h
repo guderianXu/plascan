@@ -57,26 +57,28 @@ namespace xjw
             /// 将单帧深度图反投影为点云
             /// @param depth     融合后深度图 (CV_32F)
             /// @param mask      有效像素掩码 (CV_8U, 255=有效)
-            /// @param cameraModel 与深度图对应的正深度、零畸变 FramePinholeCamera 工作值
+            /// @param cameraModel 与深度图对应的正深度、零畸变 FramePinholeNumericState 工作值
             /// @param colorImg  对应的彩色图像 (CV_8UC3 BGR) 或灰度 (CV_8UC1)，可为空
             /// @param options   选项
             /// @return 点云列表
-            static std::vector<DensePoint> unproject(const cv::Mat& depth,
-                                                     const cv::Mat& mask,
-                                                     const FramePinholeCamera& cameraModel,
-                                                     const cv::Mat& colorImg,
-                                                     const DenseCloudOptions& options = DenseCloudOptions{});
+            static std::vector<DensePoint>
+            unproject(const cv::Mat& depth,
+                      const cv::Mat& mask,
+                      const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                      const cv::Mat& colorImg,
+                      const DenseCloudOptions& options = DenseCloudOptions{});
 
             /// 执行带后端报告的反投影。显式 CUDA/OpenCL 请求严格失败，只有 Auto
             /// 可以按 CUDA -> OpenCL -> CPU 回退。
-            static bool unprojectWithReport(const cv::Mat& depth,
-                                            const cv::Mat& mask,
-                                            const FramePinholeCamera& cameraModel,
-                                            const cv::Mat& colorImg,
-                                            const DenseCloudOptions& options,
-                                            std::vector<DensePoint>* cloud,
-                                            DenseCloudExecutionReport* report = nullptr,
-                                            std::string* errorMsg = nullptr);
+            static bool
+            unprojectWithReport(const cv::Mat& depth,
+                                const cv::Mat& mask,
+                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                                const cv::Mat& colorImg,
+                                const DenseCloudOptions& options,
+                                std::vector<DensePoint>* cloud,
+                                DenseCloudExecutionReport* report = nullptr,
+                                std::string* errorMsg = nullptr);
 
             /// 将多帧点云合并（直接拼接）
             static std::vector<DensePoint> merge(const std::vector<std::vector<DensePoint>>& clouds);

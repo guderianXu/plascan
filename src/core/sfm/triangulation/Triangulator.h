@@ -17,7 +17,7 @@
 #include "graph/CorrespondenceGraph.h"
 #include "reconstruction/SfmReconstruction.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "Intersection.h"
 
 #include <vector>

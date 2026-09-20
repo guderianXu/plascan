@@ -29,9 +29,10 @@ bool isTrackFixed(int track_index, const BAOptions& options)
 
 } // namespace
 
-ActiveProblem prepareActiveProblem(const std::vector<FramePinholeCamera>& cameras,
-                                   const std::vector<BATrack>& tracks,
-                                   const BAOptions& options)
+ActiveProblem
+prepareActiveProblem(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                     const std::vector<BATrack>& tracks,
+                     const BAOptions& options)
 {
     ActiveProblem problem;
     problem.activeTrack.assign(tracks.size(), 0);

@@ -15,7 +15,7 @@ namespace xjw
     {
         PnpResult runReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
                                         const std::vector<std::array<double, 2>>& imagePoints,
-                                        const FramePinholeCamera& camera,
+                                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                         const PnpOptions& options)
         {
             PnpResult result;
@@ -61,25 +61,26 @@ namespace xjw
                                    uDir,
                                    vDir,
                                    depthFlipped,
-                                   FramePinholeCamera::Distortion{},
+                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{},
                                    options);
     }
 
-    PnpResult PnpSolver::solveWithDistortion(const std::vector<std::array<double, 3>>& worldPoints,
-                                             const std::vector<std::array<double, 2>>& imagePoints,
-                                             double fu,
-                                             double fv,
-                                             double cu,
-                                             double cv,
-                                             int uDir,
-                                             int vDir,
-                                             bool depthFlipped,
-                                             const FramePinholeCamera::Distortion& distortion,
-                                             const PnpOptions& options)
+    PnpResult PnpSolver::solveWithDistortion(
+        const std::vector<std::array<double, 3>>& worldPoints,
+        const std::vector<std::array<double, 2>>& imagePoints,
+        double fu,
+        double fv,
+        double cu,
+        double cv,
+        int uDir,
+        int vDir,
+        bool depthFlipped,
+        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion,
+        const PnpOptions& options)
     {
         if (options.useReferenceResection)
         {
-            FramePinholeCamera camera;
+            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
             camera.setIntrinsics(fu, fv, cu, cv);
             camera.setAxisDirections(uDir, vDir);
             camera.setDepthAxisFlipped(depthFlipped);
@@ -316,7 +317,7 @@ namespace xjw
 
     PnpResult PnpSolver::solveWithCamera(const std::vector<std::array<double, 3>>& worldPoints,
                                          const std::vector<std::array<double, 2>>& imagePoints,
-                                         const FramePinholeCamera& cam,
+                                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
                                          const PnpOptions& options)
     {
         if (options.useReferenceResection)

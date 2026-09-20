@@ -45,22 +45,23 @@ namespace xjw
             return true;
         }
 
-        bool PatchMatchDepthEstimator::estimateGPU(const cv::Mat&,
-                                                   const std::vector<cv::Mat>&,
-                                                   const FramePinholeCamera&,
-                                                   const std::vector<FramePinholeCamera>&,
-                                                   float,
-                                                   float,
-                                                   const PatchMatchConfig&,
-                                                   cv::Mat&,
-                                                   cv::Mat*,
-                                                   std::string* errorMsg,
-                                                   const cv::Mat*,
-                                                   const cv::Mat*,
-                                                   const cv::Mat*,
-                                                   const std::vector<cv::Mat>*,
-                                                   const PatchMatchAuxiliaryInput*,
-                                                   PatchMatchAuxiliaryOutput*)
+        bool PatchMatchDepthEstimator::estimateGPU(
+            const cv::Mat&,
+            const std::vector<cv::Mat>&,
+            const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>&,
+            float,
+            float,
+            const PatchMatchConfig&,
+            cv::Mat&,
+            cv::Mat*,
+            std::string* errorMsg,
+            const cv::Mat*,
+            const cv::Mat*,
+            const cv::Mat*,
+            const std::vector<cv::Mat>*,
+            const PatchMatchAuxiliaryInput*,
+            PatchMatchAuxiliaryOutput*)
         {
             if (errorMsg)
                 *errorMsg = "CUDA 不可用（编译时未启用）";
@@ -83,14 +84,15 @@ namespace xjw
             return {};
         }
 
-        std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(const cv::Mat&,
-                                                                  const cv::Mat&,
-                                                                  const FramePinholeCamera&,
-                                                                  const cv::Mat&,
-                                                                  float,
-                                                                  float,
-                                                                  std::string* errorMsg,
-                                                                  const DenseCloudOptions*)
+        std::vector<DensePoint>
+        DensePointCloudCUDA::unprojectGPU(const cv::Mat&,
+                                          const cv::Mat&,
+                                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+                                          const cv::Mat&,
+                                          float,
+                                          float,
+                                          std::string* errorMsg,
+                                          const DenseCloudOptions*)
         {
             if (errorMsg)
                 *errorMsg = "CUDA 不可用（编译时未启用）";

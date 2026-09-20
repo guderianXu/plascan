@@ -45,9 +45,10 @@ struct HostPinholeCamera
     float principalY = 0.0f;
 };
 
-HostPinholeCamera makeHostPinholeCamera(const FramePinholeCamera& camera, int downsampleFactor)
+HostPinholeCamera makeHostPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                        int downsampleFactor)
 {
-    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
 
     HostPinholeCamera result;
@@ -675,22 +676,23 @@ cv::Mat resizedBinaryMask(const cv::Mat* mask, const cv::Size& targetSize)
 
 } // namespace
 
-bool PatchMatchDepthEstimator::estimateCPU(const cv::Mat& refGray,
-                                           const std::vector<cv::Mat>& srcGrays,
-                                           const FramePinholeCamera& refCam,
-                                           const std::vector<FramePinholeCamera>& srcCams,
-                                           float zNear,
-                                           float zFar,
-                                           const PatchMatchConfig& config,
-                                           cv::Mat& depthOut,
-                                           cv::Mat* confOut,
-                                           std::string* errorMsg,
-                                           const cv::Mat* hintDepth,
-                                           const cv::Mat* hintRadius,
-                                           const cv::Mat* refValidMask,
-                                           const std::vector<cv::Mat>* srcValidMasks,
-                                           const PatchMatchAuxiliaryInput* auxiliaryInput,
-                                           PatchMatchAuxiliaryOutput* auxiliaryOutput)
+bool PatchMatchDepthEstimator::estimateCPU(
+    const cv::Mat& refGray,
+    const std::vector<cv::Mat>& srcGrays,
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+    float zNear,
+    float zFar,
+    const PatchMatchConfig& config,
+    cv::Mat& depthOut,
+    cv::Mat* confOut,
+    std::string* errorMsg,
+    const cv::Mat* hintDepth,
+    const cv::Mat* hintRadius,
+    const cv::Mat* refValidMask,
+    const std::vector<cv::Mat>* srcValidMasks,
+    const PatchMatchAuxiliaryInput* auxiliaryInput,
+    PatchMatchAuxiliaryOutput* auxiliaryOutput)
 {
     const int refW = refGray.cols;
     const int refH = refGray.rows;

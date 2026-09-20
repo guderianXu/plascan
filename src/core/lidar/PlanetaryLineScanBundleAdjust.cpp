@@ -16,7 +16,10 @@ namespace lidar
 namespace
 {
 
-using Vector3 = PlanetaryLineScanCamera::Vector3;
+using Vector3 = std::array<double, 3>;
+using LineScanInstance = camera_models::linescan::LineScanInstance;
+using LineScanProjection = camera_models::linescan::LineScanProjection;
+using LineScanRay = camera_models::linescan::LineScanRay;
 
 constexpr double kIsisToCsmPixelCenterOffset = 0.5;
 
@@ -96,7 +99,7 @@ struct MappedMeasure
 {
     int cameraIndex = -1;
     const IsisControlMeasure *measure = nullptr;
-    PlanetaryLineScanCamera::ImagingRay ray;
+    LineScanRay ray;
 };
 
 bool chooseTriangulationPair(const std::vector<MappedMeasure> &measures,
@@ -109,8 +112,8 @@ bool chooseTriangulationPair(const std::vector<MappedMeasure> &measures,
         for (std::size_t second = first + 1; second < measures.size(); ++second)
         {
             const double score = 1.0 - std::abs(dot(
-                measures[first].ray.directionBodyFixed,
-                measures[second].ray.directionBodyFixed));
+                measures[first].ray.direction,
+                measures[second].ray.direction));
             if (score > bestScore)
             {
                 bestScore = score;
@@ -139,10 +142,27 @@ bool usedLaserTime(const PlanetaryLineScanBaCamera &camera,
             return candidate.imageId == camera.serialNumber;
         });
     return measure != shot.imageMeasures.end() &&
-        camera.model.absoluteEtForLine(
-            measure->linePixels - kIsisToCsmPixelCenterOffset,
-            PlanetaryLineScanCamera::PixelConvention::CsmPixelCenter,
-            ephemerisTimeSeconds);
+        camera.instance->timeForLine(measure->linePixels - kIsisToCsmPixelCenterOffset, ephemerisTimeSeconds);
+}
+
+bool centerAtTime(const LineScanInstance& instance, double ephemerisTimeSeconds, Vector3* center)
+{
+    if (!center || !std::isfinite(ephemerisTimeSeconds))
+    {
+        return false;
+    }
+    try
+    {
+        *center = instance.trajectory()
+                      .poseAt(xjw::coordinate_system::TimeReference::create(xjw::coordinate_system::TimeScale::Tdb, ephemerisTimeSeconds),
+                              instance.definition().worldFrame())
+                      .center;
+    }
+    catch (const camera_core::CameraValidationError&)
+    {
+        return false;
+    }
+    return true;
 }
 
 bool isSupportedLineScanBackend(BABackend backend)
@@ -183,8 +203,8 @@ BABackend selectLineScanBackend(const PlanetaryLineScanBaOptions& options, int c
 
 } // namespace
 
-bool triangulatePlanetaryLineScanRays(const PlanetaryLineScanCamera::ImagingRay& first,
-                                      const PlanetaryLineScanCamera::ImagingRay& second,
+bool triangulatePlanetaryLineScanRays(const LineScanRay& first,
+                                      const LineScanRay& second,
                                       std::array<double, 3>* pointBodyFixedMeters,
                                       double* raySeparationMeters)
 {
@@ -192,13 +212,12 @@ bool triangulatePlanetaryLineScanRays(const PlanetaryLineScanCamera::ImagingRay&
     {
         return false;
     }
-    const Vector3 offset = subtract(first.centerBodyFixedMeters,
-                                    second.centerBodyFixedMeters);
-    const double a = dot(first.directionBodyFixed, first.directionBodyFixed);
-    const double b = dot(first.directionBodyFixed, second.directionBodyFixed);
-    const double c = dot(second.directionBodyFixed, second.directionBodyFixed);
-    const double d = dot(first.directionBodyFixed, offset);
-    const double e = dot(second.directionBodyFixed, offset);
+    const Vector3 offset = subtract(first.origin, second.origin);
+    const double a = dot(first.direction, first.direction);
+    const double b = dot(first.direction, second.direction);
+    const double c = dot(second.direction, second.direction);
+    const double d = dot(first.direction, offset);
+    const double e = dot(second.direction, offset);
     const double denominator = a * c - b * b;
     if (!(a > 0.0) || !(c > 0.0) || std::abs(denominator) < 1.0e-14)
     {
@@ -214,10 +233,8 @@ bool triangulatePlanetaryLineScanRays(const PlanetaryLineScanCamera::ImagingRay&
     Vector3 secondPoint{};
     for (int axis = 0; axis < 3; ++axis)
     {
-        firstPoint[axis] = first.centerBodyFixedMeters[axis] +
-                           firstDistance * first.directionBodyFixed[axis];
-        secondPoint[axis] = second.centerBodyFixedMeters[axis] +
-                            secondDistance * second.directionBodyFixed[axis];
+        firstPoint[axis] = first.origin[axis] + firstDistance * first.direction[axis];
+        secondPoint[axis] = second.origin[axis] + secondDistance * second.direction[axis];
         (*pointBodyFixedMeters)[axis] = 0.5 * (firstPoint[axis] + secondPoint[axis]);
     }
     if (raySeparationMeters)
@@ -289,22 +306,20 @@ bool runPlanetaryLineScanBundleAdjust(
     for (std::size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
     {
         const auto &camera = cameras[cameraIndex];
-        if (camera.serialNumber.empty() || !camera.model.isValid() ||
+        if (camera.serialNumber.empty() || !camera.instance ||
             !cameraBySerial.emplace(camera.serialNumber, static_cast<int>(cameraIndex)).second)
         {
             setError(errorMessage, "line-scan camera has an empty/duplicate serial or invalid ISD model");
             return false;
         }
-        if (camera.model.targetName() != "MOON" ||
-            camera.model.bodyFixedFrameName() != "MOON_ME" ||
-            (!controlNetwork.targetName.empty() &&
-             controlNetwork.targetName != camera.model.targetName()))
+        if (camera.instance->definition().worldFrame().value() != "MOON_ME" ||
+            (!controlNetwork.targetName.empty() && controlNetwork.targetName != "MOON"))
         {
             setError(errorMessage,
                      "line-scan ISD, control network, and solver must share MOON/MOON_ME");
             return false;
         }
-        workingSet.cameraModels.push_back(&camera.model);
+        workingSet.cameraInstances.push_back(camera.instance.get());
         result->cameras[cameraIndex].serialNumber = camera.serialNumber;
     }
 
@@ -342,10 +357,10 @@ bool runPlanetaryLineScanBundleAdjust(
                 measure.samplePixels - kIsisToCsmPixelCenterOffset;
             const double csmLine =
                 measure.linePixels - kIsisToCsmPixelCenterOffset;
-            if (!cameras[mapped.cameraIndex].model.pixelRayBodyFixed(
-                    csmSample, csmLine,
-                    PlanetaryLineScanCamera::PixelConvention::CsmPixelCenter,
-                    &mapped.ray))
+            if (!LineScanProjection::ray(*cameras[mapped.cameraIndex].instance,
+                                         csmSample,
+                                         csmLine,
+                                         &mapped.ray))
             {
                 setError(errorMessage, "failed to construct line-scan ray for control point " +
                                            controlPoint.id);
@@ -423,7 +438,7 @@ bool runPlanetaryLineScanBundleAdjust(
             const auto &camera = cameras[mappedCamera->second];
             Vector3 center{};
             if (!usedLaserTime(camera, shot, options.laserTimeMode, &usedEt) ||
-                !camera.model.sensorCenterBodyFixedAtEt(usedEt, &center))
+                !centerAtTime(*camera.instance, usedEt, &center))
             {
                 setError(errorMessage, "failed to evaluate laser shot time/position: " + shot.id);
                 return false;

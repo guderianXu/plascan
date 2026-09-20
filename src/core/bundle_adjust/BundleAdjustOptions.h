@@ -2,7 +2,7 @@
 
 #include "BundleAdjustProblem.h"
 #include "BundleAdjustTypes.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <atomic>
 #include <functional>
@@ -88,7 +88,7 @@ namespace xjw
         /// cameras 等长且 reference[i] 对应 cameras[i] 的同一像素坐标系。多轮 BA 可
         /// 更新求解初值，同时继续相对同一参考设置焦距/宽高比范围、主点偏移和弱先验；
         /// Brown-Conrady 畸变硬边界仍是绝对范围。
-        std::vector<FramePinholeCamera> sharedIntrinsicReferenceCameras;
+        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> sharedIntrinsicReferenceCameras;
 
         // ── 参考 BA 数值策略 ──────────────────────────────────────────────────
         /// PlaMatrix CPU/CUDA/OpenCL 统一使用“对齐照片”兼容策略：尺度白化、

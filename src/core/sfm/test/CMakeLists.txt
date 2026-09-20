@@ -27,6 +27,15 @@ target_include_directories(test_sfm_params PRIVATE
 
 add_sfm_test(test_sfm_quality_report sfm_project Qt6::Core)
 
+add_sfm_test(test_triangulation_service sfm_project
+    image_matching plascan_common_io ${OpenCV_LIBS})
+target_compile_definitions(test_triangulation_service PRIVATE
+    PLASCAN_SFM_COLOR_TEST_TMP_DIR="${CMAKE_SOURCE_DIR}/build/tmp/sfm-color-tests")
+
+add_sfm_test(test_camera_reference_pose_prior sfm_core
+    camera_reference
+    bundle_adjust)
+
 add_sfm_test(test_sfm_pipeline sfm_core
     camera
     intersection
@@ -55,11 +64,13 @@ target_include_directories(test_sfm_prior_tracks PRIVATE
 
 add_sfm_test(test_ba_input_builder sfm_project
     camera
+    camera_project
     intersection
     bundle_adjust
     Qt6::Core
 )
 target_include_directories(test_ba_input_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust

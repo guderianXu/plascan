@@ -5,12 +5,17 @@
 #include "DataTreeWidget.h"
 #include "MainMenu.h"
 #include "ModelDropSupport.h"
-#include "ProjectManager.h"
+#include "project/services/ProjectLifecycleService.h"
+#include "project/services/ProjectResourceCleanupCoordinator.h"
+#include "project/services/ProjectServiceContainer.h"
 #include "WorkspaceCenterWidget.h"
+#include "WindowControlsWidget.h"
 
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QMenuBar>
 #include <QMimeData>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -18,9 +23,7 @@
 // ============================================================
 //  构造 / 析构
 // ============================================================
-MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent)
-    , _ui(new Ui::MainWindow)
+MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), _ui(new Ui::MainWindow)
 {
     Qt::WindowFlags flags = windowFlags();
     flags |= Qt::Window;
@@ -46,6 +49,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     setupLogDock();
     setupMenuConnections();
+    if (WindowControlsWidget::isNeededForPlatform(QGuiApplication::platformName()) &&
+        _mainMenu->toggleFullScreenAction())
+    {
+        menuBar()->setCornerWidget(new WindowControlsWidget(*this, *_mainMenu->toggleFullScreenAction(), menuBar()),
+                                   Qt::TopRightCorner);
+    }
     setupProjectManager();
 
     setAcceptDrops(true);
@@ -54,22 +63,22 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    if (_projectManager)
+    if (_projectServices)
     {
-        _projectManager->waitForResourceCleanup();
+        _projectServices->cleanup().waitForFinished();
     }
     delete _ui;
 }
 
 void MainWindow::openProjectFromPath(const QString &projectPath)
 {
-    if (projectPath.trimmed().isEmpty() || !_projectManager)
+    if (projectPath.trimmed().isEmpty() || !_projectServices)
     {
         return;
     }
 
     persistCurrentUiSettings();
-    _projectManager->openProjectFromPath(projectPath);
+    _projectServices->lifecycle().openProjectFromPath(projectPath);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)

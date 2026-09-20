@@ -39,11 +39,10 @@ namespace xjw::mvs
         const std::string preview_directory =
             !_outputDir.empty() ? _outputDir : (durable_publication ? _config.intermediateDir : std::string());
         const bool savePreviewPng = !preview_directory.empty();
-        const bool has_raw_directory =
-            !_config.intermediateDir.empty() || !_outputDir.empty() || _streamConsistencyStorageEnabled;
+        const bool has_raw_directory = !_config.intermediateDir.empty() || !_outputDir.empty();
         const bool saveRawDepth =
-            has_raw_directory && ((_config.saveIntermediateDepthMaps || _config.saveIntermediatePyramidLevels) ||
-                                  _streamConsistencyStorageEnabled || durable_publication);
+            has_raw_directory &&
+            ((_config.saveIntermediateDepthMaps || _config.saveIntermediatePyramidLevels) || durable_publication);
         if (!savePreviewPng && !saveRawDepth)
         {
             return true;
@@ -52,10 +51,7 @@ namespace xjw::mvs
         std::string saveErr;
         const auto saveStart = Clock::now();
         const std::string pngPath = preview_directory + "/depth_" + std::to_string(frameIndex) + ".png";
-        const std::string raw_directory =
-            _streamConsistencyStorageEnabled
-                ? _consistencyDepthDirectory
-                : (!_config.intermediateDir.empty() ? _config.intermediateDir : _outputDir);
+        const std::string raw_directory = !_config.intermediateDir.empty() ? _config.intermediateDir : _outputDir;
         const std::string rawDepthPath = raw_directory + "/depth_" + std::to_string(frameIndex) + ".bin";
         const std::string rawConfidencePath = raw_directory + "/depth_" + std::to_string(frameIndex) + "_conf.bin";
         const std::string rawPhotometricSourceMaskPath =
@@ -636,8 +632,6 @@ namespace xjw::mvs
             QJsonArray sourcePlan;
             QStringList sourceImageList;
             const bool hasResultSourcePlan = !result.sourceViewPlan.empty();
-            const bool hasSourceScoreCache = frameIndex >= 0 && frameIndex < static_cast<int>(_frameCaches.size()) &&
-                                             !_frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores.empty();
             for (const int sourceIndex : result.sourceViewIndices)
             {
                 if (sourceIndex < 0 || sourceIndex >= static_cast<int>(_views.size()))
@@ -652,10 +646,6 @@ namespace xjw::mvs
                 if (hasResultSourcePlan)
                 {
                     scores = &result.sourceViewPlan;
-                }
-                else if (hasSourceScoreCache)
-                {
-                    scores = &_frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores;
                 }
                 if (scores)
                 {
@@ -773,26 +763,13 @@ namespace xjw::mvs
             {
                 depthQualityJson.insert(it.key(), it.value());
             }
-            const int requestedSourceViewCount =
-                result.requestedSourceViewCount > 0
-                    ? result.requestedSourceViewCount
-                    : (hasSourceScoreCache ? _frameCaches[static_cast<size_t>(frameIndex)].requestedSourceViewCount
-                                           : sourceQualitySummary.sourceViewCount);
+            const int requestedSourceViewCount = result.requestedSourceViewCount > 0
+                                                     ? result.requestedSourceViewCount
+                                                     : sourceQualitySummary.sourceViewCount;
             const int sourceViewShortfall =
                 std::max(0, requestedSourceViewCount - sourceQualitySummary.sourceViewCount);
-            const QString sourceViewShortfallReason =
-                !result.sourceViewShortfallReason.empty()
-                    ? QString::fromStdString(result.sourceViewShortfallReason)
-                    : (hasSourceScoreCache
-                           ? QString::fromStdString(
-                                 _frameCaches[static_cast<size_t>(frameIndex)].sourceViewShortfallReason)
-                           : QString());
-            const QJsonObject sourceAngleDiagnostics =
-                !result.sourceAngleDiagnostics.isEmpty()
-                    ? result.sourceAngleDiagnostics
-                    : (frameIndex >= 0 && frameIndex < static_cast<int>(_frameCaches.size())
-                           ? _frameCaches[static_cast<size_t>(frameIndex)].sourceAngleDiagnostics
-                           : QJsonObject{});
+            const QString sourceViewShortfallReason = QString::fromStdString(result.sourceViewShortfallReason);
+            const QJsonObject sourceAngleDiagnostics = result.sourceAngleDiagnostics;
             depthQualityJson[QStringLiteral("requested_source_view_count")] = requestedSourceViewCount;
             depthQualityJson[QStringLiteral("source_view_shortfall")] = sourceViewShortfall;
             depthQualityJson[QStringLiteral("source_view_shortfall_reason")] = sourceViewShortfallReason;

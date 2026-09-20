@@ -3,7 +3,7 @@
 #include "DemDomTypes.h"
 
 #include <plapoint/core/point_cloud.h>
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <QString>
 #include <opencv2/core.hpp>
@@ -42,11 +42,12 @@ public:
      * @param errorMsg 错误信息（可选）
      * @return 成功返回 true，失败返回 false
      */
-    static bool generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                      const std::vector<FramePinholeCamera> &cameras,
-                                      const DemGenerationOptions &options,
-                                      DemGridData *demGrid,
-                                      QString *errorMsg = nullptr);
+    static bool
+    generateFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
+                          const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+                          const DemGenerationOptions& options,
+                          DemGridData* demGrid,
+                          QString* errorMsg = nullptr);
 
     /**
      * @brief 根据点云与参数估算 DEM 栅格宽度。

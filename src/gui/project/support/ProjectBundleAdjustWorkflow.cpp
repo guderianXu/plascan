@@ -207,7 +207,7 @@ BundleAdjustPreviewPresentation buildBundleAdjustPreviewPresentation(
 }
 
 BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
-                                                   const QMap<QString, QJsonObject> &cameraMetaByImage,
+                                                   const xjw::camera_project::CameraInstanceUpdates &cameraUpdates,
                                                    const QJsonObject &baResult)
 {
     BundleAdjustCommitResult result;
@@ -217,25 +217,27 @@ BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
         return result;
     }
 
-    if (cameraMetaByImage.isEmpty())
+    if (cameraUpdates.empty())
     {
         result.errorMessage = QStringLiteral("没有可应用的平差相机结果");
         return result;
     }
 
     QString errorMessage;
-    if (!projectData->setImageCameras(cameraMetaByImage, &result.updatedCameraCount, &errorMessage))
+    ProjectBundleAdjustMetadataStageToken token;
+    if (!projectData->stageBundleAdjustMetadata(cameraUpdates, baResult, &token, &errorMessage))
     {
-        result.errorMessage = QStringLiteral("写回相机参数失败: %1").arg(errorMessage);
+        result.errorMessage = errorMessage;
         return result;
     }
-
-    QJsonObject compactBaResult = baResult;
-    compactBaResult.remove(QStringLiteral("point_preview"));
-    QString saveWarning;
-    if (!projectData->appendBundleAdjustResult(compactBaResult, &saveWarning))
+    result.updatedCameraCount = token.updatedCameraCount();
+    const ProjectBundleAdjustMetadataStageResolveResult resolved = projectData->resolveBundleAdjustMetadataStage(
+        token, ProjectBundleAdjustMetadataStageDecision::Commit);
+    if (resolved.status != ProjectBundleAdjustMetadataStageStatus::Committed)
     {
-        result.warningMessage = QStringLiteral("保存平差结果失败: %1").arg(saveWarning);
+        result.errorMessage = resolved.errorMessage.isEmpty() ? QStringLiteral("提交 BA 元数据事务失败")
+                                                              : resolved.errorMessage;
+        return result;
     }
 
     result.success = true;

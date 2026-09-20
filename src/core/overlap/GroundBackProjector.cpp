@@ -15,7 +15,8 @@
 //
 // 坐标系约定：
 //   - 像素坐标：(u=列, v=行)，左上角为原点
-//   - 相机坐标系：X 向右，Y 向下，Z 向前（光轴方向）
+//   - 相机坐标系的轴方向和物理前方由 FramePinholeNumericState 统一定义，
+//     不在此处假设固定的深度轴方向
 //   - 世界坐标系：由相机标定确定，通常为 UTM 或本地水平坐标系
 //   - 高程 Z：向上为正
 // ============================================================
@@ -26,12 +27,6 @@
 #include <sstream>
 
 namespace {
-
-// 计算三维向量的欧氏范数（L2 范数）：||v|| = sqrt(x²+y²+z²)
-double norm3(const std::array<double, 3> &v)
-{
-    return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-}
 
 // 计算两个三维点在 XY 平面（水平面）上的投影距离（忽略 Z 分量）
 // 用于将地面点之间的水平距离与影像覆盖半径比较
@@ -48,6 +43,11 @@ double distance3D(const std::array<double, 3> &a, const std::array<double, 3> &b
     const double dy = a[1] - b[1];
     const double dz = a[2] - b[2];
     return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool finitePoint(const std::array<double, 3> &point)
+{
+    return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]);
 }
 
 } // namespace
@@ -80,7 +80,10 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
         if (line.empty() || line[0] == '#') continue;
         std::istringstream iss(line);
         double x = 0.0, y = 0.0, z = 0.0;
-        if (!(iss >> x >> y >> z)) continue; // 解析失败则跳过该行
+        if (!(iss >> x >> y >> z) || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+        {
+            continue; // 解析失败或非有限数据则跳过该行
+        }
         _points.push_back({x, y, z});
     }
 
@@ -110,12 +113,13 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
 // idx 是 PlaPoint KDTree 点的 payload，即 _points 中的原始下标
 bool DemSurface::sampleHeight(double x, double y, double *z, double *xyDistance) const
 {
-    if (!z || _index.empty()) return false;
+    if (!z || !std::isfinite(x) || !std::isfinite(y) || _index.empty()) return false;
     double dist = 0.0;
     // KD 树最近邻查询：返回 PlaPoint KDTree 点的 payload（即 _points 的下标），dist 为水平距离
     const int idx = _index.nearest(DemKdTree2D::CoordinateArray{x, y}, &dist);
     if (idx < 0 || idx >= static_cast<int>(_points.size())) return false;
     *z = _points[static_cast<size_t>(idx)][2]; // 取对应点的高程 Z
+    if (!std::isfinite(*z) || !std::isfinite(dist)) return false;
     if (xyDistance) *xyDistance = dist;          // 可选：返回水平距离（评估外推精度）
     return true;
 }
@@ -136,67 +140,48 @@ double DemSurface::meanHeight() const
 // 函数：GroundBackProjector::pixelRayWorld（私有）
 // 功能：将像素坐标 (u,v) 转换为世界坐标系下的射线（起点 + 归一化方向）。
 //   数学步骤：
-//     ① 去畸变（此处假设已畸变校正或使用线性针孔模型，无显式畸变处理）
-//     ② 反内参变换（像素 → 相机归一化坐标）：
-//          x = (u - cu) / (uDir * fu)
-//          y = (v - cv) / (vDir * fv)
-//        其中 uDir/vDir 为轴方向符号（±1），处理不同图像坐标轴定义
-//     ③ 构造相机系射线方向：ray_cam = (x, y, 1)
-//     ④ 使用旋转矩阵 R（cam→world，行主序 3×3）变换到世界系：
-//          ray_world = R * ray_cam
-//     ⑤ 归一化：dir = ray_world / ||ray_world||
+//     ① 通过 FramePinholeNumericState::rayForPixel() 完成去畸变、轴方向、
+//        深度轴和相机到世界坐标变换；这里不再复制一套针孔公式。
+//     ② 返回统一数值状态定义的世界系单位射线。
 // ============================================================
-bool GroundBackProjector::pixelRayWorld(const FramePinholeCamera &camera,
+bool GroundBackProjector::pixelRayWorld(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                         double u,
                                         double v,
-                                        std::array<double, 3> *origin,
-                                        std::array<double, 3> *dir,
-                                        std::string *errorMsg)
+                                        std::array<double, 3>* origin,
+                                        std::array<double, 3>* dir,
+                                        std::string* errorMsg)
 {
-    if (!origin || !dir) return false;
-
-    // 获取相机外参：中心坐标 C（世界系）和旋转矩阵 R（cam→world）
-    const auto C = camera.cameraCenter();
-    const auto R = camera.cameraToWorldRotation();
-
-    // 获取相机内参
-    const double fu = camera.focalX(); // X 方向焦距（像素）
-    const double fv = camera.focalY(); // Y 方向焦距（像素）
-    const double cu = camera.principalX(); // 主点 X（像素）
-    const double cv = camera.principalY(); // 主点 Y（像素）
-    const int uDir = camera.uAxisSign(); // X 轴方向符号（+1 或 -1）
-    const int vDir = camera.vAxisSign(); // Y 轴方向符号（+1 或 -1）
-
-    // 焦距有效性检查（防止除零）
-    if (std::abs(fu) < 1e-12 || std::abs(fv) < 1e-12) {
-        if (errorMsg) *errorMsg = "相机焦距 fu/fv 无效";
+    if (!origin || !dir)
+    {
         return false;
     }
 
-    // ② 反内参：像素坐标 → 相机归一化坐标（Z=1 平面上的点）
-    const double x = (u - cu) / (double(uDir) * fu);
-    const double y = (v - cv) / (double(vDir) * fv);
-
-    // ③ 相机坐标系下的射线方向（齐次表示，Z=1）
-    std::array<double, 3> rayCam{x, y, 1.0};
-
-    // ④ 旋转到世界坐标系：ray_world = R * ray_cam
-    //    R 为行主序 3×3 矩阵（cam→world），即 R[row*3+col]
-    std::array<double, 3> rayWorld{
-        R[0] * rayCam[0] + R[1] * rayCam[1] + R[2] * rayCam[2],
-        R[3] * rayCam[0] + R[4] * rayCam[1] + R[5] * rayCam[2],
-        R[6] * rayCam[0] + R[7] * rayCam[1] + R[8] * rayCam[2]};
-
-    // ⑤ 归一化，得到单位方向向量
-    const double n = norm3(rayWorld);
-    if (n < 1e-12) {
-        if (errorMsg) *errorMsg = "无法计算有效射线方向";
+    std::string validationError;
+    if (!camera.validateNumericalState(&validationError))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "数值相机状态无效";
+            if (!validationError.empty())
+            {
+                *errorMsg += ": " + validationError;
+            }
+        }
         return false;
     }
 
-    // 射线起点为相机中心（世界坐标）
-    *origin = C;
-    *dir = {rayWorld[0] / n, rayWorld[1] / n, rayWorld[2] / n};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
+    if (!camera.rayForPixel({u, v}, &ray))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法计算有效射线方向";
+        }
+        return false;
+    }
+
+    *origin = ray.origin;
+    *dir = ray.direction;
     return true;
 }
 
@@ -211,14 +196,22 @@ bool GroundBackProjector::pixelRayWorld(const FramePinholeCamera &camera,
 //     - |dir.z| 不能接近 0（否则射线与高程面平行，无交点或无穷远）
 //     - t > 0（交点必须在相机前方，t ≤ 0 表示面在相机后方）
 // ============================================================
-bool GroundBackProjector::backProjectToFixedZ(const FramePinholeCamera &camera,
+bool GroundBackProjector::backProjectToFixedZ(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                               double u,
                                               double v,
                                               double fixedZ,
-                                              std::array<double, 3> *ground,
-                                              std::string *errorMsg)
+                                              std::array<double, 3>* ground,
+                                              std::string* errorMsg)
 {
     if (!ground) return false;
+    if (!std::isfinite(fixedZ))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "固定高程必须是有限数值";
+        }
+        return false;
+    }
 
     // 计算世界坐标系下的射线（起点 + 归一化方向）
     std::array<double, 3> origin;
@@ -234,6 +227,12 @@ bool GroundBackProjector::backProjectToFixedZ(const FramePinholeCamera &camera,
     // 计算参数 t（射线行进长度）
     const double t = (fixedZ - origin[2]) / dir[2];
 
+    if (!std::isfinite(t))
+    {
+        if (errorMsg) *errorMsg = "固定高程交点距离无效";
+        return false;
+    }
+
     // t ≤ 0 意味着交点在相机后方（反向延伸），物理上无意义
     if (t <= 0.0) {
         if (errorMsg) *errorMsg = "固定高程交点在相机后方";
@@ -241,7 +240,13 @@ bool GroundBackProjector::backProjectToFixedZ(const FramePinholeCamera &camera,
     }
 
     // 计算交点，Z 分量直接赋值为 fixedZ（避免浮点误差累积）
-    *ground = {origin[0] + t * dir[0], origin[1] + t * dir[1], fixedZ};
+    const std::array<double, 3> candidate{origin[0] + t * dir[0], origin[1] + t * dir[1], fixedZ};
+    if (!finitePoint(candidate))
+    {
+        if (errorMsg) *errorMsg = "固定高程交点坐标无效";
+        return false;
+    }
+    *ground = candidate;
     return true;
 }
 
@@ -256,14 +261,14 @@ bool GroundBackProjector::backProjectToFixedZ(const FramePinholeCamera &camera,
 //       其中 diff = p.z - dem_z，忽略 DEM 的水平梯度（近似假设 DEM 较平坦）
 //   初始化：以 DEM 均值高程作为初始深度估计
 //   迭代限制：最多 32 次，收敛条件 |diff| < 1e-3（毫米级精度）
-//   退化处理：若 DEM 查询失败则将 t 扩大 1.3 倍继续搜索
+//   DEM 查询失败时扩大 t 继续搜索；超过迭代预算或没有前向交点则失败。
 // ============================================================
-bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
+bool GroundBackProjector::backProjectWithDem(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                              double u,
                                              double v,
-                                             const DemSurface &dem,
-                                             std::array<double, 3> *ground,
-                                             std::string *errorMsg)
+                                             const DemSurface& dem,
+                                             std::array<double, 3>* ground,
+                                             std::string* errorMsg)
 {
     if (!ground) return false;
     if (!dem.valid()) {
@@ -284,8 +289,31 @@ bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
 
     // 初始 t：用 DEM 均值高程估算初始交点深度
     const double zMean = dem.meanHeight();
+    if (!std::isfinite(zMean))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 平均高程无效";
+        }
+        return false;
+    }
     double t = (zMean - origin[2]) / dir[2];
-    if (t <= 0.0) t = 1.0; // 如果均值估计为负（相机在 DEM 下方），给一个默认正值
+    if (!std::isfinite(t))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 初始交点距离无效";
+        }
+        return false;
+    }
+    if (t <= 0.0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 交点在相机后方";
+        }
+        return false;
+    }
 
     bool found = false;
     std::array<double, 3> best = origin; // 保存每次迭代的最优近似点
@@ -296,15 +324,35 @@ bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
         const std::array<double, 3> p{origin[0] + t * dir[0], origin[1] + t * dir[1], origin[2] + t * dir[2]};
 
         // 查询该水平位置 (p.x, p.y) 的 DEM 高程
+        if (!finitePoint(p))
+        {
+            if (errorMsg) *errorMsg = "DEM 迭代点坐标无效";
+            return false;
+        }
         double zDem = 0.0;
         if (!dem.sampleHeight(p[0], p[1], &zDem)) {
             // DEM 查询失败（可能超出覆盖范围），扩大 t 继续延射线前进
             t *= 1.3;
+            if (!std::isfinite(t) || t <= 0.0)
+            {
+                if (errorMsg) *errorMsg = "DEM 搜索距离无效";
+                return false;
+            }
             continue;
+        }
+        if (!std::isfinite(zDem))
+        {
+            if (errorMsg) *errorMsg = "DEM 高程无效";
+            return false;
         }
 
         // 残差：当前射线点的 Z 与 DEM 高程的差值
         const double diff = p[2] - zDem;
+        if (!std::isfinite(diff))
+        {
+            if (errorMsg) *errorMsg = "DEM 求交残差无效";
+            return false;
+        }
         // 记录当前最优近似点（用于未完全收敛时的返回值）
         best = {p[0], p[1], zDem};
 
@@ -319,16 +367,30 @@ bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
         //   f(t) = p.z(t) - zDem，f'(t) ≈ dir.z （忽略 DEM 梯度项）
         if (std::abs(dir[2]) < 1e-12) break;
         t -= diff / dir[2];
-        if (t <= 0.0) t = 0.5; // 防止 t 退化为非正值
+        if (t <= 0.0 || !std::isfinite(t))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "DEM 迭代交点在相机后方或距离无效";
+            }
+            return false;
+        }
     }
 
-    if (!found) {
-        // 未完全收敛，使用最后一次近似作为输出（附警告）
-        *ground = best;
-        if (errorMsg) *errorMsg = "DEM 求交未完全收敛，返回近似交点";
-        return true;
+    if (!found)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 求交未收敛";
+        }
+        return false;
     }
 
+    if (!finitePoint(best))
+    {
+        if (errorMsg) *errorMsg = "DEM 交点坐标无效";
+        return false;
+    }
     *ground = best;
     return true;
 }
@@ -337,22 +399,24 @@ bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
 // 函数：GroundBackProjector::backProjectToSphere
 // 功能：射线与基准球面求交（解析二次方程）。
 // ============================================================
-bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
+bool GroundBackProjector::backProjectToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                               double u,
                                               double v,
-                                              const ReferenceSphereSurface &sphere,
-                                              std::array<double, 3> *ground,
-                                              std::string *errorMsg)
+                                              const ReferenceSphereSurface& sphere,
+                                              std::array<double, 3>* ground,
+                                              std::string* errorMsg)
 {
     if (!ground)
     {
         return false;
     }
-    if (sphere.radiusMeters <= 0.0)
+    if (!std::isfinite(sphere.radiusMeters) || sphere.radiusMeters <= 0.0 ||
+        !std::isfinite(sphere.center[0]) || !std::isfinite(sphere.center[1]) ||
+        !std::isfinite(sphere.center[2]))
     {
         if (errorMsg)
         {
-            *errorMsg = "基准球半径无效";
+            *errorMsg = "基准球参数无效";
         }
         return false;
     }
@@ -373,11 +437,11 @@ bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
     const double c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] -
                      sphere.radiusMeters * sphere.radiusMeters;
     const double disc = b * b - 4.0 * c;
-    if (disc < 0.0)
+    if (!std::isfinite(b) || !std::isfinite(c) || !std::isfinite(disc) || disc < 0.0)
     {
         if (errorMsg)
         {
-            *errorMsg = "射线与基准球无交点";
+            *errorMsg = std::isfinite(disc) ? "射线与基准球无交点" : "基准球交点计算无效";
         }
         return false;
     }
@@ -385,6 +449,11 @@ bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
     const double root = std::sqrt(std::max(0.0, disc));
     const double t0 = (-b - root) * 0.5;
     const double t1 = (-b + root) * 0.5;
+    if (!std::isfinite(t0) || !std::isfinite(t1))
+    {
+        if (errorMsg) *errorMsg = "基准球交点距离无效";
+        return false;
+    }
     double t = 0.0;
     if (t0 > 1e-9)
     {
@@ -403,7 +472,15 @@ bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
         return false;
     }
 
-    *ground = {origin[0] + t * dir[0], origin[1] + t * dir[1], origin[2] + t * dir[2]};
+    const std::array<double, 3> candidate{origin[0] + t * dir[0],
+                                           origin[1] + t * dir[1],
+                                           origin[2] + t * dir[2]};
+    if (!finitePoint(candidate))
+    {
+        if (errorMsg) *errorMsg = "基准球交点坐标无效";
+        return false;
+    }
+    *ground = candidate;
     return true;
 }
 
@@ -412,39 +489,64 @@ bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
 // 功能：将影像中心像素反投影为地面坐标，作为影像的地面中心点。
 //   像素坐标选取策略：
 //     - imageWidth/imageHeight > 0 时：使用影像几何中心（w/2, h/2）
-//     - 否则：使用相机主点（cu, cv）作为退化情况的备选
+//     - 调用方应在进入重叠分析前提供有效影像尺寸
 //   地面模型选择：useFixedZ=true 用固定高程面，否则用 DEM（需有效）
 // ============================================================
-bool GroundBackProjector::imageCenterToGround(const FramePinholeCamera &camera,
+bool GroundBackProjector::imageCenterToGround(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                               int imageWidth,
                                               int imageHeight,
-                                              const DemSurface *dem,
+                                              const DemSurface* dem,
                                               bool useFixedZ,
                                               double fixedZ,
-                                              std::array<double, 3> *ground,
-                                              std::string *errorMsg)
+                                              std::array<double, 3>* ground,
+                                              std::string* errorMsg)
 {
-    // 计算中心像素坐标：优先使用影像尺寸，退化时使用主点
-    const double u = imageWidth > 0 ? 0.5 * double(imageWidth) : camera.principalX();
-    const double v = imageHeight > 0 ? 0.5 * double(imageHeight) : camera.principalY();
+    if (imageWidth <= 0 || imageHeight <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "影像尺寸必须为正";
+        }
+        return false;
+    }
+
+    const double u = 0.5 * double(imageWidth);
+    const double v = 0.5 * double(imageHeight);
 
     // 根据模式选择反投影方法
-    if (useFixedZ || !dem)
+    if (useFixedZ)
     {
         return backProjectToFixedZ(camera, u, v, fixedZ, ground, errorMsg);
+    }
+    if (!dem)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 模式需要有效的 DEM 曲面";
+        }
+        return false;
     }
     return backProjectWithDem(camera, u, v, *dem, ground, errorMsg);
 }
 
-bool GroundBackProjector::imageCenterToSphere(const FramePinholeCamera &camera,
+bool GroundBackProjector::imageCenterToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                               int imageWidth,
                                               int imageHeight,
-                                              const ReferenceSphereSurface &sphere,
-                                              std::array<double, 3> *ground,
-                                              std::string *errorMsg)
+                                              const ReferenceSphereSurface& sphere,
+                                              std::array<double, 3>* ground,
+                                              std::string* errorMsg)
 {
-    const double u = imageWidth > 0 ? 0.5 * double(imageWidth) : camera.principalX();
-    const double v = imageHeight > 0 ? 0.5 * double(imageHeight) : camera.principalY();
+    if (imageWidth <= 0 || imageHeight <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "影像尺寸必须为正";
+        }
+        return false;
+    }
+
+    const double u = 0.5 * double(imageWidth);
+    const double v = 0.5 * double(imageHeight);
     return backProjectToSphere(camera, u, v, sphere, ground, errorMsg);
 }
 
@@ -458,17 +560,26 @@ bool GroundBackProjector::imageCenterToSphere(const FramePinholeCamera &camera,
 //   用途：此半径用于重叠度分析中邻域搜索的初始半径估计。
 //         搜索半径 = neighborFactor * radius * 2.5（见 OverlapAnalyzer）
 // ============================================================
-bool GroundBackProjector::estimateFootprintRadius(const FramePinholeCamera &camera,
-                                                  int imageWidth,
-                                                  int imageHeight,
-                                                  const DemSurface *dem,
-                                                  bool useFixedZ,
-                                                  double fixedZ,
-                                                  double *radius,
-                                                  std::string *errorMsg)
+bool GroundBackProjector::estimateFootprintRadius(
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    int imageWidth,
+    int imageHeight,
+    const DemSurface* dem,
+    bool useFixedZ,
+    double fixedZ,
+    double* radius,
+    std::string* errorMsg)
 {
     if (!radius)
     {
+        return false;
+    }
+    if (imageWidth <= 0 || imageHeight <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "影像尺寸必须为正";
+        }
         return false;
     }
 
@@ -479,9 +590,8 @@ bool GroundBackProjector::estimateFootprintRadius(const FramePinholeCamera &came
         return false;
     }
 
-    // 计算影像尺寸：优先使用传入值，退化时使用主点近似
-    const double w = imageWidth > 0 ? double(imageWidth) : camera.principalX() * 2.0;
-    const double h = imageHeight > 0 ? double(imageHeight) : camera.principalY() * 2.0;
+    const double w = double(imageWidth);
+    const double h = double(imageHeight);
 
     // 四角像素坐标（左上、右上、右下、左下）
     std::array<double, 3> corners[4];
@@ -493,34 +603,74 @@ bool GroundBackProjector::estimateFootprintRadius(const FramePinholeCamera &came
     for (int i = 0; i < 4; ++i) {
         std::string tmpErr;
         // 选择对应的反投影方法
-        const bool ok = (useFixedZ || !dem)
+        const bool ok = useFixedZ
                             ? backProjectToFixedZ(camera, uv[i].first, uv[i].second, fixedZ, &corners[i], &tmpErr)
-                            : backProjectWithDem(camera, uv[i].first, uv[i].second, *dem, &corners[i], &tmpErr);
-        if (!ok) continue; // 某角点失败则跳过（如射线朝向天空）
-        sum += distance2D(center, corners[i]); // 累加水平距离
+                            : (dem ? backProjectWithDem(camera, uv[i].first, uv[i].second, *dem, &corners[i], &tmpErr)
+                                   : false);
+        if (!ok)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "影像角点反投影失败: corner=" + std::to_string(i) +
+                             (tmpErr.empty() ? std::string() : " | " + tmpErr);
+            }
+            return false;
+        }
+        const double distance = distance2D(center, corners[i]);
+        if (!std::isfinite(distance))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "影像角点距离无效: corner=" + std::to_string(i);
+            }
+            return false;
+        }
+        sum += distance; // 累加水平距离
+        if (!std::isfinite(sum))
+        {
+            if (errorMsg) *errorMsg = "影像覆盖半径累计值无效";
+            return false;
+        }
         ++valid;
     }
 
-    // 至少需要 1 个有效角点才能估算
-    if (valid <= 0) {
-        if (errorMsg) *errorMsg = "无法估计影像地面覆盖半径";
+    if (valid != 4)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法估计影像地面覆盖半径：四个角点必须全部有效";
+        }
         return false;
     }
 
     // Step 3：平均距离作为等效半径
     *radius = sum / double(valid);
+    if (!std::isfinite(*radius) || *radius <= 0.0)
+    {
+        if (errorMsg) *errorMsg = "影像覆盖半径无效";
+        return false;
+    }
     return true;
 }
 
-bool GroundBackProjector::estimateFootprintRadiusOnSphere(const FramePinholeCamera &camera,
-                                                          int imageWidth,
-                                                          int imageHeight,
-                                                          const ReferenceSphereSurface &sphere,
-                                                          double *radius,
-                                                          std::string *errorMsg)
+bool GroundBackProjector::estimateFootprintRadiusOnSphere(
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    int imageWidth,
+    int imageHeight,
+    const ReferenceSphereSurface& sphere,
+    double* radius,
+    std::string* errorMsg)
 {
     if (!radius)
     {
+        return false;
+    }
+    if (imageWidth <= 0 || imageHeight <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "影像尺寸必须为正";
+        }
         return false;
     }
 
@@ -530,8 +680,8 @@ bool GroundBackProjector::estimateFootprintRadiusOnSphere(const FramePinholeCame
         return false;
     }
 
-    const double w = imageWidth > 0 ? double(imageWidth) : camera.principalX() * 2.0;
-    const double h = imageHeight > 0 ? double(imageHeight) : camera.principalY() * 2.0;
+    const double w = double(imageWidth);
+    const double h = double(imageHeight);
     const std::pair<double, double> uv[4] = {{0.0, 0.0}, {w, 0.0}, {w, h}, {0.0, h}};
 
     double sum = 0.0;
@@ -542,22 +692,46 @@ bool GroundBackProjector::estimateFootprintRadiusOnSphere(const FramePinholeCame
         std::string tmpErr;
         if (!backProjectToSphere(camera, uv[i].first, uv[i].second, sphere, &corner, &tmpErr))
         {
-            continue;
+            if (errorMsg)
+            {
+                *errorMsg = "影像角点球面反投影失败: corner=" + std::to_string(i) +
+                             (tmpErr.empty() ? std::string() : " | " + tmpErr);
+            }
+            return false;
         }
-        sum += distance3D(center, corner);
+        const double distance = distance3D(center, corner);
+        if (!std::isfinite(distance))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "基准球角点距离无效: corner=" + std::to_string(i);
+            }
+            return false;
+        }
+        sum += distance;
+        if (!std::isfinite(sum))
+        {
+            if (errorMsg) *errorMsg = "基准球覆盖半径累计值无效";
+            return false;
+        }
         ++valid;
     }
 
-    if (valid <= 0)
+    if (valid != 4)
     {
         if (errorMsg)
         {
-            *errorMsg = "无法估计基准球面影像覆盖半径";
+            *errorMsg = "无法估计基准球面影像覆盖半径：四个角点必须全部有效";
         }
         return false;
     }
 
     *radius = sum / double(valid);
+    if (!std::isfinite(*radius) || *radius <= 0.0)
+    {
+        if (errorMsg) *errorMsg = "基准球覆盖半径无效";
+        return false;
+    }
     return true;
 }
 

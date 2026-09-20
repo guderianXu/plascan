@@ -63,11 +63,15 @@ def render_pdf(pdf_path: Path, output_dir: Path, dpi: int) -> list[Path]:
         document.close()
 
 
-def detect_page(detector: Path, image: Path, family: str, output: Path) -> list[int]:
+def detect_page(
+    detector: Path, image: Path, image_id: str, family: str, output: Path
+) -> list[int]:
     command = [
         str(detector),
         "--image",
         str(image),
+        "--image-id",
+        image_id,
         "--family",
         family,
         "--output",
@@ -101,6 +105,7 @@ def verify_pdf(
             detect_page(
                 detector,
                 image,
+                f"marker-pdf-page-{page_index:04d}",
                 family,
                 output_dir / f"detections_{page_index:04d}.json",
             )

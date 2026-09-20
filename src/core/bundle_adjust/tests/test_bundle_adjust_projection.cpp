@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustProjection.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <cmath>
 
 TEST(BundleAdjustProjectionTest, MatchesCameraProjectWorldPointForTsaiCamera)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(1000.0, 980.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{-2.0, 1.0, 0.0}});
     camera.setAxisDirections(-1, 1);
@@ -27,7 +27,7 @@ TEST(BundleAdjustProjectionTest, MatchesCameraProjectWorldPointForTsaiCamera)
 
 TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(900.0, 870.0, 320.0, 240.0);
     camera.setPose({{0.995004165278, -0.099833416647, 0.0, 0.099833416647, 0.995004165278, 0.0, 0.0, 0.0, 1.0}},
                    {{1.0, -2.0, 0.5}});
@@ -37,7 +37,7 @@ TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
     const double delta[6] = {0.025, -0.018, 0.011, 0.12, -0.08, 0.04};
     const double world[3] = {2.5, -0.6, 24.0};
 
-    xjw::FramePinholeCamera updated = camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState updated = camera;
     updated.applyDeltaPose(delta);
     double expected[2] = {0.0, 0.0};
     ASSERT_TRUE(updated.projectWorldPoint(world, expected));
@@ -52,7 +52,7 @@ TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
 
 TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
 {
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(800.0, 760.0, 400.0, 300.0);
     camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{0.5, -0.25, 0.0}});
 
@@ -61,7 +61,7 @@ TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
     const double sharedIntrinsics[9] = {
         960.0, std::log(912.0 / 960.0), 0.0, 0.0, -0.02, 0.003, -0.0004, 0.0002, -0.0003};
 
-    xjw::FramePinholeCamera updated = camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState updated = camera;
     updated.applyDeltaPose(delta);
     updated.setIntrinsics(960.0, 912.0, 400.0, 300.0);
     updated.setDistortion(-0.02, 0.003, -0.0004, 0.0002, -0.0003);

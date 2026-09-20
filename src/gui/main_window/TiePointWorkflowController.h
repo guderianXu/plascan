@@ -8,8 +8,12 @@
 #include <atomic>
 #include <memory>
 
-class ProjectManager;
 class QTimer;
+
+namespace xjw::gui::project
+{
+class ProjectSession;
+}
 
 namespace xjw::matchphotos
 {
@@ -20,7 +24,7 @@ class TiePointWorkflowController : public QObject
 {
     Q_OBJECT
 public:
-    explicit TiePointWorkflowController(ProjectManager *projectManager, QObject *parent = nullptr);
+    explicit TiePointWorkflowController(xjw::gui::project::ProjectSession *session, QObject *parent = nullptr);
 
     void start(xjw::matchphotos::MatchPhotosOptions options,
                const QStringList &manualPairKeys,
@@ -34,11 +38,15 @@ signals:
     void progressFinished(bool success);
     void statusMessageRequested(const QString &message, int timeoutMs);
     void warningRequested(const QString &title, const QString &message);
+    void matchPairReady(const QString &image0,
+                        const QString &image1,
+                        const QString &matchFilePath,
+                        int matchCount);
 
 private:
     void finishRun(bool success);
 
-    QPointer<ProjectManager> _projectManager;
+    QPointer<xjw::gui::project::ProjectSession> _session;
     std::shared_ptr<std::atomic_bool> _cancelFlag;
     QPointer<QTimer> _progressTimer;
     std::shared_ptr<std::atomic_int> _progressCount;

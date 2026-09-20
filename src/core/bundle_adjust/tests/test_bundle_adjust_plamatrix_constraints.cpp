@@ -6,21 +6,22 @@
 
 #include "BundleAdjustSolver.h"
 #include "BundleAdjustPlaMatrixConstraints.h"
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 namespace
 {
 
-    xjw::FramePinholeCamera makeConstraintCamera(double center_x, double center_y)
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeConstraintCamera(double center_x, double center_y)
     {
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(960.0, 950.0, 512.0, 384.0);
         camera.setDistortion(-0.012, 0.0008, -0.00005, 0.0002, -0.00015);
         camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{center_x, center_y, 0.0}});
         return camera;
     }
 
-    std::array<double, 2> projectPoint(const xjw::FramePinholeCamera& camera, const std::array<double, 3>& point)
+    std::array<double, 2> projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                       const std::array<double, 3>& point)
     {
         const double world[3] = {point[0], point[1], point[2]};
         double pixel[2] = {0.0, 0.0};
@@ -39,8 +40,9 @@ namespace
         return std::sqrt(squared);
     }
 
-    std::vector<xjw::BATrack> makeConstraintTracks(const std::vector<xjw::FramePinholeCamera>& truth_cameras,
-                                                   std::vector<std::array<double, 3>>* truth_points)
+    std::vector<xjw::BATrack>
+    makeConstraintTracks(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truth_cameras,
+                         std::vector<std::array<double, 3>>* truth_points)
     {
         std::vector<xjw::BATrack> tracks;
         for (int row = 0; row < 3; ++row)
@@ -67,8 +69,9 @@ namespace
         return tracks;
     }
 
-    xjw::BALaserRangeConstraint makeLaserShot(const std::vector<xjw::FramePinholeCamera>& truth_cameras,
-                                              const std::array<double, 3>& truth_point)
+    xjw::BALaserRangeConstraint
+    makeLaserShot(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& truth_cameras,
+                  const std::array<double, 3>& truth_point)
     {
         xjw::BALaserRangeConstraint shot;
         shot.cameraIndex = 2;
@@ -101,10 +104,11 @@ TEST(BundleAdjustPlaMatrixConstraintParityTest, GcpLidarScalePoseAndLaserRangeRe
     {
         GTEST_SKIP() << "PlaMatrix backend is unavailable";
     }
-    const std::vector<xjw::FramePinholeCamera> truth_cameras{makeConstraintCamera(-3.0, 0.0),
-                                                             makeConstraintCamera(3.0, 0.0),
-                                                             makeConstraintCamera(0.0, -2.5),
-                                                             makeConstraintCamera(0.0, 2.5)};
+    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> truth_cameras{
+        makeConstraintCamera(-3.0, 0.0),
+        makeConstraintCamera(3.0, 0.0),
+        makeConstraintCamera(0.0, -2.5),
+        makeConstraintCamera(0.0, 2.5)};
     auto initial_cameras = truth_cameras;
     const double delta_2[6] = {0.006, -0.008, 0.004, 0.16, -0.1, 0.14};
     const double delta_3[6] = {-0.005, 0.007, -0.003, -0.13, 0.09, -0.12};

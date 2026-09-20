@@ -11,7 +11,7 @@
 // 典型应用：影像地面覆盖范围估算、重叠度分析、相机姿态验证。
 // ============================================================
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include <plapoint/search/spatial_kdtree.h>
 
 #include <array>
@@ -101,12 +101,12 @@ public:
     //   errorMsg - 可选错误信息输出
     // 返回值：成功 true，失败 false（射线平行于高程面或交点在相机后方）
     // --------------------------------------------------------
-    static bool backProjectToFixedZ(const FramePinholeCamera &camera,
+    static bool backProjectToFixedZ(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                     double u,
                                     double v,
                                     double fixedZ,
-                                    std::array<double, 3> *ground,
-                                    std::string *errorMsg = nullptr);
+                                    std::array<double, 3>* ground,
+                                    std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：backProjectWithDem
@@ -117,14 +117,14 @@ public:
     // 参数：
     //   dem      - 已加载的 DEM 曲面对象
     //   ground   - 输出三维交点坐标（Z 取 DEM 高程值）
-    // 返回值：迭代收敛或未完全收敛时均返回 true（附近似结果），加载失败返回 false
+    // 返回值：仅在迭代收敛时返回 true；无前向交点、未收敛或加载失败返回 false
     // --------------------------------------------------------
-    static bool backProjectWithDem(const FramePinholeCamera &camera,
+    static bool backProjectWithDem(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                    double u,
                                    double v,
-                                   const DemSurface &dem,
-                                   std::array<double, 3> *ground,
-                                   std::string *errorMsg = nullptr);
+                                   const DemSurface& dem,
+                                   std::array<double, 3>* ground,
+                                   std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：backProjectToSphere
@@ -132,44 +132,43 @@ public:
     //   射线方程 P(t)=C+t*dir，球面方程 |P-center|=radius。
     //   选择最小正根作为相机前方的近端交点。
     // --------------------------------------------------------
-    static bool backProjectToSphere(const FramePinholeCamera &camera,
+    static bool backProjectToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                     double u,
                                     double v,
-                                    const ReferenceSphereSurface &sphere,
-                                    std::array<double, 3> *ground,
-                                    std::string *errorMsg = nullptr);
+                                    const ReferenceSphereSurface& sphere,
+                                    std::array<double, 3>* ground,
+                                    std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：imageCenterToGround
     // 功能：将影像中心像素反投影到地面，得到影像的地面投影中心点。
-    //   若 imageWidth/imageHeight > 0 则使用影像中心坐标（w/2, h/2），
-    //   否则使用相机主点坐标（cu, cv）。
+    //   imageWidth/imageHeight 必须为正，并使用影像中心坐标（w/2, h/2）。
     //   根据 useFixedZ 标志选择固定高程面模式或 DEM 模式。
     // 参数：
-    //   imageWidth/Height - 影像分辨率（像素），用于计算中心像素坐标
+    //   imageWidth/Height - 正的影像分辨率（像素），用于计算中心像素坐标
     //   dem               - DEM 指针，可为 nullptr（useFixedZ=true 时可不提供）
     //   useFixedZ         - true = 固定高程面，false = DEM
     //   fixedZ            - 固定高程值（useFixedZ=true 时有效）
     // --------------------------------------------------------
-    static bool imageCenterToGround(const FramePinholeCamera &camera,
+    static bool imageCenterToGround(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                     int imageWidth,
                                     int imageHeight,
-                                    const DemSurface *dem,
+                                    const DemSurface* dem,
                                     bool useFixedZ,
                                     double fixedZ,
-                                    std::array<double, 3> *ground,
-                                    std::string *errorMsg = nullptr);
+                                    std::array<double, 3>* ground,
+                                    std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：imageCenterToSphere
     // 功能：将影像中心像素反投影到基准球面。
     // --------------------------------------------------------
-    static bool imageCenterToSphere(const FramePinholeCamera &camera,
+    static bool imageCenterToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                     int imageWidth,
                                     int imageHeight,
-                                    const ReferenceSphereSurface &sphere,
-                                    std::array<double, 3> *ground,
-                                    std::string *errorMsg = nullptr);
+                                    const ReferenceSphereSurface& sphere,
+                                    std::array<double, 3>* ground,
+                                    std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：estimateFootprintRadius
@@ -178,27 +177,28 @@ public:
     //         计算四角到地面中心点的平均水平距离作为等效半径。
     //   该半径用于重叠度分析中的邻域搜索半径初始化。
     // 参数：
-    //   radius - 输出：估算的地面覆盖等效半径
+    //   radius - 输出：估算的地面覆盖等效半径；四个影像角点必须全部可反投影
     // --------------------------------------------------------
-    static bool estimateFootprintRadius(const FramePinholeCamera &camera,
+    static bool estimateFootprintRadius(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                                         int imageWidth,
                                         int imageHeight,
-                                        const DemSurface *dem,
+                                        const DemSurface* dem,
                                         bool useFixedZ,
                                         double fixedZ,
-                                        double *radius,
-                                        std::string *errorMsg = nullptr);
+                                        double* radius,
+                                        std::string* errorMsg = nullptr);
 
     // --------------------------------------------------------
     // 函数：estimateFootprintRadiusOnSphere
-    // 功能：估计影像在基准球面上的近似覆盖半径。
+    // 功能：估计影像在基准球面上的近似覆盖半径；四个影像角点必须全部可反投影。
     // --------------------------------------------------------
-    static bool estimateFootprintRadiusOnSphere(const FramePinholeCamera &camera,
-                                                int imageWidth,
-                                                int imageHeight,
-                                                const ReferenceSphereSurface &sphere,
-                                                double *radius,
-                                                std::string *errorMsg = nullptr);
+    static bool
+    estimateFootprintRadiusOnSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                    int imageWidth,
+                                    int imageHeight,
+                                    const ReferenceSphereSurface& sphere,
+                                    double* radius,
+                                    std::string* errorMsg = nullptr);
 
 private:
     // --------------------------------------------------------
@@ -213,12 +213,12 @@ private:
     //   origin - 输出射线起点（= 相机中心 C）
     //   dir    - 输出射线归一化方向向量（世界坐标系）
     // --------------------------------------------------------
-    static bool pixelRayWorld(const FramePinholeCamera &camera,
+    static bool pixelRayWorld(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                               double u,
                               double v,
-                              std::array<double, 3> *origin,
-                              std::array<double, 3> *dir,
-                              std::string *errorMsg = nullptr);
+                              std::array<double, 3>* origin,
+                              std::array<double, 3>* dir,
+                              std::string* errorMsg = nullptr);
 };
 
 } // namespace xjw

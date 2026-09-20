@@ -13,7 +13,7 @@ namespace detail
 namespace
 {
 
-using Vector3 = PlanetaryLineScanCamera::Vector3;
+using Vector3 = std::array<double, 3>;
 
 double vectorNorm(const Vector3 &value)
 {
@@ -24,16 +24,17 @@ double vectorNorm(const Vector3 &value)
 
 } // namespace
 
-PlanetaryLineScanCamera::PoseBias lineScanPoseBias(
+camera_models::linescan::LineScanTrajectoryBias lineScanPoseBias(
     const std::array<double, 6> &parameters)
 {
-    const Vector3 translation{{parameters[0], parameters[1], parameters[2]}};
-    const Vector3 angleAxis{{parameters[3], parameters[4], parameters[5]}};
-    return PlanetaryLineScanCamera::bodyFixedSmallAngleBias(angleAxis, translation);
+    camera_models::linescan::LineScanTrajectoryBias bias;
+    std::copy_n(parameters.begin(), 3, bias.translationMeters.begin());
+    std::copy_n(parameters.begin() + 3, 3, bias.rotationVectorRadians.begin());
+    return bias;
 }
 
 bool evaluateLineScanImageObservation(
-    const PlanetaryLineScanCamera &camera,
+    const camera_models::linescan::LineScanInstance& camera,
     const LineScanImageObservation &observation,
     const double *cameraParameters,
     const double *point,
@@ -43,19 +44,15 @@ bool evaluateLineScanImageObservation(
     std::array<double, 6> parameters{};
     std::copy_n(cameraParameters, parameters.size(), parameters.begin());
     const Vector3 ground{{point[0], point[1], point[2]}};
-    PlanetaryLineScanCamera::FixedLineProjection projection;
-    if (!camera.projectAtObservedLine(
-            ground,
-            observation.linePixels,
-            PlanetaryLineScanCamera::PixelConvention::CsmPixelCenter,
-            &projection,
-            lineScanPoseBias(parameters)))
+    camera_models::linescan::LineScanProjectionResult projection;
+    if (!camera_models::linescan::LineScanProjection::projectAtLine(
+            camera, ground, observation.linePixels, lineScanPoseBias(parameters), &projection))
     {
         return false;
     }
     residuals[0] = (projection.sample - observation.samplePixels) /
                    imageSigmaPixels;
-    residuals[1] = projection.detectorLineResidualPixels / imageSigmaPixels;
+    residuals[1] = projection.lineResidualPixels / imageSigmaPixels;
     return std::isfinite(residuals[0]) && std::isfinite(residuals[1]);
 }
 
@@ -70,7 +67,7 @@ double lineScanImageRms(const PlanetaryLineScanBaWorkingSet &workingSet)
     {
         double residuals[2]{};
         if (!evaluateLineScanImageObservation(
-                *workingSet.cameraModels[observation.cameraIndex],
+                *workingSet.cameraInstances[observation.cameraIndex],
                 observation,
                 workingSet.cameraParameters[observation.cameraIndex].data(),
                 workingSet.tiePoints[observation.pointIndex].data(),

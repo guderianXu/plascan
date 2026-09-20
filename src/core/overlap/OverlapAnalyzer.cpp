@@ -80,6 +80,11 @@ double norm3(const std::array<double, 3> &v)
     return std::sqrt(dot3(v, v));
 }
 
+bool finitePoint(const std::array<double, 3> &point)
+{
+    return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]);
+}
+
 std::array<double, 3> normalize3(const std::array<double, 3> &v, const std::array<double, 3> &fallback)
 {
     const double n = norm3(v);
@@ -102,30 +107,24 @@ double medianValue(std::vector<double> values, double fallback)
 
 bool centerRayWorldDirection(const xjw::OverlapImageInput &image, std::array<double, 3> *dir)
 {
-    if (!dir)
+    if (!dir || image.width <= 0 || image.height <= 0)
     {
         return false;
     }
 
-    const xjw::FramePinholeCamera &camera = image.camera;
-    const double fu = camera.focalX();
-    const double fv = camera.focalY();
-    if (std::abs(fu) < 1e-12 || std::abs(fv) < 1e-12)
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = image.camera;
+    if (!camera.validateNumericalState())
     {
         return false;
     }
 
-    const double u = image.width > 0 ? 0.5 * double(image.width) : camera.principalX();
-    const double v = image.height > 0 ? 0.5 * double(image.height) : camera.principalY();
-    const double x = (u - camera.principalX()) / (double(camera.uAxisSign()) * fu);
-    const double y = (v - camera.principalY()) / (double(camera.vAxisSign()) * fv);
-    const std::array<double, 3> rayCam{x, y, 1.0};
-    const auto R = camera.cameraToWorldRotation();
-    const std::array<double, 3> rayWorld{
-        R[0] * rayCam[0] + R[1] * rayCam[1] + R[2] * rayCam[2],
-        R[3] * rayCam[0] + R[4] * rayCam[1] + R[5] * rayCam[2],
-        R[6] * rayCam[0] + R[7] * rayCam[1] + R[8] * rayCam[2]};
-    *dir = normalize3(rayWorld, {0.0, 0.0, -1.0});
+    const std::array<double, 2> centerPixel{{0.5 * double(image.width), 0.5 * double(image.height)}};
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
+    if (!camera.rayForPixel(centerPixel, &ray))
+    {
+        return false;
+    }
+    *dir = ray.direction;
     return true;
 }
 
@@ -323,7 +322,7 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
                               std::string *errorMsg)
 {
     OverlapAnalysisOptions options;
-    options.groundModel = (useFixedZ || !dem) ? OverlapGroundModel::FixedZPlane : OverlapGroundModel::Dem;
+    options.groundModel = useFixedZ ? OverlapGroundModel::FixedZPlane : OverlapGroundModel::Dem;
     options.dem = dem;
     options.fixedZ = fixedZ;
     options.neighborFactor = neighborFactor;
@@ -355,8 +354,66 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         return false;
     }
 
-    // 确保邻域系数为正（避免搜索范围为 0 或负数）
-    const double kNeighbor = std::max(0.1, options.neighborFactor);
+    if (!std::isfinite(options.neighborFactor) || options.neighborFactor <= 0.0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "邻域系数必须是正的有限数值";
+        }
+        return false;
+    }
+    if (options.groundModel == OverlapGroundModel::Dem && !options.dem)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "DEM 模式需要有效的 DEM 曲面";
+        }
+        return false;
+    }
+    if (options.groundModel == OverlapGroundModel::FixedZPlane && !std::isfinite(options.fixedZ))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "固定高程必须是有限数值";
+        }
+        return false;
+    }
+    if (!std::isfinite(options.referenceSphere.radiusMeters) || options.referenceSphere.radiusMeters < 0.0 ||
+        !std::isfinite(options.referenceSphere.elevationMeters))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "基准球半径必须为非负有限数值，其他参数必须是有限数值";
+        }
+        return false;
+    }
+    for (const OverlapImageInput& image : images)
+    {
+        if (image.width <= 0 || image.height <= 0)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "影像尺寸必须为正: " + image.imagePath;
+            }
+            return false;
+        }
+
+        std::string cameraError;
+        if (!image.camera.validateNumericalState(&cameraError))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "数值相机状态无效: " + image.imagePath;
+                if (!cameraError.empty())
+                {
+                    *errorMsg += " | " + cameraError;
+                }
+            }
+            return false;
+        }
+    }
+
+    const double kNeighbor = options.neighborFactor;
 
     // 预分配输出数组
     result->centers.resize(images.size());
@@ -400,7 +457,7 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         }
         else
         {
-            const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem || !options.dem;
+            const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem;
             centerOk = GroundBackProjector::imageCenterToGround(images[i].camera,
                                                                 images[i].width,
                                                                 images[i].height,
@@ -415,6 +472,14 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
             if (errorMsg)
             {
                 *errorMsg = "中心点反投影失败: " + images[i].imagePath + " | " + err;
+            }
+            return false;
+        }
+        if (!finitePoint(result->centers[i]))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "中心点反投影结果无效: " + images[i].imagePath;
             }
             return false;
         }
@@ -433,7 +498,7 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         }
         else
         {
-            const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem || !options.dem;
+            const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem;
             radiusOk = GroundBackProjector::estimateFootprintRadius(images[i].camera,
                                                                     images[i].width,
                                                                     images[i].height,
@@ -445,7 +510,19 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         }
         if (!radiusOk)
         {
-            radius = 1.0; // 估算失败时使用默认值 1.0（兜底，避免除零）
+            if (errorMsg)
+            {
+                *errorMsg = "影像覆盖半径反投影失败: " + images[i].imagePath + " | " + err;
+            }
+            return false;
+        }
+        if (!std::isfinite(radius) || radius <= 0.0)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "影像覆盖半径结果无效: " + images[i].imagePath;
+            }
+            return false;
         }
         // 确保半径至少为 1e-3，防止后续除零
         result->footprintRadii[i] = std::max(1e-3, radius);
@@ -462,6 +539,11 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
     centerPts.reserve(images.size());
     for (size_t i = 0; i < projectedCenters.size(); ++i)
     {
+        if (!std::isfinite(projectedCenters[i].x) || !std::isfinite(projectedCenters[i].y))
+        {
+            if (errorMsg) *errorMsg = "地面中心投影结果无效";
+            return false;
+        }
         centerPts.push_back(CenterKdTree2D::Point{{projectedCenters[i].x, projectedCenters[i].y},
                                                   static_cast<int>(i)});
     }
@@ -475,6 +557,11 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         // 以当前影像地面半径的 neighborFactor * 2.5 倍作为 KD 树搜索半径
         // 乘以 2.5 是为了保守地覆盖两影像半径之和的最大可能范围
         const double searchRadius = kNeighbor * result->footprintRadii[i] * 2.5;
+        if (!std::isfinite(searchRadius) || searchRadius <= 0.0)
+        {
+            if (errorMsg) *errorMsg = "邻域搜索半径无效";
+            return false;
+        }
 
         // KD 树半径搜索：返回搜索范围内所有影像的索引
         std::vector<int> nearby =
@@ -488,6 +575,11 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
 
             // 计算两影像地面中心的水平距离
             const double distance = distance2D(projectedCenters[i], projectedCenters[static_cast<size_t>(j)]);
+            if (!std::isfinite(distance))
+            {
+                if (errorMsg) *errorMsg = "影像中心距离无效";
+                return false;
+            }
 
             // 计算重叠判断阈值：
             //   threshold = neighborFactor * (r_i + r_j)
@@ -496,6 +588,11 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
                 1e-6,
                 kNeighbor * (result->footprintRadii[i]
                              + result->footprintRadii[static_cast<size_t>(j)]));
+            if (!std::isfinite(threshold))
+            {
+                if (errorMsg) *errorMsg = "重叠判断阈值无效";
+                return false;
+            }
             if (distance > threshold) continue; // 距离超出阈值，无重叠
 
             // 线性重叠得分：中心重合时为 1.0，距离达到阈值时为 0.0

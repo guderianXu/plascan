@@ -9,6 +9,7 @@ add_executable(test_planetary_laser_json
 
 target_link_libraries(test_planetary_laser_json PRIVATE
     lidar
+    camera
     GTest::gtest_main
 )
 

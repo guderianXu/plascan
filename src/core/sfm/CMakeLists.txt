@@ -15,6 +15,7 @@ set(SFM_CORE_SOURCES
     tracks/ReferenceTrackSpatialSelector.cpp
     reconstruction/SfmReconstruction.cpp
     pose/PnpSolver.cpp
+    pose/CameraReferencePosePriorAdapter.cpp
     pose/ReferenceP3p.cpp
     pose/ReferencePoseRefiner.cpp
     pose/ReferenceResectionSolver.cpp
@@ -49,6 +50,7 @@ set(SFM_CORE_HEADERS
     tracks/ReferenceTrackSpatialSelector.h
     reconstruction/SfmReconstruction.h
     pose/PnpSolver.h
+    pose/CameraReferencePosePriorAdapter.h
     pose/ReferenceP3p.h
     pose/ReferencePoseRefiner.h
     pose/ReferenceResectionSolver.h
@@ -71,6 +73,7 @@ add_library(sfm_core STATIC ${SFM_CORE_SOURCES} ${SFM_CORE_HEADERS})
 
 target_include_directories(sfm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
     ${CMAKE_CURRENT_SOURCE_DIR}/../bundle_adjust
@@ -81,6 +84,8 @@ target_include_directories(sfm_core PUBLIC
 target_link_libraries(sfm_core
     PUBLIC
         camera
+        camera_reference_core
+        camera_models_frame_pinhole
         intersection
         bundle_adjust
         control_network
@@ -152,7 +157,6 @@ target_link_libraries(sfm_project
         sfm_postprocess
         control_points
         Qt6::Core
-        Qt6::Gui
     PRIVATE
         image_matching
         plascan_common_log

@@ -1,6 +1,6 @@
 #include "DepthTsdfNarrowBandActivation.h"
 
-#include "FramePinholeCamera.h"
+#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthTsdfSurfaceBuilder.h"
 
 #include <opencv2/core/mat.hpp>

@@ -37,6 +37,34 @@ TEST(ProjectIOTest, ResolvesCanonicalProjectDirectories)
                   QStringLiteral("assets/camera_references/camera_reference_set.json")));
 }
 
+TEST(ProjectIOTest, AppliesChunkLayoutToRegisteredRuntimeRoot)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString project_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("运行时工程.plascan"));
+    const QString runtime_root =
+        QDir(temp_dir.path()).filePath(QStringLiteral("运行时工程.files/7"));
+
+    ProjectIO::registerRuntimeRoot(project_path, runtime_root);
+    EXPECT_EQ(ProjectIO::projectRootFromPlascan(project_path),
+              QDir::cleanPath(runtime_root));
+    EXPECT_EQ(ProjectIO::projectAssetsDir(project_path),
+              QDir(runtime_root).filePath(QStringLiteral("assets")));
+    EXPECT_EQ(ProjectIO::projectControlPointsDir(project_path),
+              QDir(runtime_root).filePath(QStringLiteral("assets/control_points")));
+    EXPECT_EQ(ProjectIO::markerSetPath(project_path),
+              QDir(runtime_root).filePath(
+                  QStringLiteral("assets/control_points/marker_set.json")));
+    EXPECT_EQ(ProjectIO::tempResultsPath(project_path),
+              QDir(runtime_root).filePath(
+                  QStringLiteral(".plascan_tmp/project_results.json")));
+    EXPECT_EQ(ProjectIO::maskOutputDir(project_path),
+              QDir(runtime_root).filePath(QStringLiteral("assets/masks")));
+    ProjectIO::unregisterRuntimeRoot(project_path);
+}
+
 TEST(ProjectIOTest, ResolvesRelativeResourcesAgainstProjectRoot)
 {
     QTemporaryDir temp_dir;

@@ -2827,7 +2827,7 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         ASSERT_TRUE(cv::imwrite(supportMaskPath.toStdString(), supportMask));
         ASSERT_TRUE(cv::imwrite(repairedMaskPath.toStdString(), repairedMask));
 
-        xjw::FramePinholeCamera camera;
+        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
         camera.setIntrinsics(30.0, 30.0, 16.0, 12.0);
         camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
                                              0.0, 1.0, 0.0,
@@ -6918,7 +6918,7 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
     return config;
 }
 
-xjw::FramePinholeCamera makeLookAtCamera(const std::array<float, 3> &center)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState makeLookAtCamera(const std::array<float, 3>& center)
 {
     auto normalize = [](std::array<float, 3> value)
     {
@@ -6956,7 +6956,7 @@ xjw::FramePinholeCamera makeLookAtCamera(const std::array<float, 3> &center)
                 rows[static_cast<std::size_t>(row)][column];
         }
     }
-    xjw::FramePinholeCamera camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
     camera.setPose(cameraToWorld,
                    {center[0], center[1], center[2]});

@@ -36,21 +36,23 @@ namespace xjw::detail::plamatrix_ba::assembly_detail
                         int point_eliminated_block,
                         const ObservationLinearization& linearization);
 
-    bool linearizeImageObservation(const std::vector<FramePinholeCamera>& input_cameras,
-                                   const BAOptions& options,
-                                   const ActiveProblem& active,
-                                   const OptimizationState& state,
-                                   std::size_t camera_index,
-                                   const std::array<double, 3>& point,
-                                   const BAObservation& observation,
-                                   int iteration,
-                                   ObservationLinearization* output);
+    bool linearizeImageObservation(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        std::size_t camera_index,
+        const std::array<double, 3>& point,
+        const BAObservation& observation,
+        int iteration,
+        ObservationLinearization* output);
 
-    double assembleSurveyResiduals(const std::vector<FramePinholeCamera>& input_cameras,
-                                   const BAOptions& options,
-                                   const ActiveProblem& active,
-                                   const OptimizationState& state,
-                                   int iteration,
-                                   plamatrix::BlockNormalEquations<double>* equations);
+    double assembleSurveyResiduals(
+        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& input_cameras,
+        const BAOptions& options,
+        const ActiveProblem& active,
+        const OptimizationState& state,
+        int iteration,
+        plamatrix::BlockNormalEquations<double>* equations);
 
 } // namespace xjw::detail::plamatrix_ba::assembly_detail

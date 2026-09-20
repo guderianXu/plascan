@@ -32,11 +32,11 @@ bool hasCompleteEvidence(const DepthPoseRefinementFrame &frame)
         frame.adaptiveConflictRatio.size() == size;
 }
 
-bool unproject(const FramePinholeCamera &camera,
+bool unproject(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
                int column,
                int row,
                float depth,
-               cv::Vec3d *world)
+               cv::Vec3d* world)
 {
     if (!world || !std::isfinite(depth) || depth <= 0.0f)
     {
@@ -54,7 +54,7 @@ bool unproject(const FramePinholeCamera &camera,
     return cv::checkRange(*world);
 }
 
-cv::Matx33d cameraToWorldRotation(const FramePinholeCamera &camera)
+cv::Matx33d cameraToWorldRotation(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
 {
     const std::array<double, 9> values = camera.cameraToWorldRotation();
     return cv::Matx33d(
@@ -528,9 +528,9 @@ DepthPoseRefinementStageResult DepthPoseRefinementStage::buildCandidates(
     return result;
 }
 
-FramePinholeCamera DepthPoseRefinementStage::deriveCameraCandidate(
-    const FramePinholeCamera &camera,
-    const DepthPoseAlignmentCorrection &correction)
+xjw::camera_models::frame_pinhole::FramePinholeNumericState DepthPoseRefinementStage::deriveCameraCandidate(
+    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    const DepthPoseAlignmentCorrection& correction)
 {
     if (!camera.isValid() || !correction.accepted)
     {
@@ -538,7 +538,7 @@ FramePinholeCamera DepthPoseRefinementStage::deriveCameraCandidate(
     }
     const cv::Matx33d old_camera_to_world = cameraToWorldRotation(camera);
     // The requested world-to-camera update is R_wc' = R_wc * Q^T.
-    // FramePinholeCamera stores R_cw, so the equivalent update is R_cw' = Q * R_cw.
+    // FramePinholeNumericState stores R_cw, so the equivalent update is R_cw' = Q * R_cw.
     const cv::Matx33d new_camera_to_world =
         correction.rotation * old_camera_to_world;
     const std::array<double, 3> old_center_array = camera.cameraCenter();
@@ -547,7 +547,7 @@ FramePinholeCamera DepthPoseRefinementStage::deriveCameraCandidate(
     const cv::Vec3d new_center =
         correction.rotation * (old_center - correction.pivotWorld) +
         correction.pivotWorld + correction.translation;
-    FramePinholeCamera derived = camera;
+    xjw::camera_models::frame_pinhole::FramePinholeNumericState derived = camera;
     derived.setPose(
         std::array<double, 9>{
             new_camera_to_world(0, 0), new_camera_to_world(0, 1),

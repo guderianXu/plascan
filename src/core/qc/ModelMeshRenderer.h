@@ -10,9 +10,9 @@ namespace xjw::qc
 class ModelMeshRenderer
 {
 public:
-    ModelRenderResult render(const xjw::mesh::TriMesh &mesh,
-                             const xjw::FramePinholeCamera &camera,
-                             const cv::Size &imageSize) const;
+    ModelRenderResult render(const xjw::mesh::TriMesh& mesh,
+                             const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                             const cv::Size& imageSize) const;
 };
 
 } // namespace xjw::qc

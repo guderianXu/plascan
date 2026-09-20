@@ -218,7 +218,8 @@ namespace xjw::mvs::pipeline_detail
         return std::clamp(entry->sourceQualityScore, 0.05f, 1.0f);
     }
 
-    int cameraBaselineSector(const FramePinholeCamera& reference_camera, const FramePinholeCamera& source_camera)
+    int cameraBaselineSector(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
+                             const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera)
     {
         const std::array<double, 3> reference_center = reference_camera.cameraCenter();
         const std::array<double, 3> source_center = source_camera.cameraCenter();
